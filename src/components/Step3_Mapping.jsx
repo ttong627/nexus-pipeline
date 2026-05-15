@@ -1,0 +1,412 @@
+import { useState, useRef } from 'react';
+import { Columns, ChevronLeft, Database, CheckCircle, Loader2, X } from 'lucide-react';
+
+const REQUIRED_KEYS = ['name', 'contact1', 'address', 'qty', 'admin'];
+const FIELD_META = {
+  name:     { label: '성명',       short: '[성명]',   color: 'text-blue-300',   bg: 'bg-blue-950/40',   border: 'border-blue-700/50' },
+  contact1: { label: '연락처',     short: '[연락처]', color: 'text-green-300',  bg: 'bg-green-950/40',  border: 'border-green-700/50' },
+  address:  { label: '주소',       short: '[주소]',   color: 'text-yellow-300', bg: 'bg-yellow-950/30', border: 'border-yellow-700/50' },
+  qty:      { label: '포수',       short: '[포수]',   color: 'text-orange-300', bg: 'bg-orange-950/40', border: 'border-orange-700/50' },
+  admin:    { label: '행정동',     short: '[행정동]', color: 'text-purple-300', bg: 'bg-purple-950/40', border: 'border-purple-700/50' },
+  contact2: { label: '보조연락처', short: '[보조]',   color: 'text-teal-300',   bg: 'bg-teal-950/30',   border: 'border-teal-700/50' },
+  birth:    { label: '생년월일',   short: '[생년]',   color: 'text-pink-300',   bg: 'bg-pink-950/30',   border: 'border-pink-700/50' },
+  note:     { label: '특이사항',   short: '[특이]',   color: 'text-gray-300',   bg: 'bg-gray-800/40',   border: 'border-gray-600/50' },
+  sms:      { label: '문자수신',   short: '[문자]',   color: 'text-cyan-300',   bg: 'bg-cyan-950/30',   border: 'border-cyan-700/50' },
+  type:     { label: '수급구분',   short: '[구분]',   color: 'text-amber-300',  bg: 'bg-amber-950/30',  border: 'border-amber-700/50' },
+  driver:   { label: '기사',       short: '[기사]',   color: 'text-lime-300',   bg: 'bg-lime-950/30',   border: 'border-lime-700/50' },
+  seqNo:    { label: '배송순번',   short: '[순번]',   color: 'text-rose-300',   bg: 'bg-rose-950/30',   border: 'border-rose-700/50' },
+};
+const OPTIONAL_KWS = {
+  type:     ['구분', '유형', '계층', '자격', '수급'],
+  contact2: ['유선', '자택전화', '전화', '추가연락', '보조연락'],
+  birth:    ['생년', '생월', '주민'],
+  note:     ['특이', '비고', '메모', '참고'],
+  sms:      ['문자', '수신', 'SMS', '수신여부', '수신동의'],
+  driver:   ['기사', '배송기사', '담당'],
+  seqNo:    ['순번', '배송순번'],
+};
+
+function SheetMappingPanel({ sheet, mapDef, setMapDef, worksheets, importNote, setImportNote }) {
+  const headers = sheet.headers;
+  const previewData = sheet.bodyRows.slice(0, 20).map(row => {
+    const obj = {};
+    headers.forEach((h, j) => { obj[h] = row[j]; });
+    return obj;
+  });
+
+  const hasMixedSheet = worksheets.some(s => s.selected && s.type === '혼합');
+  const hasColumn = (key) => !!mapDef[key] || headers.some(h => (OPTIONAL_KWS[key] || []).some(k => h.includes(k)));
+  const colToField = Object.fromEntries(
+    Object.entries(mapDef).filter(([, v]) => v).map(([k, v]) => [v, k])
+  );
+
+  const updateMap = (key, val) => setMapDef({ ...mapDef, [key]: val });
+
+  return (
+    <div className="flex flex-1 overflow-hidden">
+      {/* 좌측 매핑 패널 */}
+      <div className="w-72 bg-black/40 border-r border-white/10 overflow-y-auto shrink-0 scrollbar-thin scrollbar-thumb-[#444]">
+        <div className="p-4">
+          <p className="text-[10px] text-gray-600 font-black tracking-widest mb-4">━━ 필수 항목 (미설정시 진행 불가)</p>
+          {[
+            { key: 'name',     label: '성명 (이름)' },
+            { key: 'contact1', label: '연락처 (휴대폰)' },
+            { key: 'address',  label: '주소' },
+            { key: 'qty',      label: '수량 (포수)' },
+            { key: 'admin',    label: '행정구역 (읍면동)' },
+          ].map(({ key, label }) => {
+            const meta = FIELD_META[key];
+            const isMapped = !!mapDef[key];
+            return (
+              <div key={key} className={`mb-3 p-3 rounded-xl border transition-all ${isMapped ? `${meta.bg} ${meta.border}` : 'bg-red-950/20 border-red-800/40'}`}>
+                <div className="flex items-center justify-between mb-2">
+                  <label className={`text-xs font-black ${isMapped ? meta.color : 'text-red-400'}`}>{label}</label>
+                  <span className={`text-[10px] font-black px-1.5 py-0.5 rounded ${isMapped ? 'bg-green-900/50 text-green-400' : 'bg-red-900/50 text-red-400'}`}>{isMapped ? '✓ 연결됨' : '✕ 누락'}</span>
+                </div>
+                <select value={mapDef[key]} onChange={e => updateMap(key, e.target.value)} className="w-full bg-black/60 border border-white/10 text-white font-bold p-2 rounded-lg outline-none text-xs cursor-pointer focus:border-[#22c55e]">
+                  <option value="">-- 컬럼 선택 --</option>
+                  {headers.map(h => {
+                    const sv = previewData.map(r => String(r[h] ?? '').trim()).find(Boolean) || '';
+                    return <option key={h} value={h}>{h}{sv ? ` → ${sv.slice(0, 16)}` : ''}</option>;
+                  })}
+                </select>
+              </div>
+            );
+          })}
+
+          {hasMixedSheet && !mapDef.type && (
+            <div className="mb-3 p-3 rounded-xl border border-amber-600/60 bg-amber-950/30 text-amber-300 text-[11px] font-bold flex items-start gap-2">
+              <span className="text-amber-400 shrink-0 mt-0.5">⚠</span>
+              <span>혼합 명단 시트가 있습니다.<br/>아래 <b>수급구분 열</b>을 반드시 매핑하세요.</span>
+            </div>
+          )}
+
+          {/* 비고 자동포함 토글 */}
+          <div className="mt-5 mb-3 p-3 rounded-xl border border-white/10 bg-black/30">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" checked={importNote} onChange={e => setImportNote(e.target.checked)} className="accent-[#22c55e] w-4 h-4 cursor-pointer" />
+              <span className={`text-xs font-black ${importNote ? 'text-[#22c55e]' : 'text-gray-500'}`}>비고 → 특이사항 자동 포함</span>
+            </label>
+            <p className={`text-[10px] mt-1 ml-6 ${importNote ? 'text-gray-500' : 'text-gray-700'}`}>
+              {importNote ? '비고 열 내용이 특이사항에 자동으로 포함됩니다.' : '비고 열을 가져오지 않습니다.'}
+            </p>
+          </div>
+
+          <p className="text-[10px] text-gray-600 font-black tracking-widest mb-3">━━ 보조 항목 (데이터 있는 항목만 표시)</p>
+          {[
+            { key: 'type',     label: '수급구분 열 (혼합명단 필수)' },
+            { key: 'contact2', label: '보조 연락처 (유선)' },
+            { key: 'birth',    label: '생년월일' },
+            { key: 'note',     label: '특이사항' },
+            { key: 'sms',      label: '문자수신 여부' },
+            { key: 'driver',   label: '기사 (담당 배송기사)' },
+            { key: 'seqNo',    label: '배송순번 (기존 값)' },
+          ].filter(({ key }) => hasColumn(key) || key === 'driver' || key === 'seqNo').map(({ key, label }) => {
+            const meta = FIELD_META[key];
+            const isMapped = !!mapDef[key];
+            return (
+              <div key={key} className={`mb-3 p-2.5 rounded-xl border transition-all ${isMapped ? `${meta.bg} ${meta.border}` : 'bg-black/30 border-white/5'}`}>
+                <label className={`block text-[11px] font-bold mb-1.5 ${isMapped ? meta.color : 'text-gray-500'}`}>{label}</label>
+                <select value={mapDef[key]} onChange={e => updateMap(key, e.target.value)} className="w-full bg-black/60 border border-white/10 text-gray-300 p-2 rounded-lg outline-none text-xs cursor-pointer focus:border-[#22c55e]">
+                  <option value="">-- 사용 안함 --</option>
+                  {headers.map(h => {
+                    const sv = previewData.map(r => String(r[h] ?? '').trim()).find(Boolean) || '';
+                    return <option key={h} value={h}>{h}{sv ? ` → ${sv.slice(0, 16)}` : ''}</option>;
+                  })}
+                </select>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* 우측 컬럼 카드 패널 */}
+      <div className="flex-1 overflow-y-auto overflow-x-hidden bg-[#030303] p-5 scrollbar-thin scrollbar-thumb-[#444]">
+        <p className="text-[10px] text-gray-600 font-black tracking-widest mb-4 pb-2 border-b border-[#1a1a1a]">
+          컬럼 식별 카드 — 카드를 보고 좌측에서 올바른 표준 필드로 연결하세요
+        </p>
+        <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(152px, 1fr))' }}>
+          {headers.map(h => {
+            const fieldKey = colToField[h];
+            const meta = fieldKey ? FIELD_META[fieldKey] : null;
+            const samples = previewData.map(r => String(r[h] ?? '').trim()).filter(Boolean).slice(0, 6);
+            const hasEmpty = meta && previewData.some(r => !String(r[h] ?? '').trim());
+            return (
+              <div key={h} className={`rounded-xl border p-3 flex flex-col gap-2 transition-all ${meta ? `${meta.bg} ${meta.border} shadow-[0_0_12px_rgba(0,0,0,0.5)]` : 'bg-[#111] border-[#2a2a2a] hover:border-[#444]'}`}>
+                <div className={`text-[11px] font-black leading-tight break-words min-h-[28px] ${meta ? meta.color : 'text-gray-300'}`} title={h}>{h}</div>
+                <div className={`text-[9px] font-black px-1.5 py-0.5 rounded-md w-fit border ${meta ? `${meta.bg} ${meta.color} ${meta.border}` : 'bg-black/50 text-gray-600 border-[#2a2a2a]'}`}>
+                  {meta ? `${meta.short} ✓` : '미매핑'}
+                </div>
+                <div className="flex flex-col gap-1 mt-0.5 min-h-[72px]">
+                  {samples.length > 0 ? (
+                    <>
+                      {samples.map((s, i) => (
+                        <div key={i} className={`text-[10px] font-mono truncate px-2 py-0.5 rounded ${meta ? `bg-black/40 ${meta.color} opacity-90` : 'bg-black/40 text-gray-400'}`} title={s}>{s}</div>
+                      ))}
+                      {hasEmpty && <div className="text-[9px] text-red-400 font-bold px-1 mt-0.5">⚠ 빈 값 있음</div>}
+                    </>
+                  ) : (
+                    <div className="text-[10px] text-gray-700 italic px-1">데이터 없음</div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        {headers.length === 0 && (
+          <div className="text-gray-600 text-sm font-bold text-center mt-20">컬럼 정보가 없습니다.</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+const sheetKey = (sheet) => sheet.fileSource ? `${sheet.fileSource}::${sheet.name}` : sheet.name;
+
+export default function Step3_Mapping({ step, setStep, mapDefs, setMapDefs, selectedSheets, worksheets, startProcessing, onHelp, importNote, setImportNote, baseFiles, baseCount, isBaseUploading, handleBaseUpload, handleRemoveBaseFile, handleAddTargetFile, handleRemoveTargetFile, isUploading, uploadFileName }) {
+  const [activeTab, setActiveTab] = useState(0);
+  const addTargetRef = useRef(null);
+  const addBaseRef = useRef(null);
+
+  if (step !== 3) return null;
+  if (!selectedSheets || selectedSheets.length === 0) return null;
+
+  const safeTab = Math.min(activeTab, selectedSheets.length - 1);
+  const activeSheet = selectedSheets[safeTab];
+  const currentMap = mapDefs[sheetKey(activeSheet)] || {};
+
+  const setCurrentMap = (newMap) =>
+    setMapDefs(prev => ({ ...prev, [sheetKey(activeSheet)]: newMap }));
+
+  const isSheetComplete = (sheet) => {
+    const m = mapDefs[sheetKey(sheet)] || {};
+    return REQUIRED_KEYS.every(k => !!m[k]);
+  };
+
+  const allComplete = selectedSheets.every(isSheetComplete);
+
+  return (
+    <div className="flex flex-col h-full bg-[#0a0a0a]/80 backdrop-blur-xl rounded-2xl border border-white/10 shadow-[0_8px_32px_rgba(0,0,0,0.6)] overflow-hidden">
+      {/* 헤더 */}
+      <div className="bg-gradient-to-b from-[#1a1710] to-[#0a0a0a] px-6 py-4 border-b border-[#333] flex justify-between items-center shrink-0 shadow-lg">
+        <div>
+          <h2 className="text-xl font-bold text-white flex items-center gap-3 drop-shadow-md">
+            <Columns size={24} className="text-[#22c55e]"/> 3단계: AI 헤더 매핑
+          </h2>
+          <p className="text-gray-400 mt-1.5 font-medium">자동 매핑을 확인하고 누락된 항목을 지정하세요.</p>
+        </div>
+        <div className="flex gap-4">
+          <button onClick={() => setStep(2)} className="px-6 py-3 bg-gray-800 border border-gray-600 text-white font-extrabold rounded-xl hover:bg-gray-700 transition-all shadow-md flex items-center gap-2">
+            <ChevronLeft size={18} strokeWidth={3}/> 시트 선택으로
+          </button>
+          <button
+            onClick={startProcessing}
+            disabled={!allComplete}
+            className={`px-8 py-3 font-extrabold rounded-xl flex items-center gap-2 uppercase tracking-wide transition-all ${allComplete ? 'bg-[#22c55e] text-black shadow-[0_0_15px_rgba(34,197,94,0.6)] hover:bg-[#86efac] hover:scale-105' : 'bg-gray-800 text-gray-500 border border-gray-700 cursor-not-allowed'}`}
+          >
+            12단계 정제 가동 <Database size={18} strokeWidth={3}/>
+          </button>
+          <button
+            onClick={onHelp}
+            className="w-10 h-10 rounded-full bg-[#0d1a0f] border border-[#22c55e]/40 text-[#22c55e] font-black text-base hover:bg-[#22c55e]/20 hover:scale-110 transition-all shrink-0"
+            style={{ animation: 'help-pulse 2.5s ease-in-out infinite' }}
+            title="3단계 도움말"
+          >?</button>
+        </div>
+      </div>
+
+      {/* 시트 탭 (선택된 시트 2개 이상일 때) */}
+      {selectedSheets.length > 1 && (
+        <div className="flex items-center gap-1 px-4 pt-3 pb-0 bg-black/60 border-b border-[#333] shrink-0 overflow-x-auto scrollbar-thin scrollbar-thumb-[#444]">
+          {selectedSheets.map((sheet, i) => {
+            const done = isSheetComplete(sheet);
+            const isActive = i === safeTab;
+            return (
+              <button
+                key={sheet.name}
+                onClick={() => setActiveTab(i)}
+                className={`flex items-center gap-2 px-4 py-2.5 rounded-t-lg border border-b-0 text-xs font-bold shrink-0 transition-all ${
+                  isActive
+                    ? 'bg-[#0a0a0a] border-[#22c55e]/40 text-white'
+                    : 'bg-black/40 border-[#333] text-gray-500 hover:text-gray-300 hover:bg-black/60'
+                }`}
+              >
+                {done
+                  ? <CheckCircle size={13} className="text-[#22c55e]"/>
+                  : <span className="w-3 h-3 rounded-full border-2 border-red-500 shrink-0"/>
+                }
+                <span className="max-w-[120px] truncate">{sheet.name}</span>
+                {sheet.fileSource && (
+                  <span className="text-[9px] font-black px-1 py-0.5 rounded bg-[#22c55e]/20 text-[#86efac] border border-[#22c55e]/30">2</span>
+                )}
+                <span className={`text-[10px] px-1.5 py-0.5 rounded border font-black ${
+                  sheet.type === '차상위' ? 'bg-[#0d1a0f] text-[#22c55e] border-[#22c55e]/30' : 'bg-[#111] text-gray-400 border-gray-700'
+                }`}>{sheet.type === '기초수급자' ? '수급' : sheet.type === '차상위' ? '차상위' : sheet.type === '혼합' ? '혼합' : '제외'}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {/* 매핑 현황 바 — 시트별 독립 표시 */}
+      <div className="bg-black/70 border-b border-white/5 shrink-0">
+        {selectedSheets.length === 1 ? (
+          <div className="px-6 py-2.5 flex items-center gap-2 flex-wrap">
+            <span className="text-gray-500 text-[11px] font-black tracking-widest mr-1">매핑현황</span>
+            {Object.entries(FIELD_META).map(([key, meta]) => {
+              const isRequired = REQUIRED_KEYS.includes(key);
+              const isMapped = !!currentMap[key];
+              if (!isRequired && !isMapped) return null;
+              return (
+                <span key={key} className={`px-2.5 py-1 rounded-md text-[11px] font-black flex items-center gap-1 border transition-all ${
+                  isMapped ? `${meta.bg} ${meta.color} ${meta.border}` : 'bg-red-950/60 text-red-400 border-red-600/60 animate-pulse'
+                }`}>
+                  {isMapped ? '✓' : '✕'} {meta.label}
+                  {isMapped && <span className="text-[9px] opacity-60 ml-0.5 max-w-[60px] truncate">{currentMap[key]}</span>}
+                </span>
+              );
+            })}
+          </div>
+        ) : (
+          selectedSheets.map((sheet, i) => {
+            const sheetMap = mapDefs[sheetKey(sheet)] || {};
+            const done = isSheetComplete(sheet);
+            const isActive = i === safeTab;
+            return (
+              <div
+                key={sheet.name}
+                onClick={() => setActiveTab(i)}
+                className={`px-4 py-1.5 flex items-center gap-2 flex-wrap border-b border-white/5 last:border-0 cursor-pointer transition-colors ${isActive ? 'bg-[#22c55e]/5' : 'hover:bg-white/[0.02]'}`}
+              >
+                <div className="flex items-center gap-1.5 mr-1 shrink-0">
+                  {done
+                    ? <CheckCircle size={11} className="text-[#22c55e]"/>
+                    : <span className="w-2.5 h-2.5 rounded-full border-2 border-red-500 inline-block"/>
+                  }
+                  <span className={`text-[10px] font-black max-w-[100px] truncate ${isActive ? 'text-[#22c55e]' : done ? 'text-gray-400' : 'text-red-400'}`}>
+                    {sheet.name}
+                  </span>
+                </div>
+                {Object.entries(FIELD_META).map(([key, meta]) => {
+                  const isRequired = REQUIRED_KEYS.includes(key);
+                  const isMapped = !!sheetMap[key];
+                  if (!isRequired && !isMapped) return null;
+                  return (
+                    <span key={key} className={`px-2 py-0.5 rounded text-[10px] font-black flex items-center gap-0.5 border transition-all ${
+                      isMapped ? `${meta.bg} ${meta.color} ${meta.border}` : 'bg-red-950/60 text-red-400 border-red-600/60 animate-pulse'
+                    }`}>
+                      {isMapped ? '✓' : '✕'} {meta.label}
+                    </span>
+                  );
+                })}
+              </div>
+            );
+          })
+        )}
+      </div>
+
+      {/* 매핑 패널 */}
+      <SheetMappingPanel
+        key={sheetKey(activeSheet)}
+        sheet={activeSheet}
+        mapDef={currentMap}
+        setMapDef={setCurrentMap}
+        worksheets={worksheets}
+        importNote={importNote}
+        setImportNote={setImportNote}
+      />
+
+      {/* 하단 패널 — 추가 명단 + 기본명단 */}
+      <div className="border-t-2 border-[#1a1a1a] bg-[#060606] px-5 py-4 shrink-0">
+        <div className="grid grid-cols-2 gap-4">
+
+          {/* 추가 명단 등록 */}
+          <div className="bg-[#0d0d0d] border border-blue-900/30 rounded-xl p-4">
+            <div className="flex items-center gap-2 mb-1">
+              <span className="text-blue-400 text-[10px] font-black tracking-widest">📋 추가 명단</span>
+              <span className="text-gray-700 text-[10px]">(선택)</span>
+            </div>
+            <p className="text-gray-500 text-[11px] leading-relaxed mb-3">
+              수급자·차상위가 별도 파일로 나뉘어 있거나, 처리할 명단이 여러 개라면<br/>
+              파일을 추가하세요. 각 시트는 탭으로 생성되어 독립 매핑됩니다.
+            </p>
+            {(() => {
+              const mainSrc = uploadFileName || '메인 명단';
+              const grouped = worksheets.reduce((acc, s) => {
+                const src = s.fileSource || mainSrc;
+                if (!acc[src]) acc[src] = 0;
+                acc[src] += s.bodyRows?.length || 0;
+                return acc;
+              }, {});
+              return Object.entries(grouped).map(([src, cnt]) => (
+                <div key={src} className="flex items-center gap-2 text-xs text-gray-400 mb-1.5 bg-black/30 rounded-lg px-2.5 py-1.5">
+                  <CheckCircle size={11} className="text-blue-400 flex-shrink-0"/>
+                  <span className="truncate text-gray-300">{src}</span>
+                  <span className="text-gray-600 flex-shrink-0 ml-auto pl-2 text-[10px]">{cnt.toLocaleString()}행</span>
+                  {src !== mainSrc && (
+                    <button type="button" onClick={() => handleRemoveTargetFile(src)} className="text-gray-700 hover:text-red-400 transition-colors flex-shrink-0 ml-1"><X size={11}/></button>
+                  )}
+                </div>
+              ));
+            })()}
+            <input ref={addTargetRef} type="file" className="hidden" accept=".xlsx,.xls,.csv"
+              onChange={e => { const f = e.target.files?.[0]; if (f) handleAddTargetFile(f); }}/>
+            {isUploading ? (
+              <div className="flex items-center gap-1.5 text-blue-400 text-xs font-bold mt-2">
+                <Loader2 size={12} className="animate-spin"/> 파일 분석 중...
+              </div>
+            ) : (
+              <button
+                type="button"
+                onMouseDown={(e) => { e.preventDefault(); if (addTargetRef.current) { addTargetRef.current.value = ''; addTargetRef.current.click(); }}}
+                className="mt-2 w-full flex items-center justify-center gap-2 py-2 rounded-lg border border-blue-800/40 bg-blue-950/20 text-blue-400 hover:bg-blue-950/50 hover:border-blue-600/60 text-xs font-bold transition-all cursor-pointer">
+                <Database size={12}/> + 명단 파일 추가
+              </button>
+            )}
+          </div>
+
+          {/* 기본명단 이식 */}
+          <div className="bg-[#0a100c] border border-[#22c55e]/25 rounded-xl p-4">
+            <div className="flex items-center gap-2 mb-1">
+              <span className="text-[#22c55e] text-[10px] font-black tracking-widest">👑 기본명단 이식</span>
+              <span className="text-gray-700 text-[10px]">(선택)</span>
+            </div>
+            <p className="text-gray-500 text-[11px] leading-relaxed mb-3">
+              기사·배송순번·특이사항·문자수신 등 신규 명단에 이식하고 싶은<br/>
+              정보가 담긴 이전 정제 명단 파일을 올려주세요.<br/>
+              <span className="text-gray-600">이름 + 생년월일 기준으로 자동 매칭·이식됩니다.</span>
+            </p>
+            {(baseFiles || []).map(f => (
+              <div key={f.name} className="flex items-center gap-2 mb-1.5 bg-black/30 rounded-lg px-2.5 py-1.5">
+                <CheckCircle size={11} className="text-[#22c55e] flex-shrink-0"/>
+                <span className="text-[#86efac] text-xs truncate">{f.name}</span>
+                <span className="text-gray-600 text-[10px] flex-shrink-0 ml-auto pl-2">{f.count.toLocaleString()}명</span>
+                <button type="button" onClick={() => handleRemoveBaseFile(f.name)} className="text-gray-700 hover:text-red-400 transition-colors flex-shrink-0 ml-1"><X size={11}/></button>
+              </div>
+            ))}
+            {baseCount > 0 && (
+              <p className="text-[#22c55e] text-[10px] font-bold mb-2 flex items-center gap-1">
+                <CheckCircle size={10}/> 총 {baseCount.toLocaleString()}건 이식 준비 완료
+              </p>
+            )}
+            <input ref={addBaseRef} type="file" className="hidden" accept=".xlsx,.xls,.csv"
+              onChange={e => { const f = e.target.files?.[0]; if (f) handleBaseUpload({ target: { files: [f] } }); }}/>
+            {isBaseUploading ? (
+              <div className="flex items-center gap-1.5 text-[#22c55e] text-xs font-bold mt-2">
+                <Loader2 size={12} className="animate-spin"/> 명단 분석 중...
+              </div>
+            ) : (
+              <button
+                type="button"
+                onMouseDown={(e) => { e.preventDefault(); if (addBaseRef.current) { addBaseRef.current.value = ''; addBaseRef.current.click(); }}}
+                className="mt-2 w-full flex items-center justify-center gap-2 py-2 rounded-lg border border-[#22c55e]/30 bg-[#22c55e]/10 text-[#22c55e] hover:bg-[#22c55e]/20 hover:border-[#22c55e]/60 text-xs font-bold transition-all cursor-pointer">
+                <Database size={12}/> + 기본명단 추가
+              </button>
+            )}
+          </div>
+
+        </div>
+      </div>
+    </div>
+  );
+}

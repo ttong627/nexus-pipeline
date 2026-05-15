@@ -1,0 +1,47 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    // 1. typo_dict: 로그인된 사용자 읽기/쓰기 가능 (오타 사전 공동 기여)
+    match /typo_dict/{docId} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated();
+    }
+
+    // 2. users: 본인 데이터 읽기/쓰기 + 관리자는 전체 읽기/쓰기 가능
+    match /users/{userId} {
+      allow read: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
+      allow write: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
+    }
+
+    function hasCityAccess(cityId) {
+      let uData = get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+      return ('citiesUsed' in uData && cityId in uData.citiesUsed) || ('managedCities' in uData && cityId in uData.managedCities);
+    }
+
+    // 3. base_lists: 담당 지자체 권한(citiesUsed, managedCities)이 있거나 관리자인 경우만 읽기/쓰기 허용
+    match /base_lists/{cityId} {
+      allow read: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin());
+      allow write: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin());
+      
+      match /records/{recordId} {
+        allow read: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin());
+        allow write: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin());
+      }
+    }
+
+    // 기타 모든 문서는 기본적으로 접근 거부 (Zero Trust)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

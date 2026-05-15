@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>웰쉐어 NEXUS — 광역시도 단위 공급 제안서</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700;900&display=swap');
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Noto Sans KR', sans-serif; background: #fff; color: #1a1a1a; line-height: 1.7; }
+
+  .page { max-width: 860px; margin: 0 auto; padding: 60px 40px; }
+
+  /* 헤더 */
+  .header { display: flex; justify-content: space-between; align-items: flex-start; padding-bottom: 32px; border-bottom: 3px solid #1a7a3a; margin-bottom: 40px; }
+  .logo { font-size: 26px; font-weight: 900; color: #1a7a3a; letter-spacing: -1px; }
+  .logo span { color: #888; font-weight: 300; font-size: 13px; display: block; margin-top: 4px; }
+  .doc-info { text-align: right; font-size: 12px; color: #666; line-height: 2; }
+  .doc-info strong { color: #1a1a1a; }
+
+  /* 타이틀 */
+  .title-block { background: linear-gradient(135deg, #0d4a1f 0%, #1a7a3a 100%); color: white; padding: 40px; border-radius: 12px; margin-bottom: 40px; }
+  .title-block .tag { font-size: 11px; font-weight: 700; letter-spacing: 3px; color: #86efac; text-transform: uppercase; margin-bottom: 12px; }
+  .title-block h1 { font-size: 28px; font-weight: 900; line-height: 1.4; margin-bottom: 8px; }
+  .title-block p { font-size: 14px; color: rgba(255,255,255,0.75); }
+
+  /* 섹션 */
+  h2 { font-size: 17px; font-weight: 900; color: #1a7a3a; border-left: 4px solid #1a7a3a; padding-left: 12px; margin: 36px 0 16px; }
+  h3 { font-size: 14px; font-weight: 700; color: #1a1a1a; margin: 20px 0 8px; }
+  p { font-size: 14px; color: #444; margin-bottom: 10px; }
+
+  /* 표 */
+  table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 13px; }
+  th { background: #0d4a1f; color: white; padding: 10px 14px; text-align: center; font-weight: 700; }
+  td { padding: 10px 14px; border-bottom: 1px solid #e5e7eb; text-align: center; color: #333; }
+  tr:nth-child(even) td { background: #f9fafb; }
+  .hl { color: #1a7a3a; font-weight: 900; }
+  .discount { color: #dc2626; font-weight: 700; }
+
+  /* 강조 박스 */
+  .box { background: #f0fdf4; border: 1px solid #86efac; border-radius: 10px; padding: 20px 24px; margin: 16px 0; }
+  .box.amber { background: #fffbeb; border-color: #fcd34d; }
+  .box.blue { background: #eff6ff; border-color: #93c5fd; }
+  .box ul { padding-left: 18px; }
+  .box li { font-size: 13px; color: #444; margin-bottom: 6px; }
+  .box .title { font-size: 13px; font-weight: 700; color: #166534; margin-bottom: 10px; }
+  .box.amber .title { color: #92400e; }
+  .box.blue .title { color: #1e40af; }
+
+  /* 도청 리스트 */
+  .city-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 12px 0; }
+  .city-item { background: #f3f4f6; border-radius: 6px; padding: 8px 10px; font-size: 12px; text-align: center; }
+  .city-item strong { display: block; color: #1a7a3a; font-weight: 700; font-size: 13px; }
+
+  /* 로드맵 */
+  .roadmap { display: flex; gap: 0; margin: 16px 0; }
+  .rm-step { flex: 1; padding: 16px; border-left: 3px solid #d1d5db; position: relative; }
+  .rm-step:first-child { border-left: 3px solid #1a7a3a; }
+  .rm-step .step-num { font-size: 11px; font-weight: 700; color: #1a7a3a; letter-spacing: 1px; margin-bottom: 6px; }
+  .rm-step h4 { font-size: 13px; font-weight: 700; margin-bottom: 4px; }
+  .rm-step p { font-size: 12px; color: #666; margin: 0; }
+
+  /* 서명 */
+  .sign-block { border-top: 2px solid #e5e7eb; margin-top: 48px; padding-top: 32px; display: flex; justify-content: space-between; align-items: flex-end; }
+  .sign-box { text-align: center; }
+  .sign-box .label { font-size: 12px; color: #888; margin-bottom: 40px; }
+  .sign-box .name { font-size: 14px; font-weight: 700; border-top: 1px solid #aaa; padding-top: 6px; min-width: 120px; }
+
+  .contact-block { background: #0d4a1f; color: white; border-radius: 12px; padding: 24px 28px; margin-top: 32px; }
+  .contact-block h3 { color: #86efac; font-size: 13px; margin-bottom: 12px; }
+  .contact-block p { color: rgba(255,255,255,0.8); font-size: 13px; margin-bottom: 4px; }
+  .contact-block a { color: #86efac; }
+
+  @media print {
+    body { font-size: 12px; }
+    .page { padding: 20px; }
+    .title-block h1 { font-size: 22px; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- 헤더 -->
+  <div class="header">
+    <div>
+      <div class="logo">NEXUS CORE
+        <span>웰쉐어 복지배달 명단 정제 시스템</span>
+      </div>
+    </div>
+    <div class="doc-info">
+      <strong>공급 제안서</strong><br>
+      문서번호: NX-2026-GOV<br>
+      작성일: 2026년 5월<br>
+      유효기간: 발송일로부터 60일
+    </div>
+  </div>
+
+  <!-- 타이틀 -->
+  <div class="title-block">
+    <div class="tag">◆ 광역시도 단위 공급 제안</div>
+    <h1>복지배달 명단 정제 시스템<br>광역 통합 도입 제안서</h1>
+    <p>관내 시군구 복지담당 부서의 업무 효율화 및 오류율 제로화를 위한 SaaS 솔루션 광역 공급 제안</p>
+  </div>
+
+  <!-- 1. 제안 배경 -->
+  <h2>1. 제안 배경 및 현황 문제</h2>
+  <p>현재 전국 시군구 복지 담당 공무원은 매월 기초생활수급자·차상위계층 배달 명단을 <strong>수작업 엑셀</strong>로 정제하고 있습니다. 이 과정에서 다음과 같은 반복적 문제가 발생합니다.</p>
+  <div class="box">
+    <div class="title">📋 현재 담당자의 월별 반복 업무</div>
+    <ul>
+      <li>수급자 명단 엑셀 취합 → 형식 불일치 수동 정리 (평균 3~8시간/월)</li>
+      <li>주소 오류·누락 수작업 확인 → 행정동 불일치 오분류</li>
+      <li>배달업체 명단 재가공 → 포수 오집계로 인한 민원 발생</li>
+      <li>특이사항(연락 불가·부재·이사 등) 수동 이관 → 누락 빈번</li>
+    </ul>
+  </div>
+
+  <!-- 2. 솔루션 소개 -->
+  <h2>2. NEXUS CORE 솔루션 소개</h2>
+  <p>NEXUS CORE는 복지 배달 명단 정제에 특화된 AI 기반 SaaS입니다. 기존 수작업 3~8시간을 <strong>15분 이내</strong>로 단축합니다.</p>
+  <div class="box">
+    <div class="title">✅ 핵심 기능</div>
+    <ul>
+      <li><strong>AI 자동 컬럼 매핑</strong> — 어떤 엑셀 양식이든 자동 인식</li>
+      <li><strong>12단계 주소 정제 엔진</strong> — 도로명·지번 자동 변환, 행정동 오류 자동 감지</li>
+      <li><strong>포수(배달 단위) 자동 집계</strong> — 기초/차상위 구분, 합계 자동 계산</li>
+      <li><strong>특이사항 자동 이관</strong> — 전월 특이사항 신규 명단에 자동 매칭</li>
+      <li><strong>표준 엑셀 즉시 출력</strong> — 배달업체 제출용 파일 원클릭 생성</li>
+    </ul>
+  </div>
+
+  <!-- 3. 광역 공급 제안 -->
+  <h2>3. 광역시도 단위 공급 조건</h2>
+
+  <div class="box amber">
+    <div class="title">💡 광역 계약의 핵심 이점</div>
+    <ul>
+      <li>도청 복지국 1회 계약 → 관내 전 시군구 즉시 사용 개시</li>
+      <li>개별 시군구 별도 발주 불필요 → 행정 절차 대폭 간소화</li>
+      <li>도 단위 예산 집행 가능 → 시군구 자체 예산 절감</li>
+    </ul>
+  </div>
+
+  <h3>요금 비교 (개별 계약 vs 광역 계약)</h3>
+  <table>
+    <thead>
+      <tr><th>구분</th><th>개별 시군구 계약</th><th>광역 통합 계약</th><th>절감액</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>단가 (시군구당/월)</td><td>490,000원</td><td class="hl">343,000원</td><td class="discount">-30%</td></tr>
+      <tr><td>경기도 (31개 시군)</td><td>15,190,000원/월</td><td class="hl">10,633,000원/월</td><td class="discount">4,557,000원/월</td></tr>
+      <tr><td>경상남도 (18개 시군)</td><td>8,820,000원/월</td><td class="hl">6,174,000원/월</td><td class="discount">2,646,000원/월</td></tr>
+      <tr><td>전라남도 (22개 시군)</td><td>10,780,000원/월</td><td class="hl">7,546,000원/월</td><td class="discount">3,234,000원/월</td></tr>
+      <tr><td>충청북도 (11개 시군)</td><td>5,390,000원/월</td><td class="hl">3,773,000원/월</td><td class="discount">1,617,000원/월</td></tr>
+    </tbody>
+  </table>
+  <p style="font-size:12px;color:#888;">※ 3년 장기계약 시 추가 5% 할인 적용 · 연 선납 시 1개월 무상 제공</p>
+
+  <!-- 4. 주요 광역 타겟 -->
+  <h2>4. 우선 도입 제안 광역자치단체</h2>
+  <div class="city-grid">
+    <div class="city-item"><strong>경기도</strong>31개 시군</div>
+    <div class="city-item"><strong>경상남도</strong>18개 시군</div>
+    <div class="city-item"><strong>전라남도</strong>22개 시군</div>
+    <div class="city-item"><strong>충청남도</strong>15개 시군</div>
+    <div class="city-item"><strong>전라북도</strong>14개 시군</div>
+    <div class="city-item"><strong>강원도</strong>18개 시군</div>
+    <div class="city-item"><strong>충청북도</strong>11개 시군</div>
+    <div class="city-item"><strong>경상북도</strong>23개 시군</div>
+  </div>
+
+  <!-- 5. 도입 절차 -->
+  <h2>5. 도입 로드맵</h2>
+  <div class="roadmap">
+    <div class="rm-step">
+      <div class="step-num">STEP 1 · 1~2주</div>
+      <h4>제안 협의</h4>
+      <p>도청 복지국 담당자 미팅, 시범 시군구 선정</p>
+    </div>
+    <div class="rm-step">
+      <div class="step-num">STEP 2 · 2~4주</div>
+      <h4>파일럿 운영</h4>
+      <p>선정 시군구 2~3개 무료 1개월 시범 운영</p>
+    </div>
+    <div class="rm-step">
+      <div class="step-num">STEP 3 · 5~6주</div>
+      <h4>계약 체결</h4>
+      <p>나라장터 수의계약 or 도청 직접 계약 체결</p>
+    </div>
+    <div class="rm-step">
+      <div class="step-num">STEP 4 · 7주~</div>
+      <h4>전체 확대</h4>
+      <p>관내 전 시군구 계정 일괄 발급, 온보딩 교육</p>
+    </div>
+  </div>
+
+  <!-- 6. 기대 효과 -->
+  <h2>6. 도입 기대 효과</h2>
+  <div class="box blue">
+    <div class="title">📊 정량적 기대 효과 (시군구 1개 기준/월)</div>
+    <ul>
+      <li><strong>업무 시간 단축:</strong> 월 3~8시간 → 15분 이내 (최대 97% 절감)</li>
+      <li><strong>오류율:</strong> 주소 불일치·누락 평균 2~5% → 0.1% 미만</li>
+      <li><strong>민원 감소:</strong> 주소 오류로 인한 배달 실패 민원 80% 이상 감소 예상</li>
+      <li><strong>담당자 만족도:</strong> 반복 수작업 해방 → 실질 업무 집중 가능</li>
+    </ul>
+  </div>
+
+  <!-- 7. 나라장터 조달 -->
+  <h2>7. 조달청 나라장터 등록 및 계약 방식</h2>
+  <p>본 솔루션은 <strong>소프트웨어 유지보수 및 SaaS 서비스</strong> 품목으로 나라장터에 등록 예정이며, 2,000만원 이하 수의계약이 가능합니다.</p>
+  <div class="box">
+    <div class="title">📋 계약 가능 방식</div>
+    <ul>
+      <li>나라장터 수의계약 (소액, 시군구 단위)</li>
+      <li>도청 복지국 주관 일괄 계약 (광역 단위, 3년 장기)</li>
+      <li>클라우드 서비스 이용 계약 (공공기관 클라우드 도입 지원사업 연계 가능)</li>
+    </ul>
+  </div>
+
+  <!-- 서명 -->
+  <div class="sign-block">
+    <div>
+      <p style="font-size:13px;color:#444;">위 제안 내용에 대한 문의 및 협의를 요청드립니다.</p>
+      <p style="font-size:13px;color:#444;">귀 기관의 복지 업무 효율화에 기여할 수 있도록 최선을 다하겠습니다.</p>
+    </div>
+    <div style="display:flex;gap:40px;">
+      <div class="sign-box">
+        <div class="label">제안사 대표</div>
+        <div class="name">웰쉐어</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 연락처 -->
+  <div class="contact-block">
+    <h3>📬 문의 및 협의 요청</h3>
+    <p><strong style="color:white;">담당자:</strong> 웰쉐어 NEXUS 사업팀</p>
+    <p><strong style="color:white;">이메일:</strong> <a href="mailto:ttong627@gmail.com">ttong627@gmail.com</a></p>
+    <p><strong style="color:white;">시스템 체험:</strong> <a href="https://logis-op.web.app" target="_blank">https://logis-op.web.app</a></p>
+    <p style="margin-top:12px;font-size:12px;color:rgba(255,255,255,0.5);">※ 파일럿 참여 시군구에 1개월 무료 체험 제공 · 도입 후 30일 내 불만족 시 전액 환불</p>
+  </div>
+
+</div>
+</body>
+</html>
