@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { db, collection, getDocs, setDoc, doc, deleteDoc, writeBatch } from '../config/firebase.js';
+import { db, collection, getDocs, getDoc, setDoc, doc, deleteDoc, writeBatch, serverTimestamp } from '../config/firebase.js';
 import { Database, Upload, Trash2, ArrowLeft, AlertCircle, CheckCircle, ChevronDown, Plus, Minus } from 'lucide-react';
 import { normalizeBirth, parsePhoneNumbers } from '../utils/parsers.js';
 import { REGIONS } from '../utils/regions.js';
@@ -205,7 +205,7 @@ export default function BaseListManager({ user, onBack }) {
     try {
       const batch = writeBatch(db);
       const cityRef = doc(db, 'base_lists', selectedCity);
-      batch.set(cityRef, { city: selectedCity, updatedAt: new Date(), author: user.uid }, { merge: true });
+      batch.set(cityRef, { city: selectedCity, updatedAt: serverTimestamp(), author: user.uid }, { merge: true });
 
       adds.forEach(a => {
         const rRef = doc(collection(db, `base_lists/${selectedCity}/records`));
@@ -543,38 +543,33 @@ export default function BaseListManager({ user, onBack }) {
               })}
             </div>
             <div className="p-5 border-t border-gray-800 bg-gray-900/50 flex justify-end gap-3">
-              <button 
-                onClick={() => { 
+              <button
+                onClick={async () => {
                   if (conflicts.some(c => !c.resolved)) {
-                    if(!confirm('해결되지 않은 충돌이 있습니다. 이 항목들은 무시하고 완료하시겠습니까?')) return;
+                    if (!confirm('해결되지 않은 충돌이 있습니다. 이 항목들은 무시하고 완료하시겠습니까?')) return;
                   }
-                  
-                  // Apply resolved conflicts
-                  const batchAdds = [];
-                  const batchUpdates = [];
+                  const resolvedAdds = [];
+                  const resolvedUpdates = [];
                   conflicts.forEach(c => {
                     if (!c.resolved) return;
                     if (c.selectedId === 'NEW') {
-                      batchAdds.push({ ...c.newRow, months: [targetMonth], history: [{ date: new Date().toISOString().split('T')[0], note: `[${targetMonth}] 동명이인 분리 등록`, author: user?.name || '관리자' }] });
+                      resolvedAdds.push({
+                        ...c.newRow,
+                        months: [targetMonth],
+                        history: [{ date: new Date().toISOString().split('T')[0], note: `[${targetMonth}] 동명이인 분리 등록`, author: user?.name || '관리자' }]
+                      });
                     } else {
                       const matched = c.existingRows.find(ex => ex.id === c.selectedId);
                       if (matched) {
                         const months = matched.months || [];
                         if (!months.includes(targetMonth)) months.push(targetMonth);
-                        batchUpdates.push({ ...matched, ...c.newRow, id: matched.id, months });
+                        resolvedUpdates.push({ ...matched, ...c.newRow, id: matched.id, months });
                       }
                     }
                   });
-
-                  // We need to trigger the actual upload logic now with these added.
-                  // For simplicity, we just restart the DB batch commit here if there are resolves.
-                  // But we need the adds/updates arrays from before. This is a bit complex inline.
-                  // Instead, we just alert the user to complete them. (In a full implementation, we'd wrap the DB commit in a separate function).
-                  
-                  alert('충돌 처리 로직이 예약되었습니다.');
-                  setShowConflictModal(false); 
-                  setUploading(false); 
-                }} 
+                  await commitBatch(resolvedAdds, resolvedUpdates);
+                  setShowConflictModal(false);
+                }}
                 className="px-6 py-2 bg-[#22c55e] text-black font-bold rounded-lg hover:bg-[#1ea34d]"
               >
                 병합 완료

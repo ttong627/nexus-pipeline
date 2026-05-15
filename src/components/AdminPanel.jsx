@@ -175,7 +175,8 @@ export default function AdminPanel({ onClose, adminUid }) {
   // 미인식 컬럼 집계
   const aggregatedCols = {};
   aiLogs.forEach(l => {
-    l.cols.forEach(c => {
+    const colList = Array.isArray(l.cols) ? l.cols : (l.columnName ? [l.columnName] : []);
+    colList.forEach(c => {
       if (!aggregatedCols[c]) aggregatedCols[c] = { count: 0, files: new Set() };
       aggregatedCols[c].count++;
       aggregatedCols[c].files.add(l.fileName);

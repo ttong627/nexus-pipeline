@@ -19,7 +19,7 @@ import BaseListManager from "./components/BaseListManager.jsx";
 
 import { processAddress, asyncPool, addTypoRecord, loadTypoDict } from "./engine/addressEngine.js";
 import { parsePhoneNumbers, parseSMS, parseBirthDate } from "./utils/parsers.js";
-import { LogOut, ShieldCheck, CheckCircle, Database, Crown, Layers, UserCircle, Undo2 } from "lucide-react";
+import { LogOut, ShieldCheck, CheckCircle, Database, Crown, Layers, UserCircle, Undo2, Menu } from "lucide-react";
 
 export default function App() {
   const [user, setUser] = useState(null);
@@ -47,13 +47,40 @@ export default function App() {
   const [filter, setFilter] = useState({ text: "", showErrorsOnly: false });
   const [colVis, setColVis] = useState({});
   const [baseCount, setBaseCount] = useState(0);
-  const [isBasePurifyMode, setIsBasePurifyMode] = useState(false); // 기본명단 주소 정제 전용 모드
+  const [baseMap, setBaseMap] = useState(null);
+  const [isBasePurifyMode, setIsBasePurifyMode] = useState(false);
+  const inqUnsubRef = useRef(null);
+
+  const DEFAULT_EXPORT_COLS = [
+    { key: 'NO',      label: 'NO',      on: true },
+    { key: '구분',    label: '구분',    on: true },
+    { key: '행정동',  label: '행정동',  on: true },
+    { key: '이름',    label: '성명',    on: true },
+    { key: '생년월일',label: '생년월일',on: true },
+    { key: '포수',    label: '포수',    on: true },
+    { key: '휴대폰',  label: '휴대폰',  on: true },
+    { key: '유선전화',label: '유선전화',on: true },
+    { key: '문자수신',label: '문자수신',on: true },
+    { key: '주소',    label: '주소',    on: true },
+    { key: '특이사항',label: '특이사항',on: true },
+    { key: '기사',    label: '기사',    on: true },
+    { key: '배송순번',label: '배송순번',on: true },
+    { key: '사유',    label: '사유',    on: true },
+  ];
+  const [exportColOrder, setExportColOrder] = useState(() => {
+    try {
+      const saved = localStorage.getItem('nexus_export_cols_v2');
+      if (saved) return JSON.parse(saved);
+    } catch { /* ignore */ }
+    return DEFAULT_EXPORT_COLS;
+  });
 
   const [showExportSetting, setShowExportSetting] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   const [showUpgrade, setShowUpgrade] = useState(false);
   const [showUtils, setShowUtils] = useState(false);
   const [showCloudBase, setShowCloudBase] = useState(false);
+  const [showHeaderMenu, setShowHeaderMenu] = useState(false);
   const [profileModal, setProfileModal] = useState({ open: false, isNew: false });
   const [pendingInquiriesCount, setPendingInquiriesCount] = useState(0);
 
@@ -113,7 +140,8 @@ export default function App() {
         
         if (userData.role === 'admin') {
           const q = query(collection(db, "inquiries"), where("status", "==", "pending"));
-          const unsubInq = onSnapshot(q, snap => setPendingInquiriesCount(snap.size));
+          if (inqUnsubRef.current) inqUnsubRef.current();
+          inqUnsubRef.current = onSnapshot(q, snap => setPendingInquiriesCount(snap.size));
         }
         
         const rulesDoc = await getDoc(doc(db, "nexus_config", "ai_rules"));
@@ -129,7 +157,7 @@ export default function App() {
         setAuthStatus('unauthenticated');
       }
     });
-    return () => unsub();
+    return () => { unsub(); if (inqUnsubRef.current) inqUnsubRef.current(); };
   }, []);
 
   const handleGoogleLogin = async () => {
@@ -144,8 +172,8 @@ export default function App() {
           email: res.user.email,
           name: res.user.displayName,
           lastLogin: serverTimestamp(),
-          role: "admin",
-          tier: "vvip"
+          role: "user",
+          tier: "basic"
         });
       } else {
         await updateDoc(userRef, { lastLogin: serverTimestamp() });
@@ -357,19 +385,26 @@ export default function App() {
             setEngineProgress({ current: count, total, percent: Math.round((count/total)*100) });
             lastProgressTime = Date.now();
           }
+          // baseMap 이식: 이름+생년월일 키로 매칭
+          const birthKey = parseBirthDate(getVal(row, 'birth'));
+          const baseKey = `${name}_${birthKey}`;
+          const baseEntry = baseMap ? (baseMap[baseKey] || null) : null;
+
           return {
             id: window.crypto.randomUUID(),
             구분: sheet.type,
             행정동: getVal(row, 'admin') || "",
             이름: processedRow.정제된이름 || name,
-            생년월일: parseBirthDate(getVal(row, 'birth')),
+            생년월일: birthKey,
             품명: getVal(row, 'itemName') || "",
             포수: getVal(row, 'qty') ? (parseInt(getVal(row, 'qty')) || 1) : "",
             휴대폰: parsePhoneNumbers(getVal(row, 'contact1'), getVal(row, 'contact2')).mobile,
             유선전화: parsePhoneNumbers(getVal(row, 'contact1'), getVal(row, 'contact2')).landline,
             주소: processedRow.주소,
             문자수신: parseSMS(getVal(row, 'sms')),
-            특이사항: getVal(row, 'note') || "",
+            특이사항: getVal(row, 'note') || baseEntry?.note || "",
+            기사: getVal(row, 'driver') || baseEntry?.driver || "",
+            배송순번: getVal(row, 'seqNo') || baseEntry?.seqNo || "",
             _에러: processedRow.확인필요,
             _사유: processedRow.확인사유
           };
@@ -401,7 +436,7 @@ export default function App() {
   const handleUpdateBaseList = async (row, updates) => {
     if (!row) return;
     try {
-      const ref = doc(db, "baselist", row.id || row.이름);
+      const ref = doc(db, "base_lists", row.id || row.이름);
       await setDoc(ref, { ...row, ...updates }, { merge: true });
       
       await addDoc(collection(db, "audit_logs"), {
@@ -427,7 +462,7 @@ export default function App() {
         chunk.forEach(row => {
           // 이름과 휴대폰을 조합하여 고유 ID로 사용 (누적 시 중복 방지)
           const docId = row.이름 + "_" + (row.휴대폰 || row.id);
-          const ref = doc(db, "baselist", docId);
+          const ref = doc(db, "base_lists", docId);
           batch.set(ref, row, { merge: true });
         });
         await batch.commit();
@@ -457,9 +492,81 @@ export default function App() {
     pushHistory(newData);
   };
 
-  const handleExport = () => { /* Export logic */ };
-  const handleExportErrors = () => { /* Export logic */ };
-  const handleExportDongSummary = () => { /* Export logic */ };
+  const _buildExportFileName = (prefix = '') => {
+    const now = new Date();
+    const mmdd = String(now.getMonth()+1).padStart(2,'0') + String(now.getDate()).padStart(2,'0');
+    const timeSeq = String(now.getHours()).padStart(2,'0') + String(now.getMinutes()).padStart(2,'0') + String(now.getSeconds()).padStart(2,'0');
+    const safeCity = (fileInfo?.city || '지자체미상').replace(/[/\\*?:"<>|]/g,'_');
+    const cleanMonth = (fileInfo?.month || '').replace(/월/g,'').trim();
+    const monthStr = cleanMonth ? `${cleanMonth}월` : '미상';
+    const suCount  = filteredData.filter(r => r.구분 === '기초수급자').reduce((s,r) => s+(Number(r.포수)||0), 0);
+    const chaCount = filteredData.filter(r => r.구분 === '차상위').reduce((s,r) => s+(Number(r.포수)||0), 0);
+    const total    = suCount + chaCount;
+    const base = `${safeCity}-${monthStr}-기초${suCount},차상위${chaCount},전체${total}-${mmdd}${timeSeq}`;
+    return `${prefix}${base}.xlsx`;
+  };
+
+  const _runExportWorker = (payload) => {
+    const worker = new Worker(new URL('./excelWorker.js', import.meta.url), { type: 'module' });
+    worker.onmessage = (e) => {
+      worker.terminate();
+      if (e.data.success || e.data.ok) {
+        const blob = new Blob([e.data.wbout], { type: 'application/octet-stream' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = e.data.fileName || payload.fileName || 'export.xlsx';
+        a.click();
+      } else {
+        alert('내보내기 중 오류가 발생했습니다.');
+      }
+    };
+    worker.onerror = () => { worker.terminate(); alert('내보내기 워커 오류'); };
+    worker.postMessage(payload);
+  };
+
+  const handleExport = () => {
+    if (!filteredData.length) return alert('내보낼 데이터가 없습니다.');
+    const activeCols = exportColOrder.filter(c => c.on);
+    const finalRows = filteredData.map((r, i) => {
+      const row = {};
+      activeCols.forEach(c => {
+        if (c.key === 'NO') row[c.label] = i + 1;
+        else if (c.key === '사유') row[c.label] = r._에러 ? r._사유 : '정상';
+        else row[c.label] = r[c.key] ?? '';
+      });
+      return row;
+    });
+    _runExportWorker({ finalRows, exportCols: activeCols.map(c => c.label), fileName: _buildExportFileName() });
+  };
+
+  const handleExportErrors = () => {
+    const errors = filteredData.filter(r => r._에러);
+    if (!errors.length) return alert('확인 필요 항목이 없습니다.');
+    const activeCols = exportColOrder.filter(c => c.on);
+    const finalRows = errors.map((r, i) => {
+      const row = {};
+      activeCols.forEach(c => {
+        if (c.key === 'NO') row[c.label] = i + 1;
+        else if (c.key === '사유') row[c.label] = r._사유 || '';
+        else row[c.label] = r[c.key] ?? '';
+      });
+      return row;
+    });
+    _runExportWorker({ finalRows, exportCols: activeCols.map(c => c.label), fileName: _buildExportFileName('[확인필요]') });
+  };
+
+  const handleExportDongSummary = () => {
+    if (!filteredData.length) return alert('내보낼 데이터가 없습니다.');
+    const activeCols = exportColOrder.filter(c => c.on);
+    _runExportWorker({
+      action: 'EXPORT_DONG_SUMMARY',
+      rawRows: filteredData,
+      activeCols,
+      city: fileInfo?.city || '지자체미상',
+      month: fileInfo?.month || '미상',
+      fileName: _buildExportFileName('[행정동요약]'),
+    });
+  };
   const onHelp = () => setShowHelp(true);
   const onLogout = () => auth.signOut();
 
@@ -494,29 +601,58 @@ export default function App() {
             )}
           </div>
           
-          <div className="flex items-center gap-3">
-             <button onClick={() => setStep(0)} className="px-4 py-2 bg-[#111] hover:bg-[#222] border border-[#333] text-gray-300 font-bold rounded-lg text-xs transition-all flex items-center gap-2">
-               대시보드
-             </button>
-             <button onClick={handleUndo} disabled={history.length === 0} className="px-4 py-2 bg-[#222] hover:bg-[#333] disabled:opacity-50 text-white text-xs font-bold rounded-lg transition-all flex items-center gap-2">
-               <Undo2 size={16} /> 실행취소
-             </button>
-             
-             {/* RESTORED MODAL BUTTONS */}
-             <button onClick={() => setShowCloudBase(true)} className="px-4 py-2 bg-blue-900/40 text-blue-300 border border-blue-500/50 hover:bg-blue-900/60 font-bold rounded-lg text-xs transition-all flex items-center gap-2">
-               <Database size={16} /> 클라우드 명단
-             </button>
-             <button onClick={() => setShowUtils(true)} className="px-4 py-2 bg-yellow-900/40 text-yellow-300 border border-yellow-500/50 hover:bg-yellow-900/60 font-bold rounded-lg text-xs transition-all flex items-center gap-2">
-               <Layers size={16} /> 부가서비스
-             </button>
-             <button onClick={() => setShowUpgrade(true)} className="px-4 py-2 bg-indigo-900/40 text-indigo-300 border border-indigo-500/50 hover:bg-indigo-900/60 font-bold rounded-lg text-xs transition-all flex items-center gap-2">
-               <Crown size={16} /> 회원등급 관리
-             </button>
-             <button onClick={() => setProfileModal({ open: true, isNew: false })} className="px-4 py-2 bg-gray-800 text-gray-300 border border-gray-600 hover:bg-gray-700 font-bold rounded-lg text-xs transition-all flex items-center gap-2">
-               <UserCircle size={16} /> 내 프로필
-             </button>
-             
-             {user?.role === "admin" && (
+          <div className="flex items-center gap-2">
+            <button onClick={() => setStep(0)} className="px-4 py-2 bg-[#111] hover:bg-[#222] border border-[#333] text-gray-300 font-bold rounded-lg text-xs transition-all flex items-center gap-2">
+              대시보드
+            </button>
+            <button onClick={handleUndo} disabled={history.length === 0} className="px-4 py-2 bg-[#222] hover:bg-[#333] disabled:opacity-50 text-white text-xs font-bold rounded-lg transition-all flex items-center gap-2">
+              <Undo2 size={16} /> 실행취소
+            </button>
+
+            {/* 메뉴 드롭다운 */}
+            <div className="relative">
+              <button
+                onClick={() => setShowHeaderMenu(v => !v)}
+                className="px-4 py-2 bg-[#111] hover:bg-[#1a1a1a] border border-[#333] hover:border-[#22c55e]/50 text-gray-300 font-bold rounded-lg text-xs transition-all flex items-center gap-2"
+              >
+                <Menu size={16} /> 메뉴
+              </button>
+              {showHeaderMenu && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setShowHeaderMenu(false)} />
+                  <div className="absolute right-0 top-full mt-2 w-52 bg-[#0d1a0f] border border-[#22c55e]/20 rounded-xl shadow-[0_8px_32px_rgba(0,0,0,0.6)] z-50 overflow-hidden">
+                    <div className="p-1.5 space-y-0.5">
+                      <button
+                        onClick={() => { setShowCloudBase(true); setShowHeaderMenu(false); }}
+                        className="w-full px-4 py-2.5 flex items-center gap-3 text-blue-300 hover:bg-blue-900/30 rounded-lg text-xs font-bold transition-colors text-left"
+                      >
+                        <Database size={15} /> 클라우드 명단
+                      </button>
+                      <button
+                        onClick={() => { setShowUtils(true); setShowHeaderMenu(false); }}
+                        className="w-full px-4 py-2.5 flex items-center gap-3 text-yellow-300 hover:bg-yellow-900/30 rounded-lg text-xs font-bold transition-colors text-left"
+                      >
+                        <Layers size={15} /> 부가서비스
+                      </button>
+                      <button
+                        onClick={() => { setShowUpgrade(true); setShowHeaderMenu(false); }}
+                        className="w-full px-4 py-2.5 flex items-center gap-3 text-indigo-300 hover:bg-indigo-900/30 rounded-lg text-xs font-bold transition-colors text-left"
+                      >
+                        <Crown size={15} /> 회원등급 관리
+                      </button>
+                      <button
+                        onClick={() => { setProfileModal({ open: true, isNew: false }); setShowHeaderMenu(false); }}
+                        className="w-full px-4 py-2.5 flex items-center gap-3 text-gray-300 hover:bg-gray-800/60 rounded-lg text-xs font-bold transition-colors text-left"
+                      >
+                        <UserCircle size={15} /> 내 프로필
+                      </button>
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+
+            {user?.role === "admin" && (
               <button onClick={() => setStep(7)} className="relative px-4 py-2 bg-purple-900/40 text-purple-300 border border-purple-500/50 hover:bg-purple-900/60 font-bold rounded-lg text-xs transition-all flex items-center gap-2">
                 <ShieldCheck size={16} /> 관리자 패널
                 {pendingInquiriesCount > 0 && (
@@ -526,9 +662,9 @@ export default function App() {
                 )}
               </button>
             )}
-             <button onClick={onLogout} className="px-4 py-2 bg-red-950/40 text-red-400 border border-red-500/50 hover:bg-red-900/60 font-bold rounded-lg text-xs transition-all flex items-center gap-2">
-               <LogOut size={16} /> 로그아웃
-             </button>
+            <button onClick={onLogout} className="px-4 py-2 bg-red-950/40 text-red-400 border border-red-500/50 hover:bg-red-900/60 font-bold rounded-lg text-xs transition-all flex items-center gap-2">
+              <LogOut size={16} /> 로그아웃
+            </button>
           </div>
         </header>
 
@@ -547,7 +683,7 @@ export default function App() {
         {showHelp && <HelpModal onClose={() => setShowHelp(false)} />}
         {showUtils && <UtilsModal onClose={() => setShowUtils(false)} />}
         {showUpgrade && <UpgradeModal user={user} userTier={user?.tier || 'basic'} usedCount={baseCount} userMaxCities={user?.maxCities || 1} onClose={() => setShowUpgrade(false)} />}
-        {showCloudBase && <CloudBaseModal user={user} onClose={() => setShowCloudBase(false)} onImport={(newBaseMap, city, count) => { /* Base Map Import logic */ }} />}
+        {showCloudBase && <CloudBaseModal user={user} onClose={() => setShowCloudBase(false)} onImport={(newBaseMap, city, count) => { setBaseMap(newBaseMap); setBaseCount(count); setShowCloudBase(false); }} />}
         {profileModal.open && <ProfileSetupModal user={user} isNewUser={profileModal.isNew} onClose={() => setProfileModal({ open: false, isNew: false })} />}
       </div>
     </ErrorBoundary>
