@@ -122,16 +122,27 @@ export default function App() {
   const handleFileUpload = async (e) => {
     const file = e.target.files ? e.target.files[0] : e.dataTransfer?.files[0];
     if (!file) return;
+    
+    // UI 로딩 상태 추가 가능
     setFileInfo({ name: file.name, size: file.size, file });
     
-    const worker = new Worker(new URL("./excelWorker.js", import.meta.url), { type: "module" });
-    worker.postMessage({ type: "PARSE_EXCEL", file });
-    worker.onmessage = (evt) => {
-      if (evt.data.type === "EXCEL_PARSED") {
-        setWorksheets(evt.data.sheets);
-        setStep(2);
-      }
-    };
+    try {
+      const buffer = await file.arrayBuffer();
+      const worker = new Worker(new URL("./excelWorker.js", import.meta.url), { type: "module" });
+      
+      worker.postMessage({ action: "PARSE_TARGET", buffer, fileName: file.name });
+      worker.onmessage = (evt) => {
+        if (evt.data.ok && evt.data.action === "PARSE_TARGET") {
+          setWorksheets(evt.data.sheetsData);
+          setStep(2);
+        } else if (!evt.data.ok) {
+          alert("파일 분석 중 오류가 발생했습니다: " + evt.data.error);
+        }
+        worker.terminate();
+      };
+    } catch (err) {
+      alert("파일을 읽는 중 오류가 발생했습니다.");
+    }
   };
 
   const handleUnifiedDrop = (e) => { handleDrop(e); };
@@ -306,7 +317,7 @@ export default function App() {
 
         <main className="flex-1 relative overflow-hidden bg-[#050505]">
           {step === 0 && <Dashboard user={user} onLogout={onLogout} onStart={(s) => setStep(typeof s === 'number' ? s : 1)} onHelp={onHelp} setFileInfo={setFileInfo} setWorksheets={setWorksheets} setBaseCount={setBaseCount} gridData={gridData} setGridData={setGridData} />}
-          {step === 1 && <Step1_Upload handleDragOver={handleDragOver} handleDrop={handleDrop} handleFileUpload={handleFileUpload} handleUnifiedDrop={handleUnifiedDrop} isBaseUploading={isBaseUploading} step={step} onHelp={onHelp} onCloudFetch={() => {}} />}
+          {step === 1 && <Step1_Upload handleDragOver={handleDragOver} handleDrop={handleDrop} handleFileUpload={handleFileUpload} handleUnifiedDrop={handleUnifiedDrop} isBaseUploading={isBaseUploading} step={step} onHelp={onHelp} onCloudFetch={() => setShowCloudBase(true)} />}
           {step === 2 && <Step2_SheetSelect step={step} setStep={setStep} fileInfo={fileInfo} worksheets={worksheets} selectedSheets={selectedSheets} setSelectedSheets={setSelectedSheets} handleProcessStart={handleProcessStart} />}
           {step === 3 && <Step3_Mapping step={step} setStep={setStep} selectedSheets={selectedSheets} mapDefs={mapDefs} handleMapChange={handleMapChange} handleAnalyzeAll={handleAnalyzeAll} engineProgress={engineProgress} progressLogs={progressLogs} />}
           {step === 4 && <LoadingScreen progress={engineProgress} logs={progressLogs} />}
