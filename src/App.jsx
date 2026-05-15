@@ -248,17 +248,13 @@ export default function App() {
         
         {/* HEADER RESTORED */}
         <header className="h-16 shrink-0 bg-[#0a0a0a] border-b border-[#222] flex items-center justify-between px-6 z-50">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-[#22c55e] to-[#166534] flex items-center justify-center shadow-[0_0_15px_rgba(34,197,94,0.3)]">
-              <Database className="text-black" size={20} strokeWidth={3} />
-            </div>
-            <div>
-              <h1 className="text-xl font-black tracking-tight text-white flex items-center gap-2">
-                NEXUS <span className="text-[#22c55e]">PIPELINE</span>
-                <span className="px-2 py-0.5 rounded text-[10px] bg-[#22c55e]/20 text-[#22c55e] border border-[#22c55e]/30">V4.0</span>
-              </h1>
-            </div>
-          </div>
+          <button 
+            onClick={() => setStep(0)} 
+            className="flex items-center gap-3 hover:opacity-80 transition-opacity cursor-pointer outline-none"
+            title="초기 화면으로 이동"
+          >
+            <img src="/ttlogo1.png" alt="NEXUS PIPELINE Logo" className="h-10 object-contain" />
+          </button>
           
           <div className="flex flex-1 items-center justify-center px-10">
             {step >= 1 && step <= 5 && (
