@@ -12,7 +12,7 @@ const PLANS = [
   },
   {
     tier: 'vip',
-    emoji: '🔵', label: 'VIP', price: '월 49만원',
+    emoji: '🔵', label: 'VIP', price: '월 1만원',
     cities: 3,
     features: ['기본 기능 전체', '지자체 3개 관리', '기본명단 클라우드 저장', '월별 변경 이력 조회'],
     border: 'border-blue-500/50', bg: 'bg-blue-950/30', badge: 'text-blue-300',
@@ -21,7 +21,7 @@ const PLANS = [
   },
   {
     tier: 'vvip',
-    emoji: '🟣', label: 'VVIP', price: '월 149만원',
+    emoji: '🟣', label: 'VVIP', price: '협의',
     cities: 10,
     features: ['VIP 기능 전체', '지자체 10개 관리', 'AI 자동화 리포트', '오류 자동 알림', '통합 분석 대시보드'],
     border: 'border-purple-500/50', bg: 'bg-purple-950/30', badge: 'text-purple-300',
@@ -30,7 +30,7 @@ const PLANS = [
   },
   {
     tier: 'sapphire',
-    emoji: '💎', label: '사파이어', price: '월 299만원',
+    emoji: '💎', label: '사파이어', price: '협의',
     cities: '무제한',
     features: ['VVIP 기능 전체', '지자체 무제한', '전담 고객지원(CS)', 'API 연동', '커스텀 리포트 제작'],
     border: 'border-cyan-400/50', bg: 'bg-cyan-950/30', badge: 'text-cyan-300',
@@ -48,7 +48,7 @@ export default function UpgradeModal({ onClose, userTier, userCitiesUsed = [], u
   const handleContact = (plan) => {
     const subject = encodeURIComponent(`[웰쉐어 NEXUS] ${plan.label} 플랜 업그레이드 문의`);
     const body = encodeURIComponent(
-      `안녕하세요,\n\nNEXUS 명단 정제 시스템 ${plan.label} 플랜(${plan.price}) 업그레이드를 문의합니다.\n\n현재 등급: ${userTier}\n사용 중인 지자체: ${usedCount}개\n\n연락처와 소속 지자체를 회신해 주시면 빠르게 처리해 드리겠습니다.`
+      `안녕하세요,\n\nNEXUS 명단 정제 시스템 ${plan.label} 플랜(${plan.price}) 업그레이드를 문의합니다.\n\n현재 등급: ${userTier}\n사용 중인 지자체: ${usedCount}개\n\n연락처와 소속 지자체를 남겨주시면 빠르게 처리해드리겠습니다.`
     );
     window.open(`mailto:${CONTACT_EMAIL}?subject=${subject}&body=${body}`);
   };
@@ -115,7 +115,7 @@ export default function UpgradeModal({ onClose, userTier, userCitiesUsed = [], u
                     </button>
                   ) : (
                     <div className={`w-full py-2.5 rounded-xl text-xs font-extrabold text-center ${isCurrent ? 'bg-[#22c55e]/10 text-[#22c55e]' : 'bg-gray-800/40 text-gray-600'}`}>
-                      {isCurrent ? '✓ 사용 중' : '해당 없음'}
+                      {isCurrent ? '현재 사용 중' : '해당 없음'}
                     </div>
                   )}
                 </div>
