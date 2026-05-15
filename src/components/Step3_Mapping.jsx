@@ -27,20 +27,33 @@ const OPTIONAL_KWS = {
 };
 
 function SheetMappingPanel({ sheet, mapDef, setMapDef, worksheets, importNote, setImportNote }) {
-  const headers = sheet.headers;
-  const previewData = sheet.bodyRows.slice(0, 20).map(row => {
+  // ✅ 방어: headers/bodyRows 없을 경우 빈 배열로 폴백 (forEach crash 원천 차단)
+  const headers = Array.isArray(sheet?.headers) ? sheet.headers : [];
+  const bodyRows = Array.isArray(sheet?.bodyRows) ? sheet.bodyRows : [];
+
+  const previewData = bodyRows.slice(0, 20).map(row => {
     const obj = {};
     headers.forEach((h, j) => { obj[h] = row[j]; });
     return obj;
   });
 
-  const hasMixedSheet = worksheets.some(s => s.selected && s.type === '혼합');
+  const hasMixedSheet = (worksheets || []).some(s => s.selected && s.type === '혼합');
   const hasColumn = (key) => !!mapDef[key] || headers.some(h => (OPTIONAL_KWS[key] || []).some(k => h.includes(k)));
   const colToField = Object.fromEntries(
     Object.entries(mapDef).filter(([, v]) => v).map(([k, v]) => [v, k])
   );
 
   const updateMap = (key, val) => setMapDef({ ...mapDef, [key]: val });
+
+  // ✅ 방어: 헤더가 아예 없으면 매핑 불가 안내 표시
+  if (headers.length === 0) {
+    return (
+      <div className="flex-1 flex items-center justify-center text-gray-500 text-sm font-bold">
+        이 시트에서 컬럼 헤더를 읽을 수 없습니다. 시트를 다시 선택해주세요.
+      </div>
+    );
+  }
+
 
   return (
     <div className="flex flex-1 overflow-hidden">
@@ -96,12 +109,13 @@ function SheetMappingPanel({ sheet, mapDef, setMapDef, worksheets, importNote, s
           {[
             { key: 'type',     label: '수급구분 열 (혼합명단 필수)' },
             { key: 'contact2', label: '보조 연락처 (유선)' },
+            { key: 'itemName', label: '품명' },
             { key: 'birth',    label: '생년월일' },
             { key: 'note',     label: '특이사항' },
             { key: 'sms',      label: '문자수신 여부' },
             { key: 'driver',   label: '기사 (담당 배송기사)' },
             { key: 'seqNo',    label: '배송순번 (기존 값)' },
-          ].filter(({ key }) => hasColumn(key) || key === 'driver' || key === 'seqNo').map(({ key, label }) => {
+          ].filter(({ key }) => hasColumn(key) || key === 'driver' || key === 'seqNo' || key === 'itemName').map(({ key, label }) => {
             const meta = FIELD_META[key];
             const isMapped = !!mapDef[key];
             return (
@@ -163,7 +177,7 @@ function SheetMappingPanel({ sheet, mapDef, setMapDef, worksheets, importNote, s
 
 const sheetKey = (sheet) => sheet.fileSource ? `${sheet.fileSource}::${sheet.name}` : sheet.name;
 
-export default function Step3_Mapping({ step, setStep, mapDefs, setMapDefs, selectedSheets, worksheets, startProcessing, onHelp, importNote, setImportNote, baseFiles, baseCount, isBaseUploading, handleBaseUpload, handleRemoveBaseFile, handleAddTargetFile, handleRemoveTargetFile, isUploading, uploadFileName }) {
+export default function Step3_Mapping({ step, setStep, mapDefs, setMapDefs, selectedSheets, worksheets, startProcessing, onHelp, importNote, setImportNote, baseFiles, baseCount, isBaseUploading, handleBaseUpload, handleRemoveBaseFile, handleAddTargetFile, handleRemoveTargetFile, isUploading, uploadFileName, isBasePurifyMode, setIsBasePurifyMode }) {
   const [activeTab, setActiveTab] = useState(0);
   const addTargetRef = useRef(null);
   const addBaseRef = useRef(null);
@@ -180,6 +194,8 @@ export default function Step3_Mapping({ step, setStep, mapDefs, setMapDefs, sele
 
   const isSheetComplete = (sheet) => {
     const m = mapDefs[sheetKey(sheet)] || {};
+    // 기본명단 주소 정제 모드일 때는 주소만 매핑되면 진행 가능
+    if (isBasePurifyMode) return !!m['address'];
     return REQUIRED_KEYS.every(k => !!m[k]);
   };
 
@@ -195,7 +211,22 @@ export default function Step3_Mapping({ step, setStep, mapDefs, setMapDefs, sele
           </h2>
           <p className="text-gray-400 mt-1.5 font-medium">자동 매핑을 확인하고 누락된 항목을 지정하세요.</p>
         </div>
-        <div className="flex gap-4">
+        <div className="flex gap-4 items-center">
+          {/* 기본명단 주소 정제 모드 토글 */}
+          <label className={`flex items-center gap-2.5 px-4 py-2.5 rounded-xl border-2 cursor-pointer transition-all select-none ${
+            isBasePurifyMode
+              ? 'bg-amber-950/60 border-amber-500 text-amber-300 shadow-[0_0_12px_rgba(245,158,11,0.4)]'
+              : 'bg-gray-900 border-gray-700 text-gray-400 hover:border-gray-500'
+          }`}>
+            <input
+              type="checkbox"
+              checked={!!isBasePurifyMode}
+              onChange={e => setIsBasePurifyMode && setIsBasePurifyMode(e.target.checked)}
+              className="accent-amber-400 w-4 h-4"
+            />
+            <span className="text-[12px] font-black tracking-wide">기본명단 주소 정제 작업</span>
+            {isBasePurifyMode && <span className="text-[10px] bg-amber-500/20 px-1.5 py-0.5 rounded">필수조건 주소만</span>}
+          </label>
           <button onClick={() => setStep(2)} className="px-6 py-3 bg-gray-800 border border-gray-600 text-white font-extrabold rounded-xl hover:bg-gray-700 transition-all shadow-md flex items-center gap-2">
             <ChevronLeft size={18} strokeWidth={3}/> 시트 선택으로
           </button>
@@ -204,7 +235,7 @@ export default function Step3_Mapping({ step, setStep, mapDefs, setMapDefs, sele
             disabled={!allComplete}
             className={`px-8 py-3 font-extrabold rounded-xl flex items-center gap-2 uppercase tracking-wide transition-all ${allComplete ? 'bg-[#22c55e] text-black shadow-[0_0_15px_rgba(34,197,94,0.6)] hover:bg-[#86efac] hover:scale-105' : 'bg-gray-800 text-gray-500 border border-gray-700 cursor-not-allowed'}`}
           >
-            12단계 정제 가동 <Database size={18} strokeWidth={3}/>
+            {isBasePurifyMode ? '주소 정제 가동' : '12단계 정제 가동'} <Database size={18} strokeWidth={3}/>
           </button>
           <button
             onClick={onHelp}

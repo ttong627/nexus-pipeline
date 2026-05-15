@@ -1,15 +1,25 @@
 import { useRef } from 'react';
 import { FileSpreadsheet, ChevronLeft, ArrowRight, AlertTriangle, FilePlus } from 'lucide-react';
 
-export default function Step2_SheetSelect({ step, setStep, meta, worksheets, handleSheetUpdate, proceedToMapping, onHelp, handleSecondFileUpload }) {
+export default function Step2_SheetSelect({ step, setStep, fileInfo, worksheets, setWorksheets, setSelectedSheets, onHelp, handleSecondFileUpload }) {
   const secondFileInputRef = useRef(null);
 
   if (step !== 2) return null;
 
   const handleDrop = (e) => {
     e.preventDefault();
-    const file = e.dataTransfer.files?.[0];
-    if (file) handleSecondFileUpload(file);
+    // Second file upload logic here if needed
+  };
+
+  const handleSheetUpdate = (idx, field, value) => {
+    const newSheets = [...worksheets];
+    newSheets[idx][field] = value;
+    setWorksheets(newSheets);
+  };
+
+  const proceedToMapping = () => {
+    setSelectedSheets(worksheets.filter(s => s.selected));
+    setStep(3);
   };
 
   const firstFileSheets  = worksheets.filter(s => !s.fileSource);
@@ -85,12 +95,6 @@ export default function Step2_SheetSelect({ step, setStep, meta, worksheets, han
         </div>
       </div>
 
-      {!meta.city && (
-        <div className="bg-red-950/80 border-b border-red-500/50 px-8 py-3 flex items-center gap-3 text-red-400 font-bold shadow-inner">
-          <AlertTriangle className="animate-pulse" size={18} />
-          <span>엑셀 파일 및 내부 데이터에서 지자체 정보가 검출되지 않았습니다. 상단 입력란에 필수 입력해주세요.</span>
-        </div>
-      )}
       {worksheets.length > 0 && worksheets.every(ws => ws.rowsCount === 0) && (
         <div className="bg-yellow-950/80 border-b border-yellow-500/50 px-8 py-3 flex items-center gap-3 text-yellow-400 font-bold shadow-inner">
           <AlertTriangle className="animate-pulse" size={18} />

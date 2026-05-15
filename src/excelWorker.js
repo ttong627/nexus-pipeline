@@ -53,6 +53,8 @@ function parseSheet(name, rawJson, dynamicRules) {
     { k: '주소',   kws: ['주소'] },
     { k: '수량',   kws: ['포수', '수량', '구입량', '가구원수', '포'] },
     { k: '연락처', kws: ['휴대', '연락', '전화', '유선', '핸드폰', '핸드', '모바일', '휴폰'] },
+    { k: '행정동', kws: ['행정동', '읍면동', '동명', '관할구역'] },
+    { k: '비고',   kws: ['특이사항', '비고', '메모'] }
   ];
   
   const allKws = activeReqKeys.flatMap(r => r.kws).concat(['비고', '연번', 'NO']);
@@ -91,7 +93,18 @@ function parseSheet(name, rawJson, dynamicRules) {
     subVals.forEach((v, i) => { if (v && !headerBuf[i]) headerBuf[i] = v; });
   }
 
-  const headers = headerBuf.map((h, i) => h || `col_${i}`);
+  const headerCounts = {};
+  const headers = headerBuf.map((h, i) => {
+    let name = h || `col_${i}`;
+    if (headerCounts[name]) {
+      const originalName = name;
+      name = `${originalName} (${headerCounts[originalName]})`;
+      headerCounts[originalName]++;
+    } else {
+      headerCounts[name] = 1;
+    }
+    return name;
+  });
   // ─────────────────────────────────────────────────────────────────
 
   const mappedKeys = [];
@@ -190,6 +203,7 @@ function parseSheet(name, rawJson, dynamicRules) {
     dataStartRowIdx, mappedKeys, missingKeys, emptyWarnings,
     addrColIdx: colIndices['주소'],
     unmappedCols,
+    colIndices,
   };
 }
 

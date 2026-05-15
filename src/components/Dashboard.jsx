@@ -111,15 +111,13 @@ export default function Dashboard({ user, onStart, onHelp }) {
             <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent -translate-x-full group-hover:animate-[shimmer_1.5s_infinite]"></div>
           </button>
           
-          {(user?.tier === 'vip' || user?.tier === 'vvip' || user?.tier === 'sapphire' || user?.role === 'admin') && (
-            <button
-              onClick={() => onStart(6)} // Step 6 is Base List Manager
-              className="group relative px-8 py-4 bg-transparent border-2 border-[#22c55e]/50 text-[#22c55e] font-extrabold rounded-2xl text-lg hover:bg-[#22c55e]/10 transition-all flex items-center gap-3"
-            >
-              <span>기본 명단 관리</span>
-              <Database size={20} className="group-hover:scale-110 transition-transform" />
-            </button>
-          )}
+          <button
+            onClick={() => onStart(6)} // Step 6 is Base List Manager
+            className="group relative px-8 py-4 bg-transparent border-2 border-[#22c55e]/50 text-[#22c55e] font-extrabold rounded-2xl text-lg hover:bg-[#22c55e]/10 transition-all flex items-center gap-3"
+          >
+            <span>기본 명단 관리</span>
+            <Database size={20} className="group-hover:scale-110 transition-transform" />
+          </button>
         </div>
 
         {/* 도움말 힌트 — 애니메이션 커서 + ? 버튼 */}

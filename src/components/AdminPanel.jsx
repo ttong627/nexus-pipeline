@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { getDocs, updateDoc, doc, collection, db, serverTimestamp } from '../config/firebase.js';
-import { X, Users, BarChart2, Clock, ShieldOff, ShieldCheck, AlertTriangle, Crown } from 'lucide-react';
+import { X, Users, BarChart2, Clock, ShieldOff, ShieldCheck, AlertTriangle, Crown, MessageSquare, CheckCircle2 } from 'lucide-react';
 
 const fmt = (ts) => {
   if (!ts?.seconds) return '-';
@@ -41,6 +41,8 @@ export default function AdminPanel({ onClose, adminUid }) {
   const [aiLoading, setAiLoading] = useState(false);
   const [aiRules, setAiRules] = useState(null);
 
+  const [inquiries, setInquiries] = useState([]);
+
   const fetchUsers = () => {
     setLoading(true);
     getDocs(collection(db, 'users')).then(snap => {
@@ -74,7 +76,17 @@ export default function AdminPanel({ onClose, adminUid }) {
   useEffect(() => {
     fetchUsers();
     fetchAiData();
+    fetchInquiries();
   }, []);
+
+  const fetchInquiries = () => {
+    getDocs(collection(db, 'inquiries')).then(snap => {
+      const list = snap.docs
+        .map(d => ({ id: d.id, ...d.data() }))
+        .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+      setInquiries(list);
+    });
+  };
 
   const analyzeSuggestion = (colName) => {
     const rules = [
@@ -256,11 +268,22 @@ export default function AdminPanel({ onClose, adminUid }) {
                 </span>
               )}
             </button>
+            <button
+              onClick={() => setActiveTab('inquiries')}
+              className={`px-4 py-2 rounded-lg text-sm font-bold transition-colors flex items-center gap-2 ${activeTab === 'inquiries' ? 'bg-[#22c55e] text-black shadow-[0_0_15px_rgba(34,197,94,0.3)]' : 'bg-[#111] text-gray-400 border border-[#333] hover:text-white hover:bg-[#222]'}`}
+            >
+              <MessageSquare size={16} /> 승인/문의 관리
+              {inquiries.filter(i => i.status === 'pending').length > 0 && (
+                <span className="bg-red-500 text-white text-[10px] px-1.5 py-0.5 rounded-full ml-1">
+                  {inquiries.filter(i => i.status === 'pending').length}
+                </span>
+              )}
+            </button>
             <button onClick={onClose} className="text-gray-500 hover:text-white transition-colors p-1 ml-4"><X size={22}/></button>
           </div>
         </div>
 
-        {activeTab === 'users' ? (
+        {activeTab === 'users' && (
           <>
             {/* Stats — 등급 분포 + 이용 통계 */}
             <div className="px-8 py-4 border-b border-[#1e2d22] shrink-0 space-y-3">
@@ -379,7 +402,9 @@ export default function AdminPanel({ onClose, adminUid }) {
               )}
             </div>
           </>
-        ) : (
+        )}
+        
+        {activeTab === 'ai_advisor' && (
           <div className="flex-1 p-8 overflow-y-auto scrollbar-thin scrollbar-thumb-[#2d4a35]">
             <div className="mb-6 border border-[#1e2d22] bg-[#0a100c] p-6 rounded-2xl flex items-start gap-4 shadow-lg shadow-[#0a100c]/50">
               <div className="w-12 h-12 bg-[#22c55e]/10 rounded-full flex items-center justify-center shrink-0 border border-[#22c55e]/30">
@@ -445,6 +470,56 @@ export default function AdminPanel({ onClose, adminUid }) {
                         {s.analysis.key === '알수없음' ? '적용 불가' : `'${s.analysis.key}' 규칙으로 적용`}
                       </button>
                     </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {activeTab === 'inquiries' && (
+          <div className="flex-1 overflow-auto scrollbar-thin scrollbar-thumb-[#2d4a35] p-6">
+            <h3 className="text-xl font-black text-[#22c55e] mb-4 flex items-center gap-2">
+              <MessageSquare size={20} /> 승인 및 문의 내역
+            </h3>
+            {inquiries.length === 0 ? (
+              <div className="flex items-center justify-center py-20 text-gray-500 text-sm">접수된 문의가 없습니다.</div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {inquiries.map(inq => (
+                  <div key={inq.id} className={`rounded-xl p-5 border ${inq.status === 'pending' ? 'bg-[#0f1a10] border-[#22c55e]/40 shadow-[0_0_20px_rgba(34,197,94,0.1)]' : 'bg-[#111] border-[#333] opacity-70'}`}>
+                    <div className="flex justify-between items-start mb-3">
+                      <span className={`px-2 py-0.5 rounded text-[10px] font-black border ${inq.status === 'pending' ? 'bg-[#22c55e]/20 text-[#22c55e] border-[#22c55e]/40' : 'bg-gray-800 text-gray-400 border-gray-600'}`}>
+                        {inq.status === 'pending' ? '대기 중' : '처리 완료'}
+                      </span>
+                      <span className="text-[10px] font-mono text-gray-500">{fmt(inq.createdAt)}</span>
+                    </div>
+                    <div className="mb-4">
+                      <h4 className="text-white font-bold text-lg">{inq.realName}</h4>
+                      <p className="text-gray-400 text-sm">{inq.contact}</p>
+                      <p className="text-gray-500 text-xs">{inq.email}</p>
+                    </div>
+                    <div className="mb-4 bg-black/40 p-3 rounded-lg border border-white/5">
+                      <p className="text-[#22c55e] font-black text-sm mb-1">희망 등급: <span className="text-white">{inq.requestedPlan?.toUpperCase() || '-'}</span></p>
+                      <p className="text-gray-400 text-xs whitespace-pre-wrap">{inq.message || '추가 내용 없음'}</p>
+                    </div>
+                    {inq.status === 'pending' && (
+                      <button
+                        onClick={async () => {
+                          setProcessing(true);
+                          try {
+                            await updateDoc(doc(db, 'inquiries', inq.id), { status: 'completed', completedAt: serverTimestamp() });
+                            setInquiries(prev => prev.map(i => i.id === inq.id ? { ...i, status: 'completed' } : i));
+                          } finally {
+                            setProcessing(false);
+                          }
+                        }}
+                        disabled={processing}
+                        className="w-full py-2.5 bg-[#22c55e]/20 text-[#22c55e] font-black rounded-lg hover:bg-[#22c55e] hover:text-black border border-[#22c55e]/30 transition-all flex justify-center items-center gap-2 disabled:opacity-50"
+                      >
+                        <CheckCircle2 size={16} /> 처리 완료로 표시
+                      </button>
+                    )}
                   </div>
                 ))}
               </div>

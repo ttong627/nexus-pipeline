@@ -1,12 +1,25 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { doc, setDoc, db, serverTimestamp } from '../config/firebase.js';
-import { MapPin, User, AlertTriangle, LogOut } from 'lucide-react';
+import { MapPin, User, AlertTriangle, LogOut, X } from 'lucide-react';
+import { getAuth } from 'firebase/auth';
 
-export default function ProfileSetupModal({ user, onComplete, onLogout }) {
+export default function ProfileSetupModal({ user, isNewUser, onClose }) {
   const [region, setRegion] = useState('');
   const [realName, setRealName] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (!isNewUser && user) {
+      setRegion(user.region || '');
+      setRealName(user.realName || '');
+    }
+  }, [user, isNewUser]);
+
+  const handleLogout = () => {
+    getAuth().signOut();
+    if (onClose) onClose();
+  };
 
   const handleSubmit = async () => {
     const r = region.trim();
@@ -21,7 +34,7 @@ export default function ProfileSetupModal({ user, onComplete, onLogout }) {
         profileCompleted: true,
         profileUpdatedAt: serverTimestamp(),
       }, { merge: true });
-      onComplete();
+      if (onClose) onClose();
     } catch (e) {
       setError('저장 오류: ' + e.message);
       setLoading(false);
@@ -29,22 +42,32 @@ export default function ProfileSetupModal({ user, onComplete, onLogout }) {
   };
 
   return (
-    <div className="h-screen w-full overflow-hidden bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-[#071a0e] via-[#060c08] to-[#040708] flex items-center justify-center p-4">
+    <div className="fixed inset-0 z-[999] h-screen w-full overflow-hidden bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-[#071a0e]/95 via-[#060c08]/95 to-[#040708]/95 backdrop-blur-md flex items-center justify-center p-4">
       <div className="w-full max-w-md">
-        <div className="bg-[#0a100c] border border-[#22c55e]/30 rounded-3xl shadow-[0_0_60px_rgba(34,197,94,0.15)] p-8">
+        <div className="bg-[#0a100c] border border-[#22c55e]/30 rounded-3xl shadow-[0_0_60px_rgba(34,197,94,0.15)] p-8 relative">
+          
           <div className="flex items-center justify-between mb-6">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-full bg-[#22c55e]/10 border border-[#22c55e]/30 flex items-center justify-center">
                 <User size={20} className="text-[#22c55e]"/>
               </div>
               <div>
-                <h2 className="text-lg font-black text-white">이용자 정보 등록</h2>
+                <h2 className="text-lg font-black text-white">{isNewUser ? '이용자 정보 등록' : '내 프로필 수정'}</h2>
                 <p className="text-gray-500 text-xs font-mono">{user.email}</p>
               </div>
             </div>
-            <button onClick={onLogout} className="text-gray-600 hover:text-red-400 transition-colors" title="로그아웃">
-              <LogOut size={16}/>
-            </button>
+            
+            <div className="flex items-center gap-2">
+              {isNewUser ? (
+                <button onClick={handleLogout} className="text-gray-600 hover:text-red-400 transition-colors flex items-center gap-1 text-xs font-bold bg-black/30 px-2 py-1.5 rounded" title="로그아웃">
+                  <LogOut size={14}/> 나가기
+                </button>
+              ) : (
+                <button onClick={onClose} className="text-gray-500 hover:text-white transition-colors bg-black/30 p-1.5 rounded-full" title="닫기">
+                  <X size={18}/>
+                </button>
+              )}
+            </div>
           </div>
 
           <div className="bg-amber-950/40 border border-amber-500/40 rounded-xl p-4 mb-6 flex gap-3">

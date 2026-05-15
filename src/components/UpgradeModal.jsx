@@ -1,4 +1,6 @@
+import { useState } from 'react';
 import { X, CheckCircle, Lock } from 'lucide-react';
+import { db, collection, addDoc, serverTimestamp } from '../config/firebase.js';
 
 const PLANS = [
   {
@@ -41,20 +43,93 @@ const PLANS = [
 
 const CONTACT_EMAIL = 'ttong627@gmail.com';
 
-export default function UpgradeModal({ onClose, userTier, userCitiesUsed = [], userMaxCities = 1 }) {
-  const usedCount = userCitiesUsed.length;
+export default function UpgradeModal({ onClose, user, userTier, usedCount = 0, userMaxCities = 1 }) {
   const tierIdx = ['basic', 'vip', 'vvip', 'sapphire'].indexOf(userTier || 'basic');
 
+  const [inquiryPlan, setInquiryPlan] = useState(null);
+  const [formData, setFormData] = useState({
+    name: user?.realName || '',
+    contact: user?.phone || '',
+    email: user?.email || ''
+  });
+  const [submitting, setSubmitting] = useState(false);
+
   const handleContact = (plan) => {
-    const subject = encodeURIComponent(`[웰쉐어 NEXUS] ${plan.label} 플랜 업그레이드 문의`);
-    const body = encodeURIComponent(
-      `안녕하세요,\n\nNEXUS 명단 정제 시스템 ${plan.label} 플랜(${plan.price}) 업그레이드를 문의합니다.\n\n현재 등급: ${userTier}\n사용 중인 지자체: ${usedCount}개\n\n연락처와 소속 지자체를 남겨주시면 빠르게 처리해드리겠습니다.`
-    );
-    window.open(`mailto:${CONTACT_EMAIL}?subject=${subject}&body=${body}`);
+    setInquiryPlan(plan);
+  };
+
+  const submitInquiry = async (e) => {
+    e.preventDefault();
+    if (!formData.name.trim() || !formData.contact.trim() || !formData.email.trim()) {
+      alert('모든 필드를 입력해주세요.');
+      return;
+    }
+    setSubmitting(true);
+    try {
+      await addDoc(collection(db, 'inquiries'), {
+        uid: user?.uid || 'unknown',
+        email: formData.email,
+        realName: formData.name,
+        region: user?.region || '미등록',
+        contact: formData.contact,
+        requestedPlan: inquiryPlan.label,
+        currentPlan: userTier || 'basic',
+        status: 'pending',
+        createdAt: serverTimestamp(),
+        message: `${inquiryPlan.label} 플랜 업그레이드 요청`
+      });
+      alert('업그레이드 문의가 성공적으로 접수되었습니다.\n관리자가 확인 후 입력하신 연락처로 연락드리겠습니다.');
+      setInquiryPlan(null);
+    } catch (err) {
+      console.error(err);
+      alert('접수 중 오류가 발생했습니다.');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
     <div className="fixed inset-0 bg-black/95 backdrop-blur-xl z-[700] flex items-center justify-center p-4" onClick={onClose}>
+      
+      {inquiryPlan && (
+        <div className="absolute inset-0 bg-black/80 flex items-center justify-center z-[800] p-4" onClick={(e) => e.stopPropagation()}>
+          <div className="w-full max-w-sm bg-[#0a100c] border border-[#22c55e]/40 rounded-3xl p-6 shadow-[0_0_50px_rgba(34,197,94,0.15)] relative overflow-hidden">
+            <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-[#22c55e] to-transparent opacity-50"></div>
+            
+            <div className="flex justify-between items-start mb-5">
+              <div>
+                <span className="inline-block px-2 py-0.5 rounded text-[10px] font-black border border-[#22c55e]/30 bg-[#22c55e]/10 text-[#22c55e] mb-2">
+                  1:1 문의 접수
+                </span>
+                <h3 className="text-white font-black text-lg">[{inquiryPlan.label}] 플랜 업그레이드</h3>
+              </div>
+              <button onClick={() => setInquiryPlan(null)} className="text-gray-500 hover:text-white transition-colors bg-white/5 rounded-full p-1.5"><X size={18}/></button>
+            </div>
+            
+            <p className="text-gray-400 text-xs mb-6 font-medium">관리자가 내용 확인 후 기재해주신 연락처로 빠르게 안내해 드리겠습니다.</p>
+            
+            <form onSubmit={submitInquiry} className="space-y-4">
+              <div>
+                <label className="block text-[11px] font-bold text-gray-400 mb-1.5 ml-1">담당자 성명</label>
+                <input required value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} className="w-full bg-black/50 border border-[#333] focus:border-[#22c55e]/50 text-white p-3 rounded-xl text-sm outline-none transition-all placeholder-gray-700" placeholder="홍길동" />
+              </div>
+              <div>
+                <label className="block text-[11px] font-bold text-gray-400 mb-1.5 ml-1">연락받으실 번호</label>
+                <input required value={formData.contact} onChange={e => setFormData({...formData, contact: e.target.value})} className="w-full bg-black/50 border border-[#333] focus:border-[#22c55e]/50 text-white p-3 rounded-xl text-sm outline-none transition-all placeholder-gray-700" placeholder="010-1234-5678" />
+              </div>
+              <div>
+                <label className="block text-[11px] font-bold text-gray-400 mb-1.5 ml-1">이메일 주소</label>
+                <input required type="email" value={formData.email} onChange={e => setFormData({...formData, email: e.target.value})} className="w-full bg-black/50 border border-[#333] focus:border-[#22c55e]/50 text-white p-3 rounded-xl text-sm outline-none transition-all placeholder-gray-700" placeholder="email@example.com" />
+              </div>
+              
+              <button type="submit" disabled={submitting} className="w-full py-3.5 bg-[#22c55e] hover:bg-[#1ea34d] text-black font-black rounded-xl text-sm transition-all shadow-[0_0_20px_rgba(34,197,94,0.2)] hover:shadow-[0_0_30px_rgba(34,197,94,0.4)] disabled:opacity-50 mt-4 flex items-center justify-center gap-2">
+                {submitting ? '접수 처리 중...' : '문의 접수하기'}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
       <div
         className="w-full max-w-4xl bg-[#080f09] border border-[#22c55e]/20 rounded-3xl shadow-[0_0_80px_rgba(34,197,94,0.15)] flex flex-col max-h-[90vh] overflow-hidden"
         onClick={e => e.stopPropagation()}

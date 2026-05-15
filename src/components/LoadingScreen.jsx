@@ -1,9 +1,7 @@
 import React from 'react';
 import { Database } from 'lucide-react';
 
-export default function LoadingScreen({ step, progress }) {
-  if (step !== 4) return null;
-
+export default function LoadingScreen({ progress }) {
   return (
     <div className="absolute inset-0 flex items-center justify-center bg-black/90 backdrop-blur-xl z-50 p-4">
       <div className="w-[30rem] p-10 bg-[#0a0a0a] border border-white/10 rounded-3xl shadow-[0_0_80px_rgba(34,197,94,0.2)] flex flex-col items-center">

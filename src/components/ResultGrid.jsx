@@ -1,10 +1,10 @@
 import { useState } from 'react';
-import { ChevronLeft, ChevronRight, AlertTriangle, CheckCircle, Columns, Download, Trash2, Edit3 } from 'lucide-react';
+import { ChevronLeft, ChevronRight, AlertTriangle, CheckCircle, Columns, Download, Trash2, Edit3, Database, X } from 'lucide-react';
 
 export default function ResultGrid({
   step, setStep, filter, setFilter, gridData, filteredData, paginatedData,
-  currentPage, setCurrentPage, itemsPerPage, colVis,
-  handleCellEdit, handleAddressKeyDown, handleUpdateBaseList, setShowExportSetting, handleExport, handleExportErrors, handleExportDongSummary,
+  currentPage, setCurrentPage, itemsPerPage, colVis, sortConfig, setSortConfig,
+  handleCellEdit, handleAddressKeyDown, handleUpdateBaseList, handleBatchSaveBaseList, setShowExportSetting, handleExport, handleExportErrors, handleExportDongSummary,
   handleDeleteRows, handleBatchSetNote, onHelp
 }) {
   const [selectedIds, setSelectedIds] = useState(new Set());
@@ -27,6 +27,12 @@ export default function ResultGrid({
 
   const toggleRow = (id) => {
     setSelectedIds(prev => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  };
+
+  const handleSort = (key) => {
+    let direction = 'asc';
+    if (sortConfig.key === key && sortConfig.direction === 'asc') direction = 'desc';
+    setSortConfig({ key, direction });
   };
 
   return (
@@ -125,6 +131,15 @@ export default function ResultGrid({
                 <AlertTriangle size={14}/> 오류만 내보내기 ({gridData.filter(d => d._에러).length})
               </button>
             )}
+            <button onClick={() => {
+              const validData = gridData.filter(d => !d._에러);
+              if (validData.length === 0) return alert("저장할 정상 명단이 없습니다.");
+              if (window.confirm(`총 ${validData.length}건의 정상 명단을 기본 명단에 누적 저장하시겠습니까?\n(오류 항목은 제외됩니다)`)) {
+                handleBatchSaveBaseList(validData);
+              }
+            }} className="px-6 py-3 bg-amber-900/60 border border-amber-500/60 text-amber-300 font-extrabold rounded-xl hover:bg-amber-800/70 hover:scale-105 transition-all flex items-center gap-2 text-xs">
+              <Database size={14}/> 기본명단 누적 저장
+            </button>
             <button onClick={handleExportDongSummary} className="px-6 py-3 bg-blue-900/60 border border-blue-500/60 text-blue-300 font-extrabold rounded-xl hover:bg-blue-800/70 hover:scale-105 transition-all flex items-center gap-2 text-xs">
               <Download size={14}/> 행정동별 보고서
             </button>
@@ -148,15 +163,16 @@ export default function ResultGrid({
                   <input type="checkbox" checked={allPageSelected} onChange={toggleAll} className="accent-[#22c55e] w-4 h-4 cursor-pointer" />
                 </th>
                 <th className="px-4 py-3 font-bold border-r border-[#222] tracking-wide text-center sticky left-10 bg-[#0a100c] z-30 shadow-[2px_0_5px_rgba(0,0,0,0.5)]">NO</th>
-                <th className="px-4 py-3 font-bold border-r border-[#222] tracking-wide text-center">구분</th>
-                <th className="px-4 py-3 font-bold border-r border-[#222] tracking-wide">행정구역</th>
-                <th className="px-4 py-3 font-bold border-r border-[#222] tracking-wide">성명</th>
+                <th className="px-4 py-3 font-bold border-r border-[#222] tracking-wide text-center cursor-pointer hover:bg-[#222] transition-colors" onClick={() => handleSort('구분')}>구분 {sortConfig.key === '구분' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>
+                <th className="px-4 py-3 font-bold border-r border-[#222] tracking-wide cursor-pointer hover:bg-[#222] transition-colors" onClick={() => handleSort('행정동')}>행정구역 {sortConfig.key === '행정동' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>
+                <th className="px-4 py-3 font-bold border-r border-[#222] tracking-wide cursor-pointer hover:bg-[#222] transition-colors" onClick={() => handleSort('이름')}>성명 {sortConfig.key === '이름' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>
+                <th className="px-4 py-3 font-bold border-r border-[#222] tracking-wide text-center cursor-pointer hover:bg-[#222] transition-colors" onClick={() => handleSort('품명')}>품명 {sortConfig.key === '품명' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>
                 {colVis.birth && <th className="px-4 py-3 font-bold border-r border-[#222] tracking-wide text-center">생년월일</th>}
                 <th className="px-4 py-3 font-bold border-r border-[#222] tracking-wide text-center">포수</th>
                 <th className="px-4 py-3 font-bold border-r border-[#222] tracking-wide">메인(휴대폰)</th>
                 {colVis.contact2 && <th className="px-4 py-3 font-bold border-r border-[#222] tracking-wide">보조(유선)</th>}
                 {colVis.sms && <th className="px-4 py-3 font-bold border-r border-[#222] tracking-wide text-center">문자수신</th>}
-                <th className="px-4 py-3 font-bold border-r border-[#222] tracking-wide text-[#22c55e] bg-gradient-to-b from-[#0d1a0f] to-[#0a0a0a] text-sm min-w-[400px]">통합 주소 (클릭하여 텍스트 직접 수정)</th>
+                <th className="px-4 py-3 font-bold border-r border-[#222] tracking-wide text-[#22c55e] bg-gradient-to-b from-[#0d1a0f] to-[#0a0a0a] text-sm min-w-[400px] cursor-pointer hover:from-[#112211]" onClick={() => handleSort('주소')}>통합 주소 (클릭하여 텍스트 직접 수정) {sortConfig.key === '주소' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>
                 {colVis.note && <th className="px-4 py-3 font-bold border-r border-[#222] tracking-wide">특이사항 / 비고</th>}
                 {colVis.driver && <th className="px-4 py-3 font-bold border-r border-[#222] tracking-wide">기사</th>}
                 <th className="px-4 py-3 font-bold border-r border-[#222] tracking-wide">오류 사유</th>
@@ -185,8 +201,9 @@ export default function ResultGrid({
                     </td>
                     <td className="px-4 py-1.5 border-r border-[#222] max-w-[120px] truncate text-gray-400">{row.행정동}</td>
                     <td className="px-4 py-1.5 border-r border-[#222] font-black text-white text-[13px] drop-shadow-md">{row.이름}</td>
+                    <td className="px-4 py-1.5 border-r border-[#222] text-center text-fuchsia-400 font-bold">{row.품명}</td>
                     {colVis.birth && <td className="px-4 py-1.5 border-r border-[#222] text-center text-gray-300 font-mono tracking-wider">{row.생년월일}</td>}
-                    <td className="px-4 py-1.5 border-r border-[#222] text-center text-[#22c55e] font-black bg-black/20">{Number(row.포수).toLocaleString()}</td>
+                    <td className="px-4 py-1.5 border-r border-[#222] text-center text-[#22c55e] font-black bg-black/20">{row.포수 ? Number(row.포수).toLocaleString() : ""}</td>
                     <td className="px-4 py-1.5 border-r border-[#222] text-gray-300 font-bold tracking-wider">{row.휴대폰}</td>
                     {colVis.contact2 && <td className="px-4 py-1.5 border-r border-[#222] text-gray-500 tracking-wider">{row.유선전화}</td>}
                     {colVis.sms && <td className="px-4 py-1.5 border-r border-[#222] text-center"><span className={`px-2 py-0.5 rounded text-[10px] font-bold ${row.문자수신 === 'Y' ? 'bg-[#22c55e]/20 text-[#86efac] border border-[#22c55e]/30' : 'bg-transparent text-gray-600 border border-gray-700'}`}>{row.문자수신}</span></td>}

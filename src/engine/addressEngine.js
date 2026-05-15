@@ -19,12 +19,17 @@ const setApiCache = (key, value) => {
 let currentApiIdx = 0;
 
 let typoDict = {};
-export const typoDictReady = (async () => {
-  try {
-    const snap = await getDocs(collection(db, 'typo_dict'));
-    snap.forEach(d => { typoDict[d.id] = d.data().correction; });
-  } catch (e) { console.error("Typo DB Load Error:", e); }
-})();
+export let typoDictReady = Promise.resolve();
+
+export const loadTypoDict = async () => {
+  typoDictReady = (async () => {
+    try {
+      const snap = await getDocs(collection(db, 'typo_dict'));
+      snap.forEach(d => { typoDict[d.id] = d.data().correction; });
+    } catch (e) { console.error("Typo DB Load Error:", e); }
+  })();
+  return typoDictReady;
+};
 
 export const addTypoRecord = async (wrongAddr, correctAddr) => {
   try {

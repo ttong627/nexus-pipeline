@@ -1,6 +1,6 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, signInWithPopup, onAuthStateChanged, signOut } from 'firebase/auth';
-import { getFirestore, doc, setDoc, getDoc, updateDoc, deleteDoc, writeBatch, collection, getDocs, serverTimestamp, increment, query, where, addDoc, orderBy, limit } from 'firebase/firestore';
+import { getFirestore, doc, setDoc, getDoc, updateDoc, deleteDoc, writeBatch, collection, getDocs, serverTimestamp, increment, query, where, addDoc, orderBy, limit, onSnapshot } from 'firebase/firestore';
 import { getStorage, ref, uploadString, getBytes, listAll } from 'firebase/storage';
 
 const firebaseConfig = {
@@ -39,4 +39,5 @@ export {
   addDoc,
   orderBy,
   limit,
+  onSnapshot,
 };

@@ -17,6 +17,25 @@ service cloud.firestore {
       allow write: if isAuthenticated();
     }
 
+    // 1.5 inquiries: 로그인된 사용자 쓰기 가능, 관리자는 읽기/쓰기 가능
+    match /inquiries/{inquiryId} {
+      allow create: if isAuthenticated();
+      allow read, update, delete: if isAdmin();
+    }
+
+    // 1.6 admin collections
+    match /nexus_ai_logs/{document=**} {
+      allow create: if isAuthenticated();
+      allow read, update, delete: if isAdmin();
+    }
+    match /nexus_config/{document=**} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+    match /audit_logs/{document=**} {
+      allow read, write: if isAdmin();
+    }
+
     // 2. users: 본인 데이터 읽기/쓰기 + 관리자는 전체 읽기/쓰기 가능
     match /users/{userId} {
       allow read: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
