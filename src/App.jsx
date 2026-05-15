@@ -309,14 +309,14 @@ export default function App() {
         </header>
 
         <main className="flex-1 relative overflow-hidden bg-[#050505]">
-          {step === 0 && <Dashboard user={user} onLogout={onLogout} setStep={setStep} setFileInfo={setFileInfo} setWorksheets={setWorksheets} setBaseCount={setBaseCount} gridData={gridData} setGridData={setGridData} />}
+          {step === 0 && <Dashboard user={user} onLogout={onLogout} onStart={(s) => setStep(typeof s === 'number' ? s : 1)} onHelp={onHelp} setFileInfo={setFileInfo} setWorksheets={setWorksheets} setBaseCount={setBaseCount} gridData={gridData} setGridData={setGridData} />}
           {step === 1 && <Step1_Upload handleDragOver={handleDragOver} handleDrop={handleDrop} handleFileUpload={handleFileUpload} handleUnifiedDrop={handleUnifiedDrop} isBaseUploading={isBaseUploading} step={step} onHelp={onHelp} onCloudFetch={() => {}} />}
           {step === 2 && <Step2_SheetSelect step={step} setStep={setStep} fileInfo={fileInfo} worksheets={worksheets} selectedSheets={selectedSheets} setSelectedSheets={setSelectedSheets} handleProcessStart={handleProcessStart} />}
           {step === 3 && <Step3_Mapping step={step} setStep={setStep} selectedSheets={selectedSheets} mapDefs={mapDefs} handleMapChange={handleMapChange} handleAnalyzeAll={handleAnalyzeAll} engineProgress={engineProgress} progressLogs={progressLogs} />}
           {step === 4 && <LoadingScreen progress={engineProgress} logs={progressLogs} />}
           {step === 5 && <ResultGrid step={step} setStep={setStep} filter={filter} setFilter={setFilter} gridData={gridData} filteredData={filteredData} paginatedData={paginatedData} currentPage={currentPage} setCurrentPage={setCurrentPage} itemsPerPage={itemsPerPage} colVis={colVis} handleCellEdit={handleCellEdit} handleAddressKeyDown={handleAddressKeyDown} handleUpdateBaseList={handleUpdateBaseList} setShowExportSetting={setShowExportSetting} handleExport={handleExport} handleExportErrors={handleExportErrors} handleExportDongSummary={handleExportDongSummary} handleDeleteRows={handleDeleteRows} handleBatchSetNote={handleBatchSetNote} onHelp={onHelp} />}
           {step === 6 && <BaseListManager user={user} onBack={() => setStep(0)} />}
-          {step === 7 && <AdminPanel user={user} onBack={() => setStep(0)} />}
+          {step === 7 && <AdminPanel user={user} onClose={() => setStep(0)} />}
         </main>
         
         {/* RESTORED MODAL RENDERS */}
