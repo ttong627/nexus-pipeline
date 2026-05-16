@@ -16,8 +16,8 @@ export default function ProfileSetupModal({ user, isNewUser, onClose }) {
     }
   }, [user, isNewUser]);
 
-  const handleLogout = () => {
-    getAuth().signOut();
+  const handleLogout = async () => {
+    await getAuth().signOut();
     if (onClose) onClose();
   };
 

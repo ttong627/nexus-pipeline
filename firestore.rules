@@ -8,57 +8,170 @@ service cloud.firestore {
     }
 
     function isAdmin() {
-      return isAuthenticated() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+      return isAuthenticated() &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
     }
 
-    // 1. typo_dict: 로그인된 사용자 읽기/쓰기 가능 (오타 사전 공동 기여)
+    // DB 읽기 없이 Auth 토큰에서 직접 확인 — 관리자 자기복구용 (#4)
+    function isAdminEmail() {
+      return isAuthenticated() &&
+        request.auth.token.email in [
+          'ttong627@gmail.com',
+          'admin@logis-op.com',
+          'jsh6270@gmail.com'
+        ];
+    }
+
+    // ── 오타 사전: 공동 기여 (모든 인증 사용자) ──────────────────────────────
     match /typo_dict/{docId} {
       allow read: if isAuthenticated();
       allow write: if isAuthenticated();
     }
 
-    // 1.5 inquiries: 로그인된 사용자 쓰기 가능, 관리자는 읽기/쓰기 가능
+    // ── 특수문자 사전: 공동 기여 (모든 인증 사용자) (#6) ─────────────────────
+    match /special_chars/{docId} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated();
+    }
+
+    // ── 문의: 생성은 인증 사용자, 조회·수정·삭제는 관리자 ────────────────────
     match /inquiries/{inquiryId} {
       allow create: if isAuthenticated();
       allow read, update, delete: if isAdmin();
     }
 
-    // 1.6 admin collections
+    // ── AI 로그: 생성은 인증 사용자, 나머지는 관리자 ─────────────────────────
     match /nexus_ai_logs/{document=**} {
       allow create: if isAuthenticated();
       allow read, update, delete: if isAdmin();
     }
+
+    // ── 시스템 설정: 읽기는 인증 사용자, 쓰기는 관리자 ──────────────────────
     match /nexus_config/{document=**} {
       allow read: if isAuthenticated();
       allow write: if isAdmin();
     }
+
+    // ── 감사 로그: 생성은 모든 인증 사용자, 조회·수정·삭제는 관리자만 (#7) ───
     match /audit_logs/{document=**} {
-      allow read, write: if isAdmin();
+      allow create: if isAuthenticated();
+      allow read, update, delete: if isAdmin();
     }
 
-    // 2. users: 본인 데이터 읽기/쓰기 + 관리자는 전체 읽기/쓰기 가능
+    // ── 사용자: 본인 읽기/생성/수정 + 관리자 전체 제어 ──────────────────────
     match /users/{userId} {
-      allow read: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
-      allow write: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
+      allow read: if isAuthenticated() &&
+        (request.auth.uid == userId || isAdmin());
+
+      allow create: if isAuthenticated() && request.auth.uid == userId;
+
+      // 일반 사용자: role·tier·maxCities·status·citiesApproved·orgAssignments 직접 변경 불가
+      allow update: if isAuthenticated() &&
+        request.auth.uid == userId &&
+        !request.resource.data.diff(resource.data).affectedKeys()
+          .hasAny(['role', 'tier', 'maxCities', 'status', 'citiesUsed', 'citiesApproved', 'orgAssignments', 'orgId']);
+
+      // 관리자 이메일 계정: DB role이 꼬였을 때 자기복구 허용 (#4)
+      allow update: if isAdminEmail() && request.auth.uid == userId;
+
+      // 관리자: 전체 쓰기
+      allow write: if isAdmin();
+    }
+
+    // ── 알림: 관리자만 ───────────────────────────────────────────────────────
+    match /notifications/{notificationId} {
+      allow read, write: if isAdmin();
     }
 
     function hasCityAccess(cityId) {
       let uData = get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
-      return ('citiesUsed' in uData && cityId in uData.citiesUsed) || ('managedCities' in uData && cityId in uData.managedCities);
+      return 'citiesApproved' in uData &&
+        uData.citiesApproved is list &&
+        uData.citiesApproved.hasAll([cityId]);
     }
 
-    // 3. base_lists: 담당 지자체 권한(citiesUsed, managedCities)이 있거나 관리자인 경우만 읽기/쓰기 허용
+    // ── 기본명단: 생성·수정은 승인 사용자, 삭제는 관리자만 (#5) ──────────────
     match /base_lists/{cityId} {
       allow read: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin());
-      allow write: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin());
-      
+      allow create, update: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin());
+      allow delete: if isAdmin();
+
       match /records/{recordId} {
+        allow read: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin());
+        allow create, update: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin());
+        allow delete: if isAdmin();
+      }
+    }
+
+    // ── 월별 배송명단: 읽기는 승인 사용자, 쓰기는 관리자, 기사·배송순번은 담당자도 수정 가능 ──
+    match /cloud_lists/{cityId} {
+      allow read: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin());
+      allow write: if isAdmin();
+
+      match /months/{monthId} {
+        allow read: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin());
+        allow write: if isAdmin();
+
+        match /records/{recordId} {
+          allow read: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin());
+          allow write: if isAdmin();
+          // 담당자: 기사·배송순번·좌표·isApt 업데이트 허용 (루트맵 배정+좌표 저장용)
+          allow update: if isAuthenticated() && hasCityAccess(cityId) &&
+            request.resource.data.diff(resource.data).affectedKeys()
+              .hasOnly(['기사', '배송순번', 'lat', 'lng', 'isApt']);
+        }
+      }
+    }
+
+    // ── 지자체 신청: 본인 생성(pending만), 본인·관리자 조회, 관리자 수정 ──────
+    match /city_requests/{requestId} {
+      allow create: if isAuthenticated() &&
+        request.resource.data.uid == request.auth.uid &&
+        request.resource.data.status == 'pending';
+      allow read: if isAuthenticated() &&
+        (resource.data.uid == request.auth.uid || isAdmin());
+      allow update, delete: if isAdmin();
+    }
+
+    // ── 조직 배분 프리셋: 읽기는 승인 사용자, 쓰기는 관리자 ─────────────────────
+    match /org_presets/{cityId} {
+      allow read: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin());
+      allow write: if isAdmin();
+    }
+
+    // ── 배송 루트 공유: 생성은 인증 사용자, 읽기는 누구나 (기사 접근) ──────────
+    match /route_shares/{shareId} {
+      allow read: if true;
+      allow create: if isAuthenticated();
+      allow update, delete: if isAuthenticated();
+    }
+
+    // ── 배송 세션: 기사구성·구역배정 영구저장 (승인 사용자) ─────────────────────
+    match /route_sessions/{cityId} {
+      allow read: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin());
+      allow write: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin());
+
+      match /months/{monthId} {
         allow read: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin());
         allow write: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin());
       }
     }
 
-    // 기타 모든 문서는 기본적으로 접근 거부 (Zero Trust)
+    // ── 좌표 캐시: 한번 받은 좌표 영구 재사용 (승인 사용자) ─────────────────────
+    match /coordinate_cache/{cityId} {
+      allow read: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin());
+      allow write: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin());
+
+      match /addresses/{addrId} {
+        allow read: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin());
+        allow write: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin());
+      }
+    }
+
+    // ── cloud_lists 담당자 필드 확장 (좌표·isApt 업데이트 허용) ─────────────────
+    // (기존 규칙 override — cloud_lists 블록 내 allow update 조건 확장은 아래로 처리)
+
+    // ── 기본 차단 (Zero Trust) ───────────────────────────────────────────────
     match /{document=**} {
       allow read, write: if false;
     }

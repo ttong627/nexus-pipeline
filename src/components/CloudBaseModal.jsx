@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { db, collection, getDocs } from '../config/firebase.js';
 import { Database, Download, X, AlertCircle } from 'lucide-react';
 import { normalizeBirth } from '../utils/parsers.js';
-import { REGIONS } from '../utils/regions.js';
+import { REGIONS, getSigunguOptions } from '../utils/regions.js';
 
 export default function CloudBaseModal({ onClose, onImport, user }) {
   const [selectedSido, setSelectedSido] = useState('');
@@ -97,7 +97,7 @@ export default function CloudBaseModal({ onClose, onImport, user }) {
                 className="w-full bg-black/60 border border-[#2d4a35] rounded-xl px-4 py-2.5 text-white text-sm outline-none focus:border-[#22c55e] transition-colors disabled:opacity-40"
               >
                 <option value="">시/군/구 선택</option>
-                {selectedSido && REGIONS[selectedSido].map(sigungu => (
+                {getSigunguOptions(selectedSido).map(sigungu => (
                   <option key={sigungu} value={sigungu}>{sigungu}</option>
                 ))}
               </select>

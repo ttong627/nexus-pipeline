@@ -1,7 +1,62 @@
-import { useRef } from 'react';
+import { useRef, useState, useEffect } from 'react';
 import { FileSpreadsheet, ChevronLeft, ArrowRight, AlertTriangle, FilePlus } from 'lucide-react';
+import { REGIONS, getSigunguOptions } from '../utils/regions.js';
 
-export default function Step2_SheetSelect({ step, setStep, fileInfo, worksheets, setWorksheets, setSelectedSheets, onHelp, handleSecondFileUpload }) {
+export default function Step2_SheetSelect({ step, setStep, fileInfo, setFileInfo, worksheets, setWorksheets, setSelectedSheets, onHelp, handleSecondFileUpload }) {
+  // 지자체 선택 상태
+  const [selectedSido, setSelectedSido] = useState('');
+  const [selectedSigungu, setSelectedSigungu] = useState('');
+
+  // 해당월 (YYYY-MM 형식)
+  const [selectedMonth, setSelectedMonth] = useState(() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  });
+
+  // fileInfo.city가 바뀌면 드롭다운 초기값 세팅 시도
+  useEffect(() => {
+    if (!fileInfo?.city) return;
+    const city = fileInfo.city;
+    // "시/도 시/군/구" 형식이면 분리
+    for (const sido of Object.keys(REGIONS)) {
+      if (city.startsWith(sido + ' ')) {
+        const sigungu = city.slice(sido.length + 1);
+        if (REGIONS[sido]?.includes(sigungu)) {
+          setSelectedSido(sido);
+          setSelectedSigungu(sigungu);
+          return;
+        }
+      }
+      // 시/군/구만 있는 경우
+      if (REGIONS[sido]?.includes(city)) {
+        setSelectedSigungu(city);
+        setSelectedSido(sido);
+        return;
+      }
+    }
+  }, []);
+
+  // fileInfo.month 자동 감지값 → selectedMonth 초기화
+  useEffect(() => {
+    const m = fileInfo?.month || '';
+    if (m.match(/^\d{4}-\d{2}$/)) {
+      setSelectedMonth(m);
+    } else {
+      // "5월" → 현재 년도 + "05" 변환 시도
+      const match = m.match(/(\d{1,2})월?$/);
+      if (match) {
+        const mo = String(parseInt(match[1])).padStart(2, '0');
+        const yr = new Date().getFullYear();
+        setSelectedMonth(`${yr}-${mo}`);
+      }
+    }
+  }, []);
+
+  // 지자체·월 변경 시 fileInfo 동기화
+  useEffect(() => {
+    const city = selectedSido && selectedSigungu ? `${selectedSido} ${selectedSigungu}` : (selectedSigungu || selectedSido || '');
+    setFileInfo(prev => ({ ...(prev || {}), city, month: selectedMonth }));
+  }, [selectedSido, selectedSigungu, selectedMonth]);
   const secondFileInputRef = useRef(null);
 
   if (step !== 2) return null;
@@ -18,9 +73,22 @@ export default function Step2_SheetSelect({ step, setStep, fileInfo, worksheets,
   };
 
   const proceedToMapping = () => {
+    const city = selectedSido && selectedSigungu ? `${selectedSido} ${selectedSigungu}` : '';
+    if (!city) {
+      alert('지자체(시/도 + 시/군/구)를 반드시 선택해주세요.');
+      return;
+    }
+    if (!selectedMonth) {
+      alert('해당 월을 반드시 선택해주세요.');
+      return;
+    }
     setSelectedSheets(worksheets.filter(s => s.selected));
     setStep(3);
   };
+
+  const cityLabel = selectedSido && selectedSigungu ? `${selectedSido} ${selectedSigungu}` : '';
+  const monthLabel = selectedMonth ? `${parseInt(selectedMonth.split('-')[1])}월` : '';
+  const canProceed = !!cityLabel && !!selectedMonth && worksheets.some(s => s.selected);
 
   const firstFileSheets  = worksheets.filter(s => !s.fileSource);
   const secondFileSheets = worksheets.filter(s => !!s.fileSource);
@@ -32,7 +100,7 @@ export default function Step2_SheetSelect({ step, setStep, fileInfo, worksheets,
       return (
         <tr key={idx} className={`transition-all duration-200 ${!ws.selected ? 'opacity-40 bg-black' : ws.type === '혼합' ? 'bg-[#1a1710]/40 hover:bg-[#1a1710]/80' : 'hover:bg-[#111]'}`}>
           <td className="px-6 py-4 text-center">
-            <input type="checkbox" checked={ws.selected} onChange={(e) => handleSheetUpdate(idx, 'selected', e.target.checked)} className="w-5 h-5 accent-[#d4af37] cursor-pointer" />
+            <input type="checkbox" checked={ws.selected} onChange={(e) => handleSheetUpdate(idx, 'selected', e.target.checked)} className="w-5 h-5 accent-[#22c55e] cursor-pointer" />
           </td>
           <td className="px-6 py-4 font-mono font-bold text-white text-base">
             <div className="flex items-center gap-2">
@@ -74,24 +142,98 @@ export default function Step2_SheetSelect({ step, setStep, fileInfo, worksheets,
 
   return (
     <div className="flex flex-col h-full bg-[#0a0a0a]/80 backdrop-blur-xl rounded-2xl border border-white/10 shadow-[0_8px_32px_rgba(0,0,0,0.6)] max-w-6xl mx-auto w-full overflow-hidden">
-      <div className="bg-gradient-to-b from-[#1a1710] to-[#0a0a0a] px-8 py-5 border-b border-[#333] flex justify-between items-center shrink-0 shadow-lg">
-        <div>
-          <h2 className="text-xl font-bold text-white flex items-center gap-3 drop-shadow-md"><FileSpreadsheet size={24} className="text-[#d4af37]" /> 2단계: 워크시트 분류</h2>
-          <p className="text-gray-400 mt-1.5 font-medium">처리할 대상을 켜고 분류(수급/차상위)를 확인하세요.</p>
+
+      {/* ── 상단 헤더 ── */}
+      <div className="bg-gradient-to-b from-[#1a1710] to-[#0a0a0a] px-8 pt-5 pb-4 border-b border-[#333] shrink-0 shadow-lg">
+        {/* 타이틀 + 버튼 행 */}
+        <div className="flex justify-between items-center mb-4">
+          <div>
+            <h2 className="text-xl font-bold text-white flex items-center gap-3 drop-shadow-md">
+              <FileSpreadsheet size={24} className="text-[#d4af37]" /> 2단계: 워크시트 분류
+            </h2>
+            <p className="text-gray-400 mt-1 text-sm font-medium">지자체·월을 확인하고, 시트 분류(수급/차상위)를 완료하세요.</p>
+          </div>
+          <div className="flex gap-3 items-center">
+            <button onClick={() => setStep(1)} className="px-5 py-2.5 bg-gray-800 border border-gray-600 text-white font-extrabold rounded-xl hover:bg-gray-700 transition-all shadow-md flex items-center gap-2 text-sm">
+              <ChevronLeft size={16} strokeWidth={3} /> 업로드로 돌아가기
+            </button>
+            <button
+              onClick={proceedToMapping}
+              disabled={!canProceed}
+              className={`px-7 py-2.5 font-extrabold rounded-xl flex items-center gap-2 uppercase tracking-wide text-sm transition-all ${
+                canProceed
+                  ? 'bg-[#d4af37] text-black shadow-[0_0_15px_rgba(212,175,55,0.5)] hover:bg-[#f3e5ab] hover:scale-105'
+                  : 'bg-gray-800 text-gray-500 border border-gray-700 cursor-not-allowed'
+              }`}
+            >
+              컬럼 매핑 진행 <ArrowRight size={16} strokeWidth={3} />
+            </button>
+            <button
+              onClick={onHelp}
+              className="w-9 h-9 rounded-full bg-[#0d1a0f] border border-[#22c55e]/40 text-[#22c55e] font-black text-base hover:bg-[#22c55e]/20 hover:scale-110 transition-all shrink-0"
+              style={{ animation: 'help-pulse 2.5s ease-in-out infinite' }}
+              title="2단계 도움말"
+            >?</button>
+          </div>
         </div>
-        <div className="flex gap-4">
-          <button onClick={() => setStep(1)} className="px-6 py-3 bg-gray-800 border border-gray-600 text-white font-extrabold rounded-xl hover:bg-gray-700 transition-all shadow-md flex items-center gap-2">
-            <ChevronLeft size={18} strokeWidth={3} /> 업로드로 돌아가기
-          </button>
-          <button onClick={proceedToMapping} className="px-8 py-3 bg-[#d4af37] text-black font-extrabold rounded-xl shadow-[0_0_15px_rgba(212,175,55,0.6)] hover:bg-[#f3e5ab] hover:scale-105 transition-all flex items-center gap-2 uppercase tracking-wide">
-            컬럼 매핑 진행 <ArrowRight size={18} strokeWidth={3} />
-          </button>
-          <button
-            onClick={onHelp}
-            className="w-10 h-10 rounded-full bg-[#0d1a0f] border border-[#22c55e]/40 text-[#22c55e] font-black text-base hover:bg-[#22c55e]/20 hover:scale-110 transition-all shrink-0"
-            style={{ animation: 'help-pulse 2.5s ease-in-out infinite' }}
-            title="2단계 도움말"
-          >?</button>
+
+        {/* ── 지자체 + 해당월 입력 바 ── */}
+        <div className="flex flex-wrap items-end gap-4 bg-black/40 border border-[#d4af37]/20 rounded-2xl px-5 py-3.5">
+          {/* 시/도 */}
+          <div className="flex flex-col gap-1">
+            <label className="text-[10px] text-[#d4af37] font-black tracking-widest uppercase">시 / 도</label>
+            <select
+              value={selectedSido}
+              onChange={e => { setSelectedSido(e.target.value); setSelectedSigungu(''); }}
+              className="bg-black border border-[#444] text-white rounded-xl px-3 py-2 text-sm outline-none focus:border-[#d4af37] cursor-pointer min-w-[130px]"
+            >
+              <option value="">선택</option>
+              {Object.keys(REGIONS).map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+          </div>
+
+          {/* 시/군/구 */}
+          <div className="flex flex-col gap-1">
+            <label className="text-[10px] text-[#d4af37] font-black tracking-widest uppercase">시 / 군 / 구</label>
+            <select
+              value={selectedSigungu}
+              onChange={e => setSelectedSigungu(e.target.value)}
+              disabled={!selectedSido}
+              className="bg-black border border-[#444] text-white rounded-xl px-3 py-2 text-sm outline-none focus:border-[#d4af37] cursor-pointer disabled:opacity-40 min-w-[130px]"
+            >
+              <option value="">선택</option>
+              {getSigunguOptions(selectedSido).map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+          </div>
+
+          {/* 구분선 */}
+          <div className="h-8 w-px bg-[#333] self-end mb-1" />
+
+          {/* 해당 월 */}
+          <div className="flex flex-col gap-1">
+            <label className="text-[10px] text-[#d4af37] font-black tracking-widest uppercase">해당 월</label>
+            <input
+              type="month"
+              value={selectedMonth}
+              onChange={e => setSelectedMonth(e.target.value)}
+              className="bg-black border border-[#444] text-white rounded-xl px-3 py-2 text-sm outline-none focus:border-[#d4af37] cursor-pointer"
+            />
+          </div>
+
+          {/* 확인 배지 */}
+          <div className="flex items-end pb-1 ml-2">
+            {cityLabel && selectedMonth ? (
+              <div className="flex items-center gap-2 px-3 py-1.5 bg-[#d4af37]/10 border border-[#d4af37]/30 rounded-xl text-xs font-black text-[#d4af37]">
+                <span>✓</span>
+                <span>{cityLabel} · {monthLabel}</span>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2 px-3 py-1.5 bg-red-950/30 border border-red-500/30 rounded-xl text-xs font-bold text-red-400">
+                <span>!</span>
+                <span>{!cityLabel ? '지자체 미선택' : '월 미선택'}</span>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
@@ -140,7 +282,7 @@ export default function Step2_SheetSelect({ step, setStep, fileInfo, worksheets,
             className={`flex items-center justify-center gap-3 w-full border-2 border-dashed rounded-xl p-5 cursor-pointer transition-all group ${secondFileName ? 'border-[#22c55e]/40 bg-[#0d1a0f]/40 hover:border-[#22c55e]/70' : 'border-[#333] hover:border-[#22c55e]/50'}`}
             onDragOver={e => e.preventDefault()}
             onDrop={handleDrop}
-            onClick={() => secondFileInputRef.current?.click()}
+            onMouseDown={(e) => { e.preventDefault(); if (secondFileInputRef.current) { secondFileInputRef.current.value = ''; secondFileInputRef.current.click(); } }}
           >
             <FilePlus size={20} className={`shrink-0 transition-colors ${secondFileName ? 'text-[#22c55e]' : 'text-gray-600 group-hover:text-[#22c55e]'}`} />
             <div>

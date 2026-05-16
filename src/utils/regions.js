@@ -1,3 +1,23 @@
+// 시/군/구 드롭다운 옵션 생성: 구가 있는 시는 "수원시" + "수원시 장안구" 형태로 포함
+export const getSigunguOptions = (sido) => {
+  if (!sido) return [];
+  const raw = REGIONS[sido] || [];
+  const result = [];
+  const addedParents = new Set();
+  raw.forEach(entry => {
+    const spaceIdx = entry.indexOf(' ');
+    if (spaceIdx > 0) {
+      const parent = entry.slice(0, spaceIdx); // e.g. "수원시"
+      if (!addedParents.has(parent)) {
+        result.push(parent);         // 시 자체
+        addedParents.add(parent);
+      }
+    }
+    result.push(entry);              // 시+구 또는 단독 시/군
+  });
+  return result;
+};
+
 export const REGIONS = {
   "서울특별시": ["강남구", "강동구", "강북구", "강서구", "관악구", "광진구", "구로구", "금천구", "노원구", "도봉구", "동대문구", "동작구", "마포구", "서대문구", "서초구", "성동구", "성북구", "송파구", "양천구", "영등포구", "용산구", "은평구", "종로구", "중구", "중랑구"],
   "부산광역시": ["강서구", "금정구", "기장군", "남구", "동구", "동래구", "부산진구", "북구", "사상구", "사하구", "서구", "수영구", "연제구", "영도구", "중구", "해운대구"],

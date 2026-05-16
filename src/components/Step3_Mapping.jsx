@@ -26,9 +26,9 @@ const OPTIONAL_KWS = {
   seqNo:    ['순번', '배송순번'],
 };
 
-function SheetMappingPanel({ sheet, mapDef, setMapDef, worksheets, importNote, setImportNote }) {
+function SheetMappingPanel({ sheet, mapDef, setMapDef, worksheets, importNote, setImportNote, onUserMapping }) {
   // ✅ 방어: headers/bodyRows 없을 경우 빈 배열로 폴백 (forEach crash 원천 차단)
-  const headers = Array.isArray(sheet?.headers) ? sheet.headers : [];
+  const headers = Array.isArray(sheet?.headers) ? sheet.headers.filter(h => !/^col_\d+$/.test(h)) : [];
   const bodyRows = Array.isArray(sheet?.bodyRows) ? sheet.bodyRows : [];
 
   const previewData = bodyRows.slice(0, 20).map(row => {
@@ -43,7 +43,10 @@ function SheetMappingPanel({ sheet, mapDef, setMapDef, worksheets, importNote, s
     Object.entries(mapDef).filter(([, v]) => v).map(([k, v]) => [v, k])
   );
 
-  const updateMap = (key, val) => setMapDef({ ...mapDef, [key]: val });
+  const updateMap = (key, val) => {
+    setMapDef({ ...mapDef, [key]: val });
+    if (val) onUserMapping?.(val, key);
+  };
 
   // ✅ 방어: 헤더가 아예 없으면 매핑 불가 안내 표시
   if (headers.length === 0) {
@@ -177,7 +180,7 @@ function SheetMappingPanel({ sheet, mapDef, setMapDef, worksheets, importNote, s
 
 const sheetKey = (sheet) => sheet.fileSource ? `${sheet.fileSource}::${sheet.name}` : sheet.name;
 
-export default function Step3_Mapping({ step, setStep, mapDefs, setMapDefs, selectedSheets, worksheets, startProcessing, onHelp, importNote, setImportNote, baseFiles, baseCount, isBaseUploading, handleBaseUpload, handleRemoveBaseFile, handleAddTargetFile, handleRemoveTargetFile, isUploading, uploadFileName, isBasePurifyMode, setIsBasePurifyMode }) {
+export default function Step3_Mapping({ step, setStep, mapDefs, setMapDefs, selectedSheets, worksheets, startProcessing, onHelp, importNote, setImportNote, baseFiles, baseCount, isBaseUploading, handleBaseUpload, handleRemoveBaseFile, handleAddTargetFile, handleRemoveTargetFile, isUploading, uploadFileName, isBasePurifyMode, setIsBasePurifyMode, onOpenDbImport, dbImportReady, onUserMapping }) {
   const [activeTab, setActiveTab] = useState(0);
   const addTargetRef = useRef(null);
   const addBaseRef = useRef(null);
@@ -345,6 +348,7 @@ export default function Step3_Mapping({ step, setStep, mapDefs, setMapDefs, sele
         worksheets={worksheets}
         importNote={importNote}
         setImportNote={setImportNote}
+        onUserMapping={onUserMapping}
       />
 
       {/* 하단 패널 — 추가 명단 + 기본명단 */}
@@ -427,12 +431,33 @@ export default function Step3_Mapping({ step, setStep, mapDefs, setMapDefs, sele
                 <Loader2 size={12} className="animate-spin"/> 명단 분석 중...
               </div>
             ) : (
-              <button
-                type="button"
-                onMouseDown={(e) => { e.preventDefault(); if (addBaseRef.current) { addBaseRef.current.value = ''; addBaseRef.current.click(); }}}
-                className="mt-2 w-full flex items-center justify-center gap-2 py-2 rounded-lg border border-[#22c55e]/30 bg-[#22c55e]/10 text-[#22c55e] hover:bg-[#22c55e]/20 hover:border-[#22c55e]/60 text-xs font-bold transition-all cursor-pointer">
-                <Database size={12}/> + 기본명단 추가
-              </button>
+              <div className="flex flex-col gap-1.5 mt-2">
+                <button
+                  type="button"
+                  onMouseDown={(e) => { e.preventDefault(); if (addBaseRef.current) { addBaseRef.current.value = ''; addBaseRef.current.click(); }}}
+                  className="w-full flex items-center justify-center gap-2 py-2 rounded-lg border border-[#22c55e]/30 bg-[#22c55e]/10 text-[#22c55e] hover:bg-[#22c55e]/20 hover:border-[#22c55e]/60 text-xs font-bold transition-all cursor-pointer">
+                  <Database size={12}/> + 기본명단 추가
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onOpenDbImport?.()}
+                  className="w-full flex items-center justify-center gap-2 py-2 rounded-lg border border-emerald-500/50 bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25 hover:border-emerald-400/70 text-xs font-bold transition-all cursor-pointer">
+                  <Database size={12}/> DB에서 이식하기
+                </button>
+                <p className="text-gray-600 text-[10px] leading-relaxed text-center px-1">
+                  저장된 기본 명단에서 필요한 데이터를 받아와서 명단에 적용합니다
+                </p>
+              </div>
+            )}
+            {dbImportReady && (
+              <div className="mt-2 p-2 bg-emerald-950/30 border border-emerald-700/40 rounded-lg">
+                <p className="text-emerald-400 text-[10px] font-bold flex items-center gap-1">
+                  <CheckCircle size={10}/> DB 이식 {dbImportReady.count.toLocaleString()}건 준비 완료
+                </p>
+                <p className="text-emerald-600 text-[9px] mt-0.5">
+                  {dbImportReady.fields.map(f => ({ note:'특이사항', seqNo:'배송순번', driver:'기사', sms:'문자수신' }[f] || f)).join(' · ')} 이식 예정
+                </p>
+              </div>
             )}
           </div>
 

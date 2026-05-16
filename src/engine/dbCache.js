@@ -31,10 +31,11 @@ export const setLocalCache = async (keyword, data) => {
       const tx = db.transaction("jusoCache", "readwrite");
       tx.objectStore("jusoCache").put({ keyword, data });
       tx.oncomplete = () => resolve();
-      tx.onerror = () => resolve(); // 에러 발생 시 무한 대기 방지
-      tx.onabort = () => resolve(); // 트랜잭션 중단 시에도 스무스하게 진행
+      tx.onerror = () => { console.warn('[dbCache] setLocalCache 오류:', tx.error); resolve(); };
+      tx.onabort = () => { console.warn('[dbCache] setLocalCache 중단:', tx.error); resolve(); };
     });
-  } catch {
-    return null; // Promise Hang 방지
+  } catch (e) {
+    console.warn('[dbCache] setLocalCache 예외:', e);
+    return null;
   }
 };

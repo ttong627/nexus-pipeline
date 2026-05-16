@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
-import { auth, onAuthStateChanged, setDoc, getDoc, updateDoc, increment, doc, db, serverTimestamp, addDoc, collection, getDocs, writeBatch, query, where, onSnapshot, GoogleAuthProvider, signInWithPopup } from "./config/firebase.js";
+import { auth, onAuthStateChanged, setDoc, getDoc, updateDoc, increment, doc, db, serverTimestamp, addDoc, collection, getDocs, getDocsFromServer, writeBatch, query, where, onSnapshot, GoogleAuthProvider, signInWithPopup } from "./config/firebase.js";
 
 import Dashboard from "./components/Dashboard.jsx";
 import AdminPanel from "./components/AdminPanel.jsx";
@@ -14,12 +14,19 @@ import HelpModal from "./components/HelpModal.jsx";
 import UpgradeModal from "./components/UpgradeModal.jsx";
 import UtilsModal from "./components/UtilsModal.jsx";
 import CloudBaseModal from "./components/CloudBaseModal.jsx";
+import DbImportModal from "./components/DbImportModal.jsx";
 import ErrorBoundary from "./components/ErrorBoundary.jsx";
 import BaseListManager from "./components/BaseListManager.jsx";
+import CloudListManager from "./components/CloudListManager.jsx";
+import DbOverview from "./components/DbOverview.jsx";
+import IntroScreen from "./components/IntroScreen.jsx";
 
 import { processAddress, asyncPool, addTypoRecord, loadTypoDict } from "./engine/addressEngine.js";
-import { parsePhoneNumbers, parseSMS, parseBirthDate } from "./utils/parsers.js";
-import { LogOut, ShieldCheck, CheckCircle, Database, Crown, Layers, UserCircle, Undo2, Menu } from "lucide-react";
+import { parsePhoneNumbers, parseSMS, parseBirthDate, normalizeBirth, extractPhoneNote, formatPhone } from "./utils/parsers.js";
+import { LogOut, ShieldCheck, CheckCircle, Database, Crown, Layers, UserCircle, Undo2, Menu, BarChart3, MapPin } from "lucide-react";
+import RouteMapModal from "./components/RouteMapModal.jsx";
+import RouteSetupModal from "./components/RouteSetupModal.jsx";
+import ShareRouteView from "./components/ShareRouteView.jsx";
 
 export default function App() {
   const [user, setUser] = useState(null);
@@ -48,7 +55,14 @@ export default function App() {
   const [colVis, setColVis] = useState({});
   const [baseCount, setBaseCount] = useState(0);
   const [baseMap, setBaseMap] = useState(null);
+  const [importFields, setImportFields] = useState(null); // null = 전체 이식, Set = 선택 필드만
+  const [dbImportReady, setDbImportReady] = useState(null); // { count, fields }
+  const [showDbImport, setShowDbImport] = useState(false);
+  const [dbNavCity, setDbNavCity] = useState(''); // DB Overview에서 지자체 선택 후 관리 화면 이동
   const [isBasePurifyMode, setIsBasePurifyMode] = useState(false);
+  const [isSavingBaseList, setIsSavingBaseList] = useState(false);
+  const isSavingBaseListRef = useRef(false);
+  const [showIntro, setShowIntro] = useState(false);
   const inqUnsubRef = useRef(null);
 
   const DEFAULT_EXPORT_COLS = [
@@ -80,6 +94,15 @@ export default function App() {
   const [showUpgrade, setShowUpgrade] = useState(false);
   const [showUtils, setShowUtils] = useState(false);
   const [showCloudBase, setShowCloudBase] = useState(false);
+  const [showRouteMap, setShowRouteMap] = useState(false);
+  const [showRouteSetup, setShowRouteSetup] = useState(false);
+  const [cloudRouteConfig, setCloudRouteConfig] = useState(null);
+  const [routeSetupResult, setRouteSetupResult] = useState(null);
+  const [shareParams] = useState(() => {
+    const p = new URLSearchParams(window.location.search);
+    const r = p.get('r');
+    return r ? { shareId: r, driverId: p.get('d') || null } : null;
+  });
   const [showHeaderMenu, setShowHeaderMenu] = useState(false);
   const [profileModal, setProfileModal] = useState({ open: false, isNew: false });
   const [pendingInquiriesCount, setPendingInquiriesCount] = useState(0);
@@ -195,9 +218,7 @@ export default function App() {
       });
     } else {
       result.sort((a, b) => {
-        let cmp = String(a.구분 || "").localeCompare(String(b.구분 || ""), undefined, { numeric: true, sensitivity: 'base' });
-        if (cmp !== 0) return cmp;
-        cmp = String(a.행정동 || "").localeCompare(String(b.행정동 || ""), undefined, { numeric: true, sensitivity: 'base' });
+        let cmp = String(a.행정동 || "").localeCompare(String(b.행정동 || ""), undefined, { numeric: true, sensitivity: 'base' });
         if (cmp !== 0) return cmp;
         cmp = String(a.주소 || "").localeCompare(String(b.주소 || ""), undefined, { numeric: true, sensitivity: 'base' });
         if (cmp !== 0) return cmp;
@@ -210,6 +231,7 @@ export default function App() {
   useEffect(() => {
     let res = sortedData;
     if (filter.showErrorsOnly) res = res.filter(r => r._에러);
+    if (filter.showSuccessOnly) res = res.filter(r => !r._에러);
     if (filter.text) {
       const txt = filter.text.toLowerCase();
       res = res.filter(r => Object.values(r).some(v => String(v).toLowerCase().includes(txt)));
@@ -270,11 +292,11 @@ export default function App() {
               sheet.unmappedCols.forEach(async (col) => {
                 try {
                   await addDoc(collection(db, "nexus_ai_logs"), {
-                    columnName: col,
+                    columnName: String(col).slice(0, 100).replace(/[<>&"'`]/g, ''),
                     status: "pending",
                     detectedAt: serverTimestamp(),
-                    fileName: file.name,
-                    sheetName: sheet.name
+                    fileName: String(file.name).slice(0, 200),
+                    sheetName: String(sheet.name).slice(0, 100),
                   });
                 } catch (e) {
                   console.error("AI Log upload failed:", e);
@@ -329,8 +351,9 @@ export default function App() {
               sheet.unmappedCols.forEach(async (col) => {
                 try {
                   await addDoc(collection(db, "nexus_ai_logs"), {
-                    columnName: col, status: "pending", detectedAt: serverTimestamp(),
-                    fileName: file.name, sheetName: sheet.name
+                    columnName: String(col).slice(0, 100).replace(/[<>&"'`]/g, ''),
+                    status: "pending", detectedAt: serverTimestamp(),
+                    fileName: String(file.name).slice(0, 200), sheetName: String(sheet.name).slice(0, 100),
                   });
                 } catch (e) { console.error("AI Log upload failed:", e); }
               });
@@ -352,10 +375,26 @@ export default function App() {
     setMapDefs(p => ({ ...p, [sheetKey]: { ...p[sheetKey], [type]: value } }));
   };
 
+  const handleUserMapping = async (columnName, mappedToField) => {
+    try {
+      await addDoc(collection(db, 'nexus_ai_logs'), {
+        type: 'user_mapping',
+        columnName: String(columnName).slice(0, 100),
+        mappedTo: String(mappedToField).slice(0, 50),
+        loggedAt: serverTimestamp(),
+        userEmail: user?.email || 'unknown',
+        city: fileInfo?.city || '',
+      });
+    } catch (e) {
+      console.error('user_mapping log failed:', e);
+    }
+  };
+
   const handleAnalyzeAll = async () => {
+    if (!selectedSheets || selectedSheets.length === 0) return;
     setStep(4);
     setProgressLogs([]);
-    const total = selectedSheets.reduce((acc, s) => acc + s.bodyRows.length, 0);
+    const total = selectedSheets.reduce((acc, s) => acc + (s.bodyRows?.length || 0), 0);
     let count = 0;
     setEngineProgress({ current: 0, total, percent: 0 });
 
@@ -379,7 +418,8 @@ export default function App() {
         const chunkResults = await asyncPool(20, chunk, async (row) => {
           let addr = getVal(row, 'address');
           let name = getVal(row, 'name');
-          const processedRow = await processAddress(addr, name);
+          let adminDong = getVal(row, 'admin') || "";
+          const processedRow = await processAddress(addr, name, adminDong, fileInfo?.city || "");
           count++;
           if (Date.now() - lastProgressTime > 200) {
             setEngineProgress({ current: count, total, percent: Math.round((count/total)*100) });
@@ -389,24 +429,48 @@ export default function App() {
           const birthKey = parseBirthDate(getVal(row, 'birth'));
           const baseKey = `${name}_${birthKey}`;
           const baseEntry = baseMap ? (baseMap[baseKey] || null) : null;
+          const { cleaned: c1, note: phoneNote1 } = extractPhoneNote(getVal(row, 'contact1'));
+          const { cleaned: c2, note: phoneNote2 } = extractPhoneNote(getVal(row, 'contact2'));
+          const phones = parsePhoneNumbers(c1, c2);
+          const phoneNotes = [
+            phoneNote1 && c1 ? `${phoneNote1}(${formatPhone(c1)})` : '',
+            phoneNote2 && c2 ? `${phoneNote2}(${formatPhone(c2)})` : '',
+          ].filter(Boolean).join(' ');
 
           return {
             id: window.crypto.randomUUID(),
-            구분: sheet.type,
+            구분: sheet.type === '혼합'
+              ? (() => {
+                  // Step3 수동 매핑 우선, 없으면 자동 감지 컬럼 사용
+                  const mappedVal = getVal(row, 'type');
+                  const v = String(mappedVal || (sheet.typeColIdx >= 0 ? row[sheet.typeColIdx] : '') || '').trim();
+                  if (v.includes('차상위')) return '차상위';
+                  return '기초수급자';
+                })()
+              : sheet.type,
             행정동: getVal(row, 'admin') || "",
             이름: processedRow.정제된이름 || name,
             생년월일: birthKey,
             품명: getVal(row, 'itemName') || "",
             포수: getVal(row, 'qty') ? (parseInt(getVal(row, 'qty')) || 1) : "",
-            휴대폰: parsePhoneNumbers(getVal(row, 'contact1'), getVal(row, 'contact2')).mobile,
-            유선전화: parsePhoneNumbers(getVal(row, 'contact1'), getVal(row, 'contact2')).landline,
+            휴대폰: phones.mobile,
+            유선전화: phones.landline,
             주소: processedRow.주소,
             문자수신: parseSMS(getVal(row, 'sms')),
-            특이사항: getVal(row, 'note') || baseEntry?.note || "",
-            기사: getVal(row, 'driver') || baseEntry?.driver || "",
-            배송순번: getVal(row, 'seqNo') || baseEntry?.seqNo || "",
+            특이사항: [
+              processedRow.특이사항,
+              phoneNotes,
+              getVal(row, 'note'),
+              baseEntry && (importFields === null || importFields?.includes('note')) && baseEntry.note
+                ? `◆${baseEntry.note.replace(/^\[기본\]\s*/g, '')}` : '',
+            ].filter(Boolean).join(' ').trim() || "",
+            기사: getVal(row, 'driver') || (baseEntry && (importFields === null || importFields?.includes('driver')) ? baseEntry.driver : '') || "",
+            배송순번: getVal(row, 'seqNo') || (baseEntry && (importFields === null || importFields?.includes('seqNo')) ? baseEntry.seqNo : '') || "",
             _에러: processedRow.확인필요,
-            _사유: processedRow.확인사유
+            _사유: processedRow.확인사유,
+            _lat: processedRow.lat || baseEntry?.lat || null,
+            _lng: processedRow.lng || baseEntry?.lng || null,
+            _isApt: processedRow.isApt !== undefined ? processedRow.isApt : (baseEntry?.isApt || false)
           };
         });
         results.push(...chunkResults);
@@ -419,14 +483,17 @@ export default function App() {
   };
 
   const handleCellEdit = (id, field, value) => {
-    const newData = gridData.map(r => r.id === id ? { ...r, [field]: value } : r);
-    pushHistory(newData);
+    // 타이핑마다 pushHistory 호출 시 stale closure + setHistory·setGridData 동시발동으로
+    // 중복문자·화면잠김 발생 → 키 입력은 functional setGridData로만, 히스토리는 Enter(재정제)에서만 쌓음
+    setGridData(prev => prev.map(r => r.id === id ? { ...r, [field]: value } : r));
   };
 
   const handleAddressKeyDown = async (e, row) => {
     if (e.key === "Enter") {
-      const res = await processAddress(row.주소, row.이름);
-      handleCellEdit(row.id, "주소", res.주소);
+      // adminDong·cityLabel 전달 → 주민센터 등 공공기관 검색 정확도 향상
+      const res = await processAddress(row.주소, row.이름, row.행정동 || "", fileInfo?.city || "");
+      const newData = gridData.map(r => r.id === row.id ? { ...r, 주소: res.주소 } : r);
+      pushHistory(newData);
       if (res.주소 !== row.주소 && row.주소) {
         addTypoRecord(row.주소, res.주소);
       }
@@ -436,13 +503,32 @@ export default function App() {
   const handleUpdateBaseList = async (row, updates) => {
     if (!row) return;
     try {
-      const ref = doc(db, "base_lists", row.id || row.이름);
-      await setDoc(ref, { ...row, ...updates }, { merge: true });
-      
+      const city = fileInfo?.city || '기타';
+      const normPhone = (v) => (v || '').replace(/[^0-9-]/g, '');
+      const name = (row.이름 || '').trim();
+      const birthKey = row.생년월일 || '';
+      const mobile = normPhone(row.휴대폰 || '');
+      const colRef = collection(db, 'base_lists', city, 'records');
+
+      let existingId = null;
+      if (birthKey) {
+        const snap = await getDocs(query(colRef, where('name', '==', name), where('birthKey', '==', birthKey)));
+        if (!snap.empty) existingId = snap.docs[0].id;
+      }
+      if (!existingId && mobile.length >= 9) {
+        const snap = await getDocs(query(colRef, where('name', '==', name), where('mobile', '==', mobile)));
+        if (!snap.empty) existingId = snap.docs[0].id;
+      }
+
+      const ref = existingId
+        ? doc(db, 'base_lists', city, 'records', existingId)
+        : doc(colRef);
+      await setDoc(ref, { name, birthKey, mobile, ...updates }, { merge: true });
+
       await addDoc(collection(db, "audit_logs"), {
         action: "UPDATE_BASELIST",
         targetName: row.이름,
-        updates: updates,
+        updates,
         timestamp: serverTimestamp(),
         adminEmail: user?.email || "unknown"
       });
@@ -453,32 +539,325 @@ export default function App() {
     }
   };
 
-  const handleBatchSaveBaseList = async (validData) => {
+  const handleSaveMonthlyList = async () => {
+    const city = fileInfo?.city;
+    if (!city) return alert('지자체 정보를 감지하지 못했습니다. 파일을 다시 확인해주세요.');
+    const validData = gridData.filter(d => !d._에러);
+    if (validData.length === 0) return alert('저장할 정상 명단이 없습니다.');
+
+    const now = new Date();
+    let initMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const rawMonth = fileInfo?.month || '';
+    const mMatch = rawMonth.match(/(\d{1,2})월/);
+    if (mMatch) initMonth = `${now.getFullYear()}-${String(mMatch[1]).padStart(2, '0')}`;
+
+    const monthStr = window.prompt(
+      `[${city}] 저장할 년월을 입력하세요 (예: ${initMonth})\n\n정상 데이터 ${validData.length}건이 저장됩니다.`,
+      initMonth
+    );
+    if (!monthStr) return;
+    if (!/^\d{4}-\d{2}$/.test(monthStr)) return alert('형식이 올바르지 않습니다. YYYY-MM 형식으로 입력해주세요.');
+
     try {
-      let count = 0;
+      // 기존 데이터 확인 → 중복 방지
+      const existingSnap = await getDocs(collection(db, 'cloud_lists', city, 'months', monthStr, 'records'));
+      if (existingSnap.docs.length > 0) {
+        const ok = window.confirm(
+          `[${city}] ${monthStr} 명단이 이미 ${existingSnap.docs.length}건 저장되어 있습니다.\n기존 데이터를 지우고 새로 저장하시겠습니까?`
+        );
+        if (!ok) return;
+        for (let i = 0; i < existingSnap.docs.length; i += 500) {
+          const batch = writeBatch(db);
+          existingSnap.docs.slice(i, i + 500).forEach(d => batch.delete(d.ref));
+          await batch.commit();
+        }
+      }
+
+      const 수급자Count = validData.filter(r => r.구분 === '기초수급자').length;
+      const 차상위Count = validData.filter(r => r.구분 === '차상위').length;
+
+      // 도시 상위 문서 생성 (없으면) — getDocs(collection('cloud_lists'))가 인식하려면 명시적 문서 필요
+      await setDoc(doc(db, 'cloud_lists', city), {
+        city, lastMonthId: monthStr, lastUpdatedAt: serverTimestamp(),
+      }, { merge: true });
+
+      const metaRef = doc(db, 'cloud_lists', city, 'months', monthStr);
+      await setDoc(metaRef, {
+        city, monthId: monthStr,
+        totalCount: validData.length, 수급자Count, 차상위Count,
+        uploadedAt: serverTimestamp(), uploadedBy: user?.email || 'unknown',
+        hasOriginal: false,
+      });
+
+      // 필드 정규화 후 500건씩 배치 저장
       for (let i = 0; i < validData.length; i += 500) {
         const batch = writeBatch(db);
-        const chunk = validData.slice(i, i + 500);
-        chunk.forEach(row => {
-          // 이름과 휴대폰을 조합하여 고유 ID로 사용 (누적 시 중복 방지)
-          const docId = row.이름 + "_" + (row.휴대폰 || row.id);
-          const ref = doc(db, "base_lists", docId);
-          batch.set(ref, row, { merge: true });
+        validData.slice(i, i + 500).forEach((r, j) => {
+          const ref = doc(collection(db, 'cloud_lists', city, 'months', monthStr, 'records'));
+          batch.set(ref, {
+            구분: r.구분 || '',
+            이름: r.이름 || '',
+            생년월일: r.생년월일 || '',
+            행정동: r.행정동 || '',
+            주소: r.주소 || '',
+            휴대폰: r.휴대폰 || '',
+            유선전화: r.유선전화 || '',
+            포수: parseInt(r.포수 || '1') || 1,
+            특이사항: r.특이사항 || '',
+            lat: r._lat || null,
+            lng: r._lng || null,
+            isApt: r._isApt || false,
+            기사: r.기사 || '',
+            배송순번: r.배송순번 || '',
+            _idx: i + j,
+          });
         });
         await batch.commit();
-        count += chunk.length;
       }
-      
-      await addDoc(collection(db, "audit_logs"), {
-        action: "BATCH_SAVE_BASELIST",
-        count: count,
-        timestamp: serverTimestamp(),
-        adminEmail: user?.email || "unknown"
+
+      await addDoc(collection(db, 'audit_logs'), {
+        action: 'SAVE_MONTHLY_LIST', city, monthId: monthStr,
+        count: validData.length, timestamp: serverTimestamp(),
+        adminEmail: user?.email || 'unknown',
       });
-      alert(`총 ${count}건의 정상 명단이 기본 명단에 성공적으로 누적 저장되었습니다.`);
+
+      // base_lists에 좌표·특이사항 sync-back (기본명단 저장 없이 클라우드만 저장한 경우 커버)
+      try {
+        const digitKey = v => String(v || '').replace(/[^\d]/g, '');
+        const baseSnap = await getDocs(collection(db, 'base_lists', city, 'records'));
+        if (!baseSnap.empty) {
+          const byBirth = new Map(), byPhone = new Map(), byLandline = new Map();
+          baseSnap.docs.forEach(d => {
+            const b = d.data();
+            const nm = b.name || b.이름 || '';
+            const bk = digitKey(b.birthKey || b.생년월일 || '');
+            const ph = digitKey(b.mobile || b.휴대폰 || '');
+            const ld = digitKey(b.landline || b.유선전화 || '');
+            if (bk) byBirth.set(`${nm}_${bk}`, d.ref);
+            if (ph) byPhone.set(`${nm}_${ph}`, d.ref);
+            if (ld) byLandline.set(`${nm}_${ld}`, d.ref);
+          });
+          const syncUpdates = [];
+          validData.forEach(r => {
+            const nm = r.이름 || '';
+            const bk = digitKey(r.생년월일 || '');
+            const ph = digitKey(r.휴대폰 || '');
+            const ld = digitKey(r.유선전화 || '');
+            let ref = null;
+            if (bk) ref = byBirth.get(`${nm}_${bk}`);
+            if (!ref && ph) ref = byPhone.get(`${nm}_${ph}`);
+            if (!ref && ld) ref = byLandline.get(`${nm}_${ld}`);
+            if (!ref) return;
+            const patch = {};
+            if (r._lat) patch.lat = r._lat;
+            if (r._lng) patch.lng = r._lng;
+            if (r._isApt !== undefined) patch.isApt = r._isApt;
+            if (Object.keys(patch).length) syncUpdates.push({ ref, patch });
+          });
+          for (let i = 0; i < syncUpdates.length; i += 499) {
+            const b2 = writeBatch(db);
+            syncUpdates.slice(i, i + 499).forEach(u => b2.update(u.ref, u.patch));
+            await b2.commit();
+          }
+        }
+      } catch { /* sync 실패는 무시 — 핵심 저장은 완료됨 */ }
+
+      alert(`✅ ${city} ${monthStr} 월별 명단 ${validData.length}건이 클라우드에 저장되었습니다.`);
     } catch (e) {
       console.error(e);
-      alert("일괄 저장 실패: " + e.message);
+      alert('저장 실패: ' + e.message);
+    }
+  };
+
+  const handleBatchSaveBaseList = async (validData) => {
+    if (isSavingBaseListRef.current) return;
+    isSavingBaseListRef.current = true;
+    setIsSavingBaseList(true);
+    const city = fileInfo?.city || '기타';
+    const normPhone  = (v) => (v || '').replace(/[^0-9-]/g, ''); // 저장용 (대시 유지)
+    const digitKey   = (v) => (v || '').replace(/[^\d]/g, '');   // 인덱스 키용 (숫자만)
+
+    try {
+      // ① 기존 DB 레코드 전체 로드 — 캐시 우회하여 서버 최신 데이터 직접 조회
+      const existingSnap = await getDocsFromServer(collection(db, 'base_lists', city, 'records'));
+      const existing = existingSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+      // liveByBirth/liveByPhone: DB 기존 + 인플라이트 신규 합산 인덱스
+      // 구버전(한국어 키) + 신버전(영문 키) 모두 지원 — 스키마 혼재 대응
+      // ─── 매칭 인덱스 (우선순위별 분리) ───────────────────────────────────
+      // 1순위: 이름+생년월일
+      const liveByBirth    = {};
+      // 2순위: 이름+휴대폰 (생년월일 없는 DB 레코드만)
+      const liveByPhone    = {};
+      // 3순위: 이름+유선전화 (생년월일·휴대폰 모두 없는 DB 레코드만)
+      const liveByLandline = {};
+      // 생년월일 있는 이름 목록 — 2·3순위 신규 추가 시 중복 방지
+      const birthKeyedNames = new Set();
+
+      existing.forEach(r => {
+        const rName  = (r.name || r.이름 || '').trim();
+        const rBirth = normalizeBirth(r.birthKey || String(r.생년월일 || ''));
+        const rPhone = digitKey(r.mobile   || r.휴대폰   || '');
+        const rLand  = digitKey(r.landline || r.유선전화  || '');
+        if (!rName) return;
+        if (rBirth) {
+          liveByBirth[`${rName}__${rBirth}`] = r;
+          birthKeyedNames.add(rName);
+        } else if (rPhone.length >= 9) {
+          liveByPhone[`${rName}__${rPhone}`] = r;       // 생년월일 없는 레코드만
+        } else if (rLand.length >= 9) {
+          liveByLandline[`${rName}__${rLand}`] = r;     // 생년월일·휴대폰 모두 없는 레코드만
+        }
+      });
+
+      // ② 우선순위 매칭
+      const updates    = [];
+      const addEntries = [];
+
+      validData.forEach(row => {
+        const name    = (row.이름 || '').trim();
+        if (!name) return;
+        const birthKey = normalizeBirth(row.생년월일 || '');
+        const mobile   = normPhone(row.휴대폰);
+        const mKey     = digitKey(mobile);
+        const landline = normPhone(row.유선전화);
+        const lKey     = digitKey(landline);
+
+        // 생년월일·휴대폰·유선전화 모두 없으면 제외
+        if (!birthKey && mKey.length < 9 && lKey.length < 9) return;
+
+        const payload = {
+          name, birthKey,
+          dong:    row.행정동   || '',
+          address: row.주소     || '',
+          mobile,  landline,
+          note:    (row.특이사항 || '').replace(/\s*◆[^◆]*/g, '').trim() || '',
+          driver:  row.기사     || '',
+          seqNo:   parseInt(row.배송순번 || '0') || 0,
+          sms:     row.문자수신 || '',
+          ...(row._lat  ? { lat: row._lat, lng: row._lng } : {}),
+          ...(row._isApt !== undefined ? { isApt: row._isApt } : {}),
+        };
+
+        if (birthKey) {
+          // ── 1순위: 이름+생년월일 ────────────────────────────────────────
+          const matched = liveByBirth[`${name}__${birthKey}`];
+          if (matched) {
+            if (matched._isInFlight) {
+              matched.data = {
+                ...matched.data, ...payload,
+                birthKey: matched.data.birthKey || payload.birthKey,
+                mobile:   matched.data.mobile   || payload.mobile,
+                landline: matched.data.landline || payload.landline,
+              };
+            } else {
+              updates.push({ id: matched.id, data: payload });
+              liveByBirth[`${name}__${birthKey}`] = { ...matched, ...payload };
+            }
+          } else {
+            const entry = { _isInFlight: true, data: payload };
+            addEntries.push(entry);
+            liveByBirth[`${name}__${birthKey}`] = entry;
+            birthKeyedNames.add(name);
+          }
+
+        } else if (mKey.length >= 9) {
+          // ── 2순위: 이름+휴대폰 (생년월일 없는 경우) ────────────────────
+          const matched = liveByPhone[`${name}__${mKey}`];
+          if (matched) {
+            if (matched._isInFlight) {
+              matched.data = {
+                ...matched.data, ...payload,
+                mobile:   matched.data.mobile   || payload.mobile,
+                landline: matched.data.landline || payload.landline,
+              };
+            } else {
+              updates.push({ id: matched.id, data: payload });
+              liveByPhone[`${name}__${mKey}`] = { ...matched, ...payload };
+            }
+          } else {
+            if (birthKeyedNames.has(name)) return; // 동명 생년월일 레코드 존재 → 추가 금지
+            const entry = { _isInFlight: true, data: payload };
+            addEntries.push(entry);
+            liveByPhone[`${name}__${mKey}`] = entry;
+          }
+
+        } else {
+          // ── 3순위: 이름+유선전화 (생년월일·휴대폰 모두 없는 경우) ────────
+          const matched = liveByLandline[`${name}__${lKey}`];
+          if (matched) {
+            if (matched._isInFlight) {
+              matched.data = {
+                ...matched.data, ...payload,
+                landline: matched.data.landline || payload.landline,
+              };
+            } else {
+              updates.push({ id: matched.id, data: payload });
+              liveByLandline[`${name}__${lKey}`] = { ...matched, ...payload };
+            }
+          } else {
+            if (birthKeyedNames.has(name)) return; // 동명 생년월일 레코드 존재 → 추가 금지
+            const entry = { _isInFlight: true, data: payload };
+            addEntries.push(entry);
+            liveByLandline[`${name}__${lKey}`] = entry;
+          }
+        }
+      });
+
+      const adds = addEntries.map(e => ({ data: e.data }));
+
+      // ③ 499개씩 배치 커밋
+      const allOps = [
+        ...updates.map(u => ({ type: 'update', id: u.id, data: u.data })),
+        ...adds.map(a =>    ({ type: 'add',               data: a.data })),
+      ];
+
+      let successCount = 0;
+      const errors = [];
+
+      for (let i = 0; i < allOps.length; i += 499) {
+        try {
+          const batch = writeBatch(db);
+          allOps.slice(i, i + 499).forEach(op => {
+            if (op.type === 'update') {
+              batch.set(doc(db, 'base_lists', city, 'records', op.id), op.data, { merge: true });
+            } else {
+              const newRef = doc(collection(db, 'base_lists', city, 'records'));
+              batch.set(newRef, { ...op.data, id: newRef.id });
+            }
+          });
+          await batch.commit();
+          successCount += Math.min(499, allOps.length - i);
+        } catch (batchErr) {
+          console.error(`[배치 ${i}~${i+499}] 오류:`, batchErr);
+          errors.push(`배치 ${Math.floor(i/499)+1}: ${batchErr.message}`);
+        }
+      }
+
+      // ④ 상위 도시 문서 갱신 + 감사 로그
+      await setDoc(doc(db, 'base_lists', city), {
+        city, updatedAt: serverTimestamp(), author: user?.uid || '',
+      }, { merge: true });
+
+      await addDoc(collection(db, 'audit_logs'), {
+        action: 'BATCH_SAVE_BASELIST', city,
+        addCount: adds.length, updateCount: updates.length,
+        successCount, errorCount: errors.length,
+        timestamp: serverTimestamp(),
+        adminEmail: user?.email || 'unknown',
+      });
+
+      if (errors.length > 0) {
+        alert(`⚠️ 일부 오류 발생!\n신규: ${adds.length}건, 업데이트: ${updates.length}건\n성공: ${successCount}건, 실패 배치: ${errors.length}개\n\n${errors.join('\n')}`);
+      } else {
+        alert(`✅ 기본명단 저장 완료!\n신규 추가: ${adds.length}건\n기존 업데이트: ${updates.length}건\n\n[진단] 기존 DB: ${existing.length}건 / 생년월일 인덱스: ${Object.keys(liveByBirth).length}건 / 전화번호 인덱스: ${Object.keys(liveByPhone).length}건`);
+      }
+    } catch (e) {
+      console.error('[handleBatchSaveBaseList]', e);
+      alert('일괄 저장 실패: ' + e.message);
+    } finally {
+      isSavingBaseListRef.current = false;
+      setIsSavingBaseList(false);
     }
   };
 
@@ -497,8 +876,10 @@ export default function App() {
     const mmdd = String(now.getMonth()+1).padStart(2,'0') + String(now.getDate()).padStart(2,'0');
     const timeSeq = String(now.getHours()).padStart(2,'0') + String(now.getMinutes()).padStart(2,'0') + String(now.getSeconds()).padStart(2,'0');
     const safeCity = (fileInfo?.city || '지자체미상').replace(/[/\\*?:"<>|]/g,'_');
-    const cleanMonth = (fileInfo?.month || '').replace(/월/g,'').trim();
-    const monthStr = cleanMonth ? `${cleanMonth}월` : '미상';
+    const monthRaw = fileInfo?.month || '';
+    const monthStr = monthRaw.match(/^\d{4}-\d{2}$/)
+      ? `${parseInt(monthRaw.split('-')[1])}월`
+      : (monthRaw.replace(/월/g,'').trim() ? `${monthRaw.replace(/월/g,'').trim()}월` : '미상');
     const suCount  = filteredData.filter(r => r.구분 === '기초수급자').reduce((s,r) => s+(Number(r.포수)||0), 0);
     const chaCount = filteredData.filter(r => r.구분 === '차상위').reduce((s,r) => s+(Number(r.포수)||0), 0);
     const total    = suCount + chaCount;
@@ -570,12 +951,21 @@ export default function App() {
   const onHelp = () => setShowHelp(true);
   const onLogout = () => auth.signOut();
 
+  // 공유 URL로 접근 시 로그인 없이 기사 전용 지도 표시
+  if (shareParams) return (
+    <ErrorBoundary>
+      <ShareRouteView shareId={shareParams.shareId} driverId={shareParams.driverId} />
+    </ErrorBoundary>
+  );
+
   if (showAuth) return <AuthScreen authStatus={authStatus} authLoading={authLoading} handleGoogleLogin={handleGoogleLogin} />;
 
   return (
     <ErrorBoundary>
       <div className="w-full h-screen bg-[#050505] text-white flex flex-col font-sans overflow-hidden">
-        
+
+        {showIntro && <IntroScreen user={user} onComplete={() => setShowIntro(false)} />}
+
         {/* HEADER RESTORED */}
         <header className="h-16 shrink-0 bg-[#0a0a0a] border-b border-[#222] flex items-center justify-between px-6 z-50">
           <button 
@@ -623,10 +1013,23 @@ export default function App() {
                   <div className="absolute right-0 top-full mt-2 w-52 bg-[#0d1a0f] border border-[#22c55e]/20 rounded-xl shadow-[0_8px_32px_rgba(0,0,0,0.6)] z-50 overflow-hidden">
                     <div className="p-1.5 space-y-0.5">
                       <button
-                        onClick={() => { setShowCloudBase(true); setShowHeaderMenu(false); }}
+                        onClick={() => { setStep(9); setDbNavCity(''); setShowHeaderMenu(false); }}
+                        className="w-full px-4 py-2.5 flex items-center gap-3 text-violet-300 hover:bg-violet-900/30 rounded-lg text-xs font-bold transition-colors text-left"
+                      >
+                        <BarChart3 size={15} /> DB 현황 조회
+                      </button>
+                      <div className="my-0.5 border-t border-[#1a1a1a]" />
+                      <button
+                        onClick={() => { setStep(8); setDbNavCity(''); setShowHeaderMenu(false); }}
                         className="w-full px-4 py-2.5 flex items-center gap-3 text-blue-300 hover:bg-blue-900/30 rounded-lg text-xs font-bold transition-colors text-left"
                       >
-                        <Database size={15} /> 클라우드 명단
+                        <Database size={15} /> 이번달 배송명단
+                      </button>
+                      <button
+                        onClick={() => { setStep(6); setDbNavCity(''); setShowHeaderMenu(false); }}
+                        className="w-full px-4 py-2.5 flex items-center gap-3 text-cyan-300 hover:bg-cyan-900/30 rounded-lg text-xs font-bold transition-colors text-left"
+                      >
+                        <Database size={15} /> 기본명단 관리
                       </button>
                       <button
                         onClick={() => { setShowUtils(true); setShowHeaderMenu(false); }}
@@ -668,23 +1071,107 @@ export default function App() {
           </div>
         </header>
 
-        <main className="flex-1 relative overflow-hidden bg-[#050505]">
+        {/* ── 단계 2~5 공통 요약바 ─────────────────────────────────────── */}
+        {step >= 2 && step <= 5 && fileInfo && (
+          <div className="shrink-0 bg-black/70 border-b border-[#1e1e1e] px-5 py-2 flex items-center gap-2.5 text-xs flex-wrap">
+            <span className="text-white font-black tracking-wide">{fileInfo.city || '지자체 미상'}</span>
+            <span className="text-gray-700">|</span>
+            <span className="text-gray-300 font-bold">{fileInfo.month || '-'}</span>
+            <span className="text-gray-700">|</span>
+            {step === 5 ? (
+              <>
+                <span className="text-blue-300 font-black">
+                  수급자 {gridData.filter(d => d.구분 === '기초수급자').reduce((s, d) => s + (parseInt(d.포수) || 0), 0).toLocaleString()}포
+                </span>
+                <span className="text-gray-700">|</span>
+                <span className="text-amber-300 font-black">
+                  차상위 {gridData.filter(d => d.구분 === '차상위').reduce((s, d) => s + (parseInt(d.포수) || 0), 0).toLocaleString()}포
+                </span>
+                <span className="text-gray-700">|</span>
+                <span className="text-[#22c55e] font-black">
+                  전체 {gridData.reduce((s, d) => s + (parseInt(d.포수) || 0), 0).toLocaleString()}포
+                </span>
+                <span className="ml-1 text-[10px] text-gray-600">({gridData.length.toLocaleString()}명)</span>
+              </>
+            ) : (
+              <>
+                {(() => {
+                  const sheets = worksheets.filter(s => s.selected !== false);
+                  const su  = sheets.filter(s => s.type === '기초수급자').reduce((a, s) => a + (s.qty || 0), 0);
+                  const cha = sheets.filter(s => s.type === '차상위').reduce((a, s) => a + (s.qty || 0), 0);
+                  const mix = sheets.filter(s => s.type !== '기초수급자' && s.type !== '차상위').reduce((a, s) => a + (s.qty || 0), 0);
+                  const total = su + cha + mix;
+                  return (
+                    <>
+                      <span className="text-blue-300 font-black">수급자 {su.toLocaleString()}포</span>
+                      <span className="text-gray-700">|</span>
+                      <span className="text-amber-300 font-black">차상위 {cha.toLocaleString()}포</span>
+                      <span className="text-gray-700">|</span>
+                      <span className="text-[#22c55e] font-black">전체 {total.toLocaleString()}포</span>
+                      <span className="ml-1 text-[10px] text-gray-600 italic">(예상)</span>
+                    </>
+                  );
+                })()}
+              </>
+            )}
+          </div>
+        )}
+
+        <main className="flex-1 relative overflow-hidden bg-[#050505] flex flex-col">
           {step === 0 && <Dashboard user={user} onLogout={onLogout} onStart={(s) => setStep(typeof s === 'number' ? s : 1)} onHelp={onHelp} setFileInfo={setFileInfo} setWorksheets={setWorksheets} setBaseCount={setBaseCount} gridData={gridData} setGridData={setGridData} />}
           {step === 1 && <Step1_Upload handleDragOver={handleDragOver} handleDrop={handleDrop} handleFileUpload={handleFileUpload} handleUnifiedDrop={handleUnifiedDrop} isBaseUploading={isBaseUploading} step={step} onHelp={onHelp} onCloudFetch={() => setShowCloudBase(true)} />}
-          {step === 2 && <Step2_SheetSelect step={step} setStep={setStep} fileInfo={fileInfo} worksheets={worksheets} setWorksheets={setWorksheets} setSelectedSheets={setSelectedSheets} onHelp={onHelp} handleSecondFileUpload={handleSecondFileUpload} />}
-          {step === 3 && <Step3_Mapping step={step} setStep={setStep} selectedSheets={selectedSheets} worksheets={worksheets} mapDefs={mapDefs} setMapDefs={setMapDefs} startProcessing={handleAnalyzeAll} onHelp={onHelp} isBasePurifyMode={isBasePurifyMode} setIsBasePurifyMode={setIsBasePurifyMode} />}
+          {step === 2 && <Step2_SheetSelect step={step} setStep={setStep} fileInfo={fileInfo} setFileInfo={setFileInfo} worksheets={worksheets} setWorksheets={setWorksheets} setSelectedSheets={setSelectedSheets} onHelp={onHelp} handleSecondFileUpload={handleSecondFileUpload} />}
+          {step === 3 && <Step3_Mapping step={step} setStep={setStep} selectedSheets={selectedSheets} worksheets={worksheets} mapDefs={mapDefs} setMapDefs={setMapDefs} startProcessing={handleAnalyzeAll} onHelp={onHelp} isBasePurifyMode={isBasePurifyMode} setIsBasePurifyMode={setIsBasePurifyMode} onOpenDbImport={() => setShowDbImport(true)} dbImportReady={dbImportReady} onUserMapping={handleUserMapping} />}
           {step === 4 && <LoadingScreen progress={engineProgress} logs={progressLogs} />}
-          {step === 5 && <ResultGrid step={step} setStep={setStep} filter={filter} setFilter={setFilter} gridData={gridData} filteredData={filteredData} paginatedData={paginatedData} currentPage={currentPage} setCurrentPage={setCurrentPage} itemsPerPage={itemsPerPage} colVis={colVis} sortConfig={sortConfig} setSortConfig={setSortConfig} handleCellEdit={handleCellEdit} handleAddressKeyDown={handleAddressKeyDown} handleUpdateBaseList={handleUpdateBaseList} handleBatchSaveBaseList={handleBatchSaveBaseList} setShowExportSetting={setShowExportSetting} handleExport={handleExport} handleExportErrors={handleExportErrors} handleExportDongSummary={handleExportDongSummary} handleDeleteRows={handleDeleteRows} handleBatchSetNote={handleBatchSetNote} onHelp={onHelp} />}
-          {step === 6 && <BaseListManager user={user} onBack={() => setStep(0)} />}
+          {step === 5 && <ResultGrid step={step} setStep={setStep} fileInfo={fileInfo} filter={filter} setFilter={setFilter} gridData={gridData} filteredData={filteredData} paginatedData={paginatedData} currentPage={currentPage} setCurrentPage={setCurrentPage} itemsPerPage={itemsPerPage} colVis={colVis} sortConfig={sortConfig} setSortConfig={setSortConfig} handleCellEdit={handleCellEdit} handleAddressKeyDown={handleAddressKeyDown} handleUpdateBaseList={handleUpdateBaseList} handleBatchSaveBaseList={handleBatchSaveBaseList} isSavingBaseList={isSavingBaseList} handleSaveMonthlyList={handleSaveMonthlyList} setShowExportSetting={setShowExportSetting} handleExport={handleExport} handleExportErrors={handleExportErrors} handleExportDongSummary={handleExportDongSummary} handleDeleteRows={handleDeleteRows} handleBatchSetNote={handleBatchSetNote} onHelp={onHelp} onOpenRouteMap={() => { setCloudRouteConfig(null); setShowRouteSetup(true); }} />}
+          {step === 6 && <BaseListManager user={user} initialCity={dbNavCity} onBack={() => { setStep(0); setDbNavCity(''); }} />}
           {step === 7 && <AdminPanel user={user} onClose={() => setStep(0)} />}
+          {step === 8 && <CloudListManager user={user} initialCity={dbNavCity} onBack={() => { setStep(0); setDbNavCity(''); }} onOpenRouteMap={(city, monthId, orgDongs) => { setCloudRouteConfig({ city, monthId, orgDongs }); setShowRouteSetup(true); }} />}
+          {step === 9 && (
+            <DbOverview
+              onBack={() => setStep(0)}
+              onGoToBase={(city) => { setDbNavCity(city); setStep(6); }}
+              onGoToCloud={(city) => { setDbNavCity(city); setStep(8); }}
+            />
+          )}
         </main>
         
         {/* RESTORED MODAL RENDERS */}
         {showHelp && <HelpModal onClose={() => setShowHelp(false)} />}
         {showUtils && <UtilsModal onClose={() => setShowUtils(false)} />}
         {showUpgrade && <UpgradeModal user={user} userTier={user?.tier || 'basic'} usedCount={baseCount} userMaxCities={user?.maxCities || 1} onClose={() => setShowUpgrade(false)} />}
-        {showCloudBase && <CloudBaseModal user={user} onClose={() => setShowCloudBase(false)} onImport={(newBaseMap, city, count) => { setBaseMap(newBaseMap); setBaseCount(count); setShowCloudBase(false); }} />}
-        {profileModal.open && <ProfileSetupModal user={user} isNewUser={profileModal.isNew} onClose={() => setProfileModal({ open: false, isNew: false })} />}
+        {showCloudBase && <CloudBaseModal user={user} onClose={() => setShowCloudBase(false)} onImport={(newBaseMap, city, count) => { setBaseMap(newBaseMap); setBaseCount(count); setImportFields(null); setDbImportReady(null); setShowCloudBase(false); }} />}
+        {showDbImport && <DbImportModal defaultCity={fileInfo?.city || ''} onClose={() => setShowDbImport(false)} onImport={(newBaseMap, fields, _city, count) => { setBaseMap(newBaseMap); setImportFields(fields); setDbImportReady({ count, fields }); setShowDbImport(false); }} />}
+        {showRouteSetup && (
+          <RouteSetupModal
+            mode={cloudRouteConfig ? 'cloud' : 'local'}
+            allRecords={gridData}
+            city={fileInfo?.city || ''}
+            cloudCity={cloudRouteConfig?.city}
+            cloudMonthId={cloudRouteConfig?.monthId}
+            orgDongs={cloudRouteConfig?.orgDongs || null}
+            onStart={({ selectedDongs, drivers, dongDriverMap }) => {
+              setRouteSetupResult({ selectedDongs, drivers, dongDriverMap });
+              setShowRouteSetup(false);
+              setShowRouteMap(true);
+            }}
+            onClose={() => { setShowRouteSetup(false); setCloudRouteConfig(null); setRouteSetupResult(null); }}
+          />
+        )}
+        {showRouteMap && (
+          <RouteMapModal
+            gridData={cloudRouteConfig ? [] : gridData.filter(r => !routeSetupResult?.selectedDongs || routeSetupResult.selectedDongs.has(r.행정동))}
+            fileInfo={fileInfo}
+            onClose={() => { setShowRouteMap(false); setCloudRouteConfig(null); setRouteSetupResult(null); }}
+            onSave={(updated) => pushHistory(updated)}
+            initialCloudCity={cloudRouteConfig?.city || null}
+            initialCloudMonthId={cloudRouteConfig?.monthId || null}
+            orgDongs={cloudRouteConfig?.orgDongs || null}
+            initialDrivers={routeSetupResult?.drivers || null}
+            selectedDongs={routeSetupResult?.selectedDongs || null}
+          />
+        )}
+        {profileModal.open && <ProfileSetupModal user={user} isNewUser={profileModal.isNew} onClose={() => { const wasNew = profileModal.isNew; setProfileModal({ open: false, isNew: false }); if (wasNew) setShowIntro(true); }} />}
       </div>
     </ErrorBoundary>
   );

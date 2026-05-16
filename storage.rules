@@ -1,0 +1,33 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function userData() {
+      return firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isAdmin() {
+      return request.auth != null && userData().role == 'admin';
+    }
+
+    // 승인된 지자체 사용자 여부 확인 (#1)
+    function hasCityAccess(cityId) {
+      return request.auth != null &&
+        'citiesApproved' in userData() &&
+        userData().citiesApproved is list &&
+        userData().citiesApproved.hasAll([cityId]);
+    }
+
+    // cloud_uploads: 관리자만 쓰기, 승인된 해당 cityId 사용자만 읽기 (#1)
+    match /cloud_uploads/{cityId}/{allPaths=**} {
+      allow read: if isAdmin() || hasCityAccess(cityId);
+      allow write: if isAdmin();
+    }
+
+    // 기타 모든 경로 접근 거부
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -1,18 +1,47 @@
+// 전화번호 필드에서 번호와 뒤따르는 텍스트를 분리
+// "010-1234-5678 독거노인" → { cleaned: "010-1234-5678", note: "독거노인" }
+// "010-0000-0000(요양보호사)" → { cleaned: "010-0000-0000", note: "요양보호사" }
+// "010-0000-0000-형님번호"   → { cleaned: "010-0000-0000", note: "형님번호" }
+// "010-0000-0000:집주인"     → { cleaned: "010-0000-0000", note: "집주인" }
+export const extractPhoneNote = (raw) => {
+  const s = String(raw || '').trim();
+  if (!s) return { cleaned: '', note: '' };
+
+  // 전화번호 유효 문자(숫자·대시·공백·점)로 시작하는 부분을 탐욕적으로 매칭
+  const m = s.match(/^([\d\-\s.]+)(.*)/s);
+  if (!m) return { cleaned: s, note: '' };
+
+  // 번호 끝 불필요한 대시·공백·점 제거 (예: "010-0000-0000-" → "010-0000-0000")
+  const phonePart = m[1].trimEnd().replace(/[\-\s.]+$/, '');
+  const digitCount = phonePart.replace(/[^\d]/g, '').length;
+  // 9자리 미만이면 전화번호가 아님 → 분리하지 않음
+  if (digitCount < 9) return { cleaned: s, note: '' };
+
+  // 앞쪽 구분자 제거: 공백, /, |, 쉼표, 세미콜론, 콜론, 괄호 등
+  let rest = (m[2] || '').replace(/^[\s\/|,;:，、(（]+/, '').trim();
+  // 괄호로 감싸인 경우 닫는 괄호 제거 (예: "요양보호사)" → "요양보호사")
+  rest = rest.replace(/[)）]+$/, '').trim();
+
+  return { cleaned: phonePart, note: rest };
+};
+
+export const formatPhone = (s) => {
+  const d = String(s || '').replace(/[^\d]/g, '');
+  if (d.length === 11) return `${d.slice(0,3)}-${d.slice(3,7)}-${d.slice(7)}`;
+  if (d.length === 10) {
+    if (d.startsWith('02')) return `${d.slice(0,2)}-${d.slice(2,6)}-${d.slice(6)}`;
+    return `${d.slice(0,3)}-${d.slice(3,6)}-${d.slice(6)}`;
+  }
+  if (d.length === 9 && d.startsWith('02')) return `${d.slice(0,2)}-${d.slice(2,5)}-${d.slice(5)}`;
+  return s;
+};
+
 export const parsePhoneNumbers = (p1, p2) => {
   let str1 = String(p1 || '').replace(/[^\d]/g, '');
   let str2 = String(p2 || '').replace(/[^\d]/g, '');
   let mobile = ''; let landline = '';
-  
+
   const isMobile = (s) => /^(010|011|016|017|018|019)/.test(s);
-  const formatPhone = (s) => {
-    if (s.length === 11) return s.replace(/(\d{3})(\d{4})(\d{4})/, '$1-$2-$3');
-    if (s.length === 10) {
-      if (s.startsWith('02')) return s.replace(/(\d{2})(\d{4})(\d{4})/, '$1-$2-$3');
-      return s.replace(/(\d{3})(\d{3})(\d{4})/, '$1-$2-$3');
-    }
-    if (s.length === 9 && s.startsWith('02')) return s.replace(/(\d{2})(\d{3})(\d{4})/, '$1-$2-$3');
-    return s;
-  };
 
   [str1, str2].filter(Boolean).forEach(p => {
     if (isMobile(p) && !mobile) mobile = p;
@@ -50,7 +79,9 @@ export const parseBirthDate = (val) => {
 };
 
 export const normalizeBirth = (raw) => {
-  const d = String(raw).replace(/[^0-9]/g, '');
+  const s = String(raw).trim();
+  if (/^\d{2}\.\d{2}\.\d{2}$/.test(s)) return s;
+  const d = s.replace(/[^0-9]/g, '');
   if (d.length === 8) return `${d.slice(2,4)}.${d.slice(4,6)}.${d.slice(6,8)}`;
   if (d.length === 6) return `${d.slice(0,2)}.${d.slice(2,4)}.${d.slice(4,6)}`;
   return '';

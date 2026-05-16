@@ -51,7 +51,7 @@ function parseSheet(name, rawJson, dynamicRules) {
   const activeReqKeys = dynamicRules?.reqKeys || [
     { k: '이름',   kws: ['이름', '성명', '대상자', '수령자명'] },
     { k: '주소',   kws: ['주소'] },
-    { k: '수량',   kws: ['포수', '수량', '구입량', '가구원수', '포'] },
+    { k: '수량',   kws: ['포수', '수량', '구입량', '포', '신청수량', '신청 수량'], excl: ['가구원'] },
     { k: '연락처', kws: ['휴대', '연락', '전화', '유선', '핸드폰', '핸드', '모바일', '휴폰'] },
     { k: '행정동', kws: ['행정동', '읍면동', '동명', '관할구역'] },
     { k: '비고',   kws: ['특이사항', '비고', '메모'] }
@@ -113,7 +113,10 @@ function parseSheet(name, rawJson, dynamicRules) {
   const unmappedCols = [];
 
   activeReqKeys.forEach(req => {
-    const idx = headers.findIndex(h => req.kws.some(k => h.includes(k)));
+    const idx = headers.findIndex(h =>
+      req.kws.some(k => h.includes(k)) &&
+      !(req.excl || []).some(e => h.includes(e))
+    );
     if (idx !== -1) { mappedKeys.push(req.k); colIndices[req.k] = idx; }
     else missingKeys.push(req.k);
   });
@@ -129,16 +132,23 @@ function parseSheet(name, rawJson, dynamicRules) {
 
   let dataStartRowIdx = -1;
 
+  // 연번/순번/NO 컬럼 인덱스 탐지 (있으면 빈 연번 = 합계행 제외)
+  const seqColIdx = headers.findIndex(h => /^(연번|순번|번호|NO|N\.O)$/i.test(h.trim()));
+
   // 1차 필터: 표준
   let bodyRows = rawJson.slice(headerIdx + 1).filter((r, idx) => {
     const nonEmpties = r.filter(c => String(c).trim() !== '');
     if (nonEmpties.length <= 1) return false;
     const firstFour = r.slice(0, 4).map(c => String(c || '').trim()).join('');
     if (firstFour.includes('총계') || firstFour.includes('합계') || firstFour.includes('통계')) return false;
+    // 연번 컬럼이 있는데 해당 셀이 비어있으면 합계/소계행
+    if (seqColIdx >= 0 && !String(r[seqColIdx] || '').trim()) return false;
     if (colIndices['이름'] !== undefined) {
       const nameVal = String(r[colIndices['이름']] || '').trim();
       if (!nameVal || nameVal === '-') return false;
       if (/합계|소계|총계|집계|가구$|세대$/.test(nameVal)) return false;
+      // 이름 자리에 숫자(콤마 포함)만 있으면 합계행 (예: 1,982 / 227)
+      if (/^[\d,]+$/.test(nameVal)) return false;
     }
     if (dataStartRowIdx === -1) dataStartRowIdx = headerIdx + 1 + idx + 1;
     return true;
@@ -152,6 +162,7 @@ function parseSheet(name, rawJson, dynamicRules) {
       if (nonEmpties.length <= 1) return false;
       const firstFour = r.slice(0, 4).map(c => String(c || '').trim()).join('');
       if (firstFour.includes('총계') || firstFour.includes('합계') || firstFour.includes('통계')) return false;
+      if (seqColIdx >= 0 && !String(r[seqColIdx] || '').trim()) return false;
       if (dataStartRowIdx === -1) dataStartRowIdx = headerIdx + 1 + idx + 1;
       return true;
     });
@@ -170,15 +181,16 @@ function parseSheet(name, rawJson, dynamicRules) {
     .map(k => `${k}(${emptyCellCounts[k]}건)`);
 
   const amtIdx = headers.findIndex(h =>
-    h.includes('포수') || h.includes('수량') || h.includes('구입량') ||
-    h.includes('가구원수') || h === '포' || (h.includes('포') && h.length <= 3)
+    !h.includes('가구원') && (
+      h.includes('포수') || h.includes('수량') || h.includes('구입량') || h.includes('신청수량') || h.includes('신청 수량') ||
+      h === '포' || (h.includes('포') && h.length <= 3)
+    )
   );
   let qty = 0;
   bodyRows.forEach(row => { qty += parseInt(row[amtIdx] || 0) || 1; });
 
   // ─── 데이터 컬럼 값으로 수급 유형 자동 감지 ──────────────────────────
-  // 시트명이 '총괄관리대장' 등 불명확할 때, 구분/유형 컬럼의 실제 값을 보고
-  // 기초수급자/차상위/혼합 여부를 판별
+  let typeColIdx = -1;
   if (bodyRows.length > 0) {
     const typeCandidateIdx = headers.findIndex(h =>
       h.includes('구분') || h.includes('유형') || h.includes('계층') || h.includes('자격')
@@ -190,7 +202,7 @@ function parseSheet(name, rawJson, dynamicRules) {
         if (v.includes('차상위')) detected.add('차상위');
         if (v.includes('수급') || v.includes('기초')) detected.add('기초수급자');
       });
-      if (detected.size > 1) type = '혼합';
+      if (detected.size > 1) { type = '혼합'; typeColIdx = typeCandidateIdx; }
       else if (detected.has('차상위')) type = '차상위';
       else if (detected.has('기초수급자')) type = '기초수급자';
     }
@@ -204,6 +216,7 @@ function parseSheet(name, rawJson, dynamicRules) {
     addrColIdx: colIndices['주소'],
     unmappedCols,
     colIndices,
+    typeColIdx,
   };
 }
 
@@ -448,6 +461,202 @@ self.onmessage = ({ data }) => {
       }
       return;
     }
+    if (data.action === 'ANALYZE_DEDUP') {
+      const wb = XLSX.read(data.buffer, { type: 'array' });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const allRows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+      if (allRows.length < 2) { self.postMessage({ ok: false, error: '데이터가 2행 이상이어야 합니다.' }); return; }
+
+      const headers = allRows[0].map(h => String(h).trim());
+      const findCol = (kws) => headers.find(h => kws.some(k => String(h).includes(k))) || '';
+      const nameCol  = findCol(['이름','성명','성 명']);
+      const birthCol = findCol(['생년월일','생년','생일','주민']);
+      const phoneCol = findCol(['휴대폰','휴대','전화','연락처','핸드폰']);
+      const dongCol  = findCol(['행정동','동이름','동명']);
+      const noteCol  = findCol(['특이사항','비고','메모','사항']);
+
+      const normN = v => String(v??'').trim().replace(/\s+/g,'');
+      const normB = v => String(v??'').replace(/[^0-9]/g,'');
+      const normP = v => String(v??'').replace(/[^0-9]/g,'').replace(/^82/,'0');
+
+      // 파싱: 표시용 데이터만 추출 (전송 크기 최소화)
+      const bodyRows = allRows.slice(1).map((row, i) => {
+        const obj = {};
+        headers.forEach((h, j) => { obj[h] = row[j] ?? ''; });
+        return { _rowNum: i + 2, name: obj[nameCol]||'', birth: obj[birthCol]||'', phone: obj[phoneCol]||'', dong: obj[dongCol]||'', note: String(obj[noteCol]||'').trim() };
+      });
+
+      // 강한 중복: 이름+생년월일+전화 모두 일치
+      const strongMap = new Map();
+      bodyRows.forEach(r => {
+        const key = `${normN(r.name)}|${normB(r.birth)}|${normP(r.phone)}`;
+        if (!normN(r.name) || (!normB(r.birth) && !normP(r.phone))) return;
+        if (!strongMap.has(key)) strongMap.set(key, []);
+        strongMap.get(key).push(r);
+      });
+      const strongGroups = [];
+      const strongDeleteNums = new Set();
+      strongMap.forEach(rows => {
+        if (rows.length < 2) return;
+        const keepIdx = rows.length - 1;
+        rows.forEach((r, i) => { if (i !== keepIdx) strongDeleteNums.add(r._rowNum); });
+        strongGroups.push({ rows, keepIdx });
+      });
+
+      // 약한 중복: 행정동+이름+전화 일치 (강한 중복 제거 대상 제외)
+      const weakRows = bodyRows.filter(r => !strongDeleteNums.has(r._rowNum));
+      const weakMap = new Map();
+      weakRows.forEach(r => {
+        if (!normN(r.dong) || !normN(r.name) || !normP(r.phone)) return;
+        const key = `${normN(r.dong)}|${normN(r.name)}|${normP(r.phone)}`;
+        if (!weakMap.has(key)) weakMap.set(key, []);
+        weakMap.get(key).push(r);
+      });
+      const weakGroups = [];
+      weakMap.forEach(rows => {
+        if (rows.length < 2) return;
+        // 특이사항 있는 행 우선 보존 (마지막 항목 기준). 없으면 마지막 행 보존
+        let keepIdx = rows.length - 1;
+        for (let i = rows.length - 1; i >= 0; i--) {
+          if (rows[i].note) { keepIdx = i; break; }
+        }
+        weakGroups.push({ rows, keepIdx });
+      });
+
+      // 약한 중복 — 특이사항 없는 행 전부 삭제 추천
+      const weakDeleteNums = new Set();
+      weakGroups.forEach(g => {
+        g.rows.forEach((r, i) => { if (i !== g.keepIdx) weakDeleteNums.add(r._rowNum); });
+      });
+
+      // 중복 아니어도 특이사항 없는 행은 모두 삭제 대상
+      const dupDeleteNums = new Set([...strongDeleteNums, ...weakDeleteNums]);
+      const noNoteRows = bodyRows.filter(r => !r.note && !dupDeleteNums.has(r._rowNum));
+      const noNoteDeleteNums = new Set(noNoteRows.map(r => r._rowNum));
+
+      self.postMessage({
+        ok: true, action: 'ANALYZE_DEDUP',
+        headers, detectedCols: { nameCol, birthCol, phoneCol, dongCol, noteCol },
+        strongGroups, weakGroups, noNoteRows,
+        totalRows: bodyRows.length,
+        recommendedDeletes: [...dupDeleteNums, ...noNoteDeleteNums],
+      });
+      return;
+    }
+
+    if (data.action === 'EXPORT_DEDUP') {
+      const wb = XLSX.read(data.buffer, { type: 'array' });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const allRows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+      const deleteSet = new Set(data.deleteRowNums);
+      const header = allRows[0];
+      const kept = [header], deleted = [header];
+      allRows.slice(1).forEach((row, i) => {
+        (deleteSet.has(i + 2) ? deleted : kept).push(row);
+      });
+      const newWb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(newWb, XLSX.utils.aoa_to_sheet(kept), '정제본');
+      XLSX.utils.book_append_sheet(newWb, XLSX.utils.aoa_to_sheet(deleted), '삭제목록');
+      const wbout = XLSX.write(newWb, { bookType: 'xlsx', type: 'array' });
+      self.postMessage({ ok: true, action: 'EXPORT_DEDUP', wbout, fileName: data.fileName });
+      return;
+    }
+
+    if (data.action === 'ANALYZE_CLEAN') {
+      const cleanWb = XLSX.read(data.buffer, { type: 'array' });
+      const sheetResults = [];
+
+      cleanWb.SheetNames.forEach(sheetName => {
+        const ws = cleanWb.Sheets[sheetName];
+        const allRows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', blankrows: true });
+        const headerRow = allRows[0] || [];
+
+        // 빈 행 탐지 (헤더 제외)
+        let emptyRowCount = 0;
+        let lastDataRowIdx = 0;
+        allRows.forEach((row, i) => {
+          if (i === 0) return;
+          const isEmpty = row.every(c => !String(c ?? '').trim());
+          if (!isEmpty) lastDataRowIdx = i;
+          else emptyRowCount++;
+        });
+        const trailingRowCount = allRows.length - 1 - lastDataRowIdx;
+        const innerEmptyCount = Math.max(0, emptyRowCount - trailingRowCount);
+
+        // 유령 열 탐지 (헤더 없고 데이터도 없는 열)
+        let ghostColCount = 0;
+        headerRow.forEach((h, ci) => {
+          if (String(h ?? '').trim()) return;
+          const colHasData = allRows.slice(1).some(row => String(row[ci] ?? '').trim());
+          if (!colHasData) ghostColCount++;
+        });
+
+        // 숨겨진 행/열
+        const hiddenRowCount = ws['!rows'] ? ws['!rows'].filter(r => r?.hidden).length : 0;
+        const hiddenColCount = ws['!cols'] ? ws['!cols'].filter(c => c?.hidden).length : 0;
+
+        const isEmptySheet = allRows.length <= 1 || allRows.every(r => r.every(c => !String(c ?? '').trim()));
+
+        sheetResults.push({
+          sheetName, totalRows: Math.max(0, allRows.length - 1),
+          innerEmptyRows: innerEmptyCount, trailingRows: trailingRowCount,
+          ghostCols: ghostColCount, hiddenRows: hiddenRowCount,
+          hiddenCols: hiddenColCount, isEmptySheet,
+        });
+      });
+
+      self.postMessage({
+        ok: true, action: 'ANALYZE_CLEAN',
+        originalSize: data.buffer.byteLength,
+        sheets: sheetResults,
+        totalEmptyRows: sheetResults.reduce((s, r) => s + r.innerEmptyRows + r.trailingRows, 0),
+        totalGhostCols: sheetResults.reduce((s, r) => s + r.ghostCols, 0),
+        totalHiddenRows: sheetResults.reduce((s, r) => s + r.hiddenRows, 0),
+        totalHiddenCols: sheetResults.reduce((s, r) => s + r.hiddenCols, 0),
+        emptySheets: sheetResults.filter(r => r.isEmptySheet).length,
+      });
+      return;
+    }
+
+    if (data.action === 'EXPORT_CLEAN') {
+      const cleanWb = XLSX.read(data.buffer, { type: 'array' });
+      const newWb = XLSX.utils.book_new();
+
+      cleanWb.SheetNames.forEach(sheetName => {
+        const ws = cleanWb.Sheets[sheetName];
+        const allRows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', blankrows: true });
+        if (allRows.length === 0) return;
+
+        const headerRow = allRows[0];
+        // 빈 행 제거
+        const dataRows = allRows.slice(1).filter(row => row.some(c => String(c ?? '').trim()));
+        if (dataRows.length === 0) return; // 빈 시트 제거
+
+        // 유령 열 제거 (헤더도 없고 데이터도 없는 열)
+        const ghostColSet = new Set();
+        headerRow.forEach((h, ci) => {
+          if (String(h ?? '').trim()) return;
+          const colHasData = dataRows.some(row => String(row[ci] ?? '').trim());
+          if (!colHasData) ghostColSet.add(ci);
+        });
+
+        const keepCols = headerRow.map((_, ci) => ci).filter(ci => !ghostColSet.has(ci));
+        const cleanHeader = keepCols.map(ci => headerRow[ci]);
+        const cleanRows = dataRows.map(row => keepCols.map(ci => row[ci] ?? ''));
+
+        const newWs = XLSX.utils.aoa_to_sheet([cleanHeader, ...cleanRows]);
+        XLSX.utils.book_append_sheet(newWb, newWs, sheetName);
+      });
+
+      if (newWb.SheetNames.length === 0) {
+        self.postMessage({ ok: false, action: 'EXPORT_CLEAN', error: '정제 후 남은 시트가 없습니다.' });
+        return;
+      }
+      const wbout = XLSX.write(newWb, { bookType: 'xlsx', type: 'array', compression: true });
+      self.postMessage({ ok: true, action: 'EXPORT_CLEAN', wbout, fileName: data.fileName });
+      return;
+    }
+
     if (data.action === 'MERGE_SHEETS') {
       const wb = XLSX.read(data.buffer, { type: 'array' });
       const sheetNames = getVisibleSheetNames(wb);

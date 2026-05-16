@@ -1,0 +1,74 @@
+<html>
+<head> 
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no" />
+<title>주소 입력 샘플</title>
+<style type="text/css">
+input[type=button],button{cursor:pointer;outline:0;padding: 3px 10px;}
+.mapCoord_wrap{width: 300px; padding-top: 40px;}
+.mapCoordinate {margin-bottom:20px; padding: 0 15px}
+.mapCoordinate p {padding:7px 0;}
+.mapCoordinate span {width:85px; text-align:right; display: inline-block;}
+.mapCoordinate div {width:100%; text-align: right; padding: 0 14px 0 0;}
+.mapCoordinate > input[type="text"]{ width:170px; margin-bottom:5px; padding-left: 10px}
+.mapCoordinate > input[type="text"]:hover{border:1px solid #2694d9; background-color: #fefefb;}
+.mapCoordinate > input[type="text"]:ACTIVE{font-weight: bold; border:1px solid #2694d9;}
+.mapCoordinate > div > input[type="button"]{ background-color: #3869a0; border-radius: 3px; border: 1px solid #345b88; color: #fff; height: 28px;}
+</style>
+<script type="text/javascript" src="https://business.juso.go.kr/juso_support_center/js/addrlink/map/jusoro_map_api.min.js?confmKey=승인키&skinType="></script>
+<script type="text/javascript">
+	// 검색요청  
+	// type1.좌표정보(GRS80, EPSG:5179)
+	function callJusoroMapApiType1(){
+		var frm = document.sampleForm;
+		window.postMessage({ functionName: 'callJusoroMapApi', params: [frm.pointX.value, frm.pointY.value] }, '*');
+	}
+	// type2.도로명주소 코드정보
+	function callJusoroMapApiType2(){
+		var frm = document.sampleForm;
+		window.postMessage({ functionName: 'callJusoroMapApi', params: [frm.admCd.value, frm.rnMgtSn.value, frm.udrtYn.value, frm.buldMnnm.value, frm.buldSlno.value] }, '*');
+	}
+	// type3.검색어
+	function callJusoroMapApiType3(){
+		var frm = document.sampleForm;
+		window.postMessage({ functionName: 'callJusoroMapApi', params: [frm.searchKeyword.value] }, '*');
+	}
+</script>
+</head>
+<body>
+	<form name="sampleForm" id="sampleForm" method="post">
+		<div class="mapCoord_wrap">
+			<div class="mapCoordinate" style="text-align: center;">
+				<h2>주소 입력 샘플</h2>
+			</div>
+			<div class="mapCoordinate">
+				<p><b>[주소검색] 좌표정보</b></p>
+				<span>X좌표:</span>&nbsp;<input type="text" id="pointX" name="pointX" value="945959.0381341814" /><br/>
+				<span>Y좌표:</span>&nbsp;<input type="text" id="pointY" name="pointY" value="1953851.7348996028" /><br/>
+				<div><input type="button" onclick="javascript:callJusoroMapApiType1();" value="검색" /></div>
+			</div>
+			<div class="mapCoordinate">
+				<p><b>[주소검색] 도로명주소 코드정보</b></p>
+				<span>행정구역코드:</span>&nbsp;<input type="text" id="admCd" name="admCd" value="1144012700" /><br/>
+				<span>도로명코드:</span>&nbsp;<input type="text" id="rnMgtSn" name="rnMgtSn" value="114403113012" /><br/>
+				<span>지하여부:</span>&nbsp;<input type="text" id="udrtYn" name="udrtYn" value="0" /><br/>
+				<span>건물본번:</span>&nbsp;<input type="text" id="buldMnnm" name="buldMnnm" value="301" /><br/>
+				<span>건물부번:</span>&nbsp;<input type="text" id="buldSlno" name="buldSlno" value="0" /><br/>
+				<div><input type="button" onclick="javascript:callJusoroMapApiType2();" value="검색" /></div>
+			</div>
+			<div class="mapCoordinate">
+				<p><b>[주소검색] 검색어</b></p>
+				<span>검색어:</span>&nbsp;<input type="text" id="searchKeyword" name="searchKeyword" value="한국지역정보개발원" /><br/>
+				<div><input type="button" onclick="javascript:callJusoroMapApiType3();" value="검색" /></div>
+			</div>
+		</div>
+	</form>
+
+	<!-- ※ id, class 속성의 삭제 또는 변경 시, 정상적으로 동작하지 않을 수 있으니 이에 주의하시기 바랍니다. -->
+	<!-- ※ 신규 속성을 추가하거나 style속성의 변경은 동작과 크게 상관이 없으니 적용 대상 페이지에 맞춰 수정하시기 바랍니다. -->
+	<!-- 지도영역 -->
+	<div id="mapWrap" class="mapWrap" style="position:absolute; left:300px; top:0px; width:calc(100% - 300px); height:100%; border-left: 1px solid #ddd;"></div>
+	<!-- 지도영역 -->
+
+</body>
+</html>

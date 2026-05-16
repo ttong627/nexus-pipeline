@@ -1,11 +1,11 @@
 import { useState } from 'react';
-import { ChevronLeft, ChevronRight, AlertTriangle, CheckCircle, Columns, Download, Trash2, Edit3, Database, X } from 'lucide-react';
+import { ChevronLeft, ChevronRight, AlertTriangle, CheckCircle, Columns, Download, Trash2, Edit3, Database, X, MapPin } from 'lucide-react';
 
 export default function ResultGrid({
   step, setStep, filter, setFilter, gridData, filteredData, paginatedData,
   currentPage, setCurrentPage, itemsPerPage, colVis, sortConfig, setSortConfig,
-  handleCellEdit, handleAddressKeyDown, handleUpdateBaseList, handleBatchSaveBaseList, setShowExportSetting, handleExport, handleExportErrors, handleExportDongSummary,
-  handleDeleteRows, handleBatchSetNote, onHelp
+  handleCellEdit, handleAddressKeyDown, handleUpdateBaseList, handleBatchSaveBaseList, isSavingBaseList, handleSaveMonthlyList, setShowExportSetting, handleExport, handleExportErrors, handleExportDongSummary,
+  handleDeleteRows, handleBatchSetNote, onHelp, onOpenRouteMap
 }) {
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [batchNoteOpen, setBatchNoteOpen] = useState(false);
@@ -66,9 +66,9 @@ export default function ResultGrid({
         <div className="flex items-center justify-between px-5 py-3 border-b border-[#333] bg-gradient-to-r from-[#111] to-[#050505] shrink-0 flex-wrap gap-2">
           <div className="flex items-center gap-3">
             <div className="flex space-x-2 bg-black/50 p-1 rounded-lg border border-white/5">
-              <button onClick={() => setFilter('ALL')} className={`px-5 py-2 text-xs rounded-md transition-all ${filter==='ALL' ? 'bg-[#222] border border-[#22c55e] text-[#22c55e] font-black shadow-[0_0_10px_rgba(34,197,94,0.2)]' : 'text-gray-400 hover:text-white'}`}>전체보기 ({gridData.length.toLocaleString()})</button>
-              <button onClick={() => setFilter('ERROR')} className={`px-5 py-2 text-xs rounded-md flex items-center gap-1.5 transition-all ${filter==='ERROR' ? 'bg-red-950/50 border border-red-500 text-red-400 font-black shadow-[0_0_10px_rgba(239,68,68,0.2)]' : 'text-gray-400 hover:text-white'}`}><AlertTriangle size={14}/> 확인필요 ({gridData.filter(d=>d._에러).length.toLocaleString()})</button>
-              <button onClick={() => setFilter('SUCCESS')} className={`px-5 py-2 text-xs rounded-md flex items-center gap-1.5 transition-all ${filter==='SUCCESS' ? 'bg-green-950/50 border border-green-500 text-green-400 font-black shadow-[0_0_10px_rgba(34,197,94,0.2)]' : 'text-gray-400 hover:text-white'}`}><CheckCircle size={14}/> 정제완료 ({gridData.filter(d=>!d._에러).length.toLocaleString()})</button>
+              <button onClick={() => setFilter({ text: '', showErrorsOnly: false, showSuccessOnly: false })} className={`px-5 py-2 text-xs rounded-md transition-all ${!filter.showErrorsOnly && !filter.showSuccessOnly ? 'bg-[#222] border border-[#22c55e] text-[#22c55e] font-black shadow-[0_0_10px_rgba(34,197,94,0.2)]' : 'text-gray-400 hover:text-white'}`}>전체보기 ({gridData.length.toLocaleString()})</button>
+              <button onClick={() => setFilter({ text: '', showErrorsOnly: true, showSuccessOnly: false })} className={`px-5 py-2 text-xs rounded-md flex items-center gap-1.5 transition-all ${filter.showErrorsOnly ? 'bg-red-950/50 border border-red-500 text-red-400 font-black shadow-[0_0_10px_rgba(239,68,68,0.2)]' : 'text-gray-400 hover:text-white'}`}><AlertTriangle size={14}/> 확인필요 ({gridData.filter(d=>d._에러).length.toLocaleString()})</button>
+              <button onClick={() => setFilter({ text: '', showErrorsOnly: false, showSuccessOnly: true })} className={`px-5 py-2 text-xs rounded-md flex items-center gap-1.5 transition-all ${filter.showSuccessOnly ? 'bg-green-950/50 border border-green-500 text-green-400 font-black shadow-[0_0_10px_rgba(34,197,94,0.2)]' : 'text-gray-400 hover:text-white'}`}><CheckCircle size={14}/> 정제완료 ({gridData.filter(d=>!d._에러).length.toLocaleString()})</button>
             </div>
             {(() => {
               const matched = gridData.filter(d => d._이식됨);
@@ -131,18 +131,52 @@ export default function ResultGrid({
                 <AlertTriangle size={14}/> 오류만 내보내기 ({gridData.filter(d => d._에러).length})
               </button>
             )}
-            <button onClick={() => {
-              const validData = gridData.filter(d => !d._에러);
-              if (validData.length === 0) return alert("저장할 정상 명단이 없습니다.");
-              if (window.confirm(`총 ${validData.length}건의 정상 명단을 기본 명단에 누적 저장하시겠습니까?\n(오류 항목은 제외됩니다)`)) {
-                handleBatchSaveBaseList(validData);
-              }
-            }} className="px-6 py-3 bg-amber-900/60 border border-amber-500/60 text-amber-300 font-extrabold rounded-xl hover:bg-amber-800/70 hover:scale-105 transition-all flex items-center gap-2 text-xs">
-              <Database size={14}/> 기본명단 누적 저장
+            <button onClick={handleSaveMonthlyList} className="px-6 py-3 bg-purple-900/60 border border-purple-500/60 text-purple-300 font-extrabold rounded-xl hover:bg-purple-800/70 hover:scale-105 transition-all flex items-center gap-2 text-xs">
+              <Database size={14}/> 해당월 명단 저장
+            </button>
+            <button
+              disabled={isSavingBaseList}
+              onClick={() => {
+                const allNamed = gridData.filter(d => (d.이름 || '').trim());
+                if (allNamed.length === 0) return alert("저장할 명단이 없습니다.");
+                const errCount = gridData.filter(d => d._에러).length;
+                const msg = errCount > 0
+                  ? `총 ${allNamed.length}건을 기본 명단에 누적 저장합니다.\n주소 오류 ${errCount}건도 포함됩니다 (이름·연락처 기준으로 저장).`
+                  : `총 ${allNamed.length}건을 기본 명단에 누적 저장하시겠습니까?`;
+                if (window.confirm(msg)) {
+                  handleBatchSaveBaseList(allNamed);
+                }
+              }}
+              className={`px-6 py-3 border font-extrabold rounded-xl transition-all flex items-center gap-2 text-xs ${isSavingBaseList ? 'bg-amber-950/30 border-amber-800/40 text-amber-700 cursor-not-allowed' : 'bg-amber-900/60 border-amber-500/60 text-amber-300 hover:bg-amber-800/70 hover:scale-105'}`}
+            >
+              <Database size={14}/> {isSavingBaseList ? '저장 중...' : '기본명단 누적 저장'}
             </button>
             <button onClick={handleExportDongSummary} className="px-6 py-3 bg-blue-900/60 border border-blue-500/60 text-blue-300 font-extrabold rounded-xl hover:bg-blue-800/70 hover:scale-105 transition-all flex items-center gap-2 text-xs">
               <Download size={14}/> 행정동별 보고서
             </button>
+            {onOpenRouteMap && (() => {
+              const total = gridData.length;
+              const aptCount = gridData.filter(d => d._isApt).length;
+              const withCoord = gridData.filter(d => d._lat && d._lng).length;
+              const noCoord = total - withCoord - aptCount;
+              const pct = total > 0 ? Math.round(withCoord / (total - aptCount || 1) * 100) : 0;
+              return (
+                <div className="flex items-center gap-1.5 px-3 py-2 bg-black/40 border border-[#2a3a2a] rounded-xl text-[10px] font-bold shrink-0"
+                  title={`전체 ${total.toLocaleString()}건 중\n좌표 있음: ${withCoord.toLocaleString()}건\n아파트(좌표 불필요): ${aptCount.toLocaleString()}건\n좌표 없음: ${Math.max(0, noCoord).toLocaleString()}건`}>
+                  <MapPin size={11} className="text-emerald-400 shrink-0" />
+                  <span className="text-emerald-400">{withCoord.toLocaleString()}</span>
+                  <span className="text-gray-600">/{(total - aptCount).toLocaleString()}</span>
+                  <span className="text-emerald-600 ml-0.5">({pct}%)</span>
+                  {aptCount > 0 && <span className="text-blue-400/70 ml-1">· 아파트 {aptCount.toLocaleString()}</span>}
+                  {noCoord > 0 && <span className="text-red-400/70 ml-1">· 미매칭 {noCoord.toLocaleString()}</span>}
+                </div>
+              );
+            })()}
+            {onOpenRouteMap && (
+              <button onClick={onOpenRouteMap} className="px-6 py-3 bg-emerald-900/60 border border-emerald-500/60 text-emerald-300 font-extrabold rounded-xl hover:bg-emerald-800/70 hover:scale-105 transition-all flex items-center gap-2 text-xs">
+                <MapPin size={14}/> 배송 구역 배정
+              </button>
+            )}
             <button onClick={handleExport} className="px-8 py-3 bg-[#22c55e] text-black font-extrabold rounded-xl shadow-[0_0_15px_rgba(34,197,94,0.6)] hover:bg-[#86efac] hover:scale-105 transition-all flex items-center gap-2 uppercase tracking-tight text-xs">
               <Download size={16} strokeWidth={2.5}/> 표준 명단 패키징
             </button>
@@ -154,6 +188,7 @@ export default function ResultGrid({
             >?</button>
           </div>
         </div>
+
 
         <div className="flex-1 overflow-auto relative scrollbar-thin scrollbar-thumb-[#555] scrollbar-track-black/50">
           <table className="w-full text-left text-[12px] whitespace-nowrap border-collapse">
@@ -194,8 +229,8 @@ export default function ResultGrid({
                     </td>
                     <td className="px-4 py-1.5 border-r border-[#222] text-center">
                       <span className={`px-2 py-1 rounded-md text-[10px] font-bold tracking-widest border ${
-                        row.구분 === '기초수급자' ? 'bg-[#111] text-gray-300 border-gray-600' :
-                        row.구분 === '차상위'     ? 'bg-[#0d1a0f] text-[#22c55e] border-[#22c55e]/40' :
+                        row.구분 === '기초수급자' ? 'bg-blue-950/60 text-blue-300 border-blue-600/50' :
+                        row.구분 === '차상위'     ? 'bg-amber-950/60 text-amber-300 border-amber-600/50' :
                                                    'bg-[#050505] text-gray-500 border-gray-800'
                       }`}>{row.구분}</span>
                     </td>
@@ -214,7 +249,7 @@ export default function ResultGrid({
 
                     {colVis.note && (
                       <td className={`px-1 py-1 border-r border-[#222] bg-black/40 group-hover:bg-black/60 min-w-[180px] transition-colors ${row._이식됨 ? 'border-l-2 border-l-[#22c55e]/30 bg-[#22c55e]/5' : ''}`}>
-                        <input className={`w-full h-full bg-transparent px-3 py-1.5 rounded outline-none focus:bg-[#0d1a0f] focus:ring-2 focus:ring-[#86efac] shadow-inner font-medium transition-all ${row._이식됨 ? 'text-[#86efac]' : 'text-gray-300'}`} value={row.특이사항} onChange={(e) => handleCellEdit(row.id, '특이사항', e.target.value)} placeholder=""/>
+                        <input className={`w-full h-full bg-transparent px-3 py-1.5 rounded outline-none focus:bg-[#0d1a0f] focus:ring-2 focus:ring-[#86efac] shadow-inner font-medium transition-all ${row.특이사항?.includes('◆') ? 'text-amber-300' : row._이식됨 ? 'text-[#86efac]' : 'text-gray-300'}`} value={row.특이사항} onChange={(e) => handleCellEdit(row.id, '특이사항', e.target.value)} placeholder=""/>
                       </td>
                     )}
                     {colVis.driver && (
