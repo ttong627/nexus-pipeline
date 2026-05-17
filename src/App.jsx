@@ -1,5 +1,5 @@
-﻿import React, { useState, useEffect, useMemo, useRef } from "react";
-import { auth, onAuthStateChanged, signOut, setDoc, getDoc, updateDoc, increment, doc, db, serverTimestamp, addDoc, collection, getDocs, getDocsFromServer, writeBatch, query, where, onSnapshot, GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult } from "./config/firebase.js";
+﻿import { useState, useEffect, useMemo, useRef } from "react";
+import { auth, onAuthStateChanged, signOut, setDoc, getDoc, updateDoc, doc, db, serverTimestamp, addDoc, collection, getDocs, getDocsFromServer, writeBatch, query, where, onSnapshot, GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult } from "./config/firebase.js";
 import { APP_VERSION } from "./version.js";
 
 import Dashboard from "./components/Dashboard.jsx";
@@ -27,7 +27,7 @@ import PrevMonthCompareModal from "./components/PrevMonthCompareModal.jsx";
 
 import { processAddress, asyncPool, addTypoRecord, loadTypoDict } from "./engine/addressEngine.js";
 import { parsePhoneNumbers, parseSMS, parseBirthDate, normalizeBirth, extractPhoneNote, formatPhone } from "./utils/parsers.js";
-import { canUseRouteMap, canUseDbOverview, canUseDriverRegistry, getMonthlyLimit, TIER_LABELS } from "./utils/tierUtils.js";
+import { canUseRouteMap, canUseDbOverview, canUseDriverRegistry, getMonthlyLimit } from "./utils/tierUtils.js";
 import { LogOut, ShieldCheck, CheckCircle, Database, Crown, Layers, UserCircle, Undo2, Menu, BarChart3, MapPin, Truck } from "lucide-react";
 import RouteMapModal from "./components/RouteMapModal.jsx";
 import RouteSetupModal from "./components/RouteSetupModal.jsx";
@@ -41,24 +41,22 @@ export default function App() {
   const [authStatus, setAuthStatus] = useState('checking');
   const [authLoading, setAuthLoading] = useState(false);
   const [step, setStep] = useState(0); 
-  const [activeTab, setActiveTab] = useState("audit");
-  
   const [fileInfo, setFileInfo] = useState(null);
   const [worksheets, setWorksheets] = useState([]);
   const [selectedSheets, setSelectedSheets] = useState([]);
   const [aiRules, setAiRules] = useState(null);
   const [mapDefs, setMapDefs] = useState({});
   const [gridData, setGridData] = useState([]);
-  const [filteredData, setFilteredData] = useState([]);
-  const [paginatedData, setPaginatedData] = useState([]);
   const [sortConfig, setSortConfig] = useState({ key: '', direction: 'asc' });
   const [currentPage, setCurrentPage] = useState(1);
-  const [itemsPerPage, setItemsPerPage] = useState(500);
+  const itemsPerPage = 500;
 
-  const [isBaseUploading, setIsBaseUploading] = useState(false);
+  const isBaseUploading = false;
   const [engineProgress, setEngineProgress] = useState({ current: 0, total: 0, percent: 0 });
   const [progressLogs, setProgressLogs] = useState([]);
-  const [filter, setFilter] = useState({ text: "", showErrorsOnly: false, showSuccessOnly: false, 구분: '', dong: '', driver: '', noDriver: false, hasNote: false });
+  const [filter, _setFilter] = useState({ text: "", showErrorsOnly: false, showSuccessOnly: false, 구분: '', dong: '', driver: '', noDriver: false, hasNote: false });
+  // setFilter는 항상 페이지를 1로 리셋 (React 18 자동 배칭으로 단일 렌더)
+  const setFilter = (v) => { _setFilter(v); setCurrentPage(1); };
   const [purifyResult, setPurifyResult] = useState(null);
   const [prevMonthCompare, setPrevMonthCompare] = useState(null); // { warnings, changes, newCount, leftCount }
   const [showPrevCompare, setShowPrevCompare] = useState(false);
@@ -74,11 +72,13 @@ export default function App() {
   const isSavingBaseListRef = useRef(false);
   // ── 전역 로딩 게이지 ─────────────────────────────────────────────
   const [gLoad, setGLoad] = useState({ show: false });
+  const gLoadTimerRef = useRef(null);
   const gStart = (msg, sub = '', pct = null) => setGLoad({ show: true, msg, sub, pct, done: false });
   const gUpdate = (pct, sub) => setGLoad(p => ({ ...p, pct, ...(sub !== undefined ? { sub } : {}) }));
   const gDone = (msg = '완료!') => {
+    if (gLoadTimerRef.current) clearTimeout(gLoadTimerRef.current);
     setGLoad({ show: true, msg, sub: '', pct: 100, done: true });
-    setTimeout(() => setGLoad({ show: false }), 2200);
+    gLoadTimerRef.current = setTimeout(() => setGLoad({ show: false }), 2200);
   };
 
   const [showIntro, setShowIntro] = useState(false);
@@ -311,7 +311,7 @@ export default function App() {
     [...new Set(gridData.map(r => r.기사).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'ko')),
   [gridData]);
 
-  useEffect(() => {
+  const filteredData = useMemo(() => {
     let res = sortedData;
     if (filter.showErrorsOnly) res = res.filter(r => r._에러);
     if (filter.showSuccessOnly) res = res.filter(r => !r._에러);
@@ -324,14 +324,14 @@ export default function App() {
       const txt = filter.text.toLowerCase();
       res = res.filter(r => Object.values(r).some(v => String(v).toLowerCase().includes(txt)));
     }
-    setFilteredData(res);
-    setCurrentPage(1);
+    return res;
   }, [sortedData, filter]);
 
-  useEffect(() => {
+  const paginatedData = useMemo(() => {
     const start = (currentPage - 1) * itemsPerPage;
-    setPaginatedData(filteredData.slice(start, start + itemsPerPage));
+    return filteredData.slice(start, start + itemsPerPage);
   }, [filteredData, currentPage, itemsPerPage]);
+
 
   const handleDragOver = (e) => e.preventDefault();
   const handleDrop = (e) => { e.preventDefault(); handleFileUpload(e); };
@@ -402,7 +402,7 @@ export default function App() {
         }
         worker.terminate();
       };
-    } catch (err) {
+    } catch {
       setGLoad({ show: false });
       alert("파일을 읽는 중 오류가 발생했습니다.");
     }
@@ -456,16 +456,12 @@ export default function App() {
         }
         worker.terminate();
       };
-    } catch (err) {
+    } catch {
       alert("추가 파일을 읽는 중 오류가 발생했습니다.");
     }
   };
 
   const handleUnifiedDrop = (e) => { handleDrop(e); };
-  const handleProcessStart = () => { setStep(3); };
-  const handleMapChange = (sheetKey, type, value) => {
-    setMapDefs(p => ({ ...p, [sheetKey]: { ...p[sheetKey], [type]: value } }));
-  };
 
   const handleUserMapping = async (columnName, mappedToField) => {
     try {

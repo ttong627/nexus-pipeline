@@ -347,6 +347,9 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
   const [shareModal, setShareModal] = useState(null); // { links: [{driverId,name,color,url}] }
   const [isCreatingShare, setIsCreatingShare] = useState(false);
 
+  // ── 기사 배치 잠금 (브러시 보정 후 실수로 초기화 방지)
+  const [isAssignmentLocked, setIsAssignmentLocked] = useState(false);
+
   // ── 페인트 브러시 모드 (2차 보정)
   const [isPaintMode, setIsPaintMode] = useState(false);
   const [paintDriverId, setPaintDriverId] = useState(null);
@@ -355,6 +358,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
   const isPaintingRef = useRef(false);
   const pendingPaintRef = useRef(new Map()); // id → newDriverId (드래그 중 누적, mouseup 시 commit)
   const recordsRef = useRef([]);             // stale-closure 방지용 최신 records 미러
+  const autoSaveDataRef = useRef({ records: [], drivers: [] }); // 자동저장용 최신값 (setInterval deps 제거용)
 
   const mapRef = useRef(null);
   const kakaoMapRef = useRef(null);
@@ -364,6 +368,8 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
   const driverPinOverlaysRef = useRef([]);
   const mapClickListenerRef = useRef(null);
   const initialBoundsRef = useRef(null);
+  // true 일 때만 setBounds 호출 — 초기 로드/명단 불러오기/세션 로드 후 한 번만 실행
+  const shouldFitBoundsRef = useRef(true);
 
   const baseForFilter = isCloudMode ? records : gridData;
   const dongList = ['전체', ...[...new Set(baseForFilter.map(r => r.행정동).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'ko'))];
@@ -539,7 +545,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
   // ── layoutMode 변경 시 카카오 지도 relayout ──────────────────────────
   useEffect(() => {
     if (!kakaoMapRef.current) return;
-    const t = setTimeout(() => kakaoMapRef.current.relayout(), 60);
+    const t = setTimeout(() => kakaoMapRef.current?.relayout(), 200);
     return () => clearTimeout(t);
   }, [layoutMode]);
 
@@ -627,12 +633,15 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
   // ── 변경 감지 ─────────────────────────────────────────────────────
   useEffect(() => { setHasUnsaved(true); }, [records, drivers]);
   useEffect(() => { recordsRef.current = records; }, [records]);
+  useEffect(() => { autoSaveDataRef.current = { records, drivers }; }, [records, drivers]);
 
   // ── 5분 자동 임시저장 (클라우드 모드만) ──────────────────────────────
+  // autoSaveDataRef 로 최신값 참조 → deps에 records/drivers 제거 (타이머가 매 편집마다 리셋되던 버그 수정)
   useEffect(() => {
     if (!isCloudMode || !cloudCity || !cloudMonthId) return;
     if (saveTimerRef.current) clearInterval(saveTimerRef.current);
     saveTimerRef.current = setInterval(async () => {
+      const { records: r, drivers: d } = autoSaveDataRef.current;
       try {
         await setDoc(
           doc(db, 'route_sessions', cloudCity, 'months', cloudMonthId),
@@ -640,10 +649,10 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
             city: cloudCity, monthId: cloudMonthId,
             savedAt: serverTimestamp(),
             savedBy: auth.currentUser?.email || '',
-            drivers: drivers.map(d => ({ id: d.id, name: d.name, color: d.color, capacity: d.capacity || 100, deliveryDate: d.deliveryDate || '' })),
+            drivers: d.map(dr => ({ id: dr.id, name: dr.name, color: dr.color, capacity: dr.capacity || 100, deliveryDate: dr.deliveryDate || '' })),
             status: 'draft',
-            totalRecords: records.length,
-            assignedCount: records.filter(r => r._driverId).length,
+            totalRecords: r.length,
+            assignedCount: r.filter(rec => rec._driverId).length,
           },
           { merge: true }
         );
@@ -653,7 +662,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
       } catch {}
     }, 5 * 60 * 1000);
     return () => clearInterval(saveTimerRef.current);
-  }, [isCloudMode, cloudCity, cloudMonthId, drivers, records]);
+  }, [isCloudMode, cloudCity, cloudMonthId]); // records·drivers는 autoSaveDataRef로 참조
 
   // ── 마커 렌더링 (성능 최적화: 핀 데이터 시그니처 기반 갱신) ────────
   const mapPinSignature = useMemo(
@@ -726,10 +735,11 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
 
     const bounds = new window.kakao.maps.LatLngBounds();
     mapRecords.forEach(r => bounds.extend(new window.kakao.maps.LatLng(r._lat, r._lng)));
-    // 브러시 페인트 중에는 setBounds 금지 — 지도 줌이 변하면 getBounds 기반 좌표 계산이 틀어짐
-    if (!isPaintingRef.current) {
+    // setBounds는 초기 로드/명단 불러오기/세션 로드 직후 1회만 — 자동순번·브러시 등 업데이트 시 줌 유지
+    if (!isPaintingRef.current && shouldFitBoundsRef.current) {
       kakaoMapRef.current.setBounds(bounds, 60, 60, 60, 60);
       initialBoundsRef.current = bounds;
+      shouldFitBoundsRef.current = false; // 이후 업데이트에서는 줌 고정
     }
 
     const groups = drivers.map(d => mapRecords.filter(r => r._driverId === d.id));
@@ -744,6 +754,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
 
   // ── K-means 지리적 클러스터 자동 배정 ─────────────────────────────────
   const handleAutoSplit = useCallback(() => {
+    if (isAssignmentLocked) { showToast('error', '🔒 기사 배치가 잠겨 있습니다. 잠금을 해제하세요.'); return; }
     setIsSplitting(true);
     setTimeout(() => {
       try {
@@ -888,13 +899,19 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
       });
 
       setRecords(prev => prev.map(r => clusterMap[r.id] ? { ...r, _driverId: clusterMap[r.id] } : r));
+
+      // 배분 완료 후 겹침 예상 안내 (setRecords 비동기 → 다음 프레임에서 overlayEffect가 setOverlapCount 갱신)
+      setTimeout(() => {
+        showToast('success', `자동 배정 완료 — 겹침이 남아있으면 상단 노란색 버튼을 클릭하세요.`, 4000);
+      }, 500);
       } catch (e) {
         console.error('자동 배정 오류:', e);
+        showToast('error', '자동 배정 중 오류가 발생했습니다.');
       } finally {
         setIsSplitting(false);
       }
     }, 0);
-  }, [filteredRecords, drivers, driverCount, driverPins]);
+  }, [filteredRecords, drivers, driverCount, driverPins, showToast, isAssignmentLocked]);
 
   // ── 핀 DOM 색상 직접 업데이트 (React re-render 없이 즉시 시각 반영)
   const updatePinColorDOM = useCallback((recordId, color) => {
@@ -940,8 +957,11 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
     isPaintingRef.current = false;
     const pending = pendingPaintRef.current;
     if (pending.size === 0) return;
-    setRecords(prev => prev.map(r => pending.has(r.id) ? { ...r, _driverId: pending.get(r.id) } : r));
+    // snapshot을 먼저 복사 후 clear — React updater는 비동기 실행되므로
+    // pending(원본 Map)을 clear하기 전에 복사하지 않으면 updater 실행 시 빈 Map을 봄
+    const snapshot = new Map(pending);
     pending.clear();
+    setRecords(prev => prev.map(r => snapshot.has(r.id) ? { ...r, _driverId: snapshot.get(r.id) } : r));
   }, []);
 
   // ── 명단 ↔ 지도 양방향 선택 ───────────────────────────────────────────
@@ -983,15 +1003,24 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
 
   // ── 전체 배정 초기화 ─────────────────────────────────────────────────
   const handleResetAssignments = useCallback(() => {
+    if (isAssignmentLocked) { showToast('error', '🔒 기사 배치가 잠겨 있습니다. 잠금을 해제하세요.'); return; }
+    if (!window.confirm('⚠️ 기사 배치를 전부 초기화합니다.\n\n브러시로 조정한 배치 내역까지 모두 사라집니다.\n정말 계속하시겠습니까?')) return;
     setRecords(prev => prev.map(r => ({ ...r, _driverId: null })));
     showToast('success', '배정 전체 초기화 완료');
-  }, [showToast]);
+  }, [showToast, isAssignmentLocked]);
 
 
   // ── 배송순번 자동 정렬 (도로명 기반 — 도로 그룹 → 건물번호 → 뱀 패턴) ───
   const handleAutoSequence = useCallback(() => {
+    // pendingPaintRef 잔류분을 먼저 state에 반영 (브러시 보정 직후 클릭 시 배치 유실 방지)
+    const snapshot = new Map(pendingPaintRef.current); // updater 실행 전 복사
+    pendingPaintRef.current.clear();
     setRecords(prev => {
-      const updated = [...prev];
+      const withPaint = snapshot.size > 0
+        ? prev.map(r => snapshot.has(r.id) ? { ...r, _driverId: snapshot.get(r.id) } : r)
+        : prev;
+
+      const updated = [...withPaint];
       drivers.forEach(driver => {
         const driverRecs = updated.filter(r => r._driverId === driver.id);
         if (!driverRecs.length) return;
@@ -1010,6 +1039,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
 
   // ── 지난달 배정 불러오기 ─────────────────────────────────────────────
   const handleLoadLastMonth = useCallback(() => {
+    if (isAssignmentLocked) { showToast('error', '🔒 기사 배치가 잠겨 있습니다. 잠금을 해제하세요.'); return; }
     let loaded = 0;
     setRecords(prev => prev.map(r => {
       if (!r._origDriver) return r;
@@ -1023,7 +1053,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
     } else {
       showToast('success', `지난달 배정 ${loaded}건 적용 완료`);
     }
-  }, [drivers, showToast]);
+  }, [drivers, showToast, isAssignmentLocked]);
 
   // ── 1단계: 세션 수동 저장 (draft / final) ───────────────────────────
   const handleSaveSession = useCallback(async (isFinal = false) => {
@@ -1031,10 +1061,12 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
       if (isFinal) alert('클라우드 명단 로드 후 저장 가능합니다.');
       return;
     }
-    // R-0: 최종 저장 시 기사 구역 겹침 차단
+    // R-0: 최종 저장 시 겹침 경고 (차단 → confirm으로 완화)
     if (isFinal && overlapCount > 0) {
-      showToast('error', `기사 구역 겹침 ${overlapCount}건이 있습니다. [동선 겹침 자동 해소] 후 최종 저장하세요.`, 5000);
-      return;
+      const ok = window.confirm(
+        `⚠️ 기사 구역 겹침 ${overlapCount}건이 남아있습니다.\n\n[동선 겹침 자동 해소] 버튼을 반복 클릭하면 대부분 해소됩니다.\n\n겹침을 무시하고 강제 저장하시겠습니까?`
+      );
+      if (!ok) return;
     }
     setIsSavingSession(true);
     try {
@@ -1143,6 +1175,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
       }
       // cloud_lists에서 기사/순번/좌표 재로드
       const recSnap = await getDocs(collection(db, 'cloud_lists', cloudCity, 'months', cloudMonthId, 'records'));
+      shouldFitBoundsRef.current = true; // 세션 로드 시 전체 범위로 줌 맞춤
       setRecords(prev => prev.map(r => {
         const found = recSnap.docs.find(d => d.id === r._cloudDocId);
         if (!found) return r;
@@ -1273,6 +1306,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
         _origDriver: d.data().기사 || '',
         _origSeqNo: d.data().배송순번 || '',
       }));
+      shouldFitBoundsRef.current = true; // 새 명단 로드 시 전체 범위로 줌 맞춤
       setRecords(loaded);
       setIsCloudMode(true);
       setCloudCity(cloudPickerCity.trim());
@@ -1346,12 +1380,12 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
     }
   };
 
-  // ── 클라우드 명단에 기사 배정 저장 + base_lists sync ────────────────
+  // ── 클라우드 명단에 기사 배정 저장 + base_lists sync + route_sessions 갱신 ─
   const handleSaveToCloud = async () => {
     if (!isCloudMode) return;
     setIsSavingCloud(true);
     try {
-      // 1단계: cloud_lists에 기사/배송순번 저장
+      // 1단계: cloud_lists에 기사/배송순번/좌표 저장
       const CHUNK = 499;
       for (let i = 0; i < records.length; i += CHUNK) {
         const batch = writeBatch(db);
@@ -1359,17 +1393,38 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
           if (!r._cloudDocId) return;
           const driverName = drivers.find(d => d.id === r._driverId)?.name || '';
           const ref = doc(db, 'cloud_lists', cloudCity, 'months', cloudMonthId, 'records', r._cloudDocId);
-          batch.update(ref, { 기사: driverName, 배송순번: r.배송순번 || '' });
+          const patch = { 기사: driverName, 배송순번: r.배송순번 || '' };
+          if (r._lat) { patch.lat = r._lat; patch.lng = r._lng; }
+          if (r._isApt !== undefined) patch.isApt = r._isApt;
+          batch.update(ref, patch);
         });
         await batch.commit();
       }
 
-      // 2단계: base_lists에 driver/seqNo/좌표 자동 반영
+      // 2단계: route_sessions도 갱신 — "이어서 작업" 복원이 DB 저장 이후 상태를 반영하도록
+      await setDoc(
+        doc(db, 'route_sessions', cloudCity, 'months', cloudMonthId),
+        {
+          city: cloudCity, monthId: cloudMonthId,
+          savedAt: serverTimestamp(),
+          savedBy: auth.currentUser?.email || '',
+          drivers: drivers.map(d => ({ id: d.id, name: d.name, color: d.color, capacity: d.capacity || 100, deliveryDate: d.deliveryDate || '' })),
+          status: 'draft',
+          totalRecords: records.length,
+          assignedCount: records.filter(r => r._driverId).length,
+        },
+        { merge: true }
+      );
+
+      // 3단계: base_lists에 driver/seqNo/좌표 자동 반영
       const synced = await syncToBaseList();
 
-      alert(`✅ ${cloudCity} ${cloudMonthId} 기사 배정 저장 완료\n월별 명단: ${records.length}건 / 기본명단 반영: ${synced}건`);
+      setLastAutoSave(new Date());
+      setHasUnsaved(false);
+      setSessionStatus('draft');
+      showToast('success', `DB 저장 완료 — ${cloudCity} ${cloudMonthId} · 기본명단 반영: ${synced}건`);
     } catch (e) {
-      alert('클라우드 저장 실패: ' + e.message);
+      showToast('error', 'DB 저장 실패: ' + e.message);
     } finally {
       setIsSavingCloud(false);
     }
@@ -1384,15 +1439,18 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
       const shareRecords = records
         .filter(r => r._driverId)
         .map(r => ({
+          id: r.id || '',
           driverId: r._driverId,
           lat: r._lat || null,
           lng: r._lng || null,
           isApt: r._isApt || false,
-          배송순번: r.배송순번 || null,
+          배송순번: r.배송순번 ? parseInt(r.배송순번) : null,
           이름: r.이름 || '',
           주소: r.주소 || '',
+          행정동: r.행정동 || '',
           포수: parseInt(r.포수 || r['수량(포수)']) || 1,
           특이사항: r.특이사항 || '',
+          휴대폰: r.휴대폰 || '',
         }));
       const shareId = `sr_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
       await setDoc(doc(db, 'route_shares', shareId), {
@@ -1418,58 +1476,58 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
     }
   }, [records, drivers, cloudCity, cloudMonthId, fileInfo, showToast]);
 
-  // ── 겹침 해소 (다중 패스 — 최대 20회 반복, 수렴 시 조기 종료) ───────────
+  // ── 겹침 해소 (로컬 밀도 투표 — 최대 30회 반복, 수렴 시 조기 종료) ───────
   const handleResolveOverlap = useCallback(() => {
-    const MAX_PASS = 20;
+    const MAX_PASS = 30;
+    const OVERLAP_DIST = 150;   // 겹침 판정 거리 (m)
+    const VOTE_RADIUS  = 450;   // 이웃 투표 반경 (m)
+
     let current = [...records];
     let totalMoved = 0;
 
     for (let pass = 0; pass < MAX_PASS; pass++) {
       const withCoord = current.filter(r => r._lat && r._lng && r._driverId);
+
+      // 1) 이번 패스에서 겹치는 레코드 ID 수집
+      const overlappingIds = new Set();
+      for (let i = 0; i < withCoord.length; i++) {
+        for (let j = i + 1; j < withCoord.length; j++) {
+          const rA = withCoord[i], rB = withCoord[j];
+          if (rA._driverId === rB._driverId) continue;
+          if (haversine(rA._lat, rA._lng, rB._lat, rB._lng) < OVERLAP_DIST) {
+            overlappingIds.add(rA.id);
+            overlappingIds.add(rB.id);
+          }
+        }
+      }
+      if (!overlappingIds.size) break; // 수렴
+
+      // 2) 각 겹침 레코드에 대해 VOTE_RADIUS 내 이웃 기사 다수결
       const updates = {};
+      overlappingIds.forEach(id => {
+        if (updates[id]) return;
+        const r = withCoord.find(x => x.id === id);
+        if (!r) return;
 
-      // 각 기사 쌍의 무게중심 미리 계산
-      const centroids = {};
-      drivers.forEach(d => {
-        const g = withCoord.filter(r => r._driverId === d.id);
-        if (!g.length) return;
-        centroids[d.id] = {
-          lat: g.reduce((s, r) => s + r._lat, 0) / g.length,
-          lng: g.reduce((s, r) => s + r._lng, 0) / g.length,
-        };
-      });
-
-      drivers.forEach((dA, i) => {
-        drivers.slice(i + 1).forEach(dB => {
-          const gA = withCoord.filter(r => r._driverId === dA.id);
-          const gB = withCoord.filter(r => r._driverId === dB.id);
-          const cA = centroids[dA.id];
-          const cB = centroids[dB.id];
-          if (!cA || !cB) return;
-
-          gA.forEach(rA => {
-            if (updates[rA.id]) return; // 이미 이번 패스에서 이동 확정
-            gB.forEach(rB => {
-              if (haversine(rA._lat, rA._lng, rB._lat, rB._lng) >= 150) return;
-              // rA가 cA보다 cB에 더 가까우면 dB로 이동
-              if (haversine(rA._lat, rA._lng, cA.lat, cA.lng) > haversine(rA._lat, rA._lng, cB.lat, cB.lng))
-                updates[rA.id] = dB.id;
-            });
-          });
-
-          gB.forEach(rB => {
-            if (updates[rB.id]) return;
-            gA.forEach(rA => {
-              if (haversine(rB._lat, rB._lng, rA._lat, rA._lng) >= 150) return;
-              if (haversine(rB._lat, rB._lng, cB.lat, cB.lng) > haversine(rB._lat, rB._lng, cA.lat, cA.lng))
-                updates[rB.id] = dA.id;
-            });
-          });
+        const votes = {};
+        withCoord.forEach(nb => {
+          if (nb.id === id) return;
+          if (haversine(r._lat, r._lng, nb._lat, nb._lng) <= VOTE_RADIUS) {
+            votes[nb._driverId] = (votes[nb._driverId] || 0) + 1;
+          }
         });
+
+        // 주변에서 가장 많은 기사 ID
+        let bestDriver = r._driverId;
+        let bestCount = votes[r._driverId] || 0;
+        Object.entries(votes).forEach(([did, cnt]) => {
+          if (cnt > bestCount) { bestCount = cnt; bestDriver = did; }
+        });
+        if (bestDriver !== r._driverId) updates[id] = bestDriver;
       });
 
       const movedThisPass = Object.keys(updates).length;
-      if (!movedThisPass) break; // 수렴 — 더 이상 이동 없음
+      if (!movedThisPass) break;
 
       totalMoved += movedThisPass;
       current = current.map(r => updates[r.id] ? { ...r, _driverId: updates[r.id] } : r);
@@ -1481,7 +1539,75 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
     }
     setRecords(current);
     showToast('success', `겹침 해소 완료 — 총 ${totalMoved}건 재배정`);
-  }, [records, drivers, showToast]);
+  }, [records, showToast]);
+
+  // ── 배송순번 전체 초기화 ──────────────────────────────────────────────
+  const handleClearSequence = useCallback(() => {
+    if (!window.confirm('전체 배송순번을 초기화합니다. 계속하시겠습니까?')) return;
+    // snapshot 먼저 복사 후 clear — updater 실행 전 clear 방지
+    const snapshot = new Map(pendingPaintRef.current);
+    pendingPaintRef.current.clear();
+    setRecords(prev => {
+      const withPaint = snapshot.size > 0
+        ? prev.map(r => snapshot.has(r.id) ? { ...r, _driverId: snapshot.get(r.id) } : r)
+        : prev;
+      return withPaint.map(r => ({ ...r, 배송순번: '' }));
+    });
+    showToast('success', '배송순번 전체 초기화 완료');
+  }, [showToast]);
+
+  // ── KML 경로 파일 다운로드 (네이버 지도·Google Maps 가져오기 가능) ────────
+  const handleDownloadKML = useCallback(() => {
+    const city = fileInfo?.city || cloudCity || '지자체';
+    const month = fileInfo?.month || cloudMonthId || '';
+    const assignedDrivers = drivers.filter(d => records.some(r => r._driverId === d.id));
+    if (!assignedDrivers.length) { showToast('error', '배정된 기사가 없습니다.'); return; }
+
+    const esc = (s) => String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+
+    const folders = assignedDrivers.map(driver => {
+      const driverRecs = records
+        .filter(r => r._driverId === driver.id && r._lat && r._lng)
+        .sort((a, b) => (parseInt(a.배송순번) || 999) - (parseInt(b.배송순번) || 999));
+
+      const placemarks = driverRecs.map(r => `    <Placemark>
+      <name>${esc(r.배송순번 ? `${r.배송순번}. ` : '')}${esc(r.이름)}</name>
+      <description>${esc(r.주소)} / 포수:${r.포수 || 1}${r.특이사항 ? ` / ${r.특이사항}` : ''}</description>
+      <Point><coordinates>${r._lng},${r._lat},0</coordinates></Point>
+    </Placemark>`).join('\n');
+
+      const lineCoords = driverRecs.map(r => `${r._lng},${r._lat},0`).join(' ');
+      const lineTag = driverRecs.length >= 2 ? `    <Placemark>
+      <name>${esc(driver.name)} 경로</name>
+      <LineString><tessellate>1</tessellate><coordinates>${lineCoords}</coordinates></LineString>
+    </Placemark>` : '';
+
+      return `  <Folder>
+    <name>${esc(driver.name)} (${driverRecs.length}건)</name>
+${placemarks}
+${lineTag}
+  </Folder>`;
+    }).join('\n');
+
+    const kml = `<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+<Document>
+  <name>${esc(city)} ${esc(month)} 배송경로</name>
+${folders}
+</Document>
+</kml>`;
+
+    const blob = new Blob([kml], { type: 'application/vnd.google-earth.kml+xml' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${city}-${month}-배송경로.kml`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    showToast('success', `KML 파일 다운로드 완료 — 네이버 지도 "내 지도 가져오기"에서 열 수 있습니다`);
+  }, [records, drivers, fileInfo, cloudCity, cloudMonthId, showToast]);
 
   // ── 담당자용 기사별 엑셀 내보내기 ──────────────────────────────────────
   const handleExportDriverExcel = useCallback(() => {
@@ -1821,12 +1947,14 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
 
         {overlapCount > 0 && (
           <button onClick={handleResolveOverlap}
-            className="flex items-center gap-1 px-2 py-0.5 bg-amber-900/40 border border-amber-700/40 rounded text-amber-400 text-[10px] hover:bg-amber-900/60">
-            <AlertTriangle size={10} /> 동선 겹침 {overlapCount}건 — 자동 해소
+            title="클릭하면 자동으로 겹침을 해소합니다. 여러 번 클릭하면 점점 줄어듭니다."
+            className="flex items-center gap-1.5 px-2.5 py-1 bg-amber-900/50 border border-amber-500/60 rounded-lg text-amber-300 text-[10px] font-black hover:bg-amber-800/60 transition-colors animate-pulse shadow-[0_0_8px_rgba(245,158,11,0.3)]">
+            <AlertTriangle size={11} className="shrink-0" />
+            구역 겹침 <span className="text-white">{overlapCount.toLocaleString()}건</span> — 클릭하여 해소
           </button>
         )}
         {overlapCount === 0 && withCoordCount > 0 && (
-          <span className="text-[10px] text-[#3b82f6]/60">✓ 동선 겹침 없음</span>
+          <span className="text-[10px] text-emerald-500/70 font-bold">✓ 겹침 없음</span>
         )}
 
         <div className="ml-auto flex items-center gap-1.5">
@@ -1880,6 +2008,14 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
           {/* ── 그룹 2: 도구 ─────────────────────────────────────────── */}
           <div className="flex items-center gap-1 bg-[#0a0a0a] border border-[#1e1e1e] rounded-xl px-2 py-1">
             <span className="text-[8px] text-gray-700 font-black tracking-widest mr-1">도구</span>
+            {/* 기사 배치 잠금 — 브러시 보정 후 실수 초기화 방지 */}
+            <button
+              onClick={() => { setIsAssignmentLocked(v => !v); showToast('info', isAssignmentLocked ? '🔓 기사 배치 잠금 해제' : '🔒 기사 배치 잠금 — 자동배정/이전달 승계 차단'); }}
+              title={isAssignmentLocked ? '기사 배치 잠금 해제 — 자동배정·초기화 허용' : '기사 배치 잠금 — 브러시 보정 결과를 보호합니다'}
+              className={`px-2 py-1 rounded-lg text-[10px] font-black flex items-center gap-1 border transition-colors ${isAssignmentLocked ? 'bg-amber-900/60 border-amber-500/70 text-amber-300 shadow-[0_0_6px_rgba(245,158,11,0.4)]' : 'bg-[#111] border-[#2a2a2a] text-gray-500 hover:text-amber-400 hover:border-amber-600/40'}`}
+            >
+              {isAssignmentLocked ? '🔒 배치잠금' : '🔓 배치잠금'}
+            </button>
             {/* 좌표 매칭 */}
             <button
               onClick={handleFetchMissingCoords}
@@ -1899,10 +2035,18 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
             {/* 자동 순번 */}
             <button
               onClick={handleAutoSequence}
-              title="기사별로 지도 경로 순서에 따라 배송 순번을 자동 부여합니다"
+              title="도로명 기반으로 기사별 배송 순번을 자동 부여합니다"
               className="px-2 py-1 bg-[#0d1520] border border-purple-500/30 text-purple-400 hover:bg-purple-900/20 rounded-lg text-[10px] font-bold flex items-center gap-1 transition-colors"
             >
               <Navigation2 size={10} /> 자동 순번
+            </button>
+            {/* 순번 초기화 */}
+            <button
+              onClick={handleClearSequence}
+              title="전체 배송순번을 지워 새로 지정할 수 있게 합니다"
+              className="px-2 py-1 bg-[#1a0d0d] border border-red-700/30 text-red-400 hover:bg-red-900/20 rounded-lg text-[10px] font-bold flex items-center gap-1 transition-colors"
+            >
+              <X size={10} /> 순번 초기화
             </button>
           </div>
 
@@ -1936,7 +2080,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
             >
               <HardDrive size={10} /> 명단 불러오기
             </button>
-            {/* 카카오 맵 데이터 저장 (cloud_lists에 기사/순번 반영) */}
+            {/* DB 저장 (cloud_lists에 기사/순번 반영) */}
             {isCloudMode && (
               <button
                 onClick={handleSaveToCloud}
@@ -1945,9 +2089,17 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
                 className="px-2 py-1 bg-[#0a1520] border border-cyan-600/40 text-cyan-400 hover:bg-cyan-900/20 rounded-lg text-[10px] font-bold flex items-center gap-1 transition-colors disabled:opacity-50"
               >
                 {isSavingCloud ? <RefreshCw size={10} className="animate-spin" /> : <HardDrive size={10} />}
-                {isSavingCloud ? '저장중...' : '카카오맵 저장'}
+                {isSavingCloud ? '저장중...' : 'DB 저장'}
               </button>
             )}
+            {/* KML 다운로드 — 네이버 지도·카카오맵·구글 지도 임포트용 */}
+            <button
+              onClick={handleDownloadKML}
+              title="배송 경로를 KML 파일로 다운로드합니다 (네이버 지도·Google Maps 가져오기 가능)"
+              className="px-2 py-1 bg-[#0d1a0d] border border-emerald-600/40 text-emerald-400 hover:bg-emerald-900/20 rounded-lg text-[10px] font-bold flex items-center gap-1 transition-colors"
+            >
+              <Download size={10} /> KML 경로
+            </button>
             <button
               onClick={handleExportDriverExcel}
               title="기사별 배송 목록을 엑셀 파일로 다운로드합니다"
@@ -2637,9 +2789,13 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
                   기사 N명이면 합계 N×100% 맞추세요
                 </div>
                 <div className="flex gap-2 shrink-0">
+                  <button onClick={handleClearSequence}
+                    className="px-4 py-2 bg-[#1a0d0d] border border-red-700/40 text-red-400 hover:text-red-300 rounded-lg text-sm font-bold transition-colors flex items-center gap-1.5">
+                    <X size={13} /> 순번 초기화
+                  </button>
                   <button onClick={handleAutoSequence}
-                    className="px-4 py-2 bg-[#111] border border-[#2a2a2a] text-gray-400 hover:text-white rounded-lg text-sm font-bold transition-colors">
-                    순번 자동 정렬
+                    className="px-4 py-2 bg-[#111] border border-[#2a2a2a] text-gray-400 hover:text-white rounded-lg text-sm font-bold transition-colors flex items-center gap-1.5">
+                    <Navigation2 size={13} /> 순번 자동 정렬
                   </button>
                   <button onClick={() => { handleDongAssign(); setShowDongAssign(false); }}
                     className="px-6 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-lg text-sm font-bold transition-colors flex items-center gap-2">
