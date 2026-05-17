@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+﻿import React, { useState, useEffect, useRef } from 'react';
 import { db } from '../config/firebase.js';
 import { doc, getDoc } from 'firebase/firestore';
 import { MapPin, List, Map, RefreshCw, Building2 } from 'lucide-react';
@@ -108,7 +108,7 @@ export default function ShareRouteView({ shareId, driverId }) {
   if (loading) return (
     <div className="fixed inset-0 bg-[#050505] flex items-center justify-center">
       <div className="text-center">
-        <RefreshCw size={24} className="text-[#22c55e] animate-spin mx-auto mb-3" />
+        <RefreshCw size={24} className="text-[#3b82f6] animate-spin mx-auto mb-3" />
         <div className="text-gray-400 text-sm">배송 정보 로딩 중...</div>
       </div>
     </div>
@@ -153,11 +153,11 @@ export default function ShareRouteView({ shareId, driverId }) {
         </div>
         <div className="ml-auto flex rounded-lg overflow-hidden border border-[#2a2a2a]">
           <button onClick={() => setActiveView('map')}
-            className={`px-3 py-1.5 text-xs font-bold flex items-center gap-1 transition-colors ${activeView === 'map' ? 'bg-[#1a2e1a] text-[#22c55e]' : 'bg-[#111] text-gray-500'}`}>
+            className={`px-3 py-1.5 text-xs font-bold flex items-center gap-1 transition-colors ${activeView === 'map' ? 'bg-[#1a2e1a] text-[#3b82f6]' : 'bg-[#111] text-gray-500'}`}>
             <Map size={12} /> 지도
           </button>
           <button onClick={() => setActiveView('list')}
-            className={`px-3 py-1.5 text-xs font-bold flex items-center gap-1 transition-colors ${activeView === 'list' ? 'bg-[#1a2e1a] text-[#22c55e]' : 'bg-[#111] text-gray-500'}`}>
+            className={`px-3 py-1.5 text-xs font-bold flex items-center gap-1 transition-colors ${activeView === 'list' ? 'bg-[#1a2e1a] text-[#3b82f6]' : 'bg-[#111] text-gray-500'}`}>
             <List size={12} /> 목록
           </button>
         </div>
@@ -167,7 +167,7 @@ export default function ShareRouteView({ shareId, driverId }) {
       <div className={`flex-1 relative flex flex-col ${activeView !== 'map' ? 'hidden' : ''}`}>
         {!isMapReady && (
           <div className="absolute inset-0 flex items-center justify-center bg-[#080808] z-10">
-            <RefreshCw size={20} className="text-[#22c55e] animate-spin" />
+            <RefreshCw size={20} className="text-[#3b82f6] animate-spin" />
           </div>
         )}
         <div ref={mapRef} className="flex-1" />
@@ -205,7 +205,7 @@ export default function ShareRouteView({ shareId, driverId }) {
               </div>
               <a href={`https://map.kakao.com/link/to/${encodeURIComponent(r.이름 + ' ' + (r.행정동 || ''))},${r.lat},${r.lng}`}
                 target="_blank" rel="noopener noreferrer"
-                className="shrink-0 px-2 py-1 bg-[#1a2a1a] text-[#22c55e] text-[9px] font-bold rounded border border-[#22c55e]/20 hover:bg-[#22c55e]/20">
+                className="shrink-0 px-2 py-1 bg-[#1a2a1a] text-[#3b82f6] text-[9px] font-bold rounded border border-[#3b82f6]/20 hover:bg-[#3b82f6]/20">
                 지도
               </a>
             </div>

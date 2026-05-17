@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+﻿import { useState, useEffect } from 'react';
 import { doc, setDoc, db, serverTimestamp } from '../config/firebase.js';
 import { MapPin, User, AlertTriangle, LogOut, X } from 'lucide-react';
 import { getAuth } from 'firebase/auth';
@@ -18,7 +18,7 @@ export default function ProfileSetupModal({ user, isNewUser, onClose }) {
 
   const handleLogout = async () => {
     await getAuth().signOut();
-    if (onClose) onClose();
+    if (onClose) onClose(false);
   };
 
   const handleSubmit = async () => {
@@ -34,7 +34,7 @@ export default function ProfileSetupModal({ user, isNewUser, onClose }) {
         profileCompleted: true,
         profileUpdatedAt: serverTimestamp(),
       }, { merge: true });
-      if (onClose) onClose();
+      if (onClose) onClose(true, r);
     } catch (e) {
       setError('저장 오류: ' + e.message);
       setLoading(false);
@@ -44,12 +44,12 @@ export default function ProfileSetupModal({ user, isNewUser, onClose }) {
   return (
     <div className="fixed inset-0 z-[999] h-screen w-full overflow-hidden bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-[#071a0e]/95 via-[#060c08]/95 to-[#040708]/95 backdrop-blur-md flex items-center justify-center p-4">
       <div className="w-full max-w-md">
-        <div className="bg-[#0a100c] border border-[#22c55e]/30 rounded-3xl shadow-[0_0_60px_rgba(34,197,94,0.15)] p-8 relative">
+        <div className="bg-[#0a100c] border border-[#3b82f6]/30 rounded-3xl shadow-[0_0_60px_rgba(59,130,246,0.15)] p-8 relative">
           
           <div className="flex items-center justify-between mb-6">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-full bg-[#22c55e]/10 border border-[#22c55e]/30 flex items-center justify-center">
-                <User size={20} className="text-[#22c55e]"/>
+              <div className="w-10 h-10 rounded-full bg-[#3b82f6]/10 border border-[#3b82f6]/30 flex items-center justify-center">
+                <User size={20} className="text-[#3b82f6]"/>
               </div>
               <div>
                 <h2 className="text-lg font-black text-white">{isNewUser ? '이용자 정보 등록' : '내 프로필 수정'}</h2>
@@ -63,7 +63,7 @@ export default function ProfileSetupModal({ user, isNewUser, onClose }) {
                   <LogOut size={14}/> 나가기
                 </button>
               ) : (
-                <button onClick={onClose} className="text-gray-500 hover:text-white transition-colors bg-black/30 p-1.5 rounded-full" title="닫기">
+                <button onClick={() => onClose(false)} className="text-gray-500 hover:text-white transition-colors bg-black/30 p-1.5 rounded-full" title="닫기">
                   <X size={18}/>
                 </button>
               )}
@@ -90,7 +90,7 @@ export default function ProfileSetupModal({ user, isNewUser, onClose }) {
                 onChange={e => { setRegion(e.target.value); setError(''); }}
                 onKeyDown={e => e.key === 'Enter' && handleSubmit()}
                 placeholder="예: 동대문구청, 수원시청, 강원 춘천..."
-                className="w-full bg-black/50 border border-[#1e2d22] focus:border-[#22c55e] text-white p-3.5 rounded-xl outline-none transition-colors text-sm placeholder-gray-700"
+                className="w-full bg-black/50 border border-[#0f1a2e] focus:border-[#3b82f6] text-white p-3.5 rounded-xl outline-none transition-colors text-sm placeholder-gray-700"
                 autoFocus
               />
             </div>
@@ -103,7 +103,7 @@ export default function ProfileSetupModal({ user, isNewUser, onClose }) {
                 onChange={e => { setRealName(e.target.value); setError(''); }}
                 onKeyDown={e => e.key === 'Enter' && handleSubmit()}
                 placeholder="예: 홍길동"
-                className="w-full bg-black/50 border border-[#1e2d22] focus:border-[#22c55e] text-white p-3.5 rounded-xl outline-none transition-colors text-sm placeholder-gray-700"
+                className="w-full bg-black/50 border border-[#0f1a2e] focus:border-[#3b82f6] text-white p-3.5 rounded-xl outline-none transition-colors text-sm placeholder-gray-700"
               />
             </div>
           </div>
@@ -113,7 +113,7 @@ export default function ProfileSetupModal({ user, isNewUser, onClose }) {
           <button
             onClick={handleSubmit}
             disabled={loading}
-            className="w-full mt-6 py-4 bg-[#22c55e] text-black font-extrabold rounded-xl shadow-[0_0_20px_rgba(34,197,94,0.4)] hover:bg-[#86efac] hover:scale-[1.02] transition-all disabled:opacity-50 disabled:scale-100"
+            className="w-full mt-6 py-4 bg-[#3b82f6] text-black font-extrabold rounded-xl shadow-[0_0_20px_rgba(59,130,246,0.4)] hover:bg-[#93c5fd] hover:scale-[1.02] transition-all disabled:opacity-50 disabled:scale-100"
           >
             {loading ? '저장 중...' : '등록하고 시작하기'}
           </button>

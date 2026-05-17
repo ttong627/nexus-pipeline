@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+﻿import { useState, useEffect, useMemo, useCallback } from 'react';
 import * as XLSX from 'xlsx';
 import {
   db,
@@ -12,7 +12,7 @@ import {
 const PRESET_COLORS = [
   { id: 'blue',   label: '파랑', bg: 'bg-blue-900/40',   border: 'border-blue-500/50',   text: 'text-blue-400',   hex: '#3b82f6' },
   { id: 'purple', label: '보라', bg: 'bg-purple-900/40', border: 'border-purple-500/50', text: 'text-purple-400', hex: '#a855f7' },
-  { id: 'green',  label: '초록', bg: 'bg-green-900/40',  border: 'border-green-500/50',  text: 'text-green-400',  hex: '#22c55e' },
+  { id: 'green',  label: '초록', bg: 'bg-blue-900/40',  border: 'border-blue-500/50',  text: 'text-blue-400',  hex: '#3b82f6' },
   { id: 'orange', label: '주황', bg: 'bg-orange-900/40', border: 'border-orange-500/50', text: 'text-orange-400', hex: '#f97316' },
   { id: 'pink',   label: '분홍', bg: 'bg-pink-900/40',   border: 'border-pink-500/50',   text: 'text-pink-400',   hex: '#ec4899' },
   { id: 'cyan',   label: '하늘', bg: 'bg-cyan-900/40',   border: 'border-cyan-500/50',   text: 'text-cyan-400',   hex: '#06b6d4' },
@@ -200,7 +200,7 @@ export default function OrgPresetModal({ city, records, monthId, onClose }) {
           </div>
           <div className="flex items-center gap-2 shrink-0">
             <button onClick={handleDownload}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-bold bg-green-900/30 border border-green-500/30 text-green-400 hover:bg-green-900/50 transition-colors">
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-bold bg-blue-900/30 border border-blue-500/30 text-blue-400 hover:bg-blue-900/50 transition-colors">
               <Download size={12} /> 조직별 다운로드
             </button>
             <button onClick={handleSave} disabled={saving}

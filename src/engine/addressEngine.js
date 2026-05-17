@@ -287,10 +287,25 @@ export const processAddress = async (inputAddr, inputName = "", adminDong = "", 
   let parens = [];
   text = text.replace(/\(.*?\)/g, (m) => { parens.push(m); return `__PAREN${parens.length - 1}__`; });
 
-  let commaIdx = text.indexOf(',');
-  let mainAddr = commaIdx !== -1 ? text.substring(0, commaIdx) : text;
-  let detailAddr = commaIdx !== -1 ? text.substring(commaIdx + 1) : "";
-  mainAddr = mainAddr.replace(/\s{2,}/g, ' ').trim();
+  let mainAddr, detailAddr;
+  const commaIdx = text.indexOf(',');
+  if (commaIdx !== -1) {
+    const beforeComma = text.substring(0, commaIdx).replace(/\s{2,}/g, ' ').trim();
+    const afterComma  = text.substring(commaIdx + 1).replace(/\s{2,}/g, ' ').trim();
+    // 쉼표 뒤에 도로명 패턴이 있으면 뒤가 본주소, 앞이 상세(아파트명 등)
+    const afterHasRoad = /(로|길|대로)\s*\d/.test(afterComma) || /\d+(로|길|대로)/.test(afterComma) ||
+                         /(로|길|대로)$/.test(afterComma.split(' ').slice(-1)[0]);
+    if (afterHasRoad) {
+      mainAddr   = afterComma;
+      detailAddr = beforeComma;
+    } else {
+      mainAddr   = beforeComma;
+      detailAddr = afterComma;
+    }
+  } else {
+    mainAddr   = text.replace(/\s{2,}/g, ' ').trim();
+    detailAddr = "";
+  }
 
   mainAddr = mainAddr.replace(/([가-힣]+(대로|로|길|번길|번가길|가길|나길|다길))(\d+)/g, '$1 $3');
   mainAddr = mainAddr.replace(/([가-힣]+(대로|로|길|번길|번가길|가길|나길|다길))\s{2,}(\d+)/g, '$1 $3');

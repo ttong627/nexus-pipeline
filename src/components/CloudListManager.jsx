@@ -1,18 +1,19 @@
-import { useState, useEffect, useMemo, useRef, useCallback, memo } from 'react';
+﻿import { useState, useEffect, useMemo, useRef, useCallback, memo } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import * as XLSX from 'xlsx';
 import {
   db, storage,
-  collection, getDocs, getDoc, setDoc, doc, deleteDoc, writeBatch, serverTimestamp,
-  ref, uploadBytes, getDownloadURL, deleteObject,
+  collection, getDocs, getDocsFromServer, getDoc, setDoc, doc, deleteDoc, writeBatch, serverTimestamp,
+  ref, getDownloadURL, deleteObject,
 } from '../config/firebase.js';
+import { normalizeBirth, formatPhoneInput } from '../utils/parsers.js';
 import {
-  Cloud, Upload, Trash2, ArrowLeft, Download, Calendar, FileSpreadsheet,
+  Cloud, Trash2, ArrowLeft, Download, Calendar, FileSpreadsheet,
   AlertCircle, ChevronRight, Search, Save, RotateCcw, X, CheckCircle, MapPin,
-  Building2, DatabaseZap, Ghost,
+  Building2, DatabaseZap, Ghost, BookOpen, Phone, RefreshCw, LayoutGrid,
 } from 'lucide-react';
 import OrgPresetModal from './OrgPresetModal.jsx';
-import { REGIONS, getSigunguOptions } from '../utils/regions.js';
+import { canUseCoords, canUseCoordsBg } from '../utils/tierUtils.js';
 
 const KAKAO_REST_KEY = import.meta.env.VITE_KAKAO_REST_KEY;
 
@@ -39,7 +40,7 @@ const CLOUD_FIELDS = [
 const ROW_HEIGHT = 36; // px — 고정 행 높이
 
 // 셀 편집 입력 — 자체 상태 관리로 부모 리렌더 완전 차단
-const CellInput = memo(function CellInput({ type, opts, initial, onCommit, onCancel }) {
+const CellInput = memo(function CellInput({ type, opts, initial, onCommit, onCancel, isPhone }) {
   const [val, setVal] = useState(String(initial ?? ''));
   if (type === 'select') {
     return (
@@ -56,7 +57,7 @@ const CellInput = memo(function CellInput({ type, opts, initial, onCommit, onCan
     <input autoFocus type={type === 'number' ? 'number' : 'text'}
       className="w-full bg-transparent text-white text-xs outline-none border-b border-blue-400 py-0.5"
       value={val}
-      onChange={e => setVal(e.target.value)}
+      onChange={e => { const v = isPhone ? formatPhoneInput(e.target.value) : e.target.value; setVal(v); }}
       onBlur={() => onCommit(val)}
       onKeyDown={e => { if (e.key === 'Enter') onCommit(val); if (e.key === 'Escape') onCancel(); }}
     />
@@ -104,7 +105,7 @@ const VirtualTable = memo(function VirtualTable({ displayRecords, dirtyRecords, 
             <tr className="bg-[#0c0c0c] border-b border-[#1e1e1e]">
               <th className="px-3 py-2.5 text-left text-[10px] text-gray-700 font-bold uppercase tracking-wider w-9">#</th>
               {CLOUD_FIELDS.map(f => (
-                <th key={f.key} style={{ minWidth: f.minW }} className={`px-3 py-2.5 text-left text-[10px] font-bold uppercase tracking-wider ${f.key === '기사' || f.key === '배송순번' ? 'text-[#22c55e]/60' : 'text-gray-600'}`}>
+                <th key={f.key} style={{ minWidth: f.minW }} className={`px-3 py-2.5 text-left text-[10px] font-bold uppercase tracking-wider ${f.key === '기사' || f.key === '배송순번' ? 'text-[#3b82f6]/60' : 'text-gray-600'}`}>
                   {f.label}
                 </th>
               ))}
@@ -135,7 +136,7 @@ const VirtualTable = memo(function VirtualTable({ displayRecords, dirtyRecords, 
                     </td>
                   ))}
                   <td className="px-3 py-2 text-center">
-                    {r.lat ? <span className="text-[#22c55e] text-[10px]">✓</span> : <span className="text-gray-700 text-[10px]">✗</span>}
+                    {r.lat ? <span className="text-[#3b82f6] text-[10px]">✓</span> : <span className="text-gray-700 text-[10px]">✗</span>}
                   </td>
                   <td className="px-2 py-2">
                     <button
@@ -163,7 +164,7 @@ const VirtualTable = memo(function VirtualTable({ displayRecords, dirtyRecords, 
   );
 });  // end VirtualTable (memo)
 
-export default function CloudListManager({ user, onBack, initialCity = '', onOpenRouteMap }) {
+export default function CloudListManager({ user, onBack, initialCity = '', onOpenRouteMap, onOpenInResultGrid }) {
   const isAdmin = user?.role === 'admin';
   const approvedCities = user?.citiesApproved || [];
 
@@ -188,13 +189,12 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
   const [editingCell, setEditingCell] = useState(null);  // { id, field }
   const [saving, setSaving] = useState(false);
 
-  // Upload
-  const [uploading, setUploading] = useState(false);
-  const [uploadStatus, setUploadStatus] = useState('');
 
   // UI — 검색은 150ms 디바운스로 displayRecords 재계산 최소화
   const [searchInput, setSearchInput] = useState('');
   const [searchText, setSearchText] = useState('');
+  const [filterGubun, setFilterGubun] = useState('');
+  const [filterDong, setFilterDong] = useState('');
   const searchDebounceRef = useRef(null);
   const handleSearchChange = useCallback((val) => {
     setSearchInput(val);
@@ -204,14 +204,34 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
   const [deleteMonthConfirm, setDeleteMonthConfirm] = useState(null);
   const [showOrgPreset, setShowOrgPreset] = useState(false);
 
-  // City options
-  const availableSidos = isAdmin
-    ? Object.keys(REGIONS)
-    : [...new Set(approvedCities.map(c => c.split(' ')[0]).filter(Boolean))];
+  // City cards (replaces sigungu dropdown)
+  const [cityList, setCityList] = useState([]);
+  const [loadingCities, setLoadingCities] = useState(false);
+  const [expandedCityId, setExpandedCityId] = useState(initialCity || '');
 
-  const availableSigungus = isAdmin
-    ? getSigunguOptions(selectedSido)
-    : approvedCities.filter(c => c.startsWith(selectedSido + ' ')).map(c => c.slice(selectedSido.length + 1));
+  // 특이사항·전화번호 처리
+  const [isFetchingNotes, setIsFetchingNotes] = useState(false);
+  const [isMovingPhones, setIsMovingPhones] = useState(false);
+
+  // 카드 클릭 → ResultGrid 로드
+  const [loadingCardId, setLoadingCardId] = useState(null);
+  const handleCardClick = async (cityItem) => {
+    if (!cityItem.latestMonth || !onOpenInResultGrid) return;
+    setLoadingCardId(cityItem.id);
+    try {
+      const snap = await getDocs(collection(db, 'cloud_lists', cityItem.id, 'months', cityItem.latestMonth.id, 'records'));
+      const recs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      onOpenInResultGrid(cityItem.id, cityItem.latestMonth.id, recs);
+    } catch (e) { alert('불러오기 실패: ' + e.message); }
+    finally { setLoadingCardId(null); }
+  };
+
+  // 관리 모드 진입 (카드 편집 아이콘 클릭)
+  const handleAdminMode = (cityItem) => {
+    setSelectedSido(cityItem.sido);
+    setSelectedSigungu(cityItem.sigungu);
+  };
+
 
   // ── 조직 필터 — 비관리자가 orgAssignment 있을 때 해당 dongs만 접근 ──
   const [orgDongs, setOrgDongs] = useState(null); // null=제한없음, Set=허용 동 목록
@@ -232,22 +252,48 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
     })();
   }, [selectedCity, user?.orgId, isAdmin]);
 
-  // ── Derived display records — dirty 병합 제거(renderCell에서 직접 읽음)
+  // ── Derived display records — 행정동>주소>이름 정렬 + 구분·행정동 콤보 필터
   const displayRecords = useMemo(() => {
     const q = searchText.trim().toLowerCase();
     return records
       .filter(r => {
         if (deletedRecordIds.has(r.id)) return false;
         if (orgDongs && !orgDongs.has((r.행정동 || '').trim())) return false;
-        if (!q) return true;
         const dirty = dirtyRecords[r.id] || {};
+        const gubun = dirty.구분 ?? r.구분 ?? '';
+        const dong = dirty.행정동 ?? r.행정동 ?? '';
+        if (filterGubun && gubun !== filterGubun) return false;
+        if (filterDong && dong !== filterDong) return false;
+        if (!q) return true;
         return [
           dirty.이름 ?? r.이름, dirty.행정동 ?? r.행정동,
           dirty.주소 ?? r.주소, dirty.휴대폰 ?? r.휴대폰, dirty.특이사항 ?? r.특이사항,
         ].some(v => String(v || '').toLowerCase().includes(q));
       })
-      .sort((a, b) => (a._idx || 0) - (b._idx || 0));
-  }, [records, deletedRecordIds, searchText, orgDongs, dirtyRecords]);
+      .sort((a, b) => {
+        const da = dirtyRecords[a.id] || {}, db_ = dirtyRecords[b.id] || {};
+        let cmp = (da.행정동 ?? a.행정동 ?? '').localeCompare(db_.행정동 ?? b.행정동 ?? '', 'ko', { numeric: true });
+        if (cmp !== 0) return cmp;
+        cmp = (da.주소 ?? a.주소 ?? '').localeCompare(db_.주소 ?? b.주소 ?? '', 'ko', { numeric: true });
+        if (cmp !== 0) return cmp;
+        return (da.이름 ?? a.이름 ?? '').localeCompare(db_.이름 ?? b.이름 ?? '', 'ko', { numeric: true });
+      });
+  }, [records, deletedRecordIds, searchText, orgDongs, dirtyRecords, filterGubun, filterDong]);
+
+  // 시도별 그룹
+  const citiesBySido = useMemo(() => {
+    const map = {};
+    cityList.forEach(c => {
+      if (!map[c.sido]) map[c.sido] = [];
+      map[c.sido].push(c);
+    });
+    return map;
+  }, [cityList]);
+
+  // 행정동 콤보박스 목록
+  const cloudDongList = useMemo(() =>
+    [...new Set(records.filter(r => !deletedRecordIds.has(r.id)).map(r => (dirtyRecords[r.id]?.행정동 ?? r.행정동)).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'ko', { numeric: true })),
+  [records, deletedRecordIds, dirtyRecords]);
 
   const hasRecordChanges = Object.keys(dirtyRecords).length > 0 || deletedRecordIds.size > 0;
 
@@ -263,9 +309,20 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
 
   // ── Effects ──────────────────────────────────────────────────────
   useEffect(() => {
+    fetchAllCities();
+  }, []);
+
+  useEffect(() => {
     if (!selectedCity) { setMonths([]); setSelectedMonth(null); setRecords([]); return; }
     fetchMonths();
   }, [selectedCity]);
+
+  // 월이 1개뿐이면 자동 선택 (관리 모드 진입 시)
+  useEffect(() => {
+    if (months.length === 1 && !selectedMonth) {
+      handleSelectMonth(months[0]);
+    }
+  }, [months]);
 
   useEffect(() => {
     setDirtyRecords({});
@@ -273,6 +330,8 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
     setEditingCell(null);
     setSearchText('');
     setSearchInput('');
+    setFilterGubun('');
+    setFilterDong('');
   }, [selectedMonth?.id]);
 
   // ── Data fetching ─────────────────────────────────────────────────
@@ -299,133 +358,137 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
     finally { setLoadingRecords(false); }
   };
 
+  const fetchAllCities = useCallback(async () => {
+    setLoadingCities(true);
+    try {
+      let docs;
+      if (isAdmin) {
+        // 관리자: cloud_lists 컬렉션 1회 읽기로 전체 도시 + 최신 통계 획득
+        const snap = await getDocs(collection(db, 'cloud_lists'));
+        docs = snap.docs;
+      } else {
+        // 일반 유저: 승인된 도시만 병렬 getDoc (보통 1~3개라 빠름)
+        const results = await Promise.all(
+          [...approvedCities].map(cityId => getDoc(doc(db, 'cloud_lists', cityId)))
+        );
+        docs = results.filter(d => d.exists());
+      }
+      const cities = docs
+        .map(d => {
+          const cityId = d.id;
+          const data = d.data() || {};
+          const spaceIdx = cityId.indexOf(' ');
+          if (spaceIdx < 0) return null;
+          const sido = cityId.slice(0, spaceIdx);
+          const sigungu = cityId.slice(spaceIdx + 1);
+          const lastMonthId = data.lastMonthId || null;
+          const latestMonth = lastMonthId ? {
+            id: lastMonthId,
+            totalCount: data.latestTotalCount ?? 0,
+            수급자Count: data['latest수급자Count'] ?? 0,
+            차상위Count: data['latest차상위Count'] ?? 0,
+          } : null;
+          return { id: cityId, sido, sigungu, latestMonth };
+        })
+        .filter(Boolean)
+        .sort((a, b) => {
+          const sidoCmp = a.sido.localeCompare(b.sido, 'ko');
+          if (sidoCmp !== 0) return sidoCmp;
+          return a.sigungu.localeCompare(b.sigungu, 'ko');
+        });
+      setCityList(cities);
+    } catch (e) { console.error('[fetchAllCities]', e); }
+    finally { setLoadingCities(false); }
+  }, [isAdmin, approvedCities]);
+
   const handleSelectMonth = (month) => {
     setSelectedMonth(month);
     fetchRecords(month.id);
   };
 
-  // ── Upload ────────────────────────────────────────────────────────
-  const handleUpload = async (e) => {
-    const file = e.target.files?.[0];
-    if (!file || !selectedCity) return;
-    e.target.value = '';
-
-    const monthStr = window.prompt('업로드할 년월을 입력하세요 (예: 2024-03)', new Date().toISOString().slice(0, 7));
-    if (!monthStr || !/^\d{4}-\d{2}$/.test(monthStr)) { alert('올바른 형식이 아닙니다 (예: 2024-03)'); return; }
-
-    setUploading(true);
-    setUploadStatus('파일 분석 중...');
+  const handleFetchBaseNotes = async () => {
+    if (!selectedCity || !selectedMonth || !records.length) return;
+    if (!confirm(`기본명단에서 특이사항을 불러와 현재 명단에 이식합니다.\n특이사항이 비어있는 레코드에만 적용됩니다. 계속하시겠습니까?`)) return;
+    setIsFetchingNotes(true);
     try {
-      const buffer = await file.arrayBuffer();
-      const result = await new Promise((resolve, reject) => {
-        const worker = new Worker(new URL('../excelWorker.js', import.meta.url), { type: 'module' });
-        worker.onmessage = ({ data }) => { worker.terminate(); resolve(data); };
-        worker.onerror = err => { worker.terminate(); reject(err); };
-        worker.postMessage({ buffer, fileName: file.name });
+      const normPhone = (v) => (v || '').replace(/[^0-9]/g, '');
+      const baseSnap = await getDocsFromServer(collection(db, `base_lists/${selectedCity}/records`));
+      const baseRecs = baseSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+      const byBirth = {}, byPhone = {};
+      baseRecs.forEach(r => {
+        const name = (r.name || r.이름 || '').trim();
+        const birth = r.birthKey || normalizeBirth(String(r.생년월일 || ''));
+        const mobile = normPhone(r.mobile || r.휴대폰 || '');
+        const note = (r.note || r.특이사항 || '').trim();
+        if (!name || !note) return;
+        if (birth) byBirth[`${name}__${birth}`] = note;
+        if (mobile.length >= 9) byPhone[`${name}__${mobile}`] = note;
       });
-      if (!result.ok) throw new Error(result.error || '파싱 실패');
 
-      const validSheets = (result.sheetsData || []).filter(s => s.type !== '제외');
-      if (!validSheets.length) throw new Error('유효한 시트가 없습니다.');
-
-      setUploadStatus('데이터 추출 중...');
-      const newRecords = [];
-      validSheets.forEach(sheet => {
-        const h = sheet.headers || [];
-        sheet.bodyRows.forEach(row => {
-          const g = (...keys) => { for (const k of keys) { const i = h.indexOf(k); if (i >= 0 && row[i] != null) return String(row[i]).trim(); } return ''; };
-          const name = g('성명', '이름', '대상자명', '수령자명');
-          if (!name) return;
-          newRecords.push({
-            구분: sheet.type || '전체', 이름: name,
-            생년월일: g('생년월일', '주민번호'),
-            행정동: g('행정동', '읍면동'),
-            주소: g('주소', '거주지', '배송지'),
-            휴대폰: g('휴대폰', '연락처', '휴대전화'),
-            유선전화: g('유선전화', '전화번호', '유선'),
-            포수: parseInt(g('포수', '수량', '지원량') || '1') || 1,
-            특이사항: g('특이사항', '비고'),
-          });
-        });
+      const updates = [];
+      records.forEach(r => {
+        if ((r.특이사항 || '').trim()) return;
+        const name = (r.이름 || '').trim();
+        const birth = normalizeBirth(String(r.생년월일 || ''));
+        const mobile = normPhone(r.휴대폰 || '');
+        let note = '';
+        if (birth) note = byBirth[`${name}__${birth}`] || '';
+        if (!note && mobile.length >= 9) note = byPhone[`${name}__${mobile}`] || '';
+        if (note) updates.push({ id: r.id, 특이사항: note });
       });
-      if (!newRecords.length) throw new Error('추출된 데이터가 없습니다.');
 
-      // 조직 필터 — 비관리자이고 orgDongs 있으면 내 행정동 레코드만 저장
-      let filteredRecords = newRecords;
-      if (!isAdmin && orgDongs) {
-        const outside = newRecords.filter(r => !orgDongs.has((r.행정동 || '').trim()));
-        filteredRecords = newRecords.filter(r => orgDongs.has((r.행정동 || '').trim()));
-        if (filteredRecords.length === 0) throw new Error('업로드한 파일에 귀 조직 담당 행정동 데이터가 없습니다.');
-        if (outside.length > 0 && !window.confirm(
-          `담당 행정동 외 ${outside.length}건은 제외됩니다.\n귀 조직 담당: ${filteredRecords.length}건만 저장합니다.\n계속하시겠습니까?`
-        )) return;
-      }
-      const recordsToSave = isAdmin ? newRecords : filteredRecords;
+      if (!updates.length) { alert('이식할 특이사항이 없습니다.\n(기본명단에 특이사항이 없거나 이미 모두 이식됨)'); return; }
 
-      const 수급자Count = recordsToSave.filter(r => r.구분 === '기초수급자').length;
-      const 차상위Count = newRecords.filter(r => r.구분 === '차상위').length;
-
-      // ── 같은 달 기존 레코드 먼저 삭제 (중복 방지) ──────────────────
-      const existingMonth = months.find(m => m.id === monthStr);
-      if (existingMonth) {
-        setUploadStatus('기존 데이터 초기화 중...');
-        const oldSnap = await getDocs(collection(db, 'cloud_lists', selectedCity, 'months', monthStr, 'records'));
-        for (let i = 0; i < oldSnap.docs.length; i += 499) {
-          const batch = writeBatch(db);
-          oldSnap.docs.slice(i, i + 499).forEach(d => batch.delete(d.ref));
-          await batch.commit();
-        }
-      }
-
-      setUploadStatus(`Firestore 저장 중... (${recordsToSave.length}건)`);
-      const metaRef = doc(db, 'cloud_lists', selectedCity, 'months', monthStr);
-      await setDoc(metaRef, {
-        city: selectedCity, monthId: monthStr,
-        totalCount: recordsToSave.length, 수급자Count, 차상위Count,
-        uploadedAt: serverTimestamp(), uploadedBy: user.email, hasOriginal: false,
-      });
-      for (let i = 0; i < recordsToSave.length; i += 500) {
+      for (let i = 0; i < updates.length; i += 499) {
         const batch = writeBatch(db);
-        recordsToSave.slice(i, i + 500).forEach((r, j) => {
-          batch.set(doc(collection(db, 'cloud_lists', selectedCity, 'months', monthStr, 'records')), { ...r, _idx: i + j });
+        updates.slice(i, i + 499).forEach(u =>
+          batch.update(doc(db, 'cloud_lists', selectedCity, 'months', selectedMonth.id, 'records', u.id), { 특이사항: u.특이사항 })
+        );
+        await batch.commit();
+      }
+      await fetchRecords(selectedMonth.id);
+      alert(`특이사항 이식 완료! ${updates.length}건 업데이트`);
+    } catch (e) { alert('오류: ' + e.message); }
+    finally { setIsFetchingNotes(false); }
+  };
+
+  const handleMovePhoneNumbers = async () => {
+    if (!selectedCity || !selectedMonth || !records.length) return;
+    const detectMobile = (phone) => {
+      const digits = (phone || '').replace(/[^0-9]/g, '');
+      if (/^01[016789]\d{7,8}$/.test(digits)) return digits;
+      if (/^1[016789]\d{7,8}$/.test(digits)) return '0' + digits;
+      return null;
+    };
+    const formatMobile = (digits) => {
+      if (digits.length === 11) return `${digits.slice(0,3)}-${digits.slice(3,7)}-${digits.slice(7)}`;
+      if (digits.length === 10) return `${digits.slice(0,3)}-${digits.slice(3,6)}-${digits.slice(6)}`;
+      return digits;
+    };
+    const targets = records.filter(r => {
+      const mobileDigits = (r.휴대폰 || '').replace(/[^0-9]/g, '');
+      return !mobileDigits && detectMobile(r.유선전화);
+    });
+    if (!targets.length) { alert('이동할 전화번호가 없습니다.'); return; }
+    if (!confirm(`유선전화에 있는 휴대폰 형식 번호 ${targets.length}건을 휴대폰으로 이동합니다.`)) return;
+    setIsMovingPhones(true);
+    try {
+      for (let i = 0; i < targets.length; i += 499) {
+        const batch = writeBatch(db);
+        targets.slice(i, i + 499).forEach(r => {
+          const digits = detectMobile(r.유선전화);
+          batch.update(
+            doc(db, 'cloud_lists', selectedCity, 'months', selectedMonth.id, 'records', r.id),
+            { 휴대폰: formatMobile(digits), 유선전화: '' }
+          );
         });
         await batch.commit();
-        setUploadStatus(`Firestore 저장 중... (${Math.min(i + 500, recordsToSave.length)}/${recordsToSave.length}건)`);
       }
-
-      setUploadStatus('원본 파일 보관 중...');
-      try {
-        const storageRef = ref(storage, `cloud_uploads/${selectedCity}/${monthStr}/original.xlsx`);
-        await uploadBytes(storageRef, file);
-        await setDoc(metaRef, { hasOriginal: true }, { merge: true });
-      } catch { /* Storage 미활성화 시 무시 */ }
-
-      // ── 이전 달 자동 정리 ──────────────────────────────────────────
-      const otherMonths = months.filter(m => m.id !== monthStr);
-      if (otherMonths.length > 0) {
-        setUploadStatus(`이전 달 정리 중... (${otherMonths.length}개월)`);
-        for (const oldMonth of otherMonths) {
-          const rSnap = await getDocs(collection(db, 'cloud_lists', selectedCity, 'months', oldMonth.id, 'records'));
-          for (let i = 0; i < rSnap.docs.length; i += 499) {
-            const batch = writeBatch(db);
-            rSnap.docs.slice(i, i + 499).forEach(d => batch.delete(d.ref));
-            await batch.commit();
-          }
-          await deleteDoc(doc(db, 'cloud_lists', selectedCity, 'months', oldMonth.id));
-          try { await deleteObject(ref(storage, `cloud_uploads/${selectedCity}/${oldMonth.id}/original.xlsx`)); } catch { /* 없으면 무시 */ }
-        }
-      }
-
-      setUploadStatus('완료!');
-      const cleanupMsg = otherMonths.length > 0 ? `\n이전 달 ${otherMonths.length}개월 데이터 자동 삭제됨` : '';
-      alert(`${monthStr} 배송명단 업로드 완료!\n전체 ${recordsToSave.length}건 (기초 ${수급자Count}, 차상위 ${차상위Count})${cleanupMsg}`);
-      fetchMonths();
-      setSelectedMonth(null);
-      setRecords([]);
-    } catch (err) {
-      console.error('[CloudListManager] handleUpload:', err);
-      alert('업로드 오류: ' + err.message);
-    } finally { setUploading(false); setUploadStatus(''); }
+      await fetchRecords(selectedMonth.id);
+      alert(`전화번호 이동 완료! ${targets.length}건`);
+    } catch (e) { alert('오류: ' + e.message); }
+    finally { setIsMovingPhones(false); }
   };
 
   // ── Delete month ──────────────────────────────────────────────────
@@ -441,7 +504,19 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
       await deleteDoc(doc(db, 'cloud_lists', selectedCity, 'months', month.id));
       try { await deleteObject(ref(storage, `cloud_uploads/${selectedCity}/${month.id}/original.xlsx`)); } catch { /* 없어도 무시 */ }
       if (selectedMonth?.id === month.id) { setSelectedMonth(null); setRecords([]); }
+      // 도시 상위 문서도 최신 월로 갱신
+      const remainingSnap = await getDocs(collection(db, 'cloud_lists', selectedCity, 'months'));
+      const remaining = remainingSnap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => b.id.localeCompare(a.id));
+      const newLatest = remaining[0] || null;
+      await setDoc(doc(db, 'cloud_lists', selectedCity), {
+        lastMonthId: newLatest?.id || null,
+        latestTotalCount: newLatest?.totalCount ?? 0,
+        'latest수급자Count': newLatest?.수급자Count ?? 0,
+        'latest차상위Count': newLatest?.차상위Count ?? 0,
+        lastUpdatedAt: serverTimestamp(),
+      }, { merge: true });
       fetchMonths();
+      fetchAllCities();
       alert(`${month.id} 명단이 삭제되었습니다.`);
     } catch (e) { alert('삭제 오류: ' + e.message); }
   };
@@ -494,6 +569,7 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
           initial={val}
           onCommit={(v) => commitEdit(id, key, v)}
           onCancel={cancelEdit}
+          isPhone={key === '휴대폰' || key === '유선전화'}
         />
       );
     }
@@ -517,7 +593,7 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
       return (
         <span
           onClick={() => startEdit(id, key)}
-          className={`cursor-text block text-center text-xs font-bold ${isDirty ? 'text-blue-300' : 'text-green-400'}`}
+          className={`cursor-text block text-center text-xs font-bold ${isDirty ? 'text-blue-300' : 'text-blue-400'}`}
         >
           {val || '—'}
         </span>
@@ -572,29 +648,28 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
     finally { setSaving(false); }
   };
 
-  // ── 좌표 받아오기 (Kakao 지오코딩, 3단계 폴백) ───────────────────────
+  // ── 좌표 받아오기 (VIP: 행정동 단위 수동 / VVIP: 업로드 후 백그라운드 자동) ──
   const [isFetchingCoords, setIsFetchingCoords] = useState(false);
-  const [coordProgress, setCoordProgress] = useState(null);
+  const [coordProgress, setCoordProgress] = useState(null); // { done, total } | null
+  const bgCoordCancelRef = useRef(false);
+  const [bgCoordState, setBgCoordState] = useState(null); // { done, total, success, isDone } | null
 
-  const handleFetchCoords = async () => {
-    if (!selectedCity || !selectedMonth) return;
-    const targets = records.filter(r => r.주소 && !r.lat && !r.lng);
-    if (!targets.length) { alert('좌표가 없는 주소 데이터가 없습니다.'); return; }
-    if (!window.confirm(`주소는 있지만 좌표가 없는 ${targets.length}건을 카카오 API로 조회합니다.\n계속하시겠습니까?`)) return;
-
-    setIsFetchingCoords(true);
-    setCoordProgress({ done: 0, total: targets.length, step1: 0, step2: 0 });
+  // 공통 Kakao 지오코딩 엔진 — VIP 수동·VVIP 백그라운드 공유
+  const _processCoords = async (targets, { cityId, monthId, concurrency, requestGap, cancelRef, onProgress }) => {
+    const cityParts = cityId.split(/\s+/);
+    const sido = cityParts[0] || '';
+    const sigungu = cityParts[1] || '';
+    const SIDO_SHORT = { '서울특별시': '서울', '부산광역시': '부산', '대구광역시': '대구', '인천광역시': '인천', '광주광역시': '광주', '대전광역시': '대전', '울산광역시': '울산', '세종특별자치시': '세종', '경기도': '경기', '강원특별자치도': '강원', '강원도': '강원', '충청북도': '충북', '충청남도': '충남', '전북특별자치도': '전북', '전라북도': '전북', '전라남도': '전남', '경상북도': '경북', '경상남도': '경남', '제주특별자치도': '제주' };
+    const sidoShort = SIDO_SHORT[sido] || sido;
+    const cleanRoad = (addr) => addr.replace(/\s*\([^)]*\).*$/, '').replace(/,.*$/, '').trim();
     let successCount = 0;
     const updates = {};
 
-    // 도로명만 추출: "서울 동대문구 천호대로 26, 101호 (신설동, 빌딩명)" → "서울 동대문구 천호대로 26"
-    const cleanRoad = (addr) => addr.replace(/\s*\([^)]*\).*$/, '').replace(/,.*$/, '').trim();
-
-    // Kakao API 호출 (429 시 1회 재시도)
+    // Kakao API 호출 (429 지수 백오프 3회 재시도, 10s 타임아웃)
     const kakaoFetch = async (url) => {
       const go = async () => {
         const ctrl = new AbortController();
-        const tid = setTimeout(() => ctrl.abort(), 6000);
+        const tid = setTimeout(() => ctrl.abort(), 10000);
         try {
           const res = await fetch(url, {
             headers: { Authorization: `KakaoAK ${KAKAO_REST_KEY}` },
@@ -605,20 +680,16 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
         } catch { clearTimeout(tid); return null; }
       };
       let res = await go();
-      if (res?.status === 429) {
-        await new Promise(r => setTimeout(r, 1200)); // rate-limit 대기
+      // 429 → 지수 백오프: 2s → 4s → 8s (최대 3회 재시도)
+      for (const delay of [2000, 4000, 8000]) {
+        if (res?.status !== 429) break;
+        await new Promise(r => setTimeout(r, delay));
         res = await go();
       }
       return res;
     };
 
-    // 지역 필터: selectedCity(예: "경기도 수원시 팔달구")에서 시도·시군구 추출
-    const cityParts = selectedCity.split(/\s+/);
-    const sido    = cityParts[0] || '';   // "경기도"
-    const sigungu = cityParts[1] || '';   // "수원시"
-
-    // 검색 결과가 선택된 지자체 내인지 확인
-    // address 검색(road_address.address_name)과 keyword 검색(road_address_name) 모두 커버
+    // 검색 결과가 선택된 지자체 내인지 확인 (전체명·약칭 모두 허용)
     const isInRegion = (doc) => {
       if (!sido) return true;
       const addrStr = [
@@ -626,7 +697,8 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
         doc.road_address_name || '',
         doc.road_address?.address_name || '',
       ].join(' ');
-      return addrStr.includes(sido) && (!sigungu || addrStr.includes(sigungu));
+      const hasSido = addrStr.includes(sido) || addrStr.includes(sidoShort);
+      return hasSido && (!sigungu || addrStr.includes(sigungu));
     };
 
     // 단건 좌표 조회 (행정동 정보도 받아 건물명 전용 폴백에 활용)
@@ -689,45 +761,86 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
       return null;
     };
 
+    let doneCount = 0;
+    const executing = new Set();
+    let lastDispatch = 0;
+
+    for (const r of targets) {
+      if (cancelRef?.current) break;
+      const now = Date.now();
+      const gap = requestGap - (now - lastDispatch);
+      if (gap > 0) await new Promise(res => setTimeout(res, gap));
+      lastDispatch = Date.now();
+
+      const p = (async () => {
+        if (cancelRef?.current) return;
+        const coord = await getCoord(r.주소, r.행정동);
+        if (coord) { const { _step, ...latLng } = coord; updates[r.id] = latLng; successCount++; }
+        doneCount++;
+        onProgress?.(doneCount, successCount);
+      })().then(() => { executing.delete(p); });
+      executing.add(p);
+      if (executing.size >= concurrency) await Promise.race(executing);
+    }
+    await Promise.all(executing);
+
+    if (Object.keys(updates).length) {
+      const entries = Object.entries(updates);
+      for (let i = 0; i < entries.length; i += 499) {
+        const batch = writeBatch(db);
+        entries.slice(i, i + 499).forEach(([id, coord]) => {
+          batch.update(doc(db, 'cloud_lists', cityId, 'months', monthId, 'records', id), coord);
+        });
+        await batch.commit();
+      }
+      setRecords(prev => prev.map(r => updates[r.id] ? { ...r, ...updates[r.id] } : r));
+    }
+    return { success: successCount, total: targets.length };
+  };
+
+  // VIP: 단일 행정동 수동 좌표 매칭
+  const handleFetchCoordsForDong = async () => {
+    if (!selectedCity || !selectedMonth || !filterDong) return;
+    const targets = records.filter(r => {
+      const dong = dirtyRecords[r.id]?.행정동 ?? r.행정동;
+      return r.주소 && !r.lat && !r.lng && dong === filterDong;
+    });
+    if (!targets.length) { alert(`[${filterDong}] 좌표가 없는 주소 데이터가 없습니다.`); return; }
+    if (!window.confirm(`[${filterDong}] 좌표 없는 ${targets.length}건을 카카오 API로 조회합니다.\n계속하시겠습니까?`)) return;
+    setIsFetchingCoords(true);
+    setCoordProgress({ done: 0, total: targets.length });
     try {
-      const concurrency = 5; // Kakao rate-limit 여유 있게
-      const executing = new Set();
-      let step1Hit = 0, step2Hit = 0;
-
-      for (const r of targets) {
-        const p = (async () => {
-          const coord = await getCoord(r.주소, r.행정동);
-          if (coord) {
-            const { _step, ...latLng } = coord;
-            updates[r.id] = latLng;
-            successCount++;
-            if (_step === 1) step1Hit++;
-            else step2Hit++;
-          }
-          setCoordProgress(prev => prev
-            ? { ...prev, done: prev.done + 1, step1: step1Hit, step2: step2Hit }
-            : prev
-          );
-        })().then(() => { executing.delete(p); });
-        executing.add(p);
-        if (executing.size >= concurrency) await Promise.race(executing);
-      }
-      await Promise.all(executing);
-
-      if (Object.keys(updates).length) {
-        const entries = Object.entries(updates);
-        for (let i = 0; i < entries.length; i += 499) {
-          const batch = writeBatch(db);
-          entries.slice(i, i + 499).forEach(([id, coord]) => {
-            batch.update(doc(db, 'cloud_lists', selectedCity, 'months', selectedMonth.id, 'records', id), coord);
-          });
-          await batch.commit();
-        }
-        setRecords(prev => prev.map(r => updates[r.id] ? { ...r, ...updates[r.id] } : r));
-      }
-      alert(`✅ 좌표 보완 완료: ${successCount}/${targets.length}건 성공\n(주소검색: ${step1Hit}건 / 키워드검색: ${step2Hit}건)`);
+      const result = await _processCoords(targets, {
+        cityId: selectedCity, monthId: selectedMonth.id,
+        concurrency: 3, requestGap: 80,
+        cancelRef: { current: false },
+        onProgress: (done) => setCoordProgress(prev => prev ? { ...prev, done } : prev),
+      });
+      alert(`✅ 좌표 보완 완료: ${result.success}/${result.total}건 성공`);
     } catch (e) { alert('좌표 보완 실패: ' + e.message); }
     finally { setIsFetchingCoords(false); setCoordProgress(null); }
+  };
+
+  // VVIP: 업로드 후 백그라운드 자동 좌표 매칭 (느리지만 안정적, 취소 가능)
+  const triggerBgCoordFetch = async (cityId, monthId, allRecords) => {
+    const targets = allRecords.filter(r => r.주소 && !r.lat && !r.lng);
+    if (!targets.length) return;
+    bgCoordCancelRef.current = false;
+    setBgCoordState({ done: 0, total: targets.length, success: 0 });
+    try {
+      await _processCoords(targets, {
+        cityId, monthId,
+        concurrency: 1, requestGap: 1500,
+        cancelRef: bgCoordCancelRef,
+        onProgress: (done, success) => {
+          if (!bgCoordCancelRef.current) setBgCoordState(prev => prev ? { ...prev, done, success } : null);
+        },
+      });
+      if (!bgCoordCancelRef.current) {
+        setBgCoordState(prev => prev ? { ...prev, isDone: true } : null);
+        setTimeout(() => setBgCoordState(null), 8000);
+      }
+    } catch { setBgCoordState(null); }
   };
 
   // ── DB 전체 초기화 (records만 삭제, 월 메타는 유지) ─────────────────────
@@ -835,7 +948,12 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
 
       {/* ── HEADER ── */}
       <div className="h-14 shrink-0 bg-[#080808] border-b border-[#1a1a1a] flex items-center px-5 gap-3">
-        <button onClick={onBack} className="p-2 bg-white/5 hover:bg-white/10 rounded-xl text-gray-400 hover:text-white transition-colors">
+        <button
+          onClick={selectedMonth
+            ? () => { setSelectedMonth(null); setMonths([]); setRecords([]); setSelectedSido(''); setSelectedSigungu(''); }
+            : onBack}
+          className="p-2 bg-white/5 hover:bg-white/10 rounded-xl text-gray-400 hover:text-white transition-colors"
+        >
           <ArrowLeft size={18} />
         </button>
         <div className="flex items-center gap-2.5 flex-1 min-w-0">
@@ -880,17 +998,6 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
             )}
             {records.length > 0 && (
               <button
-                onClick={handleFetchCoords}
-                disabled={isFetchingCoords}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-bold bg-blue-950/40 hover:bg-blue-900/50 text-blue-400 border border-blue-500/30 transition-colors disabled:opacity-40"
-              >
-                {isFetchingCoords
-                  ? <><span className="animate-spin inline-block">↻</span> {coordProgress ? `${coordProgress.done}/${coordProgress.total}건` : '준비중...'}</>
-                  : <><MapPin size={13} /> 좌표 받아오기</>}
-              </button>
-            )}
-            {records.length > 0 && (
-              <button
                 onPointerDown={e => { e.preventDefault(); setShowOrgPreset(true); }}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-bold bg-purple-950/40 hover:bg-purple-900/50 text-purple-400 border border-purple-500/30 transition-colors"
               >
@@ -900,7 +1007,7 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
             {onOpenRouteMap && (
               <button
                 onClick={() => onOpenRouteMap(selectedCity, selectedMonth.id, orgDongs)}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-bold bg-[#22c55e]/15 hover:bg-[#22c55e]/25 text-[#22c55e] border border-[#22c55e]/30 transition-colors"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-bold bg-[#3b82f6]/15 hover:bg-[#3b82f6]/25 text-[#3b82f6] border border-[#3b82f6]/30 transition-colors"
               >
                 <MapPin size={13} /> 루트맵 배정
               </button>
@@ -925,6 +1032,35 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
                 <DatabaseZap size={13} /> {isClearing ? '삭제 중...' : 'DB 초기화'}
               </button>
             )}
+            {records.length > 0 && (
+              <button
+                onClick={handleFetchBaseNotes}
+                disabled={isFetchingNotes}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-bold bg-amber-950/40 hover:bg-amber-900/50 text-amber-400 border border-amber-500/30 transition-colors disabled:opacity-40"
+                title="기본명단에서 특이사항을 불러와 이식"
+              >
+                <BookOpen size={13} /> {isFetchingNotes ? '이식 중...' : '특이사항 불러오기'}
+              </button>
+            )}
+            {records.length > 0 && (
+              <button
+                onClick={handleMovePhoneNumbers}
+                disabled={isMovingPhones}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-bold bg-cyan-950/40 hover:bg-cyan-900/50 text-cyan-400 border border-cyan-500/30 transition-colors disabled:opacity-40"
+                title="유선전화에 있는 휴대폰 번호를 휴대폰으로 이동"
+              >
+                <Phone size={13} /> {isMovingPhones ? '이동 중...' : '전화번호 이동'}
+              </button>
+            )}
+            {onOpenInResultGrid && records.length > 0 && (
+              <button
+                onClick={() => onOpenInResultGrid(selectedCity, selectedMonth.id, records)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-bold bg-emerald-950/50 hover:bg-emerald-900/60 text-emerald-400 border border-emerald-500/40 transition-colors shadow-[0_0_10px_rgba(52,211,153,0.1)]"
+                title="이 명단을 결과화면(Step 5)으로 불러옵니다"
+              >
+                <LayoutGrid size={13} /> 결과화면 열기
+              </button>
+            )}
             <button
               onClick={handleDownloadXlsx}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-bold bg-white/5 hover:bg-white/10 text-gray-300 transition-colors border border-white/5"
@@ -943,116 +1079,104 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
         )}
       </div>
 
-      <div className="flex-1 flex overflow-hidden">
-
-        {/* ── LEFT PANEL ── */}
-        <div className="w-64 shrink-0 border-r border-[#181818] flex flex-col bg-[#080808]">
-
-          {/* City selector */}
-          <div className="p-4 border-b border-[#181818]">
-            <p className="text-[10px] text-gray-600 font-bold mb-2.5 tracking-widest uppercase">지자체 선택</p>
-            <div className="flex flex-col gap-2">
-              <select
-                value={selectedSido}
-                onChange={e => { setSelectedSido(e.target.value); setSelectedSigungu(''); }}
-                className="w-full bg-black border border-[#333] rounded-xl px-3 py-2 text-white text-xs outline-none focus:border-blue-500 cursor-pointer"
-              >
-                <option value="">시/도 선택</option>
-                {availableSidos.map(s => <option key={s} value={s}>{s}</option>)}
-              </select>
-              <select
-                value={selectedSigungu}
-                onChange={e => setSelectedSigungu(e.target.value)}
-                disabled={!selectedSido}
-                className="w-full bg-black border border-[#333] rounded-xl px-3 py-2 text-white text-xs outline-none focus:border-blue-500 disabled:opacity-40 cursor-pointer"
-              >
-                <option value="">시/군/구 선택</option>
-                {availableSigungus.map(s => <option key={s} value={s}>{s}</option>)}
-              </select>
+      {/* ── 카드 그리드 뷰 (월 미선택) ── */}
+      {!selectedMonth ? (
+        <div className="flex-1 overflow-y-auto p-6">
+          {loadingCities ? (
+            <div className="flex items-center justify-center h-40 text-gray-600 text-sm animate-pulse">불러오는 중...</div>
+          ) : cityList.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-60 gap-4 text-gray-700">
+              <Calendar size={40} className="opacity-20" />
+              <p className="text-sm">저장된 배송명단이 없습니다</p>
             </div>
-
-            {/* Upload button (admin only) */}
-            {selectedCity && isAdmin && (
-              <label className={`mt-3 w-full cursor-pointer flex items-center justify-center gap-2 px-3 py-2 rounded-xl text-[11px] font-bold transition-all border ${uploading ? 'bg-white/5 text-gray-600 border-white/5 pointer-events-none' : 'bg-blue-900/20 text-blue-300 border-blue-500/25 hover:bg-blue-900/35'}`}>
-                <Upload size={12} />
-                {uploading ? uploadStatus || '처리 중...' : '새 월 배송명단 업로드'}
-                <input type="file" accept=".xlsx,.xls" onChange={handleUpload} className="hidden" disabled={uploading} />
-              </label>
-            )}
-          </div>
-
-          {/* Month list */}
-          <div className="flex-1 overflow-auto">
-            {!selectedCity ? (
-              <div className="flex flex-col items-center justify-center h-40 gap-3 px-4 text-center">
-                <Cloud size={28} className="text-gray-800" />
-                <p className="text-[11px] text-gray-700">지자체를 선택하세요</p>
-              </div>
-            ) : loadingMonths ? (
-              <div className="flex items-center justify-center h-20 text-gray-600 text-xs animate-pulse">불러오는 중...</div>
-            ) : months.length === 0 ? (
-              <div className="flex flex-col items-center justify-center h-40 gap-3 px-4 text-center">
-                <Calendar size={28} className="text-gray-800" />
-                <p className="text-[11px] text-gray-700">저장된 배송명단이 없습니다</p>
-              </div>
-            ) : (
-              <div className="p-2 space-y-1">
-                {months.map(m => (
-                  <div
-                    key={m.id}
-                    onClick={() => handleSelectMonth(m)}
-                    className={`p-3 rounded-xl cursor-pointer transition-all group border ${
-                      selectedMonth?.id === m.id
-                        ? 'bg-blue-900/25 border-blue-500/35'
-                        : 'hover:bg-white/[0.04] border-transparent'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between">
-                      <div className="min-w-0">
-                        <div className="text-xs font-bold text-white flex items-center gap-1.5 mb-0.5">
-                          <Calendar size={10} className="text-blue-400 shrink-0" />
-                          {m.id}
-                        </div>
-                        <div className="text-[10px] text-gray-600 truncate">
-                          전체 {(m.totalCount||0).toLocaleString()} · 수급 {(m.수급자Count||0).toLocaleString()} · 차상위 {(m.차상위Count||0).toLocaleString()}
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity ml-2">
-                        {m.hasOriginal && (
-                          <button onClick={e => { e.stopPropagation(); handleDownloadOriginal(m); }}
-                            className="p-1 text-gray-600 hover:text-blue-400 transition-colors" title="원본 다운로드">
-                            <Download size={11} />
+          ) : (
+            Object.entries(citiesBySido).map(([sido, cities]) => (
+              <div key={sido} className="mb-10">
+                <p className="text-[11px] text-gray-600 font-black tracking-widest uppercase mb-4 px-1 flex items-center gap-2">
+                  <span className="flex-1 h-px bg-[#1a1a1a]" />
+                  {sido}
+                  <span className="flex-1 h-px bg-[#1a1a1a]" />
+                </p>
+                <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-4">
+                  {cities.map(cityItem => {
+                    const m = cityItem.latestMonth;
+                    const isLoading = loadingCardId === cityItem.id;
+                    return (
+                      <button
+                        key={cityItem.id}
+                        onClick={() => handleCardClick(cityItem)}
+                        disabled={isLoading || !m}
+                        className={`group relative text-left p-5 rounded-2xl border transition-all duration-200 ${
+                          m
+                            ? 'bg-[#0c0c0c] border-[#1e1e1e] hover:bg-[#121a2a] hover:border-[#3b82f6]/40 hover:shadow-[0_0_20px_rgba(59,130,246,0.08)] cursor-pointer'
+                            : 'bg-[#0a0a0a] border-[#181818] opacity-50 cursor-not-allowed'
+                        } ${isLoading ? 'opacity-70' : ''}`}
+                      >
+                        {/* 관리 모드 버튼 (관리자만) */}
+                        {isAdmin && m && (
+                          <button
+                            onClick={e => { e.stopPropagation(); handleAdminMode(cityItem); }}
+                            className="absolute top-3 right-3 opacity-0 group-hover:opacity-100 p-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-gray-600 hover:text-gray-300 transition-all"
+                            title="인라인 편집 모드"
+                          >
+                            <FileSpreadsheet size={12} />
                           </button>
                         )}
-                        {isAdmin && (
-                          <button onClick={e => { e.stopPropagation(); setDeleteMonthConfirm(m); }}
-                            className="p-1 text-gray-600 hover:text-red-400 transition-colors" title="삭제">
-                            <Trash2 size={11} />
-                          </button>
+
+                        {/* 도시명 */}
+                        <div className="mb-3">
+                          <p className="text-lg font-black text-white leading-tight">{cityItem.sigungu}</p>
+                          <p className="text-[11px] text-gray-600 mt-0.5">{cityItem.sido}</p>
+                        </div>
+
+                        {m ? (
+                          <>
+                            {/* 월 배지 */}
+                            <div className="flex items-center gap-1.5 mb-3">
+                              <Calendar size={11} className="text-blue-400" />
+                              <span className="text-xs font-black text-blue-400">{m.id}</span>
+                            </div>
+                            {/* 통계 */}
+                            <div className="grid grid-cols-3 gap-2">
+                              <div className="bg-black/40 rounded-xl p-2 text-center">
+                                <p className="text-[15px] font-black text-white">{(m.totalCount||0).toLocaleString()}</p>
+                                <p className="text-[9px] text-gray-600 mt-0.5 font-bold">전체</p>
+                              </div>
+                              <div className="bg-black/40 rounded-xl p-2 text-center">
+                                <p className="text-[15px] font-black text-amber-400">{(m.수급자Count||0).toLocaleString()}</p>
+                                <p className="text-[9px] text-gray-600 mt-0.5 font-bold">수급자</p>
+                              </div>
+                              <div className="bg-black/40 rounded-xl p-2 text-center">
+                                <p className="text-[15px] font-black text-blue-400">{(m.차상위Count||0).toLocaleString()}</p>
+                                <p className="text-[9px] text-gray-600 mt-0.5 font-bold">차상위</p>
+                              </div>
+                            </div>
+                            {/* 로딩 오버레이 */}
+                            {isLoading && (
+                              <div className="absolute inset-0 rounded-2xl bg-[#0c0c0c]/80 flex items-center justify-center gap-2">
+                                <span className="w-4 h-4 rounded-full border-2 border-blue-400 border-t-transparent animate-spin inline-block" />
+                                <span className="text-xs text-blue-400 font-bold">불러오는 중...</span>
+                              </div>
+                            )}
+                          </>
+                        ) : (
+                          <p className="text-[11px] text-gray-700">저장된 명단 없음</p>
                         )}
-                        <ChevronRight size={11} className="text-gray-700" />
-                      </div>
-                    </div>
-                    {selectedMonth?.id === m.id && (
-                      <div className="mt-1.5 text-[10px] text-gray-600">
-                        {fmtTs(m.uploadedAt)} · {m.uploadedBy}
-                      </div>
-                    )}
-                  </div>
-                ))}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
-            )}
-          </div>
+            ))
+          )}
         </div>
 
-        {/* ── RIGHT PANEL ── */}
+      ) : (
+
+        /* ── 관리 뷰 (월 선택됨) ── */
         <div className="flex-1 flex flex-col overflow-hidden">
-          {!selectedMonth ? (
-            <div className="flex-1 flex flex-col items-center justify-center gap-4 text-gray-700">
-              <FileSpreadsheet size={48} className="opacity-15" />
-              <p className="text-sm">좌측에서 월별 명단을 선택하세요</p>
-              <p className="text-xs text-gray-800">명단을 선택하면 상세 데이터가 표시됩니다</p>
-            </div>
+          {loadingRecords ? (
+            <div className="flex-1 flex items-center justify-center text-gray-600 text-sm animate-pulse">레코드 불러오는 중...</div>
           ) : (
             <>
               {/* Month header */}
@@ -1073,8 +1197,9 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
               </div>
 
               {/* Search toolbar */}
-              <div className="h-11 shrink-0 border-b border-[#181818] flex items-center px-4 gap-3 bg-[#080808]">
-                <div className="relative w-72">
+              <div className="shrink-0 border-b border-[#181818] flex items-center px-4 gap-2.5 bg-[#080808] py-2 flex-wrap">
+                {/* 텍스트 검색 */}
+                <div className="relative w-56">
                   <Search size={12} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-600" />
                   <input
                     type="text" value={searchInput}
@@ -1088,9 +1213,49 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
                     </button>
                   )}
                 </div>
+                {/* 구분 콤보박스 */}
+                <select
+                  value={filterGubun}
+                  onChange={e => setFilterGubun(e.target.value)}
+                  className="bg-black/70 border border-[#2a2a2a] rounded-xl px-2.5 py-1.5 text-xs text-white outline-none focus:border-blue-500/50 cursor-pointer"
+                >
+                  <option value="">구분 전체</option>
+                  <option value="기초수급자">기초수급자</option>
+                  <option value="차상위">차상위</option>
+                </select>
+                {/* 행정동 콤보박스 */}
+                <select
+                  value={filterDong}
+                  onChange={e => setFilterDong(e.target.value)}
+                  className="bg-black/70 border border-[#2a2a2a] rounded-xl px-2.5 py-1.5 text-xs text-white outline-none focus:border-blue-500/50 cursor-pointer"
+                >
+                  <option value="">행정동 전체</option>
+                  {cloudDongList.map(d => <option key={d} value={d}>{d}</option>)}
+                </select>
+                {/* VIP+: 단일 행정동 선택 시 좌표 받아오기 버튼 */}
+                {filterDong && (canUseCoords(user?.tier) || isAdmin) && (
+                  <button
+                    onClick={handleFetchCoordsForDong}
+                    disabled={isFetchingCoords}
+                    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-[11px] font-bold bg-blue-950/40 hover:bg-blue-900/50 text-blue-400 border border-blue-500/30 transition-colors disabled:opacity-40 shrink-0"
+                  >
+                    {isFetchingCoords
+                      ? <><span className="w-3 h-3 rounded-full border-2 border-blue-400 border-t-transparent animate-spin inline-block" /> {coordProgress ? `${coordProgress.done}/${coordProgress.total}건` : '준비중...'}</>
+                      : <><MapPin size={11} /> {filterDong} 좌표받기</>}
+                  </button>
+                )}
+                {/* 초기화 */}
+                {(searchText || filterGubun || filterDong) && (
+                  <button
+                    onClick={() => { setSearchInput(''); setSearchText(''); setFilterGubun(''); setFilterDong(''); }}
+                    className="text-[10px] text-gray-600 hover:text-red-400 border border-[#2a2a2a] hover:border-red-700/40 rounded-lg px-2 py-1.5 transition-colors"
+                  >
+                    초기화
+                  </button>
+                )}
                 <span className="text-[11px] text-gray-600">
                   {displayRecords.length.toLocaleString()}건 표시
-                  {searchText && ` (전체 ${records.filter(r => !deletedRecordIds.has(r.id)).length.toLocaleString()}건 중)`}
+                  {(searchText || filterGubun || filterDong) && ` (전체 ${records.filter(r => !deletedRecordIds.has(r.id)).length.toLocaleString()}건 중)`}
                 </span>
                 {records.length > 0 && (() => {
                   const withCoord = records.filter(r => r.lat && r.lng).length;
@@ -1101,9 +1266,9 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
                     <div className="flex items-center gap-2 ml-auto">
                       <div className="flex items-center gap-1.5">
                         <div className="w-24 bg-[#1a1a1a] rounded-full h-1.5 overflow-hidden">
-                          <div className="h-full rounded-full bg-[#22c55e]" style={{ width: `${pct}%` }} />
+                          <div className="h-full rounded-full bg-[#3b82f6]" style={{ width: `${pct}%` }} />
                         </div>
-                        <span className="text-[10px] text-[#22c55e] font-bold whitespace-nowrap">
+                        <span className="text-[10px] text-[#3b82f6] font-bold whitespace-nowrap">
                           좌표 {withCoord.toLocaleString()}건 ({pct}%)
                         </span>
                         {noCoord > 0 && (
@@ -1133,7 +1298,7 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
             </>
           )}
         </div>
-      </div>
+      )}
 
       {/* ═══ ORG PRESET MODAL ═══ */}
       {showOrgPreset && selectedCity && selectedMonth && (
@@ -1168,6 +1333,46 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* ═══ VVIP 백그라운드 좌표 매칭 플로팅 표시기 ═══ */}
+      {bgCoordState && (
+        <div className="fixed bottom-5 right-5 z-[200] bg-[#111] border border-[#2a2a2a] rounded-2xl px-4 py-3 shadow-2xl text-xs flex items-center gap-3 min-w-[260px] max-w-xs">
+          {bgCoordState.isDone ? (
+            <>
+              <CheckCircle size={14} className="text-green-400 shrink-0" />
+              <span className="text-gray-300 flex-1">
+                좌표 자동매칭 완료
+                <span className="text-green-400 font-black ml-1">{bgCoordState.success}/{bgCoordState.total}건</span>
+              </span>
+              <button onClick={() => setBgCoordState(null)} className="text-gray-600 hover:text-white ml-1">
+                <X size={12} />
+              </button>
+            </>
+          ) : (
+            <>
+              <span className="w-3.5 h-3.5 rounded-full border-2 border-blue-400 border-t-transparent animate-spin shrink-0" />
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-gray-400 font-bold truncate">좌표 백그라운드 매칭 중</span>
+                  <span className="text-blue-400 font-black ml-2 shrink-0">{bgCoordState.done}/{bgCoordState.total}</span>
+                </div>
+                <div className="w-full bg-[#222] rounded-full h-1">
+                  <div
+                    className="h-full rounded-full bg-blue-500 transition-all duration-500"
+                    style={{ width: `${bgCoordState.total > 0 ? Math.round(bgCoordState.done / bgCoordState.total * 100) : 0}%` }}
+                  />
+                </div>
+              </div>
+              <button
+                onClick={() => { bgCoordCancelRef.current = true; setBgCoordState(null); }}
+                className="text-[10px] text-gray-600 hover:text-red-400 shrink-0 ml-1 font-bold"
+              >
+                중단
+              </button>
+            </>
+          )}
         </div>
       )}
     </div>

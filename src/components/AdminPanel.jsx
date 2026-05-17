@@ -1,6 +1,6 @@
-import { useState, useEffect, useRef } from 'react';
-import { getDocs, getDoc, updateDoc, setDoc, doc, collection, db, serverTimestamp, query, where, orderBy, writeBatch, onSnapshot, arrayUnion, arrayRemove } from '../config/firebase.js';
-import { X, Users, BarChart2, Clock, ShieldOff, ShieldCheck, AlertTriangle, Crown, MessageSquare, CheckCircle2, MapPin, XCircle, Building2, ShieldAlert, Plus, ChevronDown } from 'lucide-react';
+﻿import { useState, useEffect, useRef } from 'react';
+import { getDocs, getDoc, updateDoc, setDoc, deleteDoc, doc, collection, db, serverTimestamp, addDoc, query, where, orderBy, writeBatch, onSnapshot, arrayUnion, arrayRemove } from '../config/firebase.js';
+import { X, Users, BarChart2, Clock, ShieldOff, ShieldCheck, AlertTriangle, Crown, MessageSquare, CheckCircle2, MapPin, XCircle, Building2, ShieldAlert, Plus, ChevronDown, TrendingUp, AlertCircle, UserX, Activity, Zap, Trash2 } from 'lucide-react';
 import { REGIONS, getSigunguOptions } from '../utils/regions.js';
 
 function OrgSelect({ value, options, onChange }) {
@@ -28,12 +28,12 @@ function OrgSelect({ value, options, onChange }) {
       </button>
 
       {open && (
-        <div className="absolute left-0 top-full mt-1 z-[900] w-56 bg-[#111a12] border border-[#22c55e]/25 rounded-xl shadow-[0_12px_40px_rgba(0,0,0,0.9)] overflow-hidden">
+        <div className="absolute left-0 top-full mt-1 z-[900] w-56 bg-[#111a12] border border-[#3b82f6]/25 rounded-xl shadow-[0_12px_40px_rgba(0,0,0,0.9)] overflow-hidden">
           <div className="max-h-56 overflow-y-auto scrollbar-thin scrollbar-thumb-[#2d4a35] scrollbar-track-transparent">
             <button
               onClick={() => { onChange(''); setOpen(false); }}
-              className={`w-full text-left px-3 py-2.5 text-[11px] font-bold transition-colors border-b border-[#1e2d22] ${
-                !value ? 'text-[#22c55e] bg-[#22c55e]/10' : 'text-gray-500 hover:bg-white/5 hover:text-gray-300'
+              className={`w-full text-left px-3 py-2.5 text-[11px] font-bold transition-colors border-b border-[#0f1a2e] ${
+                !value ? 'text-[#3b82f6] bg-[#3b82f6]/10' : 'text-gray-500 hover:bg-white/5 hover:text-gray-300'
               }`}
             >
               소속 없음
@@ -102,6 +102,7 @@ export default function AdminPanel({ onClose, user }) {
   const [loading, setLoading] = useState(true);
   const [banTarget, setBanTarget] = useState(null);
   const [banReason, setBanReason] = useState('');
+  const [deleteTarget, setDeleteTarget] = useState(null);
   const [processing, setProcessing] = useState(false);
   const [tierTarget, setTierTarget] = useState(null);
   const [roleTarget, setRoleTarget] = useState(null);
@@ -127,6 +128,37 @@ export default function AdminPanel({ onClose, user }) {
   const [cityPickerUid, setCityPickerUid] = useState(null);
   const [cityPickerSido, setCityPickerSido] = useState('');
   const [cityPickerSigungu, setCityPickerSigungu] = useState('');
+
+  // 운영 현황
+  const [auditLogs, setAuditLogs] = useState([]);
+  const [auditLoading, setAuditLoading] = useState(false);
+  const [tierUpgradeTarget, setTierUpgradeTarget] = useState(null); // { inq, matchedUser, newTier }
+
+  const fetchAuditLogs = async () => {
+    setAuditLoading(true);
+    try {
+      const snap = await getDocs(query(collection(db, 'audit_logs'), orderBy('createdAt', 'desc')));
+      setAuditLogs(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    } catch { setAuditLogs([]); }
+    finally { setAuditLoading(false); }
+  };
+
+  const handleTierUpgradeInquiry = async () => {
+    if (!tierUpgradeTarget) return;
+    const { inq, matchedUser, newTier } = tierUpgradeTarget;
+    setProcessing(true);
+    try {
+      const batch = writeBatch(db);
+      const defaultMax = TIER_DEFAULT_CITIES[newTier] ?? 1;
+      batch.update(doc(db, 'users', matchedUser.id), { tier: newTier, maxCities: defaultMax });
+      batch.update(doc(db, 'inquiries', inq.id), { status: 'completed', completedAt: serverTimestamp(), approvedTier: newTier });
+      await batch.commit();
+      setUsers(prev => prev.map(u => u.id === matchedUser.id ? { ...u, tier: newTier, maxCities: defaultMax } : u));
+      setInquiries(prev => prev.map(i => i.id === inq.id ? { ...i, status: 'completed', approvedTier: newTier } : i));
+      setTierUpgradeTarget(null);
+    } catch (e) { alert('처리 실패: ' + e.message); }
+    finally { setProcessing(false); }
+  };
 
   const loadGlobalOrgs = async () => {
     try {
@@ -276,6 +308,7 @@ export default function AdminPanel({ onClose, user }) {
     fetchUsers();
     fetchAiData();
     fetchInquiries();
+    fetchAuditLogs();
     loadGlobalOrgs();
 
     const q = query(collection(db, 'city_requests'), where('status', '==', 'pending'));
@@ -401,6 +434,32 @@ export default function AdminPanel({ onClose, user }) {
   const totalFiles  = users.reduce((s, u) => s + (u.totalFilesProcessed || 0), 0);
   const bannedCount = users.filter(u => u.status === 'banned').length;
 
+  const nowSec = Date.now() / 1000;
+  const churnRisk = users.filter(u => {
+    const lastSec = u.lastLogin?.seconds || 0;
+    return lastSec > 0 && (nowSec - lastSec) > 60 * 24 * 3600 && u.status !== 'banned';
+  }).sort((a, b) => (a.lastLogin?.seconds || 0) - (b.lastLogin?.seconds || 0));
+
+  const nearLimit = users.filter(u => {
+    const max = u.maxCities ?? TIER_DEFAULT_CITIES[u.tier || 'basic'] ?? 1;
+    const used = (u.citiesApproved || []).length;
+    return max < 999 && max > 0 && used / max >= 0.8;
+  });
+
+  const cityUsageStats = (() => {
+    const map = {};
+    auditLogs.forEach(log => {
+      const city = log.city || '미지정';
+      if (!map[city]) map[city] = { city, sessions: 0, added: 0, updated: 0, lastSec: 0 };
+      map[city].sessions++;
+      map[city].added += log.addCount || 0;
+      map[city].updated += log.updateCount || 0;
+      const sec = log.createdAt?.seconds || 0;
+      if (sec > map[city].lastSec) map[city].lastSec = sec;
+    });
+    return Object.values(map).sort((a, b) => b.sessions - a.sessions);
+  })();
+
   const handleRoleChange = async () => {
     if (!roleTarget) return;
     setProcessing(true);
@@ -442,6 +501,26 @@ export default function AdminPanel({ onClose, user }) {
     } finally { setProcessing(false); }
   };
 
+  const handleDeleteUser = async () => {
+    if (!deleteTarget) return;
+    setProcessing(true);
+    try {
+      await deleteDoc(doc(db, 'users', deleteTarget.id));
+      await addDoc(collection(db, 'audit_logs'), {
+        action: 'DELETE_USER',
+        targetUid: deleteTarget.id,
+        targetEmail: deleteTarget.email || '',
+        targetName: deleteTarget.realName || '',
+        timestamp: serverTimestamp(),
+        adminEmail: user?.email || 'unknown',
+      });
+      setUsers(prev => prev.filter(u => u.id !== deleteTarget.id));
+      setDeleteTarget(null);
+    } catch (e) {
+      alert('삭제 실패: ' + e.message);
+    } finally { setProcessing(false); }
+  };
+
   const handleTierChange = async () => {
     if (!tierTarget) return;
     setProcessing(true);
@@ -471,24 +550,24 @@ export default function AdminPanel({ onClose, user }) {
 
   return (
     <div className="fixed inset-0 bg-black/90 backdrop-blur-xl z-[600] flex items-center justify-center p-2">
-      <div className="w-full bg-[#0a100c] border border-[#22c55e]/30 rounded-2xl shadow-[0_0_60px_rgba(34,197,94,0.2)] flex flex-col" style={{height:'calc(100vh - 16px)'}}>
+      <div className="w-full bg-[#0a100c] border border-[#3b82f6]/30 rounded-2xl shadow-[0_0_60px_rgba(59,130,246,0.2)] flex flex-col" style={{height:'calc(100vh - 16px)'}}>
 
         {/* Header */}
-        <div className="flex items-center justify-between px-8 py-5 border-b border-[#1e2d22] shrink-0">
+        <div className="flex items-center justify-between px-8 py-5 border-b border-[#0f1a2e] shrink-0">
           <div>
-            <h2 className="text-xl font-black text-[#22c55e] flex items-center gap-3"><Users size={22}/> 관리자 대시보드</h2>
+            <h2 className="text-xl font-black text-[#3b82f6] flex items-center gap-3"><Users size={22}/> 관리자 대시보드</h2>
             <p className="text-gray-500 text-xs mt-1">사용자 현황 · 등급·권한·소속사·지자체 관리 · AI Advisor</p>
           </div>
           <div className="flex gap-2">
             <button
               onClick={() => setActiveTab('users')}
-              className={`px-4 py-2 rounded-lg text-sm font-bold transition-colors ${activeTab === 'users' ? 'bg-[#22c55e] text-black shadow-[0_0_15px_rgba(34,197,94,0.3)]' : 'bg-[#111] text-gray-400 border border-[#333] hover:text-white hover:bg-[#222]'}`}
+              className={`px-4 py-2 rounded-lg text-sm font-bold transition-colors ${activeTab === 'users' ? 'bg-[#3b82f6] text-black shadow-[0_0_15px_rgba(59,130,246,0.3)]' : 'bg-[#111] text-gray-400 border border-[#333] hover:text-white hover:bg-[#222]'}`}
             >
               사용자 관리
             </button>
             <button
               onClick={() => setActiveTab('ai_advisor')}
-              className={`px-4 py-2 rounded-lg text-sm font-bold transition-colors flex items-center gap-2 ${activeTab === 'ai_advisor' ? 'bg-[#22c55e] text-black shadow-[0_0_15px_rgba(34,197,94,0.3)]' : 'bg-[#111] text-gray-400 border border-[#333] hover:text-white hover:bg-[#222]'}`}
+              className={`px-4 py-2 rounded-lg text-sm font-bold transition-colors flex items-center gap-2 ${activeTab === 'ai_advisor' ? 'bg-[#3b82f6] text-black shadow-[0_0_15px_rgba(59,130,246,0.3)]' : 'bg-[#111] text-gray-400 border border-[#333] hover:text-white hover:bg-[#222]'}`}
             >
               <Crown size={16} /> NEXUS AI Advisor
               {aiSuggestions.length > 0 && (
@@ -497,7 +576,7 @@ export default function AdminPanel({ onClose, user }) {
             </button>
             <button
               onClick={() => setActiveTab('city_approval')}
-              className={`px-4 py-2 rounded-lg text-sm font-bold transition-colors flex items-center gap-2 ${activeTab === 'city_approval' ? 'bg-[#22c55e] text-black shadow-[0_0_15px_rgba(34,197,94,0.3)]' : 'bg-[#111] text-gray-400 border border-[#333] hover:text-white hover:bg-[#222]'}`}
+              className={`px-4 py-2 rounded-lg text-sm font-bold transition-colors flex items-center gap-2 ${activeTab === 'city_approval' ? 'bg-[#3b82f6] text-black shadow-[0_0_15px_rgba(59,130,246,0.3)]' : 'bg-[#111] text-gray-400 border border-[#333] hover:text-white hover:bg-[#222]'}`}
             >
               <MapPin size={16} /> 지자체 승인
               {cityRequests.length > 0 && (
@@ -506,12 +585,23 @@ export default function AdminPanel({ onClose, user }) {
             </button>
             <button
               onClick={() => setActiveTab('inquiries')}
-              className={`px-4 py-2 rounded-lg text-sm font-bold transition-colors flex items-center gap-2 ${activeTab === 'inquiries' ? 'bg-[#22c55e] text-black shadow-[0_0_15px_rgba(34,197,94,0.3)]' : 'bg-[#111] text-gray-400 border border-[#333] hover:text-white hover:bg-[#222]'}`}
+              className={`px-4 py-2 rounded-lg text-sm font-bold transition-colors flex items-center gap-2 ${activeTab === 'inquiries' ? 'bg-[#3b82f6] text-black shadow-[0_0_15px_rgba(59,130,246,0.3)]' : 'bg-[#111] text-gray-400 border border-[#333] hover:text-white hover:bg-[#222]'}`}
             >
               <MessageSquare size={16} /> 문의 관리
               {inquiries.filter(i => i.status === 'pending').length > 0 && (
                 <span className="bg-red-500 text-white text-[10px] px-1.5 py-0.5 rounded-full ml-1">
                   {inquiries.filter(i => i.status === 'pending').length}
+                </span>
+              )}
+            </button>
+            <button
+              onClick={() => { setActiveTab('ops'); if (!auditLogs.length) fetchAuditLogs(); }}
+              className={`px-4 py-2 rounded-lg text-sm font-bold transition-colors flex items-center gap-2 ${activeTab === 'ops' ? 'bg-[#3b82f6] text-black shadow-[0_0_15px_rgba(59,130,246,0.3)]' : 'bg-[#111] text-gray-400 border border-[#333] hover:text-white hover:bg-[#222]'}`}
+            >
+              <Activity size={16} /> 운영 현황
+              {(churnRisk.length > 0 || nearLimit.length > 0) && (
+                <span className="bg-amber-500 text-black text-[10px] px-1.5 py-0.5 rounded-full ml-1 font-black">
+                  {churnRisk.length + nearLimit.length}
                 </span>
               )}
             </button>
@@ -522,7 +612,7 @@ export default function AdminPanel({ onClose, user }) {
         {activeTab === 'users' && (
           <>
             {/* Stats */}
-            <div className="px-8 py-4 border-b border-[#1e2d22] shrink-0 space-y-3">
+            <div className="px-8 py-4 border-b border-[#0f1a2e] shrink-0 space-y-3">
               <div className="grid grid-cols-4 gap-3">
                 {Object.entries(TIERS).map(([key, t]) => (
                   <div key={key} className={`rounded-xl p-3 border ${t.bg} ${t.border} flex items-center gap-3`}>
@@ -542,9 +632,9 @@ export default function AdminPanel({ onClose, user }) {
                     { icon: <BarChart2 size={14}/>, label: '누적 처리 행',   value: `${totalRows.toLocaleString()}행` },
                     { icon: <Clock size={14}/>,     label: '누적 처리 파일', value: `${totalFiles.toLocaleString()}건` },
                   ].map(({ icon, label, value, red }) => (
-                    <div key={label} className="bg-black/50 rounded-xl p-3 border border-[#1e2d22]">
+                    <div key={label} className="bg-black/50 rounded-xl p-3 border border-[#0f1a2e]">
                       <p className="text-gray-500 text-[10px] font-bold mb-1 flex items-center gap-1">{icon}{label}</p>
-                      <p className={`text-xl font-black ${red ? 'text-red-400' : 'text-[#22c55e]'}`}>{value}</p>
+                      <p className={`text-xl font-black ${red ? 'text-red-400' : 'text-[#3b82f6]'}`}>{value}</p>
                     </div>
                   ))}
                 </div>
@@ -564,8 +654,8 @@ export default function AdminPanel({ onClose, user }) {
                 <div className="flex items-center justify-center h-32 text-gray-500 text-sm">불러오는 중...</div>
               ) : (
                 <table className="w-full text-sm whitespace-nowrap">
-                  <thead className="sticky top-0 bg-[#0a100c] border-b border-[#1e2d22] z-10">
-                    <tr className="text-[#22c55e] text-[11px] font-black tracking-wide">
+                  <thead className="sticky top-0 bg-[#0a100c] border-b border-[#0f1a2e] z-10">
+                    <tr className="text-[#3b82f6] text-[11px] font-black tracking-wide">
                       <th className="px-4 py-3 text-left">상태</th>
                       <th className="px-4 py-3 text-left">등급</th>
                       <th className="px-4 py-3 text-left">성명</th>
@@ -581,7 +671,7 @@ export default function AdminPanel({ onClose, user }) {
                       <th className="px-4 py-3 text-center">제재</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-[#1e2d22] text-gray-300">
+                  <tbody className="divide-y divide-[#0f1a2e] text-gray-300">
                     {users.map(u => {
                       const isBanned = u.status === 'banned';
                       const hasProfile = u.profileCompleted;
@@ -596,7 +686,7 @@ export default function AdminPanel({ onClose, user }) {
                             {isBanned
                               ? <span className="px-2 py-0.5 rounded text-[10px] font-black bg-red-950/60 text-red-400 border border-red-800/50" title={u.bannedReason}>제재중</span>
                               : hasProfile
-                                ? <span className="px-2 py-0.5 rounded text-[10px] font-black bg-[#22c55e]/10 text-[#22c55e] border border-[#22c55e]/30">활성</span>
+                                ? <span className="px-2 py-0.5 rounded text-[10px] font-black bg-[#3b82f6]/10 text-[#3b82f6] border border-[#3b82f6]/30">활성</span>
                                 : <span className="px-2 py-0.5 rounded text-[10px] font-black bg-amber-950/40 text-amber-400 border border-amber-800/50">미등록</span>
                             }
                           </td>
@@ -614,7 +704,7 @@ export default function AdminPanel({ onClose, user }) {
                           <td className="px-4 py-3 text-center font-mono text-xs text-gray-400">{fmt(u.lastLogin)}</td>
 
                           {/* 로그인 */}
-                          <td className="px-4 py-3 text-center text-[#22c55e] font-black">{(u.loginCount || 0).toLocaleString()}</td>
+                          <td className="px-4 py-3 text-center text-[#3b82f6] font-black">{(u.loginCount || 0).toLocaleString()}</td>
 
                           {/* 처리행 */}
                           <td className="px-4 py-3 text-center font-mono text-xs">{(u.totalRowsProcessed || 0).toLocaleString()}</td>
@@ -628,7 +718,7 @@ export default function AdminPanel({ onClose, user }) {
                               onChange={e => setEditingCity(prev => ({ ...prev, [u.id]: e.target.value }))}
                               onBlur={e => saveCityLimit(u.id, e.target.value)}
                               onKeyDown={e => e.key === 'Enter' && saveCityLimit(u.id, e.target.value)}
-                              className="w-14 text-center bg-black/60 border border-[#333] text-[#22c55e] font-black text-sm rounded-lg px-1 py-1 outline-none focus:border-[#22c55e] hover:border-[#555] transition-colors"
+                              className="w-14 text-center bg-black/60 border border-[#333] text-[#3b82f6] font-black text-sm rounded-lg px-1 py-1 outline-none focus:border-[#3b82f6] hover:border-[#555] transition-colors"
                             />
                           </td>
 
@@ -652,11 +742,11 @@ export default function AdminPanel({ onClose, user }) {
                                   <span className="text-gray-700 text-[10px]">없음</span>
                                 )}
                                 {approvedCities.map(city => (
-                                  <span key={city} className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] bg-[#22c55e]/10 border border-[#22c55e]/30 text-[#22c55e] font-bold">
+                                  <span key={city} className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] bg-[#3b82f6]/10 border border-[#3b82f6]/30 text-[#3b82f6] font-bold">
                                     {city}
                                     <button
                                       onClick={() => removeCityFromUser(u.id, city)}
-                                      className="ml-0.5 text-[#22c55e]/60 hover:text-red-400 transition-colors leading-none"
+                                      className="ml-0.5 text-[#3b82f6]/60 hover:text-red-400 transition-colors leading-none"
                                       title="제거"
                                     >×</button>
                                   </span>
@@ -669,7 +759,7 @@ export default function AdminPanel({ onClose, user }) {
                                   <select
                                     value={cityPickerSido}
                                     onChange={e => { setCityPickerSido(e.target.value); setCityPickerSigungu(''); }}
-                                    className="flex-1 bg-black/70 border border-[#444] text-gray-300 text-[10px] px-1 py-0.5 rounded outline-none focus:border-[#22c55e]"
+                                    className="flex-1 bg-black/70 border border-[#444] text-gray-300 text-[10px] px-1 py-0.5 rounded outline-none focus:border-[#3b82f6]"
                                   >
                                     <option value="">시/도</option>
                                     {sidoList.map(s => <option key={s} value={s}>{s}</option>)}
@@ -678,7 +768,7 @@ export default function AdminPanel({ onClose, user }) {
                                     value={cityPickerSigungu}
                                     onChange={e => setCityPickerSigungu(e.target.value)}
                                     disabled={!cityPickerSido}
-                                    className="flex-1 bg-black/70 border border-[#444] text-gray-300 text-[10px] px-1 py-0.5 rounded outline-none focus:border-[#22c55e] disabled:opacity-40"
+                                    className="flex-1 bg-black/70 border border-[#444] text-gray-300 text-[10px] px-1 py-0.5 rounded outline-none focus:border-[#3b82f6] disabled:opacity-40"
                                   >
                                     <option value="">시/군/구</option>
                                     {cityPickerSido && getSigunguOptions(cityPickerSido).map(sg => (
@@ -693,7 +783,7 @@ export default function AdminPanel({ onClose, user }) {
                                       else { setCityPickerUid(null); setCityPickerSido(''); setCityPickerSigungu(''); }
                                     }}
                                     disabled={!cityPickerSido || !cityPickerSigungu}
-                                    className="px-2 py-0.5 bg-[#22c55e]/20 text-[#22c55e] border border-[#22c55e]/40 rounded text-[10px] font-black hover:bg-[#22c55e]/30 disabled:opacity-40 shrink-0"
+                                    className="px-2 py-0.5 bg-[#3b82f6]/20 text-[#3b82f6] border border-[#3b82f6]/40 rounded text-[10px] font-black hover:bg-[#3b82f6]/30 disabled:opacity-40 shrink-0"
                                   >추가</button>
                                   <button
                                     onClick={() => { setCityPickerUid(null); setCityPickerSido(''); setCityPickerSigungu(''); }}
@@ -703,7 +793,7 @@ export default function AdminPanel({ onClose, user }) {
                               ) : (
                                 <button
                                   onClick={() => { setCityPickerUid(u.id); setCityPickerSido(''); setCityPickerSigungu(''); }}
-                                  className="self-start flex items-center gap-1 px-2 py-0.5 bg-black/40 text-gray-500 border border-[#333] text-[10px] rounded hover:text-[#22c55e] hover:border-[#22c55e]/40 transition-colors"
+                                  className="self-start flex items-center gap-1 px-2 py-0.5 bg-black/40 text-gray-500 border border-[#333] text-[10px] rounded hover:text-[#3b82f6] hover:border-[#3b82f6]/40 transition-colors"
                                 >
                                   <Plus size={10}/> 지자체 추가
                                 </button>
@@ -717,7 +807,7 @@ export default function AdminPanel({ onClose, user }) {
                               value={currentTier}
                               onChange={e => setTierTarget({ user: u, newTier: e.target.value })}
                               disabled={processing}
-                              className="bg-black/60 border border-[#333] text-gray-300 text-[11px] font-bold px-2 py-1 rounded-lg outline-none cursor-pointer focus:border-[#22c55e] hover:border-[#555] transition-colors"
+                              className="bg-black/60 border border-[#333] text-gray-300 text-[11px] font-bold px-2 py-1 rounded-lg outline-none cursor-pointer focus:border-[#3b82f6] hover:border-[#555] transition-colors"
                             >
                               {Object.entries(TIERS).map(([key, t]) => (
                                 <option key={key} value={key}>{t.emoji} {t.label}</option>
@@ -734,7 +824,7 @@ export default function AdminPanel({ onClose, user }) {
                               className={`bg-black/60 border text-[11px] font-bold px-2 py-1 rounded-lg outline-none cursor-pointer transition-colors ${
                                 (u.role === 'admin')
                                   ? 'border-amber-700/50 text-amber-300 focus:border-amber-500 hover:border-amber-600'
-                                  : 'border-[#333] text-gray-400 focus:border-[#22c55e] hover:border-[#555]'
+                                  : 'border-[#333] text-gray-400 focus:border-[#3b82f6] hover:border-[#555]'
                               }`}
                             >
                               {Object.entries(ROLES).map(([key, r]) => (
@@ -746,13 +836,25 @@ export default function AdminPanel({ onClose, user }) {
                           {/* 제재 */}
                           <td className="px-4 py-3 text-center">
                             {isBanned
-                              ? <button onClick={() => handleUnban(u.id)} disabled={processing} className="px-3 py-1 bg-[#22c55e]/10 border border-[#22c55e]/30 text-[#22c55e] text-[11px] font-black rounded-lg hover:bg-[#22c55e]/20 transition-colors disabled:opacity-40 flex items-center gap-1 mx-auto">
+                              ? <button onClick={() => handleUnban(u.id)} disabled={processing} className="px-3 py-1 bg-[#3b82f6]/10 border border-[#3b82f6]/30 text-[#3b82f6] text-[11px] font-black rounded-lg hover:bg-[#3b82f6]/20 transition-colors disabled:opacity-40 flex items-center gap-1 mx-auto">
                                   <ShieldCheck size={11}/> 해제
                                 </button>
                               : <button onClick={() => { setBanTarget(u); setBanReason(''); }} disabled={processing} className="px-3 py-1 bg-red-950/40 border border-red-800/50 text-red-400 text-[11px] font-black rounded-lg hover:bg-red-900/50 transition-colors disabled:opacity-40 flex items-center gap-1 mx-auto">
                                   <ShieldOff size={11}/> 제재
                                 </button>
                             }
+                          </td>
+
+                          {/* 삭제 */}
+                          <td className="px-4 py-3 text-center">
+                            <button
+                              onClick={() => setDeleteTarget(u)}
+                              disabled={processing}
+                              className="px-3 py-1 bg-red-950/60 border border-red-700/60 text-red-400 text-[11px] font-black rounded-lg hover:bg-red-900/70 hover:border-red-500/80 transition-colors disabled:opacity-40 flex items-center gap-1 mx-auto"
+                              title="사용자 계정 영구 삭제"
+                            >
+                              <Trash2 size={11}/> 삭제
+                            </button>
                           </td>
                         </tr>
                       );
@@ -769,12 +871,12 @@ export default function AdminPanel({ onClose, user }) {
 
         {activeTab === 'ai_advisor' && (
           <div className="flex-1 p-8 overflow-y-auto scrollbar-thin scrollbar-thumb-[#2d4a35]">
-            <div className="mb-6 border border-[#1e2d22] bg-[#0a100c] p-6 rounded-2xl flex items-start gap-4 shadow-lg shadow-[#0a100c]/50">
-              <div className="w-12 h-12 bg-[#22c55e]/10 rounded-full flex items-center justify-center shrink-0 border border-[#22c55e]/30">
-                <Crown size={24} className="text-[#22c55e]"/>
+            <div className="mb-6 border border-[#0f1a2e] bg-[#0a100c] p-6 rounded-2xl flex items-start gap-4 shadow-lg shadow-[#0a100c]/50">
+              <div className="w-12 h-12 bg-[#3b82f6]/10 rounded-full flex items-center justify-center shrink-0 border border-[#3b82f6]/30">
+                <Crown size={24} className="text-[#3b82f6]"/>
               </div>
               <div>
-                <h3 className="text-xl font-black text-[#22c55e] mb-1">AI 자가 진화 분석 리포트</h3>
+                <h3 className="text-xl font-black text-[#3b82f6] mb-1">AI 자가 진화 분석 리포트</h3>
                 <p className="text-gray-400 text-sm leading-relaxed">
                   현장에서 업로드된 엑셀 파일 중 시스템이 인식하지 못한 <strong>미분류 컬럼</strong>을 AI가 자동으로 수집하고 분석합니다.<br/>
                   제안된 항목을 확인하고 <b>[적용]</b>을 누르시면, 이후부터 해당 컬럼 이름도 즉시 데이터 추출 엔진에 인식됩니다.
@@ -789,21 +891,21 @@ export default function AdminPanel({ onClose, user }) {
                 {userMappingStats.length > 0 && (
                   <div className="mb-8">
                     <div className="flex items-center gap-3 mb-4">
-                      <h4 className="text-[#22c55e] font-black text-base">사용자 학습 기반 제안</h4>
-                      <span className="text-[10px] bg-[#22c55e]/20 text-[#22c55e] border border-[#22c55e]/30 px-2 py-0.5 rounded-full font-black">
+                      <h4 className="text-[#3b82f6] font-black text-base">사용자 학습 기반 제안</h4>
+                      <span className="text-[10px] bg-[#3b82f6]/20 text-[#3b82f6] border border-[#3b82f6]/30 px-2 py-0.5 rounded-full font-black">
                         실제 매핑 데이터 {userMappingStats.reduce((s, m) => s + m.total, 0)}건 학습됨
                       </span>
                     </div>
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
                       {userMappingStats.map((m, idx) => (
-                        <div key={idx} className="bg-black/50 border border-[#22c55e]/20 rounded-xl p-4 hover:border-[#22c55e]/40 transition-colors">
+                        <div key={idx} className="bg-black/50 border border-[#3b82f6]/20 rounded-xl p-4 hover:border-[#3b82f6]/40 transition-colors">
                           <div className="flex items-start justify-between mb-3">
                             <div>
                               <p className="text-white font-black text-base leading-tight">{m.col}</p>
                               <p className="text-gray-500 text-[11px] mt-0.5">총 {m.total}회 매핑됨</p>
                             </div>
                             <div className={`px-2 py-1 rounded text-[10px] font-black border shrink-0 ${
-                              m.confidence >= 90 ? 'bg-[#22c55e]/10 text-[#22c55e] border-[#22c55e]/30' :
+                              m.confidence >= 90 ? 'bg-[#3b82f6]/10 text-[#3b82f6] border-[#3b82f6]/30' :
                               m.confidence >= 70 ? 'bg-amber-500/10 text-amber-400 border-amber-500/30' :
                               'bg-red-500/10 text-red-400 border-red-500/30'
                             }`}>
@@ -813,7 +915,7 @@ export default function AdminPanel({ onClose, user }) {
                           <div className="bg-black/60 border border-white/5 rounded-lg p-2.5 mb-3">
                             <p className="text-[11px] text-gray-400">
                               사용자들이 <strong className="text-white">{m.topCount}회</strong> 중{' '}
-                              <strong className="text-[#22c55e]">{m.topCount}회</strong>를{' '}
+                              <strong className="text-[#3b82f6]">{m.topCount}회</strong>를{' '}
                               <strong className="text-white">'{m.fieldLabel}'</strong> 로 매핑했습니다
                             </p>
                             {m.confidence < 100 && (
@@ -823,7 +925,7 @@ export default function AdminPanel({ onClose, user }) {
                           <button
                             onClick={() => handleAcceptAiSuggestion(m.col, m.topField)}
                             disabled={processing}
-                            className="w-full py-2 rounded-lg bg-[#22c55e]/10 text-[#22c55e] text-xs font-black border border-[#22c55e]/30 hover:bg-[#22c55e] hover:text-black transition-all disabled:opacity-30"
+                            className="w-full py-2 rounded-lg bg-[#3b82f6]/10 text-[#3b82f6] text-xs font-black border border-[#3b82f6]/30 hover:bg-[#3b82f6] hover:text-black transition-all disabled:opacity-30"
                           >
                             '{m.fieldLabel}' 규칙으로 등록
                           </button>
@@ -843,32 +945,32 @@ export default function AdminPanel({ onClose, user }) {
                     </h4>
                   )}
                   {aiSuggestions.length === 0 ? (
-                    <div className="bg-black/40 border border-[#1e2d22] rounded-2xl p-10 text-center">
+                    <div className="bg-black/40 border border-[#0f1a2e] rounded-2xl p-10 text-center">
                       <p className="text-gray-500 font-bold">새로 제안된 미인식 컬럼이 없습니다.</p>
                       <p className="text-gray-600 text-xs mt-2">시스템이 이미 대부분의 컬럼을 완벽하게 인식하고 있습니다.</p>
                     </div>
                   ) : (
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       {aiSuggestions.map((s, idx) => (
-                        <div key={idx} className="bg-black/40 border border-[#1e2d22] rounded-xl p-5 hover:bg-black/60 transition-colors">
+                        <div key={idx} className="bg-black/40 border border-[#0f1a2e] rounded-xl p-5 hover:bg-black/60 transition-colors">
                           <div className="flex items-start justify-between mb-4">
                             <div>
                               <h4 className="text-white font-black text-lg mb-1">{s.col}</h4>
                               <p className="text-gray-500 text-xs flex items-center gap-1">
-                                발생 <strong className="text-[#22c55e]">{s.count}</strong>회
+                                발생 <strong className="text-[#3b82f6]">{s.count}</strong>회
                                 <span className="text-gray-700">|</span>
                                 발견된 파일: {s.files.length}개
                               </p>
                             </div>
                             <div className={`px-2 py-1 rounded text-[10px] font-black border ${
-                              s.analysis.score >= 80 ? 'bg-[#22c55e]/10 text-[#22c55e] border-[#22c55e]/30' :
+                              s.analysis.score >= 80 ? 'bg-[#3b82f6]/10 text-[#3b82f6] border-[#3b82f6]/30' :
                               s.analysis.score >= 50 ? 'bg-amber-500/10 text-amber-400 border-amber-500/30' :
                               'bg-red-500/10 text-red-400 border-red-500/30'
                             }`}>
                               신뢰도 {Math.max(0, s.analysis.score)}%
                             </div>
                           </div>
-                          <div className="bg-black border border-[#1e2d22] p-3 rounded-lg mb-4 text-xs">
+                          <div className="bg-black border border-[#0f1a2e] p-3 rounded-lg mb-4 text-xs">
                             <p className="text-gray-400 mb-1">AI 매핑 제안 대상: <strong className="text-white">{s.analysis.key}</strong></p>
                             <p className="text-gray-500">사유: {s.analysis.reason}</p>
                           </div>
@@ -883,7 +985,7 @@ export default function AdminPanel({ onClose, user }) {
                             <button
                               onClick={() => handleAcceptAiSuggestion(s.col, s.analysis.key)}
                               disabled={processing || s.analysis.key === '알수없음'}
-                              className="flex-2 py-2 px-6 rounded-lg bg-[#22c55e]/10 text-[#22c55e] text-xs font-black border border-[#22c55e]/30 hover:bg-[#22c55e] hover:text-black hover:border-[#22c55e] transition-all disabled:opacity-30 disabled:hover:bg-[#22c55e]/10 disabled:hover:text-[#22c55e] disabled:cursor-not-allowed"
+                              className="flex-2 py-2 px-6 rounded-lg bg-[#3b82f6]/10 text-[#3b82f6] text-xs font-black border border-[#3b82f6]/30 hover:bg-[#3b82f6] hover:text-black hover:border-[#3b82f6] transition-all disabled:opacity-30 disabled:hover:bg-[#3b82f6]/10 disabled:hover:text-[#3b82f6] disabled:cursor-not-allowed"
                             >
                               {s.analysis.key === '알수없음' ? '적용 불가' : `'${s.analysis.key}' 규칙으로 적용`}
                             </button>
@@ -900,7 +1002,7 @@ export default function AdminPanel({ onClose, user }) {
 
         {activeTab === 'inquiries' && (
           <div className="flex-1 overflow-auto scrollbar-thin scrollbar-thumb-[#2d4a35] p-6">
-            <h3 className="text-xl font-black text-[#22c55e] mb-4 flex items-center gap-2">
+            <h3 className="text-xl font-black text-[#3b82f6] mb-4 flex items-center gap-2">
               <MessageSquare size={20} /> 승인 및 문의 내역
             </h3>
             {inquiries.length === 0 ? (
@@ -908,9 +1010,9 @@ export default function AdminPanel({ onClose, user }) {
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                 {inquiries.map(inq => (
-                  <div key={inq.id} className={`rounded-xl p-5 border ${inq.status === 'pending' ? 'bg-[#0f1a10] border-[#22c55e]/40 shadow-[0_0_20px_rgba(34,197,94,0.1)]' : 'bg-[#111] border-[#333] opacity-70'}`}>
+                  <div key={inq.id} className={`rounded-xl p-5 border ${inq.status === 'pending' ? 'bg-[#0f1a10] border-[#3b82f6]/40 shadow-[0_0_20px_rgba(59,130,246,0.1)]' : 'bg-[#111] border-[#333] opacity-70'}`}>
                     <div className="flex justify-between items-start mb-3">
-                      <span className={`px-2 py-0.5 rounded text-[10px] font-black border ${inq.status === 'pending' ? 'bg-[#22c55e]/20 text-[#22c55e] border-[#22c55e]/40' : 'bg-gray-800 text-gray-400 border-gray-600'}`}>
+                      <span className={`px-2 py-0.5 rounded text-[10px] font-black border ${inq.status === 'pending' ? 'bg-[#3b82f6]/20 text-[#3b82f6] border-[#3b82f6]/40' : 'bg-gray-800 text-gray-400 border-gray-600'}`}>
                         {inq.status === 'pending' ? '대기 중' : '처리 완료'}
                       </span>
                       <span className="text-[10px] font-mono text-gray-500">{fmt(inq.createdAt)}</span>
@@ -921,24 +1023,40 @@ export default function AdminPanel({ onClose, user }) {
                       <p className="text-gray-500 text-xs">{inq.email}</p>
                     </div>
                     <div className="mb-4 bg-black/40 p-3 rounded-lg border border-white/5">
-                      <p className="text-[#22c55e] font-black text-sm mb-1">희망 등급: <span className="text-white">{inq.requestedPlan?.toUpperCase() || '-'}</span></p>
+                      <p className="text-[#3b82f6] font-black text-sm mb-1">희망 등급: <span className="text-white">{inq.requestedPlan?.toUpperCase() || '-'}</span></p>
                       <p className="text-gray-400 text-xs whitespace-pre-wrap">{inq.message || '추가 내용 없음'}</p>
                     </div>
-                    {inq.status === 'pending' && (
-                      <button
-                        onClick={async () => {
-                          setProcessing(true);
-                          try {
-                            await updateDoc(doc(db, 'inquiries', inq.id), { status: 'completed', completedAt: serverTimestamp() });
-                            setInquiries(prev => prev.map(i => i.id === inq.id ? { ...i, status: 'completed' } : i));
-                          } finally { setProcessing(false); }
-                        }}
-                        disabled={processing}
-                        className="w-full py-2.5 bg-[#22c55e]/20 text-[#22c55e] font-black rounded-lg hover:bg-[#22c55e] hover:text-black border border-[#22c55e]/30 transition-all flex justify-center items-center gap-2 disabled:opacity-50"
-                      >
-                        <CheckCircle2 size={16} /> 처리 완료로 표시
-                      </button>
-                    )}
+                    {inq.status === 'pending' && (() => {
+                      const matchedUser = users.find(u => u.email === inq.email);
+                      const planTier = inq.requestedPlan?.toLowerCase();
+                      const validTier = ['vip','vvip','sapphire'].includes(planTier) ? planTier : null;
+                      return (
+                        <div className="flex flex-col gap-2">
+                          {validTier && matchedUser && (
+                            <button
+                              onClick={() => setTierUpgradeTarget({ inq, matchedUser, newTier: validTier })}
+                              disabled={processing}
+                              className="w-full py-2.5 bg-amber-900/40 text-amber-300 font-black rounded-lg hover:bg-amber-800/50 border border-amber-600/40 transition-all flex justify-center items-center gap-2 disabled:opacity-50 text-sm"
+                            >
+                              <Crown size={15}/> {TIERS[validTier]?.label || validTier} 등급 승인 + 완료
+                            </button>
+                          )}
+                          <button
+                            onClick={async () => {
+                              setProcessing(true);
+                              try {
+                                await updateDoc(doc(db, 'inquiries', inq.id), { status: 'completed', completedAt: serverTimestamp() });
+                                setInquiries(prev => prev.map(i => i.id === inq.id ? { ...i, status: 'completed' } : i));
+                              } finally { setProcessing(false); }
+                            }}
+                            disabled={processing}
+                            className="w-full py-2.5 bg-[#3b82f6]/20 text-[#3b82f6] font-black rounded-lg hover:bg-[#3b82f6] hover:text-black border border-[#3b82f6]/30 transition-all flex justify-center items-center gap-2 disabled:opacity-50 text-sm"
+                          >
+                            <CheckCircle2 size={15} /> 처리 완료로 표시
+                          </button>
+                        </div>
+                      );
+                    })()}
                   </div>
                 ))}
               </div>
@@ -948,7 +1066,7 @@ export default function AdminPanel({ onClose, user }) {
 
         {activeTab === 'city_approval' && (
           <div className="flex-1 overflow-auto scrollbar-thin scrollbar-thumb-[#2d4a35] p-6">
-            <h3 className="text-xl font-black text-[#22c55e] mb-1 flex items-center gap-2">
+            <h3 className="text-xl font-black text-[#3b82f6] mb-1 flex items-center gap-2">
               <MapPin size={20} /> 지자체 접근 승인 요청
             </h3>
             <p className="text-gray-500 text-xs mb-5">
@@ -963,7 +1081,7 @@ export default function AdminPanel({ onClose, user }) {
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
                 {cityRequests.map(req => (
-                  <div key={req.id} className="bg-[#0f1a10] border border-[#22c55e]/20 rounded-xl p-5 flex flex-col gap-3">
+                  <div key={req.id} className="bg-[#0f1a10] border border-[#3b82f6]/20 rounded-xl p-5 flex flex-col gap-3">
                     <div className="flex items-start justify-between">
                       <div>
                         <p className="text-white font-black">{req.userName || '이름 없음'}</p>
@@ -972,8 +1090,8 @@ export default function AdminPanel({ onClose, user }) {
                       </div>
                       <TierBadge tier={req.userTier || 'basic'} />
                     </div>
-                    <div className="bg-black/40 border border-[#1e2d22] rounded-lg px-4 py-3 flex items-center gap-2">
-                      <MapPin size={14} className="text-[#22c55e] shrink-0" />
+                    <div className="bg-black/40 border border-[#0f1a2e] rounded-lg px-4 py-3 flex items-center gap-2">
+                      <MapPin size={14} className="text-[#3b82f6] shrink-0" />
                       <span className="text-white font-black text-sm">{req.cityId}</span>
                     </div>
                     <p className="text-gray-600 text-[10px] font-mono">{fmt(req.requestedAt)}</p>
@@ -988,7 +1106,7 @@ export default function AdminPanel({ onClose, user }) {
                       <button
                         onClick={() => handleApproveRequest(req)}
                         disabled={processing}
-                        className="flex-2 py-2 px-5 bg-[#22c55e]/20 text-[#22c55e] border border-[#22c55e]/40 rounded-lg text-xs font-black hover:bg-[#22c55e]/30 transition-colors disabled:opacity-40 flex items-center justify-center gap-1"
+                        className="flex-2 py-2 px-5 bg-[#3b82f6]/20 text-[#3b82f6] border border-[#3b82f6]/40 rounded-lg text-xs font-black hover:bg-[#3b82f6]/30 transition-colors disabled:opacity-40 flex items-center justify-center gap-1"
                       >
                         <CheckCircle2 size={13} /> 승인
                       </button>
@@ -997,6 +1115,142 @@ export default function AdminPanel({ onClose, user }) {
                 ))}
               </div>
             )}
+          </div>
+        )}
+
+        {activeTab === 'ops' && (
+          <div className="flex-1 overflow-auto scrollbar-thin scrollbar-thumb-[#2d4a35] p-6 space-y-6">
+
+            {/* 이탈 위험 */}
+            {churnRisk.length > 0 && (
+              <div>
+                <h3 className="text-amber-400 font-black text-base flex items-center gap-2 mb-3">
+                  <UserX size={18}/> 이탈 위험 사용자 <span className="text-[11px] text-amber-600 font-normal ml-1">— 60일 이상 미접속</span>
+                  <span className="bg-amber-500/20 text-amber-400 border border-amber-500/30 text-[10px] px-2 py-0.5 rounded-full font-black">{churnRisk.length}명</span>
+                </h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+                  {churnRisk.map(u => {
+                    const daysSince = Math.floor((nowSec - (u.lastLogin?.seconds || 0)) / 86400);
+                    return (
+                      <div key={u.id} className="bg-amber-950/20 border border-amber-700/30 rounded-xl p-4 flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-white font-black text-sm">{u.realName || '이름없음'}</p>
+                          <p className="text-gray-500 text-[11px] font-mono">{u.email}</p>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <TierBadge tier={u.tier || 'basic'} />
+                          <p className="text-amber-400 font-black text-sm mt-1">{daysSince}일 전</p>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* 한도 근접 */}
+            {nearLimit.length > 0 && (
+              <div>
+                <h3 className="text-red-400 font-black text-base flex items-center gap-2 mb-3">
+                  <AlertCircle size={18}/> 지자체 한도 근접 <span className="text-[11px] text-red-600 font-normal ml-1">— 80% 이상 사용</span>
+                  <span className="bg-red-500/20 text-red-400 border border-red-500/30 text-[10px] px-2 py-0.5 rounded-full font-black">{nearLimit.length}명</span>
+                </h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+                  {nearLimit.map(u => {
+                    const max = u.maxCities ?? TIER_DEFAULT_CITIES[u.tier || 'basic'] ?? 1;
+                    const used = (u.citiesApproved || []).length;
+                    const pct = Math.round((used / max) * 100);
+                    return (
+                      <div key={u.id} className="bg-red-950/20 border border-red-700/30 rounded-xl p-4">
+                        <div className="flex items-center justify-between mb-2">
+                          <div>
+                            <p className="text-white font-black text-sm">{u.realName || '이름없음'}</p>
+                            <p className="text-gray-500 text-[11px] font-mono">{u.email}</p>
+                          </div>
+                          <TierBadge tier={u.tier || 'basic'} />
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <div className="flex-1 bg-black/50 rounded-full h-2 overflow-hidden">
+                            <div className="h-full rounded-full bg-red-500" style={{ width: `${Math.min(100, pct)}%` }}/>
+                          </div>
+                          <span className="text-red-400 font-black text-xs shrink-0">{used}/{max} ({pct}%)</span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {churnRisk.length === 0 && nearLimit.length === 0 && (
+              <div className="flex items-center gap-3 p-4 bg-[#3b82f6]/5 border border-[#3b82f6]/20 rounded-xl">
+                <CheckCircle2 size={20} className="text-[#3b82f6] shrink-0"/>
+                <p className="text-[#3b82f6] font-bold text-sm">이탈 위험 및 한도 근접 사용자가 없습니다.</p>
+              </div>
+            )}
+
+            {/* 지자체별 업로드 통계 */}
+            <div>
+              <h3 className="text-[#3b82f6] font-black text-base flex items-center gap-2 mb-3">
+                <TrendingUp size={18}/> 지자체별 업로드 통계
+                <span className="text-gray-600 text-[11px] font-normal">— 전체 {auditLogs.length}건 배치 저장</span>
+              </h3>
+              {auditLoading ? (
+                <div className="text-center text-gray-500 py-8 text-sm">불러오는 중...</div>
+              ) : cityUsageStats.length === 0 ? (
+                <div className="text-center text-gray-600 py-8 text-sm">기록된 데이터가 없습니다.</div>
+              ) : (
+                <div className="bg-black/40 border border-[#0f1a2e] rounded-xl overflow-hidden">
+                  <table className="w-full text-xs">
+                    <thead className="bg-[#0a100c] border-b border-[#0f1a2e]">
+                      <tr className="text-[#3b82f6] font-black">
+                        <th className="px-4 py-2.5 text-left">지자체</th>
+                        <th className="px-4 py-2.5 text-center">배치 횟수</th>
+                        <th className="px-4 py-2.5 text-center">신규 저장</th>
+                        <th className="px-4 py-2.5 text-center">업데이트</th>
+                        <th className="px-4 py-2.5 text-center">마지막 업로드</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-[#0f1a2e]">
+                      {cityUsageStats.map(s => (
+                        <tr key={s.city} className="hover:bg-white/3 transition-colors">
+                          <td className="px-4 py-2.5 text-white font-bold">{s.city}</td>
+                          <td className="px-4 py-2.5 text-center text-[#3b82f6] font-black">{s.sessions.toLocaleString()}</td>
+                          <td className="px-4 py-2.5 text-center text-blue-400">{s.added.toLocaleString()}</td>
+                          <td className="px-4 py-2.5 text-center text-amber-400">{s.updated.toLocaleString()}</td>
+                          <td className="px-4 py-2.5 text-center text-gray-500 font-mono">{s.lastSec > 0 ? fmt({ seconds: s.lastSec }) : '-'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            {/* 최근 배치 저장 로그 */}
+            <div>
+              <h3 className="text-gray-400 font-black text-base flex items-center gap-2 mb-3">
+                <Zap size={18}/> 최근 배치 저장 로그
+              </h3>
+              <div className="space-y-1.5 max-h-64 overflow-y-auto scrollbar-thin scrollbar-thumb-[#333]">
+                {auditLogs.slice(0, 50).map(log => (
+                  <div key={log.id} className="flex items-center justify-between px-4 py-2 bg-black/30 border border-[#0f1a2e] rounded-lg text-xs hover:bg-white/3">
+                    <div className="flex items-center gap-3">
+                      <span className="text-[#3b82f6] font-black">{log.city || '-'}</span>
+                      <span className="text-gray-600 font-mono text-[10px]">{log.adminEmail || '-'}</span>
+                    </div>
+                    <div className="flex items-center gap-3 text-right">
+                      <span className="text-blue-400">+{log.addCount || 0}</span>
+                      <span className="text-amber-400">~{log.updateCount || 0}</span>
+                      <span className="text-gray-600 font-mono">{fmt(log.createdAt)}</span>
+                    </div>
+                  </div>
+                ))}
+                {auditLogs.length === 0 && !auditLoading && (
+                  <p className="text-center text-gray-700 py-6 text-xs">기록된 로그가 없습니다.</p>
+                )}
+              </div>
+            </div>
           </div>
         )}
 
@@ -1062,9 +1316,9 @@ export default function AdminPanel({ onClose, user }) {
         {/* 등급 변경 확인 모달 */}
         {tierTarget && (
           <div className="absolute inset-0 bg-black/80 flex items-center justify-center z-10">
-            <div className="w-full max-w-sm bg-[#0a100c] border border-[#22c55e]/40 rounded-2xl p-6 shadow-[0_0_40px_rgba(34,197,94,0.15)]">
+            <div className="w-full max-w-sm bg-[#0a100c] border border-[#3b82f6]/40 rounded-2xl p-6 shadow-[0_0_40px_rgba(59,130,246,0.15)]">
               <div className="flex items-center gap-2 mb-4">
-                <Crown size={18} className="text-[#22c55e]"/>
+                <Crown size={18} className="text-[#3b82f6]"/>
                 <h3 className="text-white font-black">등급 변경 확인</h3>
               </div>
               <p className="text-gray-400 text-sm mb-1">
@@ -1081,7 +1335,7 @@ export default function AdminPanel({ onClose, user }) {
               </p>
               <div className="flex gap-2">
                 <button onClick={() => setTierTarget(null)} className="flex-1 py-2.5 bg-black/40 border border-[#333] text-gray-400 font-bold rounded-xl hover:bg-[#222] transition-colors text-sm">취소</button>
-                <button onClick={handleTierChange} disabled={processing} className="flex-1 py-2.5 bg-[#22c55e]/20 border border-[#22c55e]/50 text-[#22c55e] font-extrabold rounded-xl hover:bg-[#22c55e]/30 transition-colors text-sm disabled:opacity-50">
+                <button onClick={handleTierChange} disabled={processing} className="flex-1 py-2.5 bg-[#3b82f6]/20 border border-[#3b82f6]/50 text-[#3b82f6] font-extrabold rounded-xl hover:bg-[#3b82f6]/30 transition-colors text-sm disabled:opacity-50">
                   {processing ? '처리 중...' : '변경 확인'}
                 </button>
               </div>
@@ -1121,7 +1375,7 @@ export default function AdminPanel({ onClose, user }) {
                   className={`flex-1 py-2.5 font-extrabold rounded-xl transition-colors text-sm disabled:opacity-50 ${
                     roleTarget.newRole === 'admin'
                       ? 'bg-amber-900/60 border border-amber-600/60 text-amber-300 hover:bg-amber-800/60'
-                      : 'bg-[#22c55e]/20 border border-[#22c55e]/50 text-[#22c55e] hover:bg-[#22c55e]/30'
+                      : 'bg-[#3b82f6]/20 border border-[#3b82f6]/50 text-[#3b82f6] hover:bg-[#3b82f6]/30'
                   }`}
                 >
                   {processing ? '처리 중...' : '변경 확인'}
@@ -1142,7 +1396,7 @@ export default function AdminPanel({ onClose, user }) {
               <p className="text-gray-400 text-sm mb-1">
                 <span className="text-white font-bold">{rejectTarget.userName || rejectTarget.userEmail}</span> 님의
               </p>
-              <p className="text-[#22c55e] font-black mb-4">{rejectTarget.cityId}</p>
+              <p className="text-[#3b82f6] font-black mb-4">{rejectTarget.cityId}</p>
               <div className="mb-4">
                 <label className="text-[11px] text-gray-500 font-bold mb-1.5 block">거절 사유 (선택)</label>
                 <input
@@ -1165,6 +1419,33 @@ export default function AdminPanel({ onClose, user }) {
                   className="flex-1 py-2.5 bg-red-950/60 border border-red-500/60 text-red-400 font-extrabold rounded-xl text-sm hover:bg-red-900/60 transition-colors disabled:opacity-50"
                 >
                   {processing ? '처리 중...' : '거절 확정'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* 등급 승인 확인 모달 */}
+        {tierUpgradeTarget && (
+          <div className="absolute inset-0 bg-black/80 flex items-center justify-center z-10">
+            <div className="w-full max-w-sm bg-[#0a100c] border border-amber-600/40 rounded-2xl p-6 shadow-[0_0_40px_rgba(217,119,6,0.2)]">
+              <div className="flex items-center gap-2 mb-4">
+                <Crown size={18} className="text-amber-400"/>
+                <h3 className="text-white font-black">등급 승인 확인</h3>
+              </div>
+              <p className="text-gray-400 text-sm mb-1">
+                <span className="text-white font-bold">{tierUpgradeTarget.matchedUser?.realName || tierUpgradeTarget.inq.email}</span> 님의 등급을
+              </p>
+              <div className="flex items-center gap-3 my-4 px-2">
+                <TierBadge tier={tierUpgradeTarget.matchedUser?.tier || 'basic'} />
+                <span className="text-gray-600 text-lg">→</span>
+                <TierBadge tier={tierUpgradeTarget.newTier} />
+              </div>
+              <p className="text-gray-500 text-xs mb-5">으로 변경하고 문의를 처리 완료로 표시합니다.</p>
+              <div className="flex gap-2">
+                <button onClick={() => setTierUpgradeTarget(null)} className="flex-1 py-2.5 bg-black/40 border border-[#333] text-gray-400 font-bold rounded-xl hover:bg-[#222] transition-colors text-sm">취소</button>
+                <button onClick={handleTierUpgradeInquiry} disabled={processing} className="flex-1 py-2.5 bg-amber-900/50 border border-amber-600/60 text-amber-300 font-extrabold rounded-xl hover:bg-amber-800/50 transition-colors text-sm disabled:opacity-50">
+                  {processing ? '처리 중...' : '승인 확정'}
                 </button>
               </div>
             </div>
@@ -1197,6 +1478,34 @@ export default function AdminPanel({ onClose, user }) {
                 <button onClick={() => setBanTarget(null)} className="flex-1 py-2.5 bg-black/40 border border-[#333] text-gray-400 font-bold rounded-xl hover:bg-[#222] transition-colors text-sm">취소</button>
                 <button onClick={handleBan} disabled={processing} className="flex-1 py-2.5 bg-red-950/60 border border-red-500/60 text-red-400 font-extrabold rounded-xl hover:bg-red-900/60 transition-colors text-sm disabled:opacity-50">
                   {processing ? '처리 중...' : '제재 실행'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {deleteTarget && (
+          <div className="absolute inset-0 bg-black/85 flex items-center justify-center z-10">
+            <div className="w-full max-w-sm bg-[#130808] border border-red-600/50 rounded-2xl p-6 shadow-[0_0_40px_rgba(220,38,38,0.25)]">
+              <div className="flex items-center gap-2 mb-4">
+                <Trash2 size={20} className="text-red-500"/>
+                <h3 className="text-white font-black">사용자 영구 삭제</h3>
+              </div>
+              <p className="text-gray-300 text-sm mb-1">
+                <span className="text-red-400 font-black">{deleteTarget.realName || deleteTarget.email}</span> 님의 계정을 삭제합니다.
+              </p>
+              <p className="text-[11px] text-gray-600 mb-1">{deleteTarget.email}</p>
+              <div className="bg-red-950/30 border border-red-800/30 rounded-xl p-3 mb-5 mt-3">
+                <p className="text-xs text-red-400 font-bold leading-relaxed">
+                  ⚠️ Firestore 사용자 문서가 영구 삭제됩니다.<br/>
+                  Firebase Auth 계정은 별도 콘솔에서 삭제하세요.<br/>
+                  이 작업은 되돌릴 수 없습니다.
+                </p>
+              </div>
+              <div className="flex gap-2">
+                <button onClick={() => setDeleteTarget(null)} className="flex-1 py-2.5 bg-black/40 border border-[#333] text-gray-400 font-bold rounded-xl hover:bg-[#222] transition-colors text-sm">취소</button>
+                <button onClick={handleDeleteUser} disabled={processing} className="flex-1 py-2.5 bg-red-900/70 border border-red-600/70 text-red-300 font-extrabold rounded-xl hover:bg-red-800/80 transition-colors text-sm disabled:opacity-50 flex items-center justify-center gap-1.5">
+                  <Trash2 size={13}/> {processing ? '삭제 중...' : '영구 삭제'}
                 </button>
               </div>
             </div>

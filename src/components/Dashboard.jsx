@@ -1,149 +1,318 @@
-import { FileSpreadsheet, CheckCircle, Database, ChevronRight } from 'lucide-react';
+import { useState, useEffect, useMemo } from 'react';
+import { FileSpreadsheet, CheckCircle, Database, ChevronRight, Truck, BookOpen, Loader2, RefreshCw, Calendar } from 'lucide-react';
+import { APP_VERSION } from '../version.js';
+import { db } from '../config/firebase.js';
+import { collection, getDocs, getDocsFromServer } from 'firebase/firestore';
 
 const CursorSVG = () => (
   <svg width="22" height="22" viewBox="0 0 22 22" fill="none" xmlns="http://www.w3.org/2000/svg">
-    <path d="M3 1L3 17L7.5 13L10.5 20L13 19L10 12L16 12Z" fill="white" stroke="#22c55e" strokeWidth="1.2" strokeLinejoin="round"/>
+    <path d="M3 1L3 17L7.5 13L10.5 20L13 19L10 12L16 12Z" fill="white" stroke="#3b82f6" strokeWidth="1.2" strokeLinejoin="round"/>
   </svg>
 );
 
-export default function Dashboard({ user, onStart, onHelp }) {
+function fmtDate(ts) {
+  if (!ts) return '';
+  const d = ts.toDate ? ts.toDate() : new Date(ts);
+  return `${d.getMonth() + 1}/${d.getDate()}`;
+}
+
+export default function Dashboard({ user, onStart, onHelp, onCloudCard, onBaseCard }) {
   const totalRows = user?.totalRowsProcessed || 0;
   const totalFiles = user?.totalFilesProcessed || 0;
+  const isAdmin = user?.role === 'admin';
+  const approvedCities = user?.citiesApproved || [];
+
+  const [cloudData, setCloudData] = useState([]);   // [{city, sigungu, sido, latestMonthId, totalCount, suCount, chaCount}]
+  const [baseData, setBaseData] = useState([]);      // [{city, sigungu, sido, updatedAt}]
+  const [loading, setLoading] = useState(true);
+
+  const loadData = async () => {
+    setLoading(true);
+    try {
+      // ── cloud_lists: 배송명단 데이터 ──
+      let cities;
+      if (isAdmin) {
+        const snap = await getDocs(collection(db, 'cloud_lists'));
+        cities = snap.docs.map(d => d.id);
+      } else {
+        cities = approvedCities;
+      }
+
+      const cloudResults = await Promise.all(
+        cities.map(async city => {
+          try {
+            const snap = await getDocs(collection(db, 'cloud_lists', city, 'months'));
+            const months = snap.docs
+              .map(d => ({ id: d.id, ...d.data() }))
+              .sort((a, b) => b.id.localeCompare(a.id));
+            if (!months.length) return null;
+            const latest = months[0];
+            const sido = city.split(' ')[0] || city;
+            const sigungu = city.slice(sido.length).trim() || city;
+            return {
+              city, sigungu, sido,
+              latestMonthId: latest.id,
+              totalCount: latest.totalCount || 0,
+              suCount: latest['수급자Count'] || 0,
+              chaCount: latest['차상위Count'] || 0,
+            };
+          } catch { return null; }
+        })
+      );
+      setCloudData(cloudResults.filter(Boolean).sort((a, b) => a.city.localeCompare(b.city, 'ko')));
+
+      // ── base_lists: 기본명단 데이터 ──
+      const parseCity = id => {
+        const sido = id.split(' ')[0] || id;
+        const sigungu = id.slice(sido.length).trim() || id;
+        return { sido, sigungu };
+      };
+
+      if (isAdmin) {
+        const baseSnap = await getDocs(collection(db, 'base_lists')).catch(() => ({ docs: [] }));
+        const cityMap = {};
+        baseSnap.docs.forEach(d => { cityMap[d.id] = { city: d.id, ...parseCity(d.id), updatedAt: d.data().updatedAt || null }; });
+        setBaseData(Object.values(cityMap).sort((a, b) => a.city.localeCompare(b.city, 'ko')));
+      } else {
+        const results = await Promise.all(
+          approvedCities.map(async city => {
+            try {
+              const baseSnap = await getDocs(collection(db, 'base_lists', city, 'records')).catch(() => null);
+              if (!baseSnap || baseSnap.empty) return null;
+              return { city, ...parseCity(city), updatedAt: null };
+            } catch { return null; }
+          })
+        );
+        setBaseData(results.filter(Boolean).sort((a, b) => a.city.localeCompare(b.city, 'ko')));
+      }
+    } catch (e) {
+      console.error('대시보드 데이터 로드 실패:', e);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { loadData(); }, []);
+
+  // 시/도별 그룹핑
+  const groupBySido = (list) => {
+    const map = {};
+    list.forEach(item => {
+      if (!map[item.sido]) map[item.sido] = [];
+      map[item.sido].push(item);
+    });
+    return Object.entries(map).sort(([a], [b]) => a.localeCompare(b, 'ko'));
+  };
+
+  const cloudGrouped = useMemo(() => groupBySido(cloudData), [cloudData]);
+  const baseGrouped = useMemo(() => groupBySido(baseData), [baseData]);
 
   return (
-    <div className="flex-1 w-full h-full overflow-hidden bg-transparent flex flex-col p-8 lg:p-12">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-10">
-        <div>
-          <h1 className="text-3xl font-black text-white flex items-center gap-3">
-            NEXUS <span className="text-[#22c55e]">PIPELINE</span> <span className="bg-[#22c55e]/20 text-[#22c55e] px-2 py-1 rounded text-sm tracking-widest ml-2 border border-[#22c55e]/30">V4.0</span>
+    <div className="flex-1 w-full h-full flex flex-col overflow-hidden bg-transparent">
+
+      {/* ── 상단 헤더 바 ── */}
+      <div className="shrink-0 flex items-center justify-between px-8 py-5 border-b border-[#0f1a2e]">
+        <div className="flex items-center gap-3">
+          <h1 className="text-xl font-black text-white flex items-center gap-2.5">
+            NEXUS <span className="text-[#3b82f6]">PIPELINE</span>
+            <span className="bg-[#3b82f6]/15 text-[#3b82f6] px-2 py-0.5 rounded text-[11px] tracking-widest border border-[#3b82f6]/30">{APP_VERSION}</span>
           </h1>
-          <p className="text-gray-400 mt-2 text-sm">최고의 속도와 정확도를 자랑하는 명단 정제 관제 센터</p>
-        </div>
-        <div className="flex items-center gap-4">
-          <div className="text-right hidden sm:block">
-            <p className="text-white font-bold">{user?.name || '관리자'}</p>
-            <p className="text-[#22c55e] text-xs">System Operator</p>
-          </div>
-          {user?.photoURL ? (
-            <img src={user.photoURL} alt="Profile" className="w-12 h-12 rounded-full border-2 border-[#22c55e]/50 shadow-[0_0_15px_rgba(34,197,94,0.3)]" />
-          ) : (
-            <div className="w-12 h-12 rounded-full bg-[#111] border-2 border-[#22c55e]/50 flex items-center justify-center shadow-[0_0_15px_rgba(34,197,94,0.3)]">
-              <span className="text-[#22c55e] font-bold text-lg">{user?.name?.charAt(0) || 'A'}</span>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* Stats Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10">
-        <div className="bg-gradient-to-br from-[#0d1a0f] to-[#0a0a0a] border border-[#22c55e]/30 rounded-3xl p-6 shadow-[0_0_30px_rgba(34,197,94,0.1)] relative overflow-hidden group hover:border-[#22c55e]/60 transition-colors">
-          <div className="absolute -right-4 -top-4 w-24 h-24 bg-[#22c55e]/10 rounded-full blur-2xl group-hover:bg-[#22c55e]/20 transition-all"></div>
-          <div className="flex items-center gap-4 mb-4">
-            <div className="w-12 h-12 bg-[#22c55e]/20 rounded-2xl flex items-center justify-center text-[#22c55e]">
-              <Database size={24} />
-            </div>
-            <div>
-              <p className="text-gray-400 text-sm font-bold">누적 정제 데이터</p>
-              <h2 className="text-3xl font-black text-white">{totalRows.toLocaleString()}<span className="text-sm text-gray-500 ml-1 font-normal">건</span></h2>
-            </div>
-          </div>
-          <div className="w-full bg-[#111] h-1.5 rounded-full overflow-hidden">
-            <div className="bg-[#22c55e] h-full w-[85%] shadow-[0_0_10px_#22c55e]"></div>
-          </div>
         </div>
 
-        <div className="bg-gradient-to-br from-[#0d1a0f] to-[#0a0a0a] border border-[#22c55e]/30 rounded-3xl p-6 shadow-[0_0_30px_rgba(34,197,94,0.1)] relative overflow-hidden group hover:border-[#22c55e]/60 transition-colors">
-          <div className="absolute -right-4 -top-4 w-24 h-24 bg-[#22c55e]/10 rounded-full blur-2xl group-hover:bg-[#22c55e]/20 transition-all"></div>
-          <div className="flex items-center gap-4 mb-4">
-            <div className="w-12 h-12 bg-[#22c55e]/20 rounded-2xl flex items-center justify-center text-[#22c55e]">
-              <FileSpreadsheet size={24} />
+        {/* 통계 + 버튼 */}
+        <div className="flex items-center gap-3">
+          {/* 통계 컴팩트 */}
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-[#060c18] border border-[#0f1a2e]">
+              <Database size={12} className="text-[#3b82f6]" />
+              <span className="text-gray-400 text-[11px] font-bold">누적</span>
+              <span className="text-white text-[12px] font-black">{totalRows.toLocaleString()}</span>
+              <span className="text-gray-600 text-[10px]">건</span>
             </div>
-            <div>
-              <p className="text-gray-400 text-sm font-bold">처리한 파일 수</p>
-              <h2 className="text-3xl font-black text-white">{totalFiles.toLocaleString()}<span className="text-sm text-gray-500 ml-1 font-normal">개</span></h2>
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-[#060c18] border border-[#0f1a2e]">
+              <FileSpreadsheet size={12} className="text-[#3b82f6]" />
+              <span className="text-gray-400 text-[11px] font-bold">파일</span>
+              <span className="text-white text-[12px] font-black">{totalFiles.toLocaleString()}</span>
+              <span className="text-gray-600 text-[10px]">개</span>
+            </div>
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-[#060c18] border border-[#0f1a2e]">
+              <CheckCircle size={12} className="text-[#3b82f6]" />
+              <span className="text-gray-400 text-[11px] font-bold">정확도</span>
+              <span className="text-[#3b82f6] text-[12px] font-black">{totalRows > 0 ? '99%+' : '-'}</span>
             </div>
           </div>
-          <div className="w-full bg-[#111] h-1.5 rounded-full overflow-hidden">
-            <div className="bg-[#22c55e] h-full w-[60%] shadow-[0_0_10px_#22c55e]"></div>
-          </div>
-        </div>
 
-        <div className="bg-gradient-to-br from-[#0d1a0f] to-[#0a0a0a] border border-[#22c55e]/30 rounded-3xl p-6 shadow-[0_0_30px_rgba(34,197,94,0.1)] relative overflow-hidden group hover:border-[#22c55e]/60 transition-colors">
-          <div className="absolute -right-4 -top-4 w-24 h-24 bg-[#22c55e]/10 rounded-full blur-2xl group-hover:bg-[#22c55e]/20 transition-all"></div>
-          <div className="flex items-center gap-4 mb-4">
-            <div className="w-12 h-12 bg-[#22c55e]/20 rounded-2xl flex items-center justify-center text-[#22c55e]">
-              <CheckCircle size={24} />
-            </div>
-            <div>
-              <p className="text-gray-400 text-sm font-bold">정제 완료율</p>
-              <h2 className="text-3xl font-black text-[#22c55e]">
-                {totalRows > 0 ? '99%+' : '-'}
-                <span className="text-sm text-gray-500 ml-1 font-normal">정확도</span>
-              </h2>
-            </div>
-          </div>
-          <p className="text-xs text-[#86efac] mt-2 flex items-center gap-1">
-            <CheckCircle size={12} /> AI 주소 엔진 + 오타 사전 적용
-          </p>
-        </div>
-      </div>
-
-      {/* Main Action Area */}
-      <div className="flex-1 bg-black/40 border border-white/5 rounded-3xl p-8 flex flex-col items-center justify-center text-center relative overflow-hidden">
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-[#22c55e]/5 rounded-full blur-3xl pointer-events-none"></div>
-        
-        <div className="w-20 h-20 bg-gradient-to-b from-[#22c55e]/20 to-transparent border border-[#22c55e]/50 rounded-full flex items-center justify-center mb-6 shadow-[0_0_30px_rgba(34,197,94,0.2)]">
-          <Database size={32} className="text-[#22c55e]" />
-        </div>
-        <h2 className="text-2xl font-black text-white mb-2">새로운 명단 정제 시작</h2>
-        <p className="text-gray-400 text-sm mb-8 max-w-md">
-          정제할 엑셀 파일을 업로드하고 파이프라인을 가동하세요. AI 주소 엔진과 오타 사전이 자동으로 가장 완벽한 명단으로 변환합니다.
-        </p>
-        
-        <div className="flex flex-col sm:flex-row items-center gap-4">
+          {/* 파이프라인 가동 CTA */}
           <button
-            onClick={onStart}
-            className="group relative px-8 py-4 bg-[#22c55e] text-black font-extrabold rounded-2xl text-lg hover:scale-105 transition-all shadow-[0_0_30px_rgba(34,197,94,0.4)] flex items-center gap-3 overflow-hidden"
+            onClick={() => onStart()}
+            className="flex items-center gap-2 px-5 py-2 bg-[#3b82f6] text-black font-extrabold rounded-xl text-sm hover:bg-[#60a5fa] transition-all shadow-[0_0_20px_rgba(59,130,246,0.3)] hover:shadow-[0_0_30px_rgba(59,130,246,0.5)]"
           >
-            <span className="relative z-10">파이프라인 가동</span>
-            <ChevronRight size={20} className="relative z-10 group-hover:translate-x-1 transition-transform" />
-            <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent -translate-x-full group-hover:animate-[shimmer_1.5s_infinite]"></div>
+            <FileSpreadsheet size={15} />
+            파이프라인 가동
+            <ChevronRight size={14} />
           </button>
-          
-          <button
-            onClick={() => onStart(6)} // Step 6 is Base List Manager
-            className="group relative px-8 py-4 bg-transparent border-2 border-[#22c55e]/50 text-[#22c55e] font-extrabold rounded-2xl text-lg hover:bg-[#22c55e]/10 transition-all flex items-center gap-3"
-          >
-            <span>기본 명단 관리</span>
-            <Database size={20} className="group-hover:scale-110 transition-transform" />
-          </button>
-        </div>
 
-        {/* 도움말 힌트 — 애니메이션 커서 + ? 버튼 */}
-        <div className="relative mt-6 flex flex-col items-center gap-2">
-          <div className="relative">
-            {/* 애니메이션 커서 */}
-            <div
-              className="absolute pointer-events-none z-10"
-              style={{ animation: 'cursor-hint 3s ease-in-out infinite', bottom: '100%', right: '100%' }}
-            >
+          {/* 도움말 */}
+          <button
+            onClick={onHelp}
+            className="relative w-9 h-9 rounded-full bg-[#060c18] border border-[#3b82f6]/50 text-[#3b82f6] font-black text-base hover:bg-[#3b82f6]/20 transition-all"
+            style={{ animation: 'help-pulse 2.5s ease-in-out infinite' }}
+          >
+            <span className="absolute inset-0 flex items-center justify-center pointer-events-none">
               <CursorSVG />
-            </div>
-            {/* ? 버튼 */}
-            <button
-              onClick={onHelp}
-              className="w-11 h-11 rounded-full bg-[#0d1a0f] border border-[#22c55e]/50 text-[#22c55e] font-black text-lg hover:bg-[#22c55e]/20 hover:scale-110 transition-all"
-              style={{ animation: 'help-pulse 2.5s ease-in-out infinite' }}
-              title="도움말 보기"
-            >
-              ?
-            </button>
-          </div>
-          <p className="text-gray-600 text-xs tracking-wide">이용 가이드</p>
+            </span>
+            <span className="sr-only">도움말</span>
+          </button>
         </div>
       </div>
-      
+
+      {/* ── DB 현황 카드 영역 ── */}
+      <div className="flex-1 overflow-y-auto px-8 py-6 space-y-8">
+
+        {loading ? (
+          <div className="flex flex-col items-center justify-center h-64 gap-3 text-gray-500">
+            <Loader2 size={24} className="animate-spin text-[#3b82f6]" />
+            <span className="text-sm">등록 현황 불러오는 중...</span>
+          </div>
+        ) : (
+          <>
+            {/* ── 이번달 배송명단 ── */}
+            <section>
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-7 h-7 rounded-lg bg-[#3b82f6]/10 border border-[#3b82f6]/25 flex items-center justify-center">
+                    <Truck size={14} className="text-[#3b82f6]" />
+                  </div>
+                  <span className="text-white font-black text-sm">이번달 배송명단</span>
+                  {cloudData.length > 0 && (
+                    <span className="text-[11px] text-gray-600 font-medium">
+                      {cloudData.length}개 지자체 등록됨
+                    </span>
+                  )}
+                </div>
+                <button
+                  onClick={loadData}
+                  className="flex items-center gap-1.5 text-[11px] text-gray-600 hover:text-gray-400 transition-colors"
+                >
+                  <RefreshCw size={11} /> 새로고침
+                </button>
+              </div>
+
+              {cloudData.length === 0 ? (
+                <div className="flex items-center gap-3 px-5 py-4 rounded-2xl border border-dashed border-[#0f1a2e] text-gray-600 text-sm">
+                  <Truck size={16} className="opacity-30" />
+                  <span>등록된 배송명단이 없습니다 · 파이프라인에서 클라우드 저장 후 나타납니다</span>
+                </div>
+              ) : (
+                <div className="space-y-5">
+                  {cloudGrouped.map(([sido, items]) => (
+                    <div key={sido}>
+                      {/* 광역시/도 구분선 */}
+                      <div className="flex items-center gap-3 mb-3">
+                        <div className="h-px flex-1 bg-[#0f1a2e]" />
+                        <span className="text-[10px] font-black text-gray-600 tracking-widest px-2">{sido}</span>
+                        <div className="h-px flex-1 bg-[#0f1a2e]" />
+                      </div>
+                      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2.5">
+                        {items.map(({ city, sigungu, latestMonthId, totalCount, suCount, chaCount }) => (
+                          <button
+                            key={city}
+                            onClick={() => onCloudCard && onCloudCard(city, latestMonthId)}
+                            className="group flex flex-col gap-2.5 p-3.5 rounded-2xl border border-[#0f1a2e] text-left transition-all hover:border-[#3b82f6]/40 hover:-translate-y-0.5 hover:shadow-[0_4px_16px_rgba(59,130,246,0.1)]"
+                            style={{ background: '#060e1a' }}
+                          >
+                            <div className="flex items-center justify-between">
+                              <span className="text-white font-black text-[13px] group-hover:text-[#93c5fd] transition-colors truncate">{sigungu}</span>
+                              <ChevronRight size={12} className="text-gray-700 group-hover:text-[#3b82f6] transition-colors shrink-0 ml-1" />
+                            </div>
+                            <div className="flex items-center gap-1">
+                              <Calendar size={9} className="text-gray-700" />
+                              <span className="text-[10px] text-gray-600 font-bold">{latestMonthId}</span>
+                            </div>
+                            <div className="flex items-end justify-between gap-1">
+                              <div className="flex flex-wrap gap-1">
+                                {suCount > 0 && (
+                                  <span className="text-[9px] px-1.5 py-0.5 rounded-md bg-blue-900/20 text-blue-400 font-bold border border-blue-800/20">
+                                    수급 {suCount.toLocaleString()}
+                                  </span>
+                                )}
+                                {chaCount > 0 && (
+                                  <span className="text-[9px] px-1.5 py-0.5 rounded-md bg-purple-900/20 text-purple-400 font-bold border border-purple-800/20">
+                                    차상위 {chaCount.toLocaleString()}
+                                  </span>
+                                )}
+                              </div>
+                              <span className="text-[11px] font-black text-[#3b82f6]/70 tabular-nums shrink-0">{totalCount.toLocaleString()}건</span>
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
+
+            {/* ── 기본명단 ── */}
+            <section>
+              <div className="flex items-center gap-2.5 mb-4">
+                <div className="w-7 h-7 rounded-lg bg-purple-900/20 border border-purple-800/25 flex items-center justify-center">
+                  <BookOpen size={14} className="text-purple-400" />
+                </div>
+                <span className="text-white font-black text-sm">기본명단</span>
+                {baseData.length > 0 && (
+                  <span className="text-[11px] text-gray-600 font-medium">
+                    {baseData.length}개 지자체 등록됨
+                  </span>
+                )}
+              </div>
+
+              {baseData.length === 0 ? (
+                <div className="flex items-center gap-3 px-5 py-4 rounded-2xl border border-dashed border-[#0f1a2e] text-gray-600 text-sm">
+                  <BookOpen size={16} className="opacity-30" />
+                  <span>등록된 기본명단이 없습니다 · 고객 노트 관리에서 저장 후 나타납니다</span>
+                </div>
+              ) : (
+                <div className="space-y-5">
+                  {baseGrouped.map(([sido, items]) => (
+                    <div key={sido}>
+                      <div className="flex items-center gap-3 mb-3">
+                        <div className="h-px flex-1 bg-[#0f1a2e]" />
+                        <span className="text-[10px] font-black text-gray-600 tracking-widest px-2">{sido}</span>
+                        <div className="h-px flex-1 bg-[#0f1a2e]" />
+                      </div>
+                      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2.5">
+                        {items.map(({ city, sigungu, updatedAt }) => (
+                          <button
+                            key={city}
+                            onClick={() => onBaseCard && onBaseCard(city)}
+                            className="group flex flex-col gap-2.5 p-3.5 rounded-2xl border border-[#0f1a2e] text-left transition-all hover:border-purple-600/40 hover:-translate-y-0.5 hover:shadow-[0_4px_16px_rgba(168,85,247,0.1)]"
+                            style={{ background: '#080612' }}
+                          >
+                            <div className="flex items-center justify-between">
+                              <span className="text-white font-black text-[13px] group-hover:text-purple-300 transition-colors truncate">{sigungu}</span>
+                              <ChevronRight size={12} className="text-gray-700 group-hover:text-purple-400 transition-colors shrink-0 ml-1" />
+                            </div>
+                            {updatedAt && (
+                              <div className="flex items-center gap-1">
+                                <RefreshCw size={9} className="text-gray-700" />
+                                <span className="text-[10px] text-gray-600 font-bold">{fmtDate(updatedAt)} 업데이트</span>
+                              </div>
+                            )}
+                            <span className="text-[9px] px-1.5 py-0.5 rounded-md bg-purple-900/20 text-purple-400 font-bold border border-purple-800/20 self-start">
+                              기본명단
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
+          </>
+        )}
+      </div>
     </div>
   );
 }

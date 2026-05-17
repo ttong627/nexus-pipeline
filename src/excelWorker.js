@@ -276,6 +276,355 @@ self.onmessage = ({ data }) => {
       return;
     }
 
+    // ── 컬럼 재배치 — 파일 분석 ─────────────────────────────────────────
+    if (action === 'ANALYZE_REMAP') {
+      const wbR = XLSX.read(new Uint8Array(buffer), { type: 'array', sheetRows: 30000, cellFormula: false, cellHTML: false, cellText: false, cellStyles: false, cellDates: false });
+      const visR = getVisibleSheetNames(wbR);
+      const HKWSR = ['이름', '성명', '주소', '행정동', '포수', '수량', '구분', '연락', '전화', '휴대', '기사', '순번', '비고', '특이', '생년'];
+      const analyzeSheetR = (n) => {
+        const rawR = XLSX.utils.sheet_to_json(wbR.Sheets[n], { header: 1, defval: '', blankrows: false });
+        let hIdxR = 0, hScR = -1;
+        for (let i = 0; i < Math.min(20, rawR.length); i++) {
+          const s = rawR[i].map(c => String(c || '').trim()).join('');
+          let sc = 0; HKWSR.forEach(kw => { if (s.includes(kw)) sc++; });
+          if (sc > hScR && rawR[i].filter(c => String(c).trim()).length > 2) { hScR = sc; hIdxR = i; }
+        }
+        const colCntR = Math.max(...[0, 1, 2].map(o => rawR[hIdxR + o]?.length || 0), 1);
+        const hdrsR = Array.from({ length: colCntR }, (_, i) => String(rawR[hIdxR]?.[i] || '').trim());
+        for (let off = 1; off <= 2; off++) {
+          const sub = rawR[hIdxR + off]; if (!sub) break;
+          const isData = sub.some(v => /\d{2,3}-\d{3,4}-\d{4}/.test(String(v)) || (/[가-힣]/.test(String(v)) && String(v).length > 10));
+          if (isData) break;
+          sub.forEach((v, i) => { if (v && !hdrsR[i]) hdrsR[i] = String(v).trim(); });
+        }
+        const bodyR = rawR.slice(hIdxR + 1).filter(r => r.some(c => String(c).trim()));
+        return { name: n, rowCount: bodyR.length, headers: hdrsR, sampleRows: bodyR.slice(0, 10) };
+      };
+      const sheetsInfo = visR.map(analyzeSheetR);
+      const defS = sheetsInfo.reduce((best, s) => s.rowCount > best.rowCount ? s : best, sheetsInfo[0]);
+      self.postMessage({ ok: true, headers: defS.headers, sampleRows: defS.sampleRows, totalRows: defS.rowCount, sheetName: defS.name, sheets: sheetsInfo });
+      return;
+    }
+
+    // ── 컬럼 재배치 — 파일 내보내기 ──────────────────────────────────────
+    if (action === 'EXPORT_REMAP') {
+      const { mapping, outputCols, addrSrcIdx, selectedSheets, colOrder, fileName: fnRE } = data;
+      const orderedCols = colOrder?.length ? colOrder.map(key => outputCols.find(c => c.key === key)).filter(Boolean) : outputCols;
+      const wbRE = XLSX.read(new Uint8Array(buffer), { type: 'array', sheetRows: 30000, cellFormula: false, cellHTML: false, cellText: false, cellStyles: false, cellDates: false });
+      const visRE = getVisibleSheetNames(wbRE);
+      let tgtRE = visRE[0], mxRE = 0;
+      visRE.forEach(n => { const ref = wbRE.Sheets[n]['!ref']; if (ref) { const r = XLSX.utils.decode_range(ref).e.r; if (r > mxRE) { mxRE = r; tgtRE = n; } } });
+      const HKWSRE = ['이름', '성명', '주소', '행정동', '포수', '수량', '구분', '연락', '전화', '휴대', '기사', '순번', '비고', '특이', '생년'];
+
+      const detectHeaderIdx = (raw) => {
+        let hIdx = 0, hSc = -1;
+        for (let i = 0; i < Math.min(20, raw.length); i++) {
+          const s = raw[i].map(c => String(c || '').trim()).join('');
+          let sc = 0; HKWSRE.forEach(kw => { if (s.includes(kw)) sc++; });
+          if (sc > hSc && raw[i].filter(c => String(c).trim()).length > 2) { hSc = sc; hIdx = i; }
+        }
+        return hIdx;
+      };
+
+      const sheetsToProcess = (selectedSheets?.length > 0 ? selectedSheets : [tgtRE]).filter(n => visRE.includes(n));
+      let allBodyRows = [];
+      sheetsToProcess.forEach(sheetName => {
+        const raw = XLSX.utils.sheet_to_json(wbRE.Sheets[sheetName], { header: 1, defval: '', blankrows: false });
+        const hIdx = detectHeaderIdx(raw);
+        const body = raw.slice(hIdx + 1).filter(r => r.some(c => String(c).trim()));
+        allBodyRows.push(...body);
+      });
+
+      const fmtPhoneRE = (v) => {
+        const d = String(v ?? '').replace(/[^0-9]/g, '');
+        if (d.length === 11) return `${d.slice(0,3)}-${d.slice(3,7)}-${d.slice(7)}`;
+        if (d.length === 10) return `${d.slice(0,3)}-${d.slice(3,6)}-${d.slice(6)}`;
+        if (d.length === 9 && d.startsWith('02')) return `02-${d.slice(2,5)}-${d.slice(5)}`;
+        return v;
+      };
+      const normSMSRE = (v) => {
+        const s = String(v || '').trim();
+        if (!s || s === '-') return '';
+        if (/거부|거절|불가|불허|미동의|미수신|수신\s*불가/.test(s)) return 'N';
+        if (/^(N|n|X|x|×|0|아니오?|불|없음)$/.test(s)) return 'N';
+        if (/^(Y|y|O|o|○|ㅇ|1|예|동의|수신|가능|허용|yes|YES)$/.test(s)) return 'Y';
+        if (/동의|수신|가능|허용/.test(s)) return 'Y';
+        return 'N';
+      };
+      const extMetroRE = (addr) => {
+        const m = String(addr||'').match(/^(서울특별시|부산광역시|대구광역시|인천광역시|광주광역시|대전광역시|울산광역시|세종특별자치시|경기도|강원도|충청북도|충청남도|전라북도|전라남도|경상북도|경상남도|제주특별자치도)/);
+        return m ? m[1] : '';
+      };
+      const extSigunguRE = (addr) => {
+        const m = String(addr||'').match(/(?:서울특별시|부산광역시|대구광역시|인천광역시|광주광역시|대전광역시|울산광역시|세종특별자치시|경기도|강원도|충청북도|충청남도|전라북도|전라남도|경상북도|경상남도|제주특별자치도)\s+([^\s]+(?:시|군|구))/);
+        return m ? m[1] : '';
+      };
+
+      const outRows = allBodyRows.map((row, i) => {
+        return orderedCols.map(col => {
+          const m = mapping[col.key] || {};
+          const srcIdx = m.srcIdx ?? -1;
+          if (srcIdx === -3) return i + 1;
+          if (srcIdx === -2) {
+            const addr = addrSrcIdx >= 0 ? String(row[addrSrcIdx] ?? '') : '';
+            if (col.key === 'metro') return extMetroRE(addr);
+            if (col.key === 'sigungu') return extSigunguRE(addr);
+            return '';
+          }
+          if (srcIdx < 0) return '';
+          const raw = row[srcIdx] ?? '';
+          if (col.key === 'mobile' || col.key === 'landline') return fmtPhoneRE(raw);
+          if (col.key === 'birth') return normalizeBirth(raw);
+          if (col.key === 'sms') return normSMSRE(raw);
+          if (col.key === 'gubun') {
+            const v = String(raw).trim();
+            if (/차상위/.test(v)) return '차상위';
+            if (/수급|기초|생계|의료/.test(v)) return '기초수급자';
+            return raw;
+          }
+          return raw;
+        });
+      });
+
+      const header = orderedCols.map(c => c.label);
+      const wsRE = XLSX.utils.aoa_to_sheet([header, ...outRows]);
+      wsRE['!cols'] = orderedCols.map(c => ({ wch: Math.min(Math.max(String(c.label).length * 2 + 4, 8), 28) }));
+      const wbOutRE = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wbOutRE, wsRE, '재배치결과');
+      const wbout = XLSX.write(wbOutRE, { bookType: 'xlsx', type: 'array' });
+      self.postMessage({ ok: true, wbout, fileName: fnRE });
+      return;
+    }
+
+    // ── 파일 합치기 — 내보내기 ────────────────────────────────────────────
+    if (action === 'EXPORT_MERGE') {
+      const { bufferA, bufferB, mappingA, mappingB, selectedSheetsA, selectedSheetsB, outputCols, addrSrcIdxA, addrSrcIdxB, fileName: fnMG } = data;
+
+      const HKWSMG = ['이름', '성명', '주소', '행정동', '포수', '수량', '구분', '연락', '전화', '휴대', '기사', '순번', '비고', '특이', '생년'];
+      const detectHdrMG = (raw) => {
+        let hIdx = 0, hSc = -1;
+        for (let i = 0; i < Math.min(20, raw.length); i++) {
+          const s = raw[i].map(c => String(c || '').trim()).join('');
+          let sc = 0; HKWSMG.forEach(kw => { if (s.includes(kw)) sc++; });
+          if (sc > hSc && raw[i].filter(c => String(c).trim()).length > 2) { hSc = sc; hIdx = i; }
+        }
+        return hIdx;
+      };
+
+      const extractBodyMG = (buf, selSheets) => {
+        const wbMG = XLSX.read(new Uint8Array(buf), { type: 'array', sheetRows: 30000, cellFormula: false, cellHTML: false, cellText: false, cellStyles: false, cellDates: false });
+        const vis = getVisibleSheetNames(wbMG);
+        const sheets = selSheets?.length > 0 ? selSheets.filter(n => vis.includes(n)) : [vis[0]];
+        let rows = [];
+        sheets.forEach(sn => {
+          const raw = XLSX.utils.sheet_to_json(wbMG.Sheets[sn], { header: 1, defval: '', blankrows: false });
+          const hIdx = detectHdrMG(raw);
+          rows.push(...raw.slice(hIdx + 1).filter(r => r.some(c => String(c).trim())));
+        });
+        return rows;
+      };
+
+      const fmtPhoneMG = (v) => {
+        const d = String(v ?? '').replace(/[^0-9]/g, '');
+        if (d.length === 11) return `${d.slice(0,3)}-${d.slice(3,7)}-${d.slice(7)}`;
+        if (d.length === 10) return `${d.slice(0,3)}-${d.slice(3,6)}-${d.slice(6)}`;
+        if (d.length === 9 && d.startsWith('02')) return `02-${d.slice(2,5)}-${d.slice(5)}`;
+        return v;
+      };
+      const normSMSMG = (v) => {
+        const s = String(v || '').trim();
+        if (!s || s === '-') return '';
+        if (/거부|거절|불가|불허|미동의|미수신|수신\s*불가/.test(s)) return 'N';
+        if (/^(N|n|X|x|×|0|아니오?|불|없음)$/.test(s)) return 'N';
+        if (/^(Y|y|O|o|○|ㅇ|1|예|동의|수신|가능|허용|yes|YES)$/.test(s)) return 'Y';
+        if (/동의|수신|가능|허용/.test(s)) return 'Y';
+        return 'N';
+      };
+      const extMetroMG = (addr) => {
+        const m = String(addr||'').match(/^(서울특별시|부산광역시|대구광역시|인천광역시|광주광역시|대전광역시|울산광역시|세종특별자치시|경기도|강원도|충청북도|충청남도|전라북도|전라남도|경상북도|경상남도|제주특별자치도)/);
+        return m ? m[1] : '';
+      };
+      const extSigunguMG = (addr) => {
+        const m = String(addr||'').match(/(?:서울특별시|부산광역시|대구광역시|인천광역시|광주광역시|대전광역시|울산광역시|세종특별자치시|경기도|강원도|충청북도|충청남도|전라북도|전라남도|경상북도|경상남도|제주특별자치도)\s+([^\s]+(?:시|군|구))/);
+        return m ? m[1] : '';
+      };
+
+      const buildRowsMG = (bodyRows, mapping, addrSrcIdx, fixedGubun) => {
+        return bodyRows.map((row, i) => {
+          return outputCols.map(col => {
+            if (col.key === 'gubun') return fixedGubun;
+            const m = mapping[col.key] || {};
+            const srcIdx = m.srcIdx ?? -1;
+            if (srcIdx === -3) return i + 1;
+            if (srcIdx === -2) {
+              const addr = addrSrcIdx >= 0 ? String(row[addrSrcIdx] ?? '') : '';
+              if (col.key === 'metro') return extMetroMG(addr);
+              if (col.key === 'sigungu') return extSigunguMG(addr);
+              return '';
+            }
+            if (srcIdx < 0) return '';
+            const raw = row[srcIdx] ?? '';
+            if (col.key === 'mobile' || col.key === 'landline') return fmtPhoneMG(raw);
+            if (col.key === 'birth') return normalizeBirth(raw);
+            if (col.key === 'sms') return normSMSMG(raw);
+            return raw;
+          });
+        });
+      };
+
+      const header = outputCols.map(c => c.label);
+      const colWidths = outputCols.map(c => ({ wch: Math.min(Math.max(String(c.label).length * 2 + 4, 8), 28) }));
+
+      const bodyA = extractBodyMG(bufferA, selectedSheetsA);
+      const bodyB = extractBodyMG(bufferB, selectedSheetsB);
+      const rowsA = buildRowsMG(bodyA, mappingA, addrSrcIdxA, '기초수급자');
+      const rowsB = buildRowsMG(bodyB, mappingB, addrSrcIdxB, '차상위');
+      const rowsC = [...rowsA, ...rowsB];
+
+      const mkSheet = (rows) => { const ws = XLSX.utils.aoa_to_sheet([header, ...rows]); ws['!cols'] = colWidths; return ws; };
+      const wbMGOut = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wbMGOut, mkSheet(rowsA), '기초수급자');
+      XLSX.utils.book_append_sheet(wbMGOut, mkSheet(rowsB), '차상위');
+      XLSX.utils.book_append_sheet(wbMGOut, mkSheet(rowsC), '합본');
+      const wboutMG = XLSX.write(wbMGOut, { bookType: 'xlsx', type: 'array' });
+      self.postMessage({ ok: true, wbout: wboutMG, fileName: fnMG });
+      return;
+    }
+
+    // ── 행정동 분리 — 파일 분석 ──────────────────────────────────────────
+    if (action === 'ANALYZE_DONG_SPLIT') {
+      const wbD = XLSX.read(new Uint8Array(buffer), { type: 'array', sheetRows: 30000, cellFormula: false, cellHTML: false, cellText: false, cellStyles: false, cellDates: false });
+      const visibleD = getVisibleSheetNames(wbD);
+      let targetD = visibleD[0];
+      let maxRowsD = 0;
+      visibleD.forEach(name => {
+        const ref = wbD.Sheets[name]['!ref'];
+        if (ref) { const r = XLSX.utils.decode_range(ref).e.r; if (r > maxRowsD) { maxRowsD = r; targetD = name; } }
+      });
+      const rawD = XLSX.utils.sheet_to_json(wbD.Sheets[targetD], { header: 1, defval: '', blankrows: false });
+      const HKWS = ['이름', '성명', '주소', '행정동', '포수', '수량', '구분', '연락', '전화', '휴대', '기사', '순번', '비고', '특이', '생년'];
+      let hIdx = 0, hScore = -1;
+      for (let i = 0; i < Math.min(20, rawD.length); i++) {
+        const s = rawD[i].map(c => String(c || '').trim()).join('');
+        let sc = 0; HKWS.forEach(kw => { if (s.includes(kw)) sc++; });
+        if (sc > hScore && rawD[i].filter(c => String(c).trim()).length > 2) { hScore = sc; hIdx = i; }
+      }
+      const colCnt = Math.max(...[0, 1, 2].map(o => rawD[hIdx + o]?.length || 0));
+      const headers = Array.from({ length: colCnt }, (_, i) => String(rawD[hIdx]?.[i] || '').trim());
+      for (let off = 1; off <= 2; off++) {
+        const sub = rawD[hIdx + off]; if (!sub) break;
+        const isData = sub.some(v => /\d{2,3}-\d{3,4}-\d{4}/.test(v) || (/[가-힣]/.test(v) && String(v).length > 10));
+        if (isData) break;
+        sub.forEach((v, i) => { if (v && !headers[i]) headers[i] = String(v).trim(); });
+      }
+      const bodyD = rawD.slice(hIdx + 1).filter(r => r.some(c => String(c).trim()));
+      const det = (kws, excl = []) => {
+        const i = headers.findIndex(h => { const hn = String(h).trim(); return !excl.some(e => hn.includes(e)) && kws.some(k => hn.includes(k)); });
+        return i >= 0 ? i : null;
+      };
+      const colMap = {
+        dong:      det(['행정동', '읍면동', '동명', '관할구역']),
+        name:      det(['이름', '성명', '대상자', '수령자']),
+        gubun:     det(['구분', '유형', '계층', '자격']),
+        qty:       det(['포수', '수량', '구입량', '신청수량', '신청 수량'], ['가구원']),
+        addr:      det(['주소']),
+        birth:     det(['생년월일', '생일', '생년']),
+        mobile:    det(['휴대', '핸드', '모바일'], ['유선']),
+        landline:  det(['유선']),
+        note:      det(['특이사항', '비고', '메모']),
+        driver:    det(['기사', '담당']),
+        seqNo:     det(['순번', '배송순번']),
+      };
+      const detGubun = (row) => {
+        if (colMap.gubun === null) return '기초수급자';
+        const v = String(row[colMap.gubun] ?? '').trim();
+        return v.includes('차상위') ? '차상위' : '기초수급자';
+      };
+      const dongMap = {};
+      bodyD.forEach(row => {
+        const dong = String(row[colMap.dong] ?? '-').trim() || '-';
+        const gubun = detGubun(row);
+        const qty = parseInt(String(row[colMap.qty] ?? '1').replace(/[^0-9]/g, '')) || 1;
+        if (!dongMap[dong]) dongMap[dong] = { 기초수급자명: 0, 기초수급자포: 0, 차상위명: 0, 차상위포: 0 };
+        dongMap[dong][gubun + '명']++;
+        dongMap[dong][gubun + '포'] += qty;
+      });
+      const dongStats = Object.entries(dongMap)
+        .sort(([a], [b]) => a.localeCompare(b, 'ko', { numeric: true }))
+        .map(([dong, s]) => ({ dong, su명: s.기초수급자명, su포: s.기초수급자포, cha명: s.차상위명, cha포: s.차상위포, total명: s.기초수급자명 + s.차상위명, total포: s.기초수급자포 + s.차상위포 }));
+      self.postMessage({ ok: true, headers, colMap, dongStats, totalRows: bodyD.length, sheetName: targetD, hasGubun: colMap.gubun !== null, hasDong: colMap.dong !== null });
+      return;
+    }
+
+    // ── 행정동 분리 — 파일 내보내기 ─────────────────────────────────────
+    if (action === 'EXPORT_DONG_SPLIT') {
+      const { colMap: cm, selectedColIdxs, options, fileName: fnS } = data;
+      const wbE = XLSX.read(new Uint8Array(buffer), { type: 'array', sheetRows: 30000, cellFormula: false, cellHTML: false, cellText: false, cellStyles: false, cellDates: false });
+      const visE = getVisibleSheetNames(wbE);
+      let tgtE = visE[0]; let mxE = 0;
+      visE.forEach(n => { const ref = wbE.Sheets[n]['!ref']; if (ref) { const r = XLSX.utils.decode_range(ref).e.r; if (r > mxE) { mxE = r; tgtE = n; } } });
+      const rawE = XLSX.utils.sheet_to_json(wbE.Sheets[tgtE], { header: 1, defval: '', blankrows: false });
+      const HKWS2 = ['이름', '성명', '주소', '행정동', '포수', '수량', '구분', '연락', '전화', '휴대'];
+      let hIdxE = 0, hScE = -1;
+      for (let i = 0; i < Math.min(20, rawE.length); i++) {
+        const s = rawE[i].map(c => String(c || '').trim()).join('');
+        let sc = 0; HKWS2.forEach(kw => { if (s.includes(kw)) sc++; });
+        if (sc > hScE && rawE[i].filter(c => String(c).trim()).length > 2) { hScE = sc; hIdxE = i; }
+      }
+      const hdrE = Array.from({ length: Math.max(...[0,1,2].map(o => rawE[hIdxE+o]?.length||0)) }, (_, i) => String(rawE[hIdxE]?.[i]||'').trim());
+      const bodyE = rawE.slice(hIdxE + 1).filter(r => r.some(c => String(c).trim()));
+      const selHdrs = selectedColIdxs.map(i => hdrE[i] || `열${i+1}`);
+      const toRow = (row) => selectedColIdxs.map(i => row[i] ?? '');
+      const detG = (row) => { if (cm.gubun === null) return '기초수급자'; const v = String(row[cm.gubun]??'').trim(); return v.includes('차상위') ? '차상위' : '기초수급자'; };
+      let rows = [...bodyE];
+      if (options.sortRows && cm.dong !== null) {
+        rows.sort((a, b) => {
+          let c = String(a[cm.dong]??'').localeCompare(String(b[cm.dong]??''), 'ko', { numeric: true });
+          if (c) return c;
+          c = String(a[cm.addr??-1]??'').localeCompare(String(b[cm.addr??-1]??''), 'ko', { numeric: true });
+          if (c) return c;
+          return String(a[cm.name??-1]??'').localeCompare(String(b[cm.name??-1]??''), 'ko', { numeric: true });
+        });
+      }
+      const dongSet = [...new Set(rows.map(r => String(r[cm.dong]??'-').trim()||'-'))].sort((a,b)=>a.localeCompare(b,'ko',{numeric:true}));
+      const wbOut = XLSX.utils.book_new();
+      const colW = selHdrs.map(h => ({ wch: Math.min(Math.max(String(h).length*2+4, 8), 36) }));
+      if (options.includeSummary) {
+        const aoa = [['행정동','기초수급자(명)','기초수급자(포)','차상위(명)','차상위(포)','합계(명)','합계(포)']];
+        let tsM=0,tsP=0,tcM=0,tcP=0;
+        dongSet.forEach(dong => {
+          const dr = rows.filter(r => (String(r[cm.dong]??'-').trim()||'-')===dong);
+          const sr = dr.filter(r=>detG(r)==='기초수급자'), cr = dr.filter(r=>detG(r)==='차상위');
+          const sP = sr.reduce((s,r)=>s+(parseInt(String(r[cm.qty??-1]??'1').replace(/[^0-9]/g,''))||1),0);
+          const cP = cr.reduce((s,r)=>s+(parseInt(String(r[cm.qty??-1]??'1').replace(/[^0-9]/g,''))||1),0);
+          aoa.push([dong,sr.length,sP,cr.length,cP,dr.length,sP+cP]);
+          tsM+=sr.length; tsP+=sP; tcM+=cr.length; tcP+=cP;
+        });
+        aoa.push(['합계',tsM,tsP,tcM,tcP,tsM+tcM,tsP+tcP]);
+        const ws=XLSX.utils.aoa_to_sheet(aoa); ws['!cols']=[{wch:18},{wch:14},{wch:14},{wch:12},{wch:12},{wch:10},{wch:10}];
+        XLSX.utils.book_append_sheet(wbOut, ws, '요약');
+      }
+      if (options.includeAll) {
+        const ws=XLSX.utils.aoa_to_sheet([selHdrs,...rows.map(toRow)]); ws['!cols']=colW;
+        XLSX.utils.book_append_sheet(wbOut, ws, '합본');
+      }
+      dongSet.forEach(dong => {
+        const dr=rows.filter(r=>(String(r[cm.dong]??'-').trim()||'-')===dong);
+        const safe=dong.substring(0,25).replace(/[\*\[\]:?\/\\]/g,'_')||'기타';
+        if (options.splitGubun && cm.gubun !== null) {
+          const sr=dr.filter(r=>detG(r)==='기초수급자'), cr=dr.filter(r=>detG(r)==='차상위');
+          if (sr.length) { const ws=XLSX.utils.aoa_to_sheet([selHdrs,...sr.map(toRow)]); ws['!cols']=colW; XLSX.utils.book_append_sheet(wbOut, ws, `${safe}_수급`.substring(0,31)); }
+          if (cr.length) { const ws=XLSX.utils.aoa_to_sheet([selHdrs,...cr.map(toRow)]); ws['!cols']=colW; XLSX.utils.book_append_sheet(wbOut, ws, `${safe}_차상위`.substring(0,31)); }
+        } else {
+          const ws=XLSX.utils.aoa_to_sheet([selHdrs,...dr.map(toRow)]); ws['!cols']=colW;
+          XLSX.utils.book_append_sheet(wbOut, ws, safe.substring(0,31));
+        }
+      });
+      const wbout=XLSX.write(wbOut,{bookType:'xlsx',type:'array'});
+      self.postMessage({ok:true,wbout,fileName:fnS});
+      return;
+    }
+
     // ── 기존 표준 내보내기 ───────────────────────────────────────────────
     if (finalRows && exportCols) {
       const ws = XLSX.utils.json_to_sheet(finalRows, { header: exportCols });

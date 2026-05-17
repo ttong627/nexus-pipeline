@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useMemo, useRef } from "react";
-import { auth, onAuthStateChanged, setDoc, getDoc, updateDoc, increment, doc, db, serverTimestamp, addDoc, collection, getDocs, getDocsFromServer, writeBatch, query, where, onSnapshot, GoogleAuthProvider, signInWithPopup } from "./config/firebase.js";
+﻿import React, { useState, useEffect, useMemo, useRef } from "react";
+import { auth, onAuthStateChanged, signOut, setDoc, getDoc, updateDoc, increment, doc, db, serverTimestamp, addDoc, collection, getDocs, getDocsFromServer, writeBatch, query, where, onSnapshot, GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult } from "./config/firebase.js";
+import { APP_VERSION } from "./version.js";
 
 import Dashboard from "./components/Dashboard.jsx";
 import AdminPanel from "./components/AdminPanel.jsx";
@@ -16,17 +17,23 @@ import UtilsModal from "./components/UtilsModal.jsx";
 import CloudBaseModal from "./components/CloudBaseModal.jsx";
 import DbImportModal from "./components/DbImportModal.jsx";
 import ErrorBoundary from "./components/ErrorBoundary.jsx";
+import GlobalLoadingBar from "./components/GlobalLoadingBar.jsx";
 import BaseListManager from "./components/BaseListManager.jsx";
 import CloudListManager from "./components/CloudListManager.jsx";
+import ErrorListManager from "./components/ErrorListManager.jsx";
 import DbOverview from "./components/DbOverview.jsx";
 import IntroScreen from "./components/IntroScreen.jsx";
+import PrevMonthCompareModal from "./components/PrevMonthCompareModal.jsx";
 
 import { processAddress, asyncPool, addTypoRecord, loadTypoDict } from "./engine/addressEngine.js";
 import { parsePhoneNumbers, parseSMS, parseBirthDate, normalizeBirth, extractPhoneNote, formatPhone } from "./utils/parsers.js";
-import { LogOut, ShieldCheck, CheckCircle, Database, Crown, Layers, UserCircle, Undo2, Menu, BarChart3, MapPin } from "lucide-react";
+import { canUseRouteMap, canUseDbOverview, canUseDriverRegistry, getMonthlyLimit, TIER_LABELS } from "./utils/tierUtils.js";
+import { LogOut, ShieldCheck, CheckCircle, Database, Crown, Layers, UserCircle, Undo2, Menu, BarChart3, MapPin, Truck } from "lucide-react";
 import RouteMapModal from "./components/RouteMapModal.jsx";
 import RouteSetupModal from "./components/RouteSetupModal.jsx";
+import RouteQuickModal from "./components/RouteQuickModal.jsx";
 import ShareRouteView from "./components/ShareRouteView.jsx";
+import DriverRegistryModal from "./components/DriverRegistryModal.jsx";
 
 export default function App() {
   const [user, setUser] = useState(null);
@@ -51,7 +58,10 @@ export default function App() {
   const [isBaseUploading, setIsBaseUploading] = useState(false);
   const [engineProgress, setEngineProgress] = useState({ current: 0, total: 0, percent: 0 });
   const [progressLogs, setProgressLogs] = useState([]);
-  const [filter, setFilter] = useState({ text: "", showErrorsOnly: false });
+  const [filter, setFilter] = useState({ text: "", showErrorsOnly: false, showSuccessOnly: false, 구분: '', dong: '', driver: '', noDriver: false, hasNote: false });
+  const [purifyResult, setPurifyResult] = useState(null);
+  const [prevMonthCompare, setPrevMonthCompare] = useState(null); // { warnings, changes, newCount, leftCount }
+  const [showPrevCompare, setShowPrevCompare] = useState(false);
   const [colVis, setColVis] = useState({});
   const [baseCount, setBaseCount] = useState(0);
   const [baseMap, setBaseMap] = useState(null);
@@ -62,7 +72,18 @@ export default function App() {
   const [isBasePurifyMode, setIsBasePurifyMode] = useState(false);
   const [isSavingBaseList, setIsSavingBaseList] = useState(false);
   const isSavingBaseListRef = useRef(false);
+  // ── 전역 로딩 게이지 ─────────────────────────────────────────────
+  const [gLoad, setGLoad] = useState({ show: false });
+  const gStart = (msg, sub = '', pct = null) => setGLoad({ show: true, msg, sub, pct, done: false });
+  const gUpdate = (pct, sub) => setGLoad(p => ({ ...p, pct, ...(sub !== undefined ? { sub } : {}) }));
+  const gDone = (msg = '완료!') => {
+    setGLoad({ show: true, msg, sub: '', pct: 100, done: true });
+    setTimeout(() => setGLoad({ show: false }), 2200);
+  };
+
   const [showIntro, setShowIntro] = useState(false);
+  const [introReason, setIntroReason] = useState('new'); // 'new' | 'region' | 'upgrade'
+  const [introMeta, setIntroMeta] = useState({}); // { region, tier } 등 이유별 추가 정보
   const inqUnsubRef = useRef(null);
 
   const DEFAULT_EXPORT_COLS = [
@@ -92,10 +113,12 @@ export default function App() {
   const [showExportSetting, setShowExportSetting] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   const [showUpgrade, setShowUpgrade] = useState(false);
+  const [upgradeReason, setUpgradeReason] = useState('city_limit');
   const [showUtils, setShowUtils] = useState(false);
   const [showCloudBase, setShowCloudBase] = useState(false);
   const [showRouteMap, setShowRouteMap] = useState(false);
   const [showRouteSetup, setShowRouteSetup] = useState(false);
+  const [showRouteQuick, setShowRouteQuick] = useState(false);
   const [cloudRouteConfig, setCloudRouteConfig] = useState(null);
   const [routeSetupResult, setRouteSetupResult] = useState(null);
   const [shareParams] = useState(() => {
@@ -104,6 +127,7 @@ export default function App() {
     return r ? { shareId: r, driverId: p.get('d') || null } : null;
   });
   const [showHeaderMenu, setShowHeaderMenu] = useState(false);
+  const [showDriverRegistry, setShowDriverRegistry] = useState(false);
   const [profileModal, setProfileModal] = useState({ open: false, isNew: false });
   const [pendingInquiriesCount, setPendingInquiriesCount] = useState(0);
 
@@ -131,12 +155,37 @@ export default function App() {
     let link = document.querySelector("link[rel~='icon']");
     if (!link) { link = document.createElement("link"); link.rel = "icon"; document.head.appendChild(link); }
     link.type = "image/png"; link.href = "ttongpa.png";
-    document.title = "NEXUS PIPELINE V4.0";
+    document.title = `NEXUS PIPELINE ${APP_VERSION}`;
 
-    const unsub = onAuthStateChanged(auth, async u => { 
+    // 리다이렉트 로그인 복귀 처리 (모바일/팝업 차단 환경 fallback)
+    if (localStorage.getItem('nexus_auth_redirect_v1')) {
+      localStorage.removeItem('nexus_auth_redirect_v1');
+      getRedirectResult(auth).catch(err => {
+        console.error('Redirect result error:', err);
+        setAuthLoading(false);
+        if (err?.code !== 'auth/null-user') {
+          alert('Google 로그인에 실패했습니다.\n오류코드: ' + (err?.code || err?.message));
+        }
+      });
+    }
+
+    const unsub = onAuthStateChanged(auth, async u => {
       if (u) {
-        const d = await getDoc(doc(db, "users", u.uid));
+        // 유저 문서 없으면 즉시 생성 (신규 회원 — 리다이렉트 로그인 포함)
+        const userRef = doc(db, "users", u.uid);
+        const d = await getDoc(userRef);
         let userData = d.exists() ? d.data() : {};
+        if (!d.exists()) {
+          await setDoc(userRef, {
+            email: u.email,
+            name: u.displayName,
+            lastLogin: serverTimestamp(),
+            role: "user",
+            tier: "basic"
+          });
+        } else {
+          updateDoc(userRef, { lastLogin: serverTimestamp() }).catch(() => {});
+        }
         
         const ADMIN_EMAILS = ['ttong627@gmail.com', 'admin@logis-op.com', 'jsh6270@gmail.com'];
         const isAdminEmail = ADMIN_EMAILS.includes(u.email);
@@ -156,6 +205,19 @@ export default function App() {
         }
 
         setUser({ ...u, ...userData });
+
+        // 티어 승급 감지 (관리자 제외)
+        if (!isAdminEmail && userData.profileCompleted) {
+          const TIER_RANK = { basic: 0, vip: 1, vvip: 2, sapphire: 3 };
+          const storedTier = localStorage.getItem('nexus_last_tier_v1');
+          const currentTier = userData.tier || 'basic';
+          if (storedTier && (TIER_RANK[currentTier] ?? 0) > (TIER_RANK[storedTier] ?? 0)) {
+            setIntroReason('upgrade');
+            setIntroMeta({ tier: currentTier });
+            setShowIntro(true);
+          }
+          localStorage.setItem('nexus_last_tier_v1', currentTier);
+        }
 
         if (!userData.profileCompleted) {
           setProfileModal({ open: true, isNew: !d.exists() });
@@ -178,6 +240,7 @@ export default function App() {
         setUser(null);
         setShowAuth(true);
         setAuthStatus('unauthenticated');
+        setAuthLoading(false);
       }
     });
     return () => { unsub(); if (inqUnsubRef.current) inqUnsubRef.current(); };
@@ -185,26 +248,38 @@ export default function App() {
 
   const handleGoogleLogin = async () => {
     setAuthLoading(true);
+    const provider = new GoogleAuthProvider();
+    provider.setCustomParameters({ prompt: 'select_account' });
+    const isMobile = /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
     try {
-      const provider = new GoogleAuthProvider();
-      const res = await signInWithPopup(auth, provider);
-      const userRef = doc(db, "users", res.user.uid);
-      const userSnap = await getDoc(userRef);
-      if (!userSnap.exists()) {
-        await setDoc(userRef, {
-          email: res.user.email,
-          name: res.user.displayName,
-          lastLogin: serverTimestamp(),
-          role: "user",
-          tier: "basic"
-        });
+      if (isMobile) {
+        localStorage.setItem('nexus_auth_redirect_v1', '1');
+        await signInWithRedirect(auth, provider);
       } else {
-        await updateDoc(userRef, { lastLogin: serverTimestamp() });
+        await signInWithPopup(auth, provider);
+        setAuthLoading(false); // 팝업 성공 후 로딩 해제
       }
     } catch (error) {
-      console.error("Login Error:", error);
-      alert("로그인 중 오류가 발생했습니다: " + error.message);
-    } finally {
+      const isPopupIssue = error.code === 'auth/popup-blocked'
+        || error.code === 'auth/popup-closed-by-user'
+        || error.code === 'auth/cancelled-popup-request'
+        || error.code === 'auth/internal-error';
+      if (isPopupIssue && !isMobile) {
+        // 팝업 실패 → redirect 자동 전환
+        try {
+          localStorage.setItem('nexus_auth_redirect_v1', '1');
+          await signInWithRedirect(auth, provider);
+          return;
+        } catch (e2) {
+          localStorage.removeItem('nexus_auth_redirect_v1');
+          console.error('Redirect fallback error:', e2);
+        }
+      }
+      localStorage.removeItem('nexus_auth_redirect_v1');
+      console.error('Login error:', error);
+      if (error.code !== 'auth/popup-closed-by-user' && error.code !== 'auth/cancelled-popup-request') {
+        alert('Google 로그인에 실패했습니다.\n오류코드: ' + (error?.code || error?.message));
+      }
       setAuthLoading(false);
     }
   };
@@ -228,10 +303,23 @@ export default function App() {
     return result;
   }, [gridData, sortConfig]);
 
+  const gridDongList = useMemo(() =>
+    [...new Set(gridData.map(r => r.행정동).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'ko', { numeric: true })),
+  [gridData]);
+
+  const gridDriverList = useMemo(() =>
+    [...new Set(gridData.map(r => r.기사).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'ko')),
+  [gridData]);
+
   useEffect(() => {
     let res = sortedData;
     if (filter.showErrorsOnly) res = res.filter(r => r._에러);
     if (filter.showSuccessOnly) res = res.filter(r => !r._에러);
+    if (filter.구분) res = res.filter(r => r.구분 === filter.구분);
+    if (filter.dong) res = res.filter(r => (r.행정동 || '') === filter.dong);
+    if (filter.driver) res = res.filter(r => (r.기사 || '') === filter.driver);
+    if (filter.noDriver) res = res.filter(r => !(r.기사 || '').trim());
+    if (filter.hasNote) res = res.filter(r => (r.특이사항 || '').trim());
     if (filter.text) {
       const txt = filter.text.toLowerCase();
       res = res.filter(r => Object.values(r).some(v => String(v).toLowerCase().includes(txt)));
@@ -259,9 +347,11 @@ export default function App() {
       const buffer = await file.arrayBuffer();
       const worker = new Worker(new URL("./excelWorker.js", import.meta.url), { type: "module" });
       
+      gStart('파일 분석 중...', file.name);
       worker.postMessage({ action: "PARSE_TARGET", buffer, fileName: file.name, dynamicRules: aiRules });
       worker.onmessage = (evt) => {
         if (evt.data.ok && evt.data.action === "PARSE_TARGET") {
+          gDone('파일 분석 완료!');
           const { sheetsData, detectedCity, monthStr } = evt.data;
           setFileInfo(prev => ({ ...prev, city: detectedCity, month: monthStr }));
           setWorksheets(sheetsData);
@@ -307,11 +397,13 @@ export default function App() {
 
           setStep(2);
         } else if (!evt.data.ok) {
-          alert("파일 분석 중 오류가 발생했습니다: " + evt.data.error);
+          setGLoad({ show: false });
+        alert("파일 분석 중 오류가 발생했습니다: " + evt.data.error);
         }
         worker.terminate();
       };
     } catch (err) {
+      setGLoad({ show: false });
       alert("파일을 읽는 중 오류가 발생했습니다.");
     }
   };
@@ -392,9 +484,15 @@ export default function App() {
 
   const handleAnalyzeAll = async () => {
     if (!selectedSheets || selectedSheets.length === 0) return;
+    const total = selectedSheets.reduce((acc, s) => acc + (s.bodyRows?.length || 0), 0);
+    const monthlyLimit = getMonthlyLimit(user?.tier);
+    if (monthlyLimit < Infinity && total > monthlyLimit) {
+      setUpgradeReason('monthlyLimit');
+      setShowUpgrade(true);
+      return;
+    }
     setStep(4);
     setProgressLogs([]);
-    const total = selectedSheets.reduce((acc, s) => acc + (s.bodyRows?.length || 0), 0);
     let count = 0;
     setEngineProgress({ current: 0, total, percent: 0 });
 
@@ -464,8 +562,8 @@ export default function App() {
               baseEntry && (importFields === null || importFields?.includes('note')) && baseEntry.note
                 ? `◆${baseEntry.note.replace(/^\[기본\]\s*/g, '')}` : '',
             ].filter(Boolean).join(' ').trim() || "",
-            기사: getVal(row, 'driver') || (baseEntry && (importFields === null || importFields?.includes('driver')) ? baseEntry.driver : '') || "",
-            배송순번: getVal(row, 'seqNo') || (baseEntry && (importFields === null || importFields?.includes('seqNo')) ? baseEntry.seqNo : '') || "",
+            기사: getVal(row, 'driver') || "",
+            배송순번: getVal(row, 'seqNo') || "",
             _에러: processedRow.확인필요,
             _사유: processedRow.확인사유,
             _lat: processedRow.lat || baseEntry?.lat || null,
@@ -479,7 +577,89 @@ export default function App() {
     
     setEngineProgress({ current: total, total, percent: 100 });
     pushHistory(results);
+
+    // 정제 결과 요약
+    const errList = results.filter(r => r._에러);
+    const apiFailCount = errList.filter(r => (r._사유 || '').includes('API') || (r._사유 || '').includes('응답')).length;
+    const emptyAddrCount = errList.filter(r => (r._사유 || '').includes('공란') || (r._사유 || '').includes('비어')).length;
+    const shortAddrCount = errList.filter(r => (r._사유 || '').includes('3자') || (r._사유 || '').includes('짧')).length;
+    const otherErrCount = errList.length - apiFailCount - emptyAddrCount - shortAddrCount;
+    setPurifyResult({
+      totalCount: results.length,
+      successCount: results.length - errList.length,
+      errorCount: errList.length,
+      apiFailCount,
+      emptyAddrCount,
+      shortAddrCount,
+      otherErrCount,
+      importedCount: results.filter(r => r._이식됨).length,
+    });
+
     setStep(5);
+
+    // 전월 delivery_history 로드 → 전월 비교 (비동기, 결과 화면 표시 후 실행)
+    try {
+      const city = fileInfo?.city;
+      if (city) {
+        const now = new Date();
+        const prevMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+        const prevMonthId = `${prevMonth.getFullYear()}-${String(prevMonth.getMonth() + 1).padStart(2, '0')}`;
+        const prevSnap = await getDocs(
+          collection(db, 'delivery_history', city, 'months', prevMonthId, 'records')
+        );
+        if (!prevSnap.empty) {
+          const prevRecords = prevSnap.docs.map(d => d.data());
+          const prevMap = new Map();
+          prevRecords.forEach(r => {
+            const k = r.birthKey ? `${r.name}__${r.birthKey}` : `${r.name}__${(r.mobile || r.landline || '').replace(/[^\d]/g, '')}`;
+            if (k.length > 3) prevMap.set(k, r);
+          });
+
+          const currentKeys = new Set();
+          const changes = [];
+          let dongStats = {};
+
+          results.forEach(r => {
+            const bk = r.생년월일 ? `${r.이름}__${r.생년월일}` : `${r.이름}__${(r.휴대폰 || r.유선전화 || '').replace(/[^\d]/g, '')}`;
+            currentKeys.add(bk);
+            const prev = prevMap.get(bk);
+            const dong = r.행정동 || '미분류';
+            if (!dongStats[dong]) dongStats[dong] = { total: 0, changed: 0 };
+            dongStats[dong].total++;
+
+            if (prev) {
+              const prevAddr = (prev.address || '').trim();
+              const curAddr = (r.주소 || '').trim();
+              const addrChanged = prevAddr && curAddr && prevAddr !== curAddr && prevAddr.slice(0, 10) !== curAddr.slice(0, 10);
+              if (addrChanged) {
+                dongStats[dong].changed++;
+                changes.push({ type: 'address', name: r.이름, dong, prevAddr, curAddr });
+              }
+            } else {
+              changes.push({ type: 'new', name: r.이름, dong, prevAddr: '', curAddr: r.주소 || '' });
+            }
+          });
+
+          const leftCount = [...prevMap.keys()].filter(k => !currentKeys.has(k)).length;
+
+          // 경고 조건: 행정동 30% 이상 또는 20건 이상 변경
+          const warnings = Object.entries(dongStats)
+            .filter(([, v]) => v.changed > 0 && (v.changed / v.total >= 0.3 || v.changed >= 20))
+            .map(([dong, v]) => ({ dong, changed: v.changed, total: v.total, rate: Math.round(v.changed / v.total * 100) }))
+            .sort((a, b) => b.changed - a.changed);
+
+          const newCount = changes.filter(c => c.type === 'new').length;
+          const addrChangeCount = changes.filter(c => c.type === 'address').length;
+
+          if (warnings.length > 0 || addrChangeCount > 0 || newCount > 0 || leftCount > 0) {
+            setPrevMonthCompare({ warnings, changes, newCount, leftCount, addrChangeCount, prevMonthId });
+            if (warnings.length > 0) setShowPrevCompare(true); // 경고 있으면 자동 표시
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[전월 비교 로드 실패 — 무시]', e);
+    }
   };
 
   const handleCellEdit = (id, field, value) => {
@@ -576,9 +756,10 @@ export default function App() {
       const 수급자Count = validData.filter(r => r.구분 === '기초수급자').length;
       const 차상위Count = validData.filter(r => r.구분 === '차상위').length;
 
-      // 도시 상위 문서 생성 (없으면) — getDocs(collection('cloud_lists'))가 인식하려면 명시적 문서 필요
+      // 도시 상위 문서 — fetchAllCities 1회 읽기로 카드 통계 표시 가능하도록 통계 포함 저장
       await setDoc(doc(db, 'cloud_lists', city), {
         city, lastMonthId: monthStr, lastUpdatedAt: serverTimestamp(),
+        latestTotalCount: validData.length, latest수급자Count: 수급자Count, latest차상위Count: 차상위Count,
       }, { merge: true });
 
       const metaRef = doc(db, 'cloud_lists', city, 'months', monthStr);
@@ -590,6 +771,7 @@ export default function App() {
       });
 
       // 필드 정규화 후 500건씩 배치 저장
+      gStart('클라우드 저장 중...', `${city} ${monthStr} · ${validData.length.toLocaleString()}건`, 0);
       for (let i = 0; i < validData.length; i += 500) {
         const batch = writeBatch(db);
         validData.slice(i, i + 500).forEach((r, j) => {
@@ -613,6 +795,7 @@ export default function App() {
           });
         });
         await batch.commit();
+        gUpdate(Math.round(Math.min(i + 500, validData.length) / validData.length * 100));
       }
 
       await addDoc(collection(db, 'audit_logs'), {
@@ -620,6 +803,42 @@ export default function App() {
         count: validData.length, timestamp: serverTimestamp(),
         adminEmail: user?.email || 'unknown',
       });
+
+      // delivery_history 동시 저장 (전월 비교·기사/순번/좌표 복원 기반 데이터)
+      try {
+        const dhColRef = collection(db, 'delivery_history', city, 'months', monthStr, 'records');
+        const existingDH = await getDocs(dhColRef);
+        if (!existingDH.empty) {
+          for (let i = 0; i < existingDH.docs.length; i += 499) {
+            const b = writeBatch(db);
+            existingDH.docs.slice(i, i + 499).forEach(d => b.delete(d.ref));
+            await b.commit();
+          }
+        }
+        await setDoc(doc(db, 'delivery_history', city), { city, lastMonthId: monthStr, lastUpdatedAt: serverTimestamp() }, { merge: true });
+        await setDoc(doc(db, 'delivery_history', city, 'months', monthStr), { city, monthId: monthStr, totalCount: validData.length, savedAt: serverTimestamp(), savedBy: user?.email || 'unknown' });
+        for (let i = 0; i < validData.length; i += 499) {
+          const b = writeBatch(db);
+          validData.slice(i, i + 499).forEach(r => {
+            const ref = doc(collection(db, 'delivery_history', city, 'months', monthStr, 'records'));
+            b.set(ref, {
+              name: r.이름 || '',
+              birthKey: r.생년월일 || '',
+              dong: r.행정동 || '',
+              address: r.주소 || '',
+              lat: r._lat || null,
+              lng: r._lng || null,
+              driver: r.기사 || '',
+              seqNo: parseInt(r.배송순번 || '0') || 0,
+              sms: r.문자수신 || 'N',
+              gubun: r.구분 || '',
+            });
+          });
+          await b.commit();
+        }
+      } catch (dhErr) {
+        console.warn('[delivery_history 저장 실패 — 무시]', dhErr);
+      }
 
       // base_lists에 좌표·특이사항 sync-back (기본명단 저장 없이 클라우드만 저장한 경우 커버)
       try {
@@ -662,8 +881,10 @@ export default function App() {
         }
       } catch { /* sync 실패는 무시 — 핵심 저장은 완료됨 */ }
 
+      gDone(`${city} ${monthStr} · ${validData.length.toLocaleString()}건 저장 완료`);
       alert(`✅ ${city} ${monthStr} 월별 명단 ${validData.length}건이 클라우드에 저장되었습니다.`);
     } catch (e) {
+      setGLoad({ show: false });
       console.error(e);
       alert('저장 실패: ' + e.message);
     }
@@ -678,7 +899,6 @@ export default function App() {
     const digitKey   = (v) => (v || '').replace(/[^\d]/g, '');   // 인덱스 키용 (숫자만)
 
     try {
-      // ① 기존 DB 레코드 전체 로드 — 캐시 우회하여 서버 최신 데이터 직접 조회
       const existingSnap = await getDocsFromServer(collection(db, 'base_lists', city, 'records'));
       const existing = existingSnap.docs.map(d => ({ id: d.id, ...d.data() }));
 
@@ -728,15 +948,12 @@ export default function App() {
 
         const payload = {
           name, birthKey,
-          dong:    row.행정동   || '',
-          address: row.주소     || '',
+          dong:    row.행정동 || '',
+          address: row.주소   || '',
           mobile,  landline,
           note:    (row.특이사항 || '').replace(/\s*◆[^◆]*/g, '').trim() || '',
-          driver:  row.기사     || '',
-          seqNo:   parseInt(row.배송순번 || '0') || 0,
           sms:     row.문자수신 || '',
-          ...(row._lat  ? { lat: row._lat, lng: row._lng } : {}),
-          ...(row._isApt !== undefined ? { isApt: row._isApt } : {}),
+          updatedAt: serverTimestamp(),
         };
 
         if (birthKey) {
@@ -814,6 +1031,7 @@ export default function App() {
 
       let successCount = 0;
       const errors = [];
+      gStart('기본명단 저장 중...', `${city} · ${allOps.length.toLocaleString()}건`, 0);
 
       for (let i = 0; i < allOps.length; i += 499) {
         try {
@@ -828,6 +1046,7 @@ export default function App() {
           });
           await batch.commit();
           successCount += Math.min(499, allOps.length - i);
+          gUpdate(Math.round(Math.min(i + 499, allOps.length) / allOps.length * 100));
         } catch (batchErr) {
           console.error(`[배치 ${i}~${i+499}] 오류:`, batchErr);
           errors.push(`배치 ${Math.floor(i/499)+1}: ${batchErr.message}`);
@@ -848,11 +1067,14 @@ export default function App() {
       });
 
       if (errors.length > 0) {
+        setGLoad({ show: false });
         alert(`⚠️ 일부 오류 발생!\n신규: ${adds.length}건, 업데이트: ${updates.length}건\n성공: ${successCount}건, 실패 배치: ${errors.length}개\n\n${errors.join('\n')}`);
       } else {
+        gDone(`기본명단 저장 완료 · 신규 ${adds.length}건 / 업데이트 ${updates.length}건`);
         alert(`✅ 기본명단 저장 완료!\n신규 추가: ${adds.length}건\n기존 업데이트: ${updates.length}건\n\n[진단] 기존 DB: ${existing.length}건 / 생년월일 인덱스: ${Object.keys(liveByBirth).length}건 / 전화번호 인덱스: ${Object.keys(liveByPhone).length}건`);
       }
     } catch (e) {
+      setGLoad({ show: false });
       console.error('[handleBatchSaveBaseList]', e);
       alert('일괄 저장 실패: ' + e.message);
     } finally {
@@ -866,9 +1088,54 @@ export default function App() {
     pushHistory(newData);
   };
 
+  // 이번달 배송명단 → 결과화면으로 불러오기
+  const handleOpenInResultGrid = (city, monthId, cloudRecords) => {
+    const mapped = cloudRecords.map((r, idx) => ({
+      ...r,
+      id: r.id || `cloud_${idx}`,
+      품명: r.품명 || '',
+    }));
+    setFileInfo({ city, month: monthId });
+    setPurifyResult(null);
+    setPrevMonthCompare(null);
+    setFilter({ text: '', showErrorsOnly: false, showSuccessOnly: false, 구분: '', dong: '', driver: '', noDriver: false, hasNote: false });
+    setCurrentPage(1);
+    setSortConfig({ key: '', direction: 'asc' });
+    pushHistory(mapped);
+    setStep(5);
+  };
+
   const handleBatchSetNote = (ids, note) => {
     const newData = gridData.map(r => ids.has(r.id) ? { ...r, 특이사항: note } : r);
     pushHistory(newData);
+  };
+
+  const handleMovePhones = () => {
+    const detectMobile = (phone) => {
+      const digits = (phone || '').replace(/[^0-9]/g, '');
+      if (/^01[016789]\d{7,8}$/.test(digits)) return digits;
+      if (/^1[016789]\d{7,8}$/.test(digits)) return '0' + digits;
+      return null;
+    };
+    const formatMobile = (digits) => {
+      if (digits.length === 11) return `${digits.slice(0,3)}-${digits.slice(3,7)}-${digits.slice(7)}`;
+      if (digits.length === 10) return `${digits.slice(0,3)}-${digits.slice(3,6)}-${digits.slice(6)}`;
+      return digits;
+    };
+    const targets = gridData.filter(r => {
+      const mobileDigits = (r.휴대폰 || '').replace(/[^0-9]/g, '');
+      return !mobileDigits && detectMobile(r.유선전화);
+    });
+    if (!targets.length) { alert('이동할 전화번호가 없습니다.'); return; }
+    if (!window.confirm(`유선전화에 있는 휴대폰 형식 번호 ${targets.length}건을 휴대폰으로 이동합니다.`)) return;
+    const targetIds = new Set(targets.map(r => r.id));
+    const newData = gridData.map(r => {
+      if (!targetIds.has(r.id)) return r;
+      const digits = detectMobile(r.유선전화);
+      return { ...r, 휴대폰: formatMobile(digits), 유선전화: '' };
+    });
+    pushHistory(newData);
+    alert(`전화번호 이동 완료! ${targets.length}건`);
   };
 
   const _buildExportFileName = (prefix = '') => {
@@ -948,8 +1215,48 @@ export default function App() {
       fileName: _buildExportFileName('[행정동요약]'),
     });
   };
+
+  const handleExportByDriver = () => {
+    if (!filteredData.length) return alert('내보낼 데이터가 없습니다.');
+    const activeCols = exportColOrder.filter(c => c.on);
+    const worker = new Worker(new URL('./exportWorker.js', import.meta.url), { type: 'module' });
+    worker.onmessage = (e) => {
+      worker.terminate();
+      if (e.data.success) {
+        const blob = new Blob([e.data.wbout], { type: 'application/octet-stream' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = e.data.fileName || _buildExportFileName('[기사별]');
+        a.click();
+      } else {
+        alert('기사별 내보내기 오류: ' + e.data.error);
+      }
+    };
+    worker.onerror = () => { worker.terminate(); alert('내보내기 워커 오류'); };
+    worker.postMessage({
+      action: 'EXPORT_DRIVER_SHEETS',
+      rows: filteredData,
+      activeCols,
+      fileName: _buildExportFileName('[기사별]'),
+    });
+  };
   const onHelp = () => setShowHelp(true);
-  const onLogout = () => auth.signOut();
+  const onLogout = async () => {
+    try {
+      await signOut(auth);
+      setUser(null);
+      setShowAuth(true);
+      setAuthStatus('unauthenticated');
+      setAuthLoading(false);
+      setStep(0);
+      setGridData([]);
+      setFileInfo(null);
+      setWorksheets([]);
+    } catch (e) {
+      console.error('Logout error:', e);
+      setAuthLoading(false);
+    }
+  };
 
   // 공유 URL로 접근 시 로그인 없이 기사 전용 지도 표시
   if (shareParams) return (
@@ -964,7 +1271,7 @@ export default function App() {
     <ErrorBoundary>
       <div className="w-full h-screen bg-[#050505] text-white flex flex-col font-sans overflow-hidden">
 
-        {showIntro && <IntroScreen user={user} onComplete={() => setShowIntro(false)} />}
+        {showIntro && <IntroScreen user={user} reason={introReason} meta={introMeta} onComplete={() => setShowIntro(false)} />}
 
         {/* HEADER RESTORED */}
         <header className="h-16 shrink-0 bg-[#0a0a0a] border-b border-[#222] flex items-center justify-between px-6 z-50">
@@ -981,10 +1288,10 @@ export default function App() {
               <div className="flex items-center gap-2">
                 {[1, 2, 3, 4, 5].map(s => (
                   <div key={s} className="flex items-center">
-                    <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm transition-all ${step === s ? "bg-[#22c55e] text-black shadow-[0_0_10px_rgba(34,197,94,0.5)]" : step > s ? "bg-[#166534] text-white" : "bg-[#222] text-gray-500"}`}>
+                    <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm transition-all ${step === s ? "bg-[#3b82f6] text-black shadow-[0_0_10px_rgba(59,130,246,0.5)]" : step > s ? "bg-[#1e3a8a] text-white" : "bg-[#222] text-gray-500"}`}>
                       {step > s ? <CheckCircle size={16} /> : s}
                     </div>
-                    {s < 5 && <div className={`w-10 h-0.5 mx-1 ${step > s ? "bg-[#166534]" : "bg-[#222]"}`} />}
+                    {s < 5 && <div className={`w-10 h-0.5 mx-1 ${step > s ? "bg-[#1e3a8a]" : "bg-[#222]"}`} />}
                   </div>
                 ))}
               </div>
@@ -1003,20 +1310,40 @@ export default function App() {
             <div className="relative">
               <button
                 onClick={() => setShowHeaderMenu(v => !v)}
-                className="px-4 py-2 bg-[#111] hover:bg-[#1a1a1a] border border-[#333] hover:border-[#22c55e]/50 text-gray-300 font-bold rounded-lg text-xs transition-all flex items-center gap-2"
+                className="px-4 py-2 bg-[#111] hover:bg-[#1a1a1a] border border-[#333] hover:border-[#3b82f6]/50 text-gray-300 font-bold rounded-lg text-xs transition-all flex items-center gap-2"
               >
                 <Menu size={16} /> 메뉴
               </button>
               {showHeaderMenu && (
                 <>
                   <div className="fixed inset-0 z-40" onClick={() => setShowHeaderMenu(false)} />
-                  <div className="absolute right-0 top-full mt-2 w-52 bg-[#0d1a0f] border border-[#22c55e]/20 rounded-xl shadow-[0_8px_32px_rgba(0,0,0,0.6)] z-50 overflow-hidden">
+                  <div className="absolute right-0 top-full mt-2 w-52 bg-[#060c18] border border-[#3b82f6]/20 rounded-xl shadow-[0_8px_32px_rgba(0,0,0,0.6)] z-50 overflow-hidden">
                     <div className="p-1.5 space-y-0.5">
                       <button
-                        onClick={() => { setStep(9); setDbNavCity(''); setShowHeaderMenu(false); }}
+                        onClick={() => {
+                          if (!canUseDbOverview(user?.tier)) {
+                            setUpgradeReason('dbOverview'); setShowUpgrade(true); setShowHeaderMenu(false);
+                          } else {
+                            setStep(9); setDbNavCity(''); setShowHeaderMenu(false);
+                          }
+                        }}
                         className="w-full px-4 py-2.5 flex items-center gap-3 text-violet-300 hover:bg-violet-900/30 rounded-lg text-xs font-bold transition-colors text-left"
                       >
                         <BarChart3 size={15} /> DB 현황 조회
+                        {!canUseDbOverview(user?.tier) && <span className="ml-auto text-[9px] bg-purple-900/40 text-purple-400 border border-purple-700/40 px-1.5 py-0.5 rounded font-black">VVIP+</span>}
+                      </button>
+                      <button
+                        onClick={() => {
+                          if (!canUseDriverRegistry(user?.tier)) {
+                            setUpgradeReason('city_limit'); setShowUpgrade(true); setShowHeaderMenu(false);
+                          } else {
+                            setShowDriverRegistry(true); setShowHeaderMenu(false);
+                          }
+                        }}
+                        className="w-full px-4 py-2.5 flex items-center gap-3 text-emerald-300 hover:bg-emerald-900/30 rounded-lg text-xs font-bold transition-colors text-left"
+                      >
+                        <Truck size={15} /> 소속사 기사 관리
+                        {!canUseDriverRegistry(user?.tier) && <span className="ml-auto text-[9px] bg-purple-900/40 text-purple-400 border border-purple-700/40 px-1.5 py-0.5 rounded font-black">VVIP+</span>}
                       </button>
                       <div className="my-0.5 border-t border-[#1a1a1a]" />
                       <button
@@ -1024,6 +1351,19 @@ export default function App() {
                         className="w-full px-4 py-2.5 flex items-center gap-3 text-blue-300 hover:bg-blue-900/30 rounded-lg text-xs font-bold transition-colors text-left"
                       >
                         <Database size={15} /> 이번달 배송명단
+                      </button>
+                      <button
+                        onClick={() => {
+                          if (!canUseRouteMap(user?.tier)) {
+                            setUpgradeReason('routeMap'); setShowUpgrade(true); setShowHeaderMenu(false);
+                          } else {
+                            setShowRouteQuick(true); setShowHeaderMenu(false);
+                          }
+                        }}
+                        className="w-full px-4 py-2.5 flex items-center gap-3 text-[#3b82f6] hover:bg-[#3b82f6]/10 rounded-lg text-xs font-bold transition-colors text-left"
+                      >
+                        <MapPin size={15} /> 기사 배정 / 루트맵
+                        {!canUseRouteMap(user?.tier) && <span className="ml-auto text-[9px] bg-blue-900/40 text-blue-400 border border-blue-700/40 px-1.5 py-0.5 rounded font-black">VIP+</span>}
                       </button>
                       <button
                         onClick={() => { setStep(6); setDbNavCity(''); setShowHeaderMenu(false); }}
@@ -1038,7 +1378,7 @@ export default function App() {
                         <Layers size={15} /> 부가서비스
                       </button>
                       <button
-                        onClick={() => { setShowUpgrade(true); setShowHeaderMenu(false); }}
+                        onClick={() => { setUpgradeReason('city_limit'); setShowUpgrade(true); setShowHeaderMenu(false); }}
                         className="w-full px-4 py-2.5 flex items-center gap-3 text-indigo-300 hover:bg-indigo-900/30 rounded-lg text-xs font-bold transition-colors text-left"
                       >
                         <Crown size={15} /> 회원등급 관리
@@ -1055,6 +1395,25 @@ export default function App() {
               )}
             </div>
 
+            {canUseRouteMap(user?.tier) ? (
+              <button
+                onClick={() => { setShowRouteQuick(true); }}
+                className="px-4 py-2 bg-[#050c18] border border-[#3b82f6]/40 text-[#3b82f6] font-bold rounded-lg text-xs transition-all flex items-center gap-2 hover:bg-[#0a1a30]"
+              >
+                <MapPin size={16} /> 기사배정/루트맵
+              </button>
+            ) : null}
+            {gridData.some(r => r._에러) && (
+              <button
+                onClick={() => setStep(10)}
+                className="px-4 py-2 bg-red-950/40 text-red-400 border border-red-500/40 hover:bg-red-900/50 font-bold rounded-lg text-xs transition-all flex items-center gap-2"
+              >
+                <span className="inline-flex items-center justify-center w-4 h-4 bg-red-500 text-white text-[9px] font-black rounded-full">
+                  {gridData.filter(r => r._에러).length}
+                </span>
+                오류 명단
+              </button>
+            )}
             {user?.role === "admin" && (
               <button onClick={() => setStep(7)} className="relative px-4 py-2 bg-purple-900/40 text-purple-300 border border-purple-500/50 hover:bg-purple-900/60 font-bold rounded-lg text-xs transition-all flex items-center gap-2">
                 <ShieldCheck size={16} /> 관리자 패널
@@ -1088,7 +1447,7 @@ export default function App() {
                   차상위 {gridData.filter(d => d.구분 === '차상위').reduce((s, d) => s + (parseInt(d.포수) || 0), 0).toLocaleString()}포
                 </span>
                 <span className="text-gray-700">|</span>
-                <span className="text-[#22c55e] font-black">
+                <span className="text-[#3b82f6] font-black">
                   전체 {gridData.reduce((s, d) => s + (parseInt(d.포수) || 0), 0).toLocaleString()}포
                 </span>
                 <span className="ml-1 text-[10px] text-gray-600">({gridData.length.toLocaleString()}명)</span>
@@ -1107,7 +1466,7 @@ export default function App() {
                       <span className="text-gray-700">|</span>
                       <span className="text-amber-300 font-black">차상위 {cha.toLocaleString()}포</span>
                       <span className="text-gray-700">|</span>
-                      <span className="text-[#22c55e] font-black">전체 {total.toLocaleString()}포</span>
+                      <span className="text-[#3b82f6] font-black">전체 {total.toLocaleString()}포</span>
                       <span className="ml-1 text-[10px] text-gray-600 italic">(예상)</span>
                     </>
                   );
@@ -1117,16 +1476,54 @@ export default function App() {
           </div>
         )}
 
+        {/* ── 단계 진행 표시기 (step 1~5) ─────────────────────────────── */}
+        {step >= 1 && step <= 5 && (
+          <div className="shrink-0 bg-[#040404] border-b border-[#151515] px-6 py-2.5 flex items-center justify-center gap-0">
+            {[
+              { n: 1, label: '업로드' },
+              { n: 2, label: '시트분류' },
+              { n: 3, label: '컬럼매핑' },
+              { n: 4, label: '주소정제' },
+              { n: 5, label: '결과확인' },
+            ].map(({ n, label }, i) => {
+              const done = step > n;
+              const active = step === n;
+              return (
+                <div key={n} className="flex items-center">
+                  <div className="flex items-center gap-1.5">
+                    <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-black transition-all ${
+                      done    ? 'bg-[#3b82f6] text-black' :
+                      active  ? 'bg-[#3b82f6]/20 border border-[#3b82f6] text-[#3b82f6]' :
+                               'bg-[#111] border border-[#333] text-gray-600'
+                    }`}>
+                      {done ? '✓' : n}
+                    </div>
+                    <span className={`text-xs font-bold transition-all ${
+                      done   ? 'text-[#3b82f6]/60' :
+                      active ? 'text-[#3b82f6]' :
+                               'text-gray-600'
+                    }`}>{label}</span>
+                  </div>
+                  {i < 4 && (
+                    <div className={`w-8 h-px mx-2 transition-all ${step > n ? 'bg-[#3b82f6]/40' : 'bg-[#222]'}`} />
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
         <main className="flex-1 relative overflow-hidden bg-[#050505] flex flex-col">
-          {step === 0 && <Dashboard user={user} onLogout={onLogout} onStart={(s) => setStep(typeof s === 'number' ? s : 1)} onHelp={onHelp} setFileInfo={setFileInfo} setWorksheets={setWorksheets} setBaseCount={setBaseCount} gridData={gridData} setGridData={setGridData} />}
+          {step === 0 && <Dashboard user={user} onLogout={onLogout} onStart={(s) => setStep(typeof s === 'number' ? s : 1)} onHelp={onHelp} setFileInfo={setFileInfo} setWorksheets={setWorksheets} setBaseCount={setBaseCount} gridData={gridData} setGridData={setGridData} onCloudCard={(city) => { setDbNavCity(city); setStep(8); }} onBaseCard={(city) => { setDbNavCity(city); setStep(6); }} />}
           {step === 1 && <Step1_Upload handleDragOver={handleDragOver} handleDrop={handleDrop} handleFileUpload={handleFileUpload} handleUnifiedDrop={handleUnifiedDrop} isBaseUploading={isBaseUploading} step={step} onHelp={onHelp} onCloudFetch={() => setShowCloudBase(true)} />}
           {step === 2 && <Step2_SheetSelect step={step} setStep={setStep} fileInfo={fileInfo} setFileInfo={setFileInfo} worksheets={worksheets} setWorksheets={setWorksheets} setSelectedSheets={setSelectedSheets} onHelp={onHelp} handleSecondFileUpload={handleSecondFileUpload} />}
           {step === 3 && <Step3_Mapping step={step} setStep={setStep} selectedSheets={selectedSheets} worksheets={worksheets} mapDefs={mapDefs} setMapDefs={setMapDefs} startProcessing={handleAnalyzeAll} onHelp={onHelp} isBasePurifyMode={isBasePurifyMode} setIsBasePurifyMode={setIsBasePurifyMode} onOpenDbImport={() => setShowDbImport(true)} dbImportReady={dbImportReady} onUserMapping={handleUserMapping} />}
           {step === 4 && <LoadingScreen progress={engineProgress} logs={progressLogs} />}
-          {step === 5 && <ResultGrid step={step} setStep={setStep} fileInfo={fileInfo} filter={filter} setFilter={setFilter} gridData={gridData} filteredData={filteredData} paginatedData={paginatedData} currentPage={currentPage} setCurrentPage={setCurrentPage} itemsPerPage={itemsPerPage} colVis={colVis} sortConfig={sortConfig} setSortConfig={setSortConfig} handleCellEdit={handleCellEdit} handleAddressKeyDown={handleAddressKeyDown} handleUpdateBaseList={handleUpdateBaseList} handleBatchSaveBaseList={handleBatchSaveBaseList} isSavingBaseList={isSavingBaseList} handleSaveMonthlyList={handleSaveMonthlyList} setShowExportSetting={setShowExportSetting} handleExport={handleExport} handleExportErrors={handleExportErrors} handleExportDongSummary={handleExportDongSummary} handleDeleteRows={handleDeleteRows} handleBatchSetNote={handleBatchSetNote} onHelp={onHelp} onOpenRouteMap={() => { setCloudRouteConfig(null); setShowRouteSetup(true); }} />}
+          {step === 5 && <ResultGrid step={step} setStep={setStep} fileInfo={fileInfo} filter={filter} setFilter={setFilter} dongList={gridDongList} driverList={gridDriverList} gridData={gridData} filteredData={filteredData} paginatedData={paginatedData} currentPage={currentPage} setCurrentPage={setCurrentPage} itemsPerPage={itemsPerPage} colVis={colVis} sortConfig={sortConfig} setSortConfig={setSortConfig} handleCellEdit={handleCellEdit} handleAddressKeyDown={handleAddressKeyDown} handleUpdateBaseList={handleUpdateBaseList} handleBatchSaveBaseList={handleBatchSaveBaseList} isSavingBaseList={isSavingBaseList} handleSaveMonthlyList={handleSaveMonthlyList} setShowExportSetting={setShowExportSetting} handleExport={handleExport} handleExportErrors={handleExportErrors} handleExportDongSummary={handleExportDongSummary} handleExportByDriver={handleExportByDriver} handleDeleteRows={handleDeleteRows} handleBatchSetNote={handleBatchSetNote} onHelp={onHelp} purifyResult={purifyResult} onClosePurifyResult={() => setPurifyResult(null)} onMovePhones={handleMovePhones} onOpenRouteMap={() => { if (!canUseRouteMap(user?.tier)) { setUpgradeReason('routeMap'); setShowUpgrade(true); } else { setCloudRouteConfig(null); setShowRouteSetup(true); } }} />}
+          {step === 10 && <ErrorListManager gridData={gridData} onBack={() => setStep(gridData.length ? 5 : 0)} handleCellEdit={handleCellEdit} handleAddressKeyDown={handleAddressKeyDown} handleExportErrors={handleExportErrors} />}
           {step === 6 && <BaseListManager user={user} initialCity={dbNavCity} onBack={() => { setStep(0); setDbNavCity(''); }} />}
           {step === 7 && <AdminPanel user={user} onClose={() => setStep(0)} />}
-          {step === 8 && <CloudListManager user={user} initialCity={dbNavCity} onBack={() => { setStep(0); setDbNavCity(''); }} onOpenRouteMap={(city, monthId, orgDongs) => { setCloudRouteConfig({ city, monthId, orgDongs }); setShowRouteSetup(true); }} />}
+          {step === 8 && <CloudListManager user={user} initialCity={dbNavCity} onBack={() => { setStep(0); setDbNavCity(''); }} onOpenRouteMap={(city, monthId, orgDongs) => { if (!canUseRouteMap(user?.tier)) { setUpgradeReason('routeMap'); setShowUpgrade(true); } else { setCloudRouteConfig({ city, monthId, orgDongs }); setShowRouteSetup(true); } }} onOpenInResultGrid={handleOpenInResultGrid} />}
           {step === 9 && (
             <DbOverview
               onBack={() => setStep(0)}
@@ -1138,10 +1535,21 @@ export default function App() {
         
         {/* RESTORED MODAL RENDERS */}
         {showHelp && <HelpModal onClose={() => setShowHelp(false)} />}
-        {showUtils && <UtilsModal onClose={() => setShowUtils(false)} />}
-        {showUpgrade && <UpgradeModal user={user} userTier={user?.tier || 'basic'} usedCount={baseCount} userMaxCities={user?.maxCities || 1} onClose={() => setShowUpgrade(false)} />}
+        {showUtils && <UtilsModal user={user} onClose={() => setShowUtils(false)} />}
+        {showUpgrade && <UpgradeModal user={user} userTier={user?.tier || 'basic'} usedCount={baseCount} userMaxCities={user?.maxCities || 1} reason={upgradeReason} onClose={() => setShowUpgrade(false)} />}
         {showCloudBase && <CloudBaseModal user={user} onClose={() => setShowCloudBase(false)} onImport={(newBaseMap, city, count) => { setBaseMap(newBaseMap); setBaseCount(count); setImportFields(null); setDbImportReady(null); setShowCloudBase(false); }} />}
         {showDbImport && <DbImportModal defaultCity={fileInfo?.city || ''} onClose={() => setShowDbImport(false)} onImport={(newBaseMap, fields, _city, count) => { setBaseMap(newBaseMap); setImportFields(fields); setDbImportReady({ count, fields }); setShowDbImport(false); }} />}
+        {showRouteQuick && (
+          <RouteQuickModal
+            user={user}
+            onClose={() => setShowRouteQuick(false)}
+            onConfirm={(city, monthId) => {
+              setCloudRouteConfig({ city, monthId, orgDongs: null });
+              setShowRouteQuick(false);
+              setShowRouteSetup(true);
+            }}
+          />
+        )}
         {showRouteSetup && (
           <RouteSetupModal
             mode={cloudRouteConfig ? 'cloud' : 'local'}
@@ -1150,8 +1558,9 @@ export default function App() {
             cloudCity={cloudRouteConfig?.city}
             cloudMonthId={cloudRouteConfig?.monthId}
             orgDongs={cloudRouteConfig?.orgDongs || null}
-            onStart={({ selectedDongs, drivers, dongDriverMap }) => {
-              setRouteSetupResult({ selectedDongs, drivers, dongDriverMap });
+            user={user}
+            onStart={({ selectedDongs, drivers, dongDriverMap, baseDailyQty }) => {
+              setRouteSetupResult({ selectedDongs, drivers, dongDriverMap, baseDailyQty });
               setShowRouteSetup(false);
               setShowRouteMap(true);
             }}
@@ -1169,9 +1578,23 @@ export default function App() {
             orgDongs={cloudRouteConfig?.orgDongs || null}
             initialDrivers={routeSetupResult?.drivers || null}
             selectedDongs={routeSetupResult?.selectedDongs || null}
+            baseDailyQty={routeSetupResult?.baseDailyQty || 40}
           />
         )}
-        {profileModal.open && <ProfileSetupModal user={user} isNewUser={profileModal.isNew} onClose={() => { const wasNew = profileModal.isNew; setProfileModal({ open: false, isNew: false }); if (wasNew) setShowIntro(true); }} />}
+        {showDriverRegistry && (
+          <DriverRegistryModal
+            user={user}
+            onClose={() => setShowDriverRegistry(false)}
+          />
+        )}
+        {profileModal.open && <ProfileSetupModal user={user} isNewUser={profileModal.isNew} onClose={(saved, savedRegion) => { const wasNew = profileModal.isNew; setProfileModal({ open: false, isNew: false }); if (saved) { setIntroReason(wasNew ? 'new' : 'region'); setIntroMeta({ region: savedRegion }); setShowIntro(true); } }} />}
+        {showPrevCompare && prevMonthCompare && (
+          <PrevMonthCompareModal
+            data={prevMonthCompare}
+            onClose={() => setShowPrevCompare(false)}
+          />
+        )}
+        <GlobalLoadingBar state={gLoad} />
       </div>
     </ErrorBoundary>
   );

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+﻿import { useState, useEffect } from 'react';
 import {
   db, collection, getDocs, getCountFromServer, doc, getDoc,
 } from '../config/firebase.js';
@@ -140,13 +140,13 @@ export default function DbOverview({ onBack, onGoToBase, onGoToCloud }) {
           onClick={() => setTab('base')}
           className={`px-5 py-3 text-xs font-black tracking-wide flex items-center gap-2 border-b-2 transition-all ${
             tab === 'base'
-              ? 'border-green-500 text-green-400'
+              ? 'border-blue-500 text-blue-400'
               : 'border-transparent text-gray-600 hover:text-gray-400'
           }`}
         >
           <Database size={14} /> 기본명단
           {baseCities.length > 0 && (
-            <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-black ${tab === 'base' ? 'bg-green-900/50 text-green-400' : 'bg-white/5 text-gray-600'}`}>
+            <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-black ${tab === 'base' ? 'bg-blue-900/50 text-blue-400' : 'bg-white/5 text-gray-600'}`}>
               {baseCities.length}
             </span>
           )}
@@ -178,12 +178,12 @@ export default function DbOverview({ onBack, onGoToBase, onGoToCloud }) {
             {/* 요약 카드 */}
             <div className="grid grid-cols-3 gap-4">
               {[
-                { label: '저장된 지자체', value: baseCities.length, color: 'text-green-400', icon: <Database size={16} /> },
+                { label: '저장된 지자체', value: baseCities.length, color: 'text-blue-400', icon: <Database size={16} /> },
                 { label: '전체 레코드 수', value: baseTotalCount.toLocaleString() + '건', color: 'text-white', icon: <Users size={16} /> },
                 { label: '마지막 업데이트', value: baseCities.length > 0 ? fmtTs(baseCities.reduce((a, b) => (a.updatedAt?.seconds || 0) > (b.updatedAt?.seconds || 0) ? a : b).updatedAt) : '—', color: 'text-gray-300', icon: <Calendar size={16} /> },
               ].map((s, i) => (
                 <div key={i} className="bg-[#0a0a0a] border border-[#1e1e1e] rounded-2xl p-4 flex items-center gap-4">
-                  <div className="w-10 h-10 rounded-xl bg-green-900/20 border border-green-500/20 flex items-center justify-center text-green-400 shrink-0">
+                  <div className="w-10 h-10 rounded-xl bg-blue-900/20 border border-blue-500/20 flex items-center justify-center text-blue-400 shrink-0">
                     {s.icon}
                   </div>
                   <div>
@@ -196,7 +196,7 @@ export default function DbOverview({ onBack, onGoToBase, onGoToCloud }) {
 
             {/* 지자체 카드 그리드 */}
             {loading ? (
-              <div className="flex items-center justify-center h-40 gap-2 text-green-400 text-sm animate-pulse">
+              <div className="flex items-center justify-center h-40 gap-2 text-blue-400 text-sm animate-pulse">
                 <Database size={18} /> 데이터 불러오는 중...
               </div>
             ) : baseCities.length === 0 ? (
@@ -207,11 +207,11 @@ export default function DbOverview({ onBack, onGoToBase, onGoToCloud }) {
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
                 {baseCities.map(city => (
-                  <div key={city.id} className="bg-[#0a0a0a] border border-[#1e1e1e] hover:border-green-500/30 rounded-2xl p-5 flex flex-col gap-3 transition-all group">
+                  <div key={city.id} className="bg-[#0a0a0a] border border-[#1e1e1e] hover:border-blue-500/30 rounded-2xl p-5 flex flex-col gap-3 transition-all group">
                     {/* City header */}
                     <div className="flex items-start justify-between gap-2">
                       <div className="flex items-center gap-2 min-w-0">
-                        <div className="w-2 h-2 rounded-full bg-green-500 shrink-0 shadow-[0_0_6px_rgba(34,197,94,0.8)]" />
+                        <div className="w-2 h-2 rounded-full bg-blue-500 shrink-0 shadow-[0_0_6px_rgba(59,130,246,0.8)]" />
                         <h3 className="text-sm font-black text-white leading-tight truncate">{city.id}</h3>
                       </div>
                     </div>
@@ -220,7 +220,7 @@ export default function DbOverview({ onBack, onGoToBase, onGoToCloud }) {
                     <div className="space-y-1.5">
                       <div className="flex items-center justify-between text-xs">
                         <span className="text-gray-600">레코드 수</span>
-                        <span className={`font-black ${city.count !== null ? 'text-green-400' : 'text-gray-700'}`}>
+                        <span className={`font-black ${city.count !== null ? 'text-blue-400' : 'text-gray-700'}`}>
                           {city.count !== null ? city.count.toLocaleString() + '건' : '집계 중...'}
                         </span>
                       </div>
@@ -240,7 +240,7 @@ export default function DbOverview({ onBack, onGoToBase, onGoToCloud }) {
                     {city.count !== null && baseTotalCount > 0 && (
                       <div className="w-full bg-[#1a1a1a] rounded-full h-1">
                         <div
-                          className="bg-green-500 h-1 rounded-full transition-all"
+                          className="bg-blue-500 h-1 rounded-full transition-all"
                           style={{ width: `${Math.max(2, Math.round((city.count / Math.max(...baseCities.map(c => c.count || 0))) * 100))}%` }}
                         />
                       </div>
@@ -249,7 +249,7 @@ export default function DbOverview({ onBack, onGoToBase, onGoToCloud }) {
                     {/* Action button */}
                     <button
                       onClick={() => onGoToBase(city.id)}
-                      className="w-full py-2 bg-green-900/20 hover:bg-green-900/40 border border-green-500/20 hover:border-green-500/50 text-green-400 font-bold rounded-xl text-xs flex items-center justify-center gap-1.5 transition-all"
+                      className="w-full py-2 bg-blue-900/20 hover:bg-blue-900/40 border border-blue-500/20 hover:border-blue-500/50 text-blue-400 font-bold rounded-xl text-xs flex items-center justify-center gap-1.5 transition-all"
                     >
                       <ExternalLink size={12} /> 기본명단 관리로 이동
                     </button>

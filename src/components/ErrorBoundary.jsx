@@ -1,4 +1,4 @@
-import { Component } from 'react';
+﻿import { Component } from 'react';
 
 export default class ErrorBoundary extends Component {
   constructor(props) {
@@ -29,7 +29,7 @@ export default class ErrorBoundary extends Component {
             </p>
             <button
               onClick={() => this.setState({ hasError: false, error: null })}
-              className="w-full py-3 bg-[#22c55e] text-black font-extrabold rounded-xl hover:bg-[#86efac] transition-all shadow-[0_0_20px_rgba(34,197,94,0.4)] mb-3"
+              className="w-full py-3 bg-[#3b82f6] text-black font-extrabold rounded-xl hover:bg-[#93c5fd] transition-all shadow-[0_0_20px_rgba(59,130,246,0.4)] mb-3"
             >
               다시 시도
             </button>

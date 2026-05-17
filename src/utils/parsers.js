@@ -25,6 +25,21 @@ export const extractPhoneNote = (raw) => {
   return { cleaned: phonePart, note: rest };
 };
 
+// 입력 중 실시간 자동 포맷 (숫자만 추출 → 대시 삽입)
+export const formatPhoneInput = (raw) => {
+  const digits = (raw || '').replace(/\D/g, '').slice(0, 11);
+  if (!digits) return '';
+  if (digits.startsWith('02')) {
+    if (digits.length <= 2) return digits;
+    if (digits.length <= 5) return `${digits.slice(0,2)}-${digits.slice(2)}`;
+    if (digits.length <= 9) return `${digits.slice(0,2)}-${digits.slice(2,5)}-${digits.slice(5)}`;
+    return `${digits.slice(0,2)}-${digits.slice(2,6)}-${digits.slice(6)}`;
+  }
+  if (digits.length <= 3) return digits;
+  if (digits.length <= 7) return `${digits.slice(0,3)}-${digits.slice(3)}`;
+  return `${digits.slice(0,3)}-${digits.slice(3,7)}-${digits.slice(7)}`;
+};
+
 export const formatPhone = (s) => {
   const d = String(s || '').replace(/[^\d]/g, '');
   if (d.length === 11) return `${d.slice(0,3)}-${d.slice(3,7)}-${d.slice(7)}`;

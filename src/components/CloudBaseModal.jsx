@@ -1,4 +1,4 @@
-import { useState } from 'react';
+﻿import { useState } from 'react';
 import { db, collection, getDocs } from '../config/firebase.js';
 import { Database, Download, X, AlertCircle } from 'lucide-react';
 import { normalizeBirth } from '../utils/parsers.js';
@@ -58,12 +58,12 @@ export default function CloudBaseModal({ onClose, onImport, user }) {
 
   return (
     <div className="absolute inset-0 z-[100] bg-black/85 backdrop-blur-sm flex items-center justify-center p-6">
-      <div className="bg-[#0a100c] border border-[#22c55e]/30 rounded-2xl w-full max-w-md shadow-[0_0_40px_rgba(34,197,94,0.15)] flex flex-col overflow-hidden">
+      <div className="bg-[#0a100c] border border-[#3b82f6]/30 rounded-2xl w-full max-w-md shadow-[0_0_40px_rgba(59,130,246,0.15)] flex flex-col overflow-hidden">
 
         {/* Header */}
-        <div className="p-5 border-b border-[#1e2d22] flex justify-between items-center">
+        <div className="p-5 border-b border-[#0f1a2e] flex justify-between items-center">
           <h2 className="text-lg font-black text-white flex items-center gap-2">
-            <Database size={18} className="text-[#22c55e]" /> 클라우드 기본명단 불러오기
+            <Database size={18} className="text-[#3b82f6]" /> 고객 노트 불러오기
           </h2>
           <button onClick={onClose} className="text-gray-500 hover:text-white transition-colors"><X size={18} /></button>
         </div>
@@ -83,7 +83,7 @@ export default function CloudBaseModal({ onClose, onImport, user }) {
                 value={selectedSido}
                 onChange={e => { setSelectedSido(e.target.value); setSelectedSigungu(''); }}
                 disabled={!canAccess}
-                className="w-full bg-black/60 border border-[#2d4a35] rounded-xl px-4 py-2.5 text-white text-sm outline-none focus:border-[#22c55e] transition-colors disabled:opacity-40"
+                className="w-full bg-black/60 border border-[#2d4a35] rounded-xl px-4 py-2.5 text-white text-sm outline-none focus:border-[#3b82f6] transition-colors disabled:opacity-40"
               >
                 <option value="">시/도 선택</option>
                 {Object.keys(REGIONS).map(sido => (
@@ -94,7 +94,7 @@ export default function CloudBaseModal({ onClose, onImport, user }) {
                 value={selectedSigungu}
                 onChange={e => setSelectedSigungu(e.target.value)}
                 disabled={!selectedSido || !canAccess}
-                className="w-full bg-black/60 border border-[#2d4a35] rounded-xl px-4 py-2.5 text-white text-sm outline-none focus:border-[#22c55e] transition-colors disabled:opacity-40"
+                className="w-full bg-black/60 border border-[#2d4a35] rounded-xl px-4 py-2.5 text-white text-sm outline-none focus:border-[#3b82f6] transition-colors disabled:opacity-40"
               >
                 <option value="">시/군/구 선택</option>
                 {getSigunguOptions(selectedSido).map(sigungu => (
@@ -103,7 +103,7 @@ export default function CloudBaseModal({ onClose, onImport, user }) {
               </select>
             </div>
             {selectedCity && (
-              <p className="text-xs text-[#22c55e] mt-2 font-bold">✓ {selectedCity}</p>
+              <p className="text-xs text-[#3b82f6] mt-2 font-bold">✓ {selectedCity}</p>
             )}
           </div>
 
@@ -114,17 +114,17 @@ export default function CloudBaseModal({ onClose, onImport, user }) {
               value={selectedMonth}
               onChange={e => setSelectedMonth(e.target.value)}
               disabled={!canAccess}
-              className="w-full bg-black/60 border border-[#2d4a35] rounded-xl px-4 py-2.5 text-white text-sm outline-none focus:border-[#22c55e] transition-colors disabled:opacity-40"
+              className="w-full bg-black/60 border border-[#2d4a35] rounded-xl px-4 py-2.5 text-white text-sm outline-none focus:border-[#3b82f6] transition-colors disabled:opacity-40"
             />
             <p className="text-[11px] text-gray-600 mt-1.5">월 미선택 시 전체 명단을 불러옵니다.</p>
           </div>
         </div>
 
-        <div className="p-5 border-t border-[#1e2d22]">
+        <div className="p-5 border-t border-[#0f1a2e]">
           <button
             onClick={handleFetch}
             disabled={loading || !canAccess || !selectedCity}
-            className="w-full py-3 bg-[#22c55e] text-black font-black rounded-xl flex items-center justify-center gap-2 hover:bg-[#1ea34d] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            className="w-full py-3 bg-[#3b82f6] text-black font-black rounded-xl flex items-center justify-center gap-2 hover:bg-[#1ea34d] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           >
             {loading ? '불러오는 중...' : <><Download size={16} /> 명단 가져오기</>}
           </button>

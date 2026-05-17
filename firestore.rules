@@ -171,6 +171,48 @@ service cloud.firestore {
     // ── cloud_lists 담당자 필드 확장 (좌표·isApt 업데이트 허용) ─────────────────
     // (기존 규칙 override — cloud_lists 블록 내 allow update 조건 확장은 아래로 처리)
 
+    // ── 소속사 기사 마스터: 본인 소속사만 읽기·쓰기, 관리자 전체 제어 ──────────
+    match /org_drivers/{orgName} {
+      allow read: if isAuthenticated() &&
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.orgId == orgName || isAdmin());
+      allow write: if isAuthenticated() &&
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.orgId == orgName || isAdmin());
+
+      match /drivers/{driverId} {
+        allow read: if isAuthenticated() &&
+          (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.orgId == orgName || isAdmin());
+        allow write: if isAuthenticated() &&
+          (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.orgId == orgName || isAdmin());
+      }
+    }
+
+    // ── 기사 배정 프리셋: 읽기·쓰기는 승인 사용자 (루트맵 셋업 저장용) ───────────
+    match /driver_assignments/{cityId} {
+      allow read: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin());
+      allow write: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin());
+
+      match /orgs/{orgKey} {
+        allow read: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin());
+        allow write: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin());
+      }
+    }
+
+    // ── 배송 실적 이력: 읽기·쓰기는 승인 사용자 ──────────────────────────────
+    match /delivery_history/{cityId} {
+      allow read: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin());
+      allow write: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin());
+
+      match /months/{monthId} {
+        allow read: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin());
+        allow write: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin());
+
+        match /drivers/{driverId} {
+          allow read: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin());
+          allow write: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin());
+        }
+      }
+    }
+
     // ── 기본 차단 (Zero Trust) ───────────────────────────────────────────────
     match /{document=**} {
       allow read, write: if false;
