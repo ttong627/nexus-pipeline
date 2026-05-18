@@ -418,16 +418,18 @@ export default function App() {
       worker.onmessage = (evt) => {
         if (evt.data.ok && evt.data.action === "PARSE_TARGET") {
           const { sheetsData } = evt.data;
-          setWorksheets(prev => [...prev, ...sheetsData]);
-          
+          // 파일 출처 태깅 — 같은 시트명이라도 파일별 고유 key를 갖도록 (mapDefs 충돌 방지)
+          const taggedSheets = sheetsData.map(s => ({ ...s, fileSource: file.name }));
+          setWorksheets(prev => [...prev, ...taggedSheets]);
+
           const initialSel = {};
-          sheetsData.forEach(s => {
+          taggedSheets.forEach(s => {
             const getHeader = (k) => {
               const idx = s.colIndices?.[k];
               return (idx !== undefined && idx !== -1) ? s.headers[idx] : "";
             };
-            const sheetKey = s.fileSource ? `${s.fileSource}::${s.name}` : s.name;
-            initialSel[sheetKey] = {
+            const sk = `${s.fileSource}::${s.name}`;
+            initialSel[sk] = {
               name: getHeader('이름'),
               address: getHeader('주소'),
               qty: getHeader('수량'),
@@ -440,8 +442,8 @@ export default function App() {
             };
           });
           setMapDefs(prev => ({ ...prev, ...initialSel }));
-          
-          sheetsData.forEach(sheet => {
+
+          taggedSheets.forEach(sheet => {
             if (sheet.unmappedCols && sheet.unmappedCols.length > 0) {
               sheet.unmappedCols.forEach(async (col) => {
                 try {

@@ -260,7 +260,7 @@ export default function Step3_Mapping({ step, setStep, mapDefs, setMapDefs, sele
             const isActive = i === safeTab;
             return (
               <button
-                key={sheet.name}
+                key={sheetKey(sheet)}
                 onClick={() => setActiveTab(i)}
                 className={`flex items-center gap-2 px-4 py-2.5 rounded-t-lg border border-b-0 text-xs font-bold shrink-0 transition-all ${
                   isActive
