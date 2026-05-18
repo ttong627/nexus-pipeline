@@ -52,11 +52,22 @@ export default function DbImportModal({ onClose, onImport, defaultCity }) {
           return;
         }
       }
+      // 3순위 매칭 인덱스 구축 (D-1: 이름+생년월일 → 이름+휴대폰 → 이름+유선전화)
       const baseMapObj = {};
+      const dk = v => String(v || '').replace(/[^\d]/g, '');
       filtered.forEach(r => {
-        const birthKey = r.birthKey || normalizeBirth(r.birth || '');
-        if (!birthKey || !r.name) return;
-        baseMapObj[`${r.name}_${birthKey}`] = r;
+        const nm = (r.name || r.이름 || '').trim();
+        if (!nm) return;
+        const bk = r.birthKey || normalizeBirth(r.birth || r.생년월일 || '');
+        const ph = dk(r.mobile || r.휴대폰 || '');
+        const ld = dk(r.landline || r.유선전화 || '');
+        if (bk) {
+          baseMapObj[`${nm}_${bk}`] = r;            // 1순위
+        } else if (ph.length >= 9) {
+          baseMapObj[`ph_${nm}_${ph}`] = r;         // 2순위 (생년월일 없을 때)
+        } else if (ld.length >= 9) {
+          baseMapObj[`ld_${nm}_${ld}`] = r;         // 3순위 (생년월일·휴대폰 모두 없을 때)
+        }
       });
       setFetchedCount(filtered.length);
       onImport(baseMapObj, [...checkedFields], selectedCity, filtered.length);
@@ -83,7 +94,7 @@ export default function DbImportModal({ onClose, onImport, defaultCity }) {
         <div className="p-6 space-y-5 overflow-y-auto">
           <p className="text-sm text-gray-400 leading-relaxed">
             저장된 기본 명단에서 필요한 데이터를 받아와서 명단에 적용합니다.<br/>
-            <span className="text-gray-600 text-xs">이름 + 생년월일 기준으로 자동 매칭됩니다.</span>
+            <span className="text-gray-600 text-xs">이름+생년월일 → 이름+휴대폰 → 이름+유선 순으로 자동 매칭됩니다.</span>
           </p>
 
           {/* 이식할 항목 체크 */}

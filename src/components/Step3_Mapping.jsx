@@ -38,6 +38,7 @@ function SheetMappingPanel({ sheet, mapDef, setMapDef, worksheets, importNote, s
   });
 
   const hasMixedSheet = (worksheets || []).some(s => s.selected && s.type === '혼합');
+  const isMixedWithoutType = sheet.type === '혼합' && !mapDef.type && !(sheet.typeColIdx >= 0);
   const hasColumn = (key) => !!mapDef[key] || headers.some(h => (OPTIONAL_KWS[key] || []).some(k => h.includes(k)));
   const colToField = Object.fromEntries(
     Object.entries(mapDef).filter(([, v]) => v).map(([k, v]) => [v, k])
@@ -90,10 +91,10 @@ function SheetMappingPanel({ sheet, mapDef, setMapDef, worksheets, importNote, s
             );
           })}
 
-          {hasMixedSheet && !mapDef.type && (
-            <div className="mb-3 p-3 rounded-xl border border-amber-600/60 bg-amber-950/30 text-amber-300 text-[11px] font-bold flex items-start gap-2">
-              <span className="text-amber-400 shrink-0 mt-0.5">⚠</span>
-              <span>혼합 명단 시트가 있습니다.<br/>아래 <b>수급구분 열</b>을 반드시 매핑하세요.</span>
+          {isMixedWithoutType && (
+            <div className="mb-3 p-3 rounded-xl border border-red-600/70 bg-red-950/30 text-red-300 text-[11px] font-bold flex items-start gap-2">
+              <span className="text-red-400 shrink-0 mt-0.5">✕</span>
+              <span>이 시트는 <b>혼합 명단</b>입니다.<br/>아래 <b>수급구분 열</b>을 반드시 매핑해야 진행할 수 있습니다.</span>
             </div>
           )}
 
@@ -118,7 +119,7 @@ function SheetMappingPanel({ sheet, mapDef, setMapDef, worksheets, importNote, s
             { key: 'sms',      label: '문자수신 여부' },
             { key: 'driver',   label: '기사 (담당 배송기사)' },
             { key: 'seqNo',    label: '배송순번 (기존 값)' },
-          ].filter(({ key }) => hasColumn(key) || key === 'driver' || key === 'seqNo' || key === 'itemName').map(({ key, label }) => {
+          ].filter(({ key }) => hasColumn(key) || key === 'driver' || key === 'seqNo' || key === 'itemName' || key === 'type').map(({ key, label }) => {
             const meta = FIELD_META[key];
             const isMapped = !!mapDef[key];
             return (
@@ -197,9 +198,11 @@ export default function Step3_Mapping({ step, setStep, mapDefs, setMapDefs, sele
 
   const isSheetComplete = (sheet) => {
     const m = mapDefs[sheetKey(sheet)] || {};
-    // 기본명단 주소 정제 모드일 때는 주소만 매핑되면 진행 가능
     if (isBasePurifyMode) return !!m['address'];
-    return REQUIRED_KEYS.every(k => !!m[k]);
+    if (!REQUIRED_KEYS.every(k => !!m[k])) return false;
+    // 혼합 시트: 수급구분 열 미매핑 + 자동감지 컬럼도 없으면 진행 불가
+    if (sheet.type === '혼합' && !m['type'] && !(sheet.typeColIdx >= 0)) return false;
+    return true;
   };
 
   const allComplete = selectedSheets.every(isSheetComplete);

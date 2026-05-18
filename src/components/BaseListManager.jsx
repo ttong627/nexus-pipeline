@@ -5,7 +5,7 @@ import {
 } from '../config/firebase.js';
 import {
   Database, Upload, Trash2, ArrowLeft, AlertCircle,
-  Download, Search, Save, Clock, RotateCcw, FileSpreadsheet, X, RefreshCw
+  Download, Search, Save, Clock, RotateCcw, FileSpreadsheet, X, RefreshCw, Calendar
 } from 'lucide-react';
 
 import { normalizeBirth, parsePhoneNumbers, formatPhoneInput } from '../utils/parsers.js';
@@ -63,6 +63,11 @@ export default function BaseListManager({ user, onBack, initialCity = '' }) {
   const [historyRecord, setHistoryRecord] = useState(null);
   const [newHistoryNote, setNewHistoryNote] = useState('');
   const [notifyManager, setNotifyManager] = useState(false);
+
+  // ── 생년월일 업데이트 모달 ──────────────────────────────────────────
+  const [showBirthModal, setShowBirthModal] = useState(false);
+  const [birthPreview, setBirthPreview] = useState(null); // { toUpdate, noMatch }
+  const [birthUpdating, setBirthUpdating] = useState(false);
 
   const hasCityAccess = isAdmin || citiesApproved.includes(selectedCity);
   const availableSidos = Object.keys(REGIONS);
@@ -474,11 +479,16 @@ export default function BaseListManager({ user, onBack, initialCity = '' }) {
           const name = g('성명', '이름', '대상자명');
           if (!name) return;
           const phones = parsePhoneNumbers(g('연락처', '휴대폰'), g('전화번호', '유선'));
+          // 특이사항 정제: 무시 단어(공제/계좌/현금) 삭제 → 공백 정리
+          const note = g('특이사항', '비고')
+            .replace(/공제|계좌|현금/g, '')
+            .replace(/\s+/g, ' ')
+            .trim();
           newRows.push({
             name,
             birthKey: normalizeBirth(g('생년월일', '주민번호')),
             mobile: phones.mobile.replace(/[^0-9-]/g, ''),
-            note: g('특이사항', '비고'),
+            note,
           });
         });
       });
@@ -595,6 +605,113 @@ export default function BaseListManager({ user, onBack, initialCity = '' }) {
     } catch { alert('이력 저장 오류'); }
   };
 
+  // ── 생년월일 업데이트: 파일 파싱 → 미리보기 ─────────────────────────
+  const handleBirthFileSelect = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = '';
+    try {
+      const buf = await file.arrayBuffer();
+      const wb  = XLSX.read(buf);
+      const ws  = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+      if (rows.length < 2) { alert('데이터가 없습니다.'); return; }
+
+      // 헤더 자동 감지 (상위 5행 중 키워드 최다 행)
+      const NAME_KWS  = ['이름','성명','대상자','수령자'];
+      const PHONE_KWS = ['휴대','핸드','모바일','연락','전화'];
+      const BIRTH_KWS = ['생년','생일','주민'];
+      const scoreRow = (r) => r.reduce((s, c) => {
+        const v = String(c || '');
+        return s + (NAME_KWS.some(k=>v.includes(k))?1:0) + (PHONE_KWS.some(k=>v.includes(k))?1:0) + (BIRTH_KWS.some(k=>v.includes(k))?1:0);
+      }, 0);
+      const hdrIdx = rows.slice(0, 5).reduce((best, r, i) => scoreRow(r) > scoreRow(rows[best]) ? i : best, 0);
+      const header  = rows[hdrIdx].map(c => String(c || ''));
+      const dataRows = rows.slice(hdrIdx + 1).filter(r => r.some(c => String(c).trim()));
+
+      const colIdx = (kws) => header.findIndex(h => kws.some(k => h.includes(k)));
+      const nameIdx  = colIdx(NAME_KWS);
+      const phoneIdx = colIdx(PHONE_KWS);
+      const birthIdx = colIdx(BIRTH_KWS);
+
+      if (nameIdx < 0 || birthIdx < 0) {
+        alert(`컬럼 자동 감지 실패:\n이름 컬럼: ${nameIdx >= 0 ? header[nameIdx] : '없음'}\n생년월일 컬럼: ${birthIdx >= 0 ? header[birthIdx] : '없음'}\n\n파일 헤더를 확인하세요.`);
+        return;
+      }
+
+      // 현재 DB 레코드로 이름+휴대폰 인덱스 구성
+      const digitKey = v => String(v || '').replace(/[^\d]/g, '');
+      const byPhone  = {};
+      const byBirth  = {};
+      records.forEach(r => {
+        const name = (r.name || '').trim();
+        const ph   = digitKey(r.mobile || '');
+        const bk   = digitKey(r.birthKey || '');
+        if (ph.length >= 9) byPhone[`${name}__${ph}`] = r;
+        if (bk)             byBirth[`${name}__${bk}`] = r;
+      });
+
+      const toUpdate = [];
+      const noMatch  = [];
+
+      dataRows.forEach(row => {
+        const name    = String(row[nameIdx] || '').trim();
+        const rawBirth = String(row[birthIdx] || '').trim();
+        const rawPhone = phoneIdx >= 0 ? String(row[phoneIdx] || '') : '';
+        if (!name || !rawBirth) return;
+
+        const newBirth = normalizeBirth(rawBirth);
+        if (!newBirth) return;
+
+        const mKey = digitKey(rawPhone);
+        let matched = null;
+        if (mKey.length >= 9) matched = byPhone[`${name}__${mKey}`];
+        if (!matched && newBirth) {
+          // 이름+새생년월일로도 시도
+          const bKey = digitKey(newBirth);
+          matched = byBirth[`${name}__${bKey}`];
+        }
+
+        if (matched) {
+          toUpdate.push({ id: matched.id, name, newBirth, oldBirth: matched.birthKey || '', phone: matched.mobile || '' });
+        } else {
+          noMatch.push({ name, rawBirth, rawPhone });
+        }
+      });
+
+      setBirthPreview({ toUpdate, noMatch });
+    } catch(e) { alert('파일 파싱 오류: ' + e.message); }
+  };
+
+  // ── 생년월일 업데이트: 확정 저장 ────────────────────────────────────
+  const commitBirthUpdate = async () => {
+    if (!birthPreview?.toUpdate?.length) return;
+    setBirthUpdating(true);
+    try {
+      const CHUNK = 499;
+      const ops = birthPreview.toUpdate;
+      let done = 0;
+      for (let i = 0; i < ops.length; i += CHUNK) {
+        const batch = writeBatch(db);
+        ops.slice(i, i + CHUNK).forEach(op => {
+          const ref = doc(db, 'base_lists', selectedCity, 'records', op.id);
+          batch.set(ref, { birthKey: op.newBirth, updatedAt: serverTimestamp() }, { merge: true });
+        });
+        await batch.commit();
+        done += Math.min(CHUNK, ops.length - i);
+      }
+      // 로컬 레코드 업데이트
+      setRecords(prev => {
+        const map = Object.fromEntries(ops.map(o => [o.id, o.newBirth]));
+        return prev.map(r => map[r.id] ? { ...r, birthKey: map[r.id] } : r);
+      });
+      alert(`✅ 생년월일 업데이트 완료 — ${done}건`);
+      setShowBirthModal(false);
+      setBirthPreview(null);
+    } catch(e) { alert('저장 오류: ' + e.message); }
+    finally { setBirthUpdating(false); }
+  };
+
   // ═══════════════════════════════════════════════════════════════
   // RENDER
   // ═══════════════════════════════════════════════════════════════
@@ -646,6 +763,12 @@ export default function BaseListManager({ user, onBack, initialCity = '' }) {
               }`}>
               <Upload size={13} /> 엑셀 업로드
             </button>
+            {records.length > 0 && (
+              <button onClick={() => { setShowBirthModal(true); setBirthPreview(null); }}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-bold bg-violet-950/40 hover:bg-violet-900/50 text-violet-300 border border-violet-500/30 transition-colors">
+                <Calendar size={13} /> 생년월일 업데이트
+              </button>
+            )}
             {records.length > 0 && (
               <button onClick={handleMovePhoneNumbers} disabled={saving}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-bold bg-cyan-950/40 hover:bg-cyan-900/50 text-cyan-400 border border-cyan-500/30 transition-colors disabled:opacity-40">
@@ -1048,6 +1171,130 @@ export default function BaseListManager({ user, onBack, initialCity = '' }) {
           </div>
         </div>
       )}
+
+    {/* ── 생년월일 업데이트 모달 ──────────────────────────────────────── */}
+    {showBirthModal && (
+      <div className="absolute inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
+        <div className="bg-[#0d0d0d] border border-[#2a2a2a] rounded-2xl w-full max-w-2xl max-h-[85vh] flex flex-col shadow-2xl">
+
+          {/* 헤더 */}
+          <div className="shrink-0 px-5 py-4 border-b border-[#1e1e1e] flex items-center gap-3">
+            <Calendar size={16} className="text-violet-400 shrink-0" />
+            <div className="flex-1 min-w-0">
+              <h3 className="text-sm font-black text-white">생년월일 업데이트</h3>
+              <p className="text-[10px] text-gray-600 leading-tight">
+                파일의 이름+휴대폰으로 기존 명단 매칭 → birthKey 일괄 갱신
+              </p>
+            </div>
+            <button onClick={() => { setShowBirthModal(false); setBirthPreview(null); }}
+              className="p-1.5 text-gray-600 hover:text-white transition-colors rounded-lg hover:bg-white/5">
+              <X size={15} />
+            </button>
+          </div>
+
+          {/* 바디 */}
+          <div className="flex-1 overflow-auto p-5 space-y-4">
+
+            {!birthPreview ? (
+              /* ─ Step 1: 파일 선택 ─ */
+              <div className="space-y-3">
+                <div className="bg-[#111] border border-[#222] rounded-xl p-4 text-[11px] text-gray-500 space-y-1.5 leading-relaxed">
+                  <p className="text-gray-400 font-bold">파일 조건</p>
+                  <p>• 이름(성명) + 휴대폰(연락처) + 생년월일(주민번호) 컬럼 포함</p>
+                  <p>• 이름+휴대폰으로 기존 명단 매칭 후 생년월일만 업데이트</p>
+                  <p>• 생년월일 형식: 8자리(19750315) / 6자리(750315) / YY.MM.DD 모두 OK</p>
+                  <p>• 현재 지자체: <span className="text-violet-300 font-bold">{selectedCity}</span> ({records.length.toLocaleString()}건 로드됨)</p>
+                </div>
+                <label className="w-full py-8 border-2 border-dashed border-[#2a2a2a] rounded-xl flex flex-col items-center gap-2 cursor-pointer hover:border-violet-500/40 hover:bg-violet-500/5 transition-all">
+                  <Calendar size={24} className="text-violet-400" />
+                  <span className="text-[12px] text-gray-400 font-bold">생년월일 포함 파일 선택</span>
+                  <span className="text-[10px] text-gray-700">.xlsx / .xls</span>
+                  <input type="file" accept=".xlsx,.xls" onChange={handleBirthFileSelect} className="hidden" />
+                </label>
+              </div>
+            ) : (
+              /* ─ Step 2: 미리보기 ─ */
+              <div className="space-y-4">
+
+                {/* 요약 */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="bg-[#0d1a0d] border border-[#1a3a1a] rounded-xl p-3 text-center">
+                    <div className="text-2xl font-black text-green-400">{birthPreview.toUpdate.length.toLocaleString()}</div>
+                    <div className="text-[10px] text-gray-500 mt-0.5">업데이트 예정</div>
+                  </div>
+                  <div className="bg-[#1a1a0a] border border-[#333] rounded-xl p-3 text-center">
+                    <div className="text-2xl font-black text-gray-500">{birthPreview.noMatch.length.toLocaleString()}</div>
+                    <div className="text-[10px] text-gray-700 mt-0.5">미매칭 (제외)</div>
+                  </div>
+                </div>
+
+                {/* 업데이트 미리보기 테이블 */}
+                {birthPreview.toUpdate.length > 0 && (
+                  <div>
+                    <p className="text-[10px] text-gray-600 font-bold mb-2 tracking-widest uppercase">업데이트 예정 ({Math.min(birthPreview.toUpdate.length, 50)}건 미리보기)</p>
+                    <div className="bg-[#0a0a0a] border border-[#1e1e1e] rounded-xl overflow-hidden">
+                      <table className="w-full text-[10px] border-collapse">
+                        <thead>
+                          <tr className="border-b border-[#1e1e1e] bg-[#111]">
+                            <th className="px-3 py-2 text-left text-gray-600 font-bold w-20">이름</th>
+                            <th className="px-3 py-2 text-left text-gray-600 font-bold">휴대폰</th>
+                            <th className="px-3 py-2 text-left text-gray-600 font-bold w-24">기존 생년월일</th>
+                            <th className="px-3 py-2 text-left text-gray-600 font-bold w-24">신규 생년월일</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {birthPreview.toUpdate.slice(0, 50).map((r, i) => (
+                            <tr key={i} className="border-b border-[#0e0e0e] hover:bg-white/[0.02]">
+                              <td className="px-3 py-1.5 text-white font-bold">{r.name}</td>
+                              <td className="px-3 py-1.5 text-gray-500">{r.phone}</td>
+                              <td className="px-3 py-1.5 text-gray-600">{r.oldBirth || '(빈값)'}</td>
+                              <td className="px-3 py-1.5 text-green-400 font-bold">{r.newBirth}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                      {birthPreview.toUpdate.length > 50 && (
+                        <p className="px-3 py-2 text-[10px] text-gray-700 border-t border-[#1e1e1e]">
+                          ... 외 {birthPreview.toUpdate.length - 50}건 더
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* 파일 재선택 */}
+                <label className="flex items-center gap-2 text-[11px] text-gray-600 hover:text-violet-400 cursor-pointer transition-colors w-max">
+                  <Upload size={12} />
+                  다른 파일 선택하기
+                  <input type="file" accept=".xlsx,.xls" onChange={handleBirthFileSelect} className="hidden" />
+                </label>
+              </div>
+            )}
+          </div>
+
+          {/* 푸터 */}
+          {birthPreview && (
+            <div className="shrink-0 px-5 py-4 border-t border-[#1e1e1e] flex items-center justify-between gap-3">
+              <p className="text-[10px] text-gray-600">
+                {birthPreview.toUpdate.length}건 생년월일 업데이트 · 기존 데이터에 merge 저장
+              </p>
+              <div className="flex gap-2">
+                <button onClick={() => setBirthPreview(null)}
+                  className="px-3 py-1.5 rounded-xl text-[11px] text-gray-500 hover:text-white bg-white/5 hover:bg-white/10 transition-colors">
+                  뒤로
+                </button>
+                <button
+                  onClick={commitBirthUpdate}
+                  disabled={birthUpdating || !birthPreview.toUpdate.length}
+                  className="px-4 py-1.5 rounded-xl text-[11px] font-black bg-violet-600 hover:bg-violet-500 text-white transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
+                  {birthUpdating ? '저장 중...' : `${birthPreview.toUpdate.length}건 저장`}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    )}
 
     </div>
   );

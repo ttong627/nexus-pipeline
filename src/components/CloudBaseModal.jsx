@@ -40,11 +40,22 @@ export default function CloudBaseModal({ onClose, onImport, user }) {
         }
       }
 
+      // 3순위 매칭 인덱스 구축 (이름+생년월일 → 이름+휴대폰 → 이름+유선전화)
       const newBaseMapObj = {};
+      const dk = v => String(v || '').replace(/[^\d]/g, '');
       filtered.forEach(r => {
-        const birthKey = r.birthKey || normalizeBirth(r.birth || '');
-        if (!birthKey || !r.name) return;
-        newBaseMapObj[`${r.name}_${birthKey}`] = r;
+        const nm = (r.name || r.이름 || '').trim();
+        if (!nm) return;
+        const bk = r.birthKey || normalizeBirth(r.birth || r.생년월일 || '');
+        const ph = dk(r.mobile || r.휴대폰 || '');
+        const ld = dk(r.landline || r.유선전화 || '');
+        if (bk) {
+          newBaseMapObj[`${nm}_${bk}`] = r;
+        } else if (ph.length >= 9) {
+          newBaseMapObj[`ph_${nm}_${ph}`] = r;
+        } else if (ld.length >= 9) {
+          newBaseMapObj[`ld_${nm}_${ld}`] = r;
+        }
       });
 
       onImport(newBaseMapObj, selectedCity, filtered.length);

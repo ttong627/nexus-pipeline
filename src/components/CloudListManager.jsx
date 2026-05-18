@@ -396,6 +396,34 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
           if (sidoCmp !== 0) return sidoCmp;
           return a.sigungu.localeCompare(b.sigungu, 'ko');
         });
+
+      // 카드 카운트가 0인데 lastMonthId가 있으면 month 문서를 직접 읽어 자동 복구
+      await Promise.all(
+        cities
+          .filter(c => c.latestMonth && c.latestMonth.totalCount === 0)
+          .map(async (c) => {
+            try {
+              const monthSnap = await getDoc(doc(db, 'cloud_lists', c.id, 'months', c.latestMonth.id));
+              if (!monthSnap.exists()) return;
+              const m = monthSnap.data();
+              const totalCount = m.totalCount ?? 0;
+              const 수급자Count = m.수급자Count ?? 0;
+              const 차상위Count = m.차상위Count ?? 0;
+              c.latestMonth.totalCount = totalCount;
+              c.latestMonth.수급자Count = 수급자Count;
+              c.latestMonth.차상위Count = 차상위Count;
+              // 최상위 문서 캐시도 동기화 (이후 로드 시 추가 읽기 불필요)
+              if (totalCount > 0) {
+                setDoc(doc(db, 'cloud_lists', c.id), {
+                  latestTotalCount: totalCount,
+                  'latest수급자Count': 수급자Count,
+                  'latest차상위Count': 차상위Count,
+                }, { merge: true }).catch(() => {});
+              }
+            } catch { /* 복구 실패 무시 */ }
+          })
+      );
+
       setCityList(cities);
     } catch (e) { console.error('[fetchAllCities]', e); }
     finally { setLoadingCities(false); }
@@ -492,23 +520,28 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
   };
 
   // ── Delete month ──────────────────────────────────────────────────
-  const handleDeleteMonth = async (month) => {
+  // deleteMonthConfirm: { month: {...}, city: string } | null
+  const [isDeletingMonth, setIsDeletingMonth] = useState(false);
+  const handleDeleteMonth = async () => {
+    if (!deleteMonthConfirm) return;
+    const { month, city } = deleteMonthConfirm;
     setDeleteMonthConfirm(null);
+    setIsDeletingMonth(true);
     try {
-      const rSnap = await getDocs(collection(db, 'cloud_lists', selectedCity, 'months', month.id, 'records'));
+      const rSnap = await getDocs(collection(db, 'cloud_lists', city, 'months', month.id, 'records'));
       for (let i = 0; i < rSnap.docs.length; i += 500) {
         const batch = writeBatch(db);
         rSnap.docs.slice(i, i + 500).forEach(d => batch.delete(d.ref));
         await batch.commit();
       }
-      await deleteDoc(doc(db, 'cloud_lists', selectedCity, 'months', month.id));
-      try { await deleteObject(ref(storage, `cloud_uploads/${selectedCity}/${month.id}/original.xlsx`)); } catch { /* 없어도 무시 */ }
+      await deleteDoc(doc(db, 'cloud_lists', city, 'months', month.id));
+      try { await deleteObject(ref(storage, `cloud_uploads/${city}/${month.id}/original.xlsx`)); } catch { /* 없어도 무시 */ }
       if (selectedMonth?.id === month.id) { setSelectedMonth(null); setRecords([]); }
       // 도시 상위 문서도 최신 월로 갱신
-      const remainingSnap = await getDocs(collection(db, 'cloud_lists', selectedCity, 'months'));
+      const remainingSnap = await getDocs(collection(db, 'cloud_lists', city, 'months'));
       const remaining = remainingSnap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => b.id.localeCompare(a.id));
       const newLatest = remaining[0] || null;
-      await setDoc(doc(db, 'cloud_lists', selectedCity), {
+      await setDoc(doc(db, 'cloud_lists', city), {
         lastMonthId: newLatest?.id || null,
         latestTotalCount: newLatest?.totalCount ?? 0,
         'latest수급자Count': newLatest?.수급자Count ?? 0,
@@ -517,8 +550,9 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
       }, { merge: true });
       fetchMonths();
       fetchAllCities();
-      alert(`${month.id} 명단이 삭제되었습니다.`);
+      alert(`${city} ${month.id} 명단이 삭제되었습니다.`);
     } catch (e) { alert('삭제 오류: ' + e.message); }
+    finally { setIsDeletingMonth(false); }
   };
 
   // ── Download original ─────────────────────────────────────────────
@@ -639,6 +673,13 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
       const 수급자Count = remaining.filter(r => r.구분 === '기초수급자').length;
       const 차상위Count = remaining.filter(r => r.구분 === '차상위').length;
       await setDoc(doc(db, 'cloud_lists', selectedCity, 'months', selectedMonth.id), { totalCount, 수급자Count, 차상위Count }, { merge: true });
+      // 최상위 city 문서 캐시도 동기화
+      await setDoc(doc(db, 'cloud_lists', selectedCity), {
+        latestTotalCount: totalCount,
+        'latest수급자Count': 수급자Count,
+        'latest차상위Count': 차상위Count,
+        lastUpdatedAt: serverTimestamp(),
+      }, { merge: true });
       setDirtyRecords({});
       setDeletedRecordIds(new Set());
       await fetchRecords(selectedMonth.id);
@@ -862,6 +903,9 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
       await setDoc(doc(db, 'cloud_lists', selectedCity, 'months', selectedMonth.id), {
         totalCount: 0, 수급자Count: 0, 차상위Count: 0,
       }, { merge: true });
+      await setDoc(doc(db, 'cloud_lists', selectedCity), {
+        latestTotalCount: 0, 'latest수급자Count': 0, 'latest차상위Count': 0, lastUpdatedAt: serverTimestamp(),
+      }, { merge: true });
       setRecords([]);
       setDirtyRecords({});
       setDeletedRecordIds(new Set());
@@ -909,6 +953,9 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
       const 차상위Count = remaining.filter(r => r.구분 === '차상위').length;
       await setDoc(doc(db, 'cloud_lists', selectedCity, 'months', selectedMonth.id), {
         totalCount, 수급자Count, 차상위Count,
+      }, { merge: true });
+      await setDoc(doc(db, 'cloud_lists', selectedCity), {
+        latestTotalCount: totalCount, 'latest수급자Count': 수급자Count, 'latest차상위Count': 차상위Count, lastUpdatedAt: serverTimestamp(),
       }, { merge: true });
       setRecords(remaining);
       setDirtyRecords({});
@@ -1114,13 +1161,22 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
                       >
                         {/* 관리 모드 버튼 (관리자만) */}
                         {isAdmin && m && (
-                          <button
-                            onClick={e => { e.stopPropagation(); handleAdminMode(cityItem); }}
-                            className="absolute top-3 right-3 opacity-0 group-hover:opacity-100 p-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-gray-600 hover:text-gray-300 transition-all"
-                            title="인라인 편집 모드"
-                          >
-                            <FileSpreadsheet size={12} />
-                          </button>
+                          <div className="absolute top-3 right-3 opacity-0 group-hover:opacity-100 flex gap-1 transition-all">
+                            <button
+                              onClick={e => { e.stopPropagation(); handleAdminMode(cityItem); }}
+                              className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-gray-600 hover:text-gray-300 transition-all"
+                              title="인라인 편집 모드"
+                            >
+                              <FileSpreadsheet size={12} />
+                            </button>
+                            <button
+                              onClick={e => { e.stopPropagation(); setDeleteMonthConfirm({ month: m, city: cityItem.id }); }}
+                              className="p-1.5 rounded-lg bg-red-950/30 hover:bg-red-950/60 text-red-700 hover:text-red-400 transition-all"
+                              title={`${m.id} 명단 삭제`}
+                            >
+                              <Trash2 size={12} />
+                            </button>
+                          </div>
                         )}
 
                         {/* 도시명 */}
@@ -1193,6 +1249,15 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
                       <span className="text-gray-600">업로드: {fmtTs(selectedMonth.uploadedAt)} · {selectedMonth.uploadedBy}</span>
                     )}
                   </div>
+                  {isAdmin && (
+                    <button
+                      onClick={() => setDeleteMonthConfirm({ month: selectedMonth, city: selectedCity })}
+                      disabled={isDeletingMonth}
+                      className="ml-auto flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-bold text-red-500 hover:text-red-300 bg-red-950/30 hover:bg-red-950/50 border border-red-700/30 transition-colors disabled:opacity-40"
+                    >
+                      <Trash2 size={11} /> 이 월 삭제
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -1318,16 +1383,16 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
               <AlertCircle className="text-red-400 shrink-0" size={18} />
               <h3 className="text-white font-black text-sm">월 명단 삭제 확인</h3>
             </div>
-            <p className="text-gray-300 text-sm font-bold mb-1">{selectedCity} — {deleteMonthConfirm.id}</p>
+            <p className="text-gray-300 text-sm font-bold mb-1">{deleteMonthConfirm.city} — {deleteMonthConfirm.month.id}</p>
             <p className="text-gray-600 text-xs mb-5 leading-relaxed">
-              총 {(deleteMonthConfirm.totalCount||0).toLocaleString()}건의 데이터와 원본 파일이 영구 삭제됩니다.<br />이 작업은 되돌릴 수 없습니다.
+              총 {(deleteMonthConfirm.month.totalCount||0).toLocaleString()}건의 데이터와 원본 파일이 영구 삭제됩니다.<br />이 작업은 되돌릴 수 없습니다.
             </p>
             <div className="flex gap-2">
               <button onClick={() => setDeleteMonthConfirm(null)}
                 className="flex-1 py-2.5 bg-white/5 border border-[#333] text-gray-400 font-bold rounded-xl text-sm hover:bg-white/10 transition-colors">
                 취소
               </button>
-              <button onClick={() => handleDeleteMonth(deleteMonthConfirm)}
+              <button onClick={handleDeleteMonth}
                 className="flex-1 py-2.5 bg-red-950/60 border border-red-500/50 text-red-400 font-bold rounded-xl text-sm hover:bg-red-900/60 transition-colors">
                 삭제
               </button>

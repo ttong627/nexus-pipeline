@@ -371,7 +371,8 @@ export default function App() {
               contact2: getHeader('보조연락처'),
               admin: getHeader('행정동'),
               itemName: getHeader('품명'),
-              note: getHeader('비고')
+              note: getHeader('비고'),
+              type: (s.typeColIdx >= 0) ? s.headers[s.typeColIdx] : "",
             };
           });
           setMapDefs(initialSel);
@@ -431,9 +432,11 @@ export default function App() {
               address: getHeader('주소'),
               qty: getHeader('수량'),
               contact1: getHeader('연락처'),
+              contact2: getHeader('보조연락처'),
               admin: getHeader('행정동'),
               itemName: getHeader('품명'),
-              note: getHeader('비고')
+              note: getHeader('비고'),
+              type: (s.typeColIdx >= 0) ? s.headers[s.typeColIdx] : "",
             };
           });
           setMapDefs(prev => ({ ...prev, ...initialSel }));
@@ -519,10 +522,7 @@ export default function App() {
             setEngineProgress({ current: count, total, percent: Math.round((count/total)*100) });
             lastProgressTime = Date.now();
           }
-          // baseMap 이식: 이름+생년월일 키로 매칭
-          const birthKey = parseBirthDate(getVal(row, 'birth'));
-          const baseKey = `${name}_${birthKey}`;
-          const baseEntry = baseMap ? (baseMap[baseKey] || null) : null;
+          // 전화번호 먼저 추출 (baseMap 3순위 매칭에 필요)
           const { cleaned: c1, note: phoneNote1 } = extractPhoneNote(getVal(row, 'contact1'));
           const { cleaned: c2, note: phoneNote2 } = extractPhoneNote(getVal(row, 'contact2'));
           const phones = parsePhoneNumbers(c1, c2);
@@ -530,6 +530,18 @@ export default function App() {
             phoneNote1 && c1 ? `${phoneNote1}(${formatPhone(c1)})` : '',
             phoneNote2 && c2 ? `${phoneNote2}(${formatPhone(c2)})` : '',
           ].filter(Boolean).join(' ');
+
+          // baseMap 3순위 매칭: 이름+생년월일 → 이름+휴대폰 → 이름+유선전화
+          const birthKey = parseBirthDate(getVal(row, 'birth'));
+          let baseEntry = null;
+          if (baseMap) {
+            const dkf = v => String(v || '').replace(/[^\d]/g, '');
+            const dph = dkf(phones.mobile);
+            const dld = dkf(phones.landline);
+            if (birthKey) baseEntry = baseMap[`${name}_${birthKey}`] || null;
+            if (!baseEntry && dph.length >= 9) baseEntry = baseMap[`ph_${name}_${dph}`] || null;
+            if (!baseEntry && dld.length >= 9) baseEntry = baseMap[`ld_${name}_${dld}`] || null;
+          }
 
           return {
             id: window.crypto.randomUUID(),
@@ -735,64 +747,77 @@ export default function App() {
     if (!/^\d{4}-\d{2}$/.test(monthStr)) return alert('형식이 올바르지 않습니다. YYYY-MM 형식으로 입력해주세요.');
 
     try {
-      // 기존 데이터 확인 → 중복 방지
-      const existingSnap = await getDocs(collection(db, 'cloud_lists', city, 'months', monthStr, 'records'));
+      // [1단계] 기존 데이터 확인 → 중복 방지
+      let existingSnap;
+      try {
+        existingSnap = await getDocs(collection(db, 'cloud_lists', city, 'months', monthStr, 'records'));
+      } catch (e) { throw new Error(`[1단계 기존명단 조회 권한 오류] ${e.message}\n계정: ${user?.email}`); }
+
       if (existingSnap.docs.length > 0) {
         const ok = window.confirm(
           `[${city}] ${monthStr} 명단이 이미 ${existingSnap.docs.length}건 저장되어 있습니다.\n기존 데이터를 지우고 새로 저장하시겠습니까?`
         );
         if (!ok) return;
-        for (let i = 0; i < existingSnap.docs.length; i += 500) {
-          const batch = writeBatch(db);
-          existingSnap.docs.slice(i, i + 500).forEach(d => batch.delete(d.ref));
-          await batch.commit();
-        }
+        try {
+          for (let i = 0; i < existingSnap.docs.length; i += 499) {
+            const batch = writeBatch(db);
+            existingSnap.docs.slice(i, i + 499).forEach(d => batch.delete(d.ref));
+            await batch.commit();
+          }
+        } catch (e) { throw new Error(`[2단계 기존명단 삭제 권한 오류] ${e.message}\n계정: ${user?.email}`); }
       }
 
       const 수급자Count = validData.filter(r => r.구분 === '기초수급자').length;
       const 차상위Count = validData.filter(r => r.구분 === '차상위').length;
 
-      // 도시 상위 문서 — fetchAllCities 1회 읽기로 카드 통계 표시 가능하도록 통계 포함 저장
-      await setDoc(doc(db, 'cloud_lists', city), {
-        city, lastMonthId: monthStr, lastUpdatedAt: serverTimestamp(),
-        latestTotalCount: validData.length, latest수급자Count: 수급자Count, latest차상위Count: 차상위Count,
-      }, { merge: true });
+      // [3단계] 도시 상위 문서
+      try {
+        await setDoc(doc(db, 'cloud_lists', city), {
+          city, lastMonthId: monthStr, lastUpdatedAt: serverTimestamp(),
+          latestTotalCount: validData.length, latest수급자Count: 수급자Count, latest차상위Count: 차상위Count,
+        }, { merge: true });
+      } catch (e) { throw new Error(`[3단계 도시문서 저장 권한 오류] ${e.message}\n계정: ${user?.email}`); }
 
-      const metaRef = doc(db, 'cloud_lists', city, 'months', monthStr);
-      await setDoc(metaRef, {
-        city, monthId: monthStr,
-        totalCount: validData.length, 수급자Count, 차상위Count,
-        uploadedAt: serverTimestamp(), uploadedBy: user?.email || 'unknown',
-        hasOriginal: false,
-      });
-
-      // 필드 정규화 후 500건씩 배치 저장
-      gStart('클라우드 저장 중...', `${city} ${monthStr} · ${validData.length.toLocaleString()}건`, 0);
-      for (let i = 0; i < validData.length; i += 500) {
-        const batch = writeBatch(db);
-        validData.slice(i, i + 500).forEach((r, j) => {
-          const ref = doc(collection(db, 'cloud_lists', city, 'months', monthStr, 'records'));
-          batch.set(ref, {
-            구분: r.구분 || '',
-            이름: r.이름 || '',
-            생년월일: r.생년월일 || '',
-            행정동: r.행정동 || '',
-            주소: r.주소 || '',
-            휴대폰: r.휴대폰 || '',
-            유선전화: r.유선전화 || '',
-            포수: parseInt(r.포수 || '1') || 1,
-            특이사항: r.특이사항 || '',
-            lat: r._lat || null,
-            lng: r._lng || null,
-            isApt: r._isApt || false,
-            기사: r.기사 || '',
-            배송순번: r.배송순번 || '',
-            _idx: i + j,
-          });
+      // [4단계] 월별 메타 문서
+      try {
+        const metaRef = doc(db, 'cloud_lists', city, 'months', monthStr);
+        await setDoc(metaRef, {
+          city, monthId: monthStr,
+          totalCount: validData.length, 수급자Count, 차상위Count,
+          uploadedAt: serverTimestamp(), uploadedBy: user?.email || 'unknown',
+          hasOriginal: false,
         });
-        await batch.commit();
-        gUpdate(Math.round(Math.min(i + 500, validData.length) / validData.length * 100));
-      }
+      } catch (e) { throw new Error(`[4단계 월별메타 저장 권한 오류] ${e.message}\n계정: ${user?.email}`); }
+
+      // [5단계] 레코드 499건씩 배치 저장
+      gStart('클라우드 저장 중...', `${city} ${monthStr} · ${validData.length.toLocaleString()}건`, 0);
+      try {
+        for (let i = 0; i < validData.length; i += 499) {
+          const batch = writeBatch(db);
+          validData.slice(i, i + 499).forEach((r, j) => {
+            const ref = doc(collection(db, 'cloud_lists', city, 'months', monthStr, 'records'));
+            batch.set(ref, {
+              구분: r.구분 || '',
+              이름: r.이름 || '',
+              생년월일: r.생년월일 || '',
+              행정동: r.행정동 || '',
+              주소: r.주소 || '',
+              휴대폰: r.휴대폰 || '',
+              유선전화: r.유선전화 || '',
+              포수: parseInt(r.포수 || '1') || 1,
+              특이사항: r.특이사항 || '',
+              lat: r._lat || null,
+              lng: r._lng || null,
+              isApt: r._isApt || false,
+              기사: r.기사 || '',
+              배송순번: r.배송순번 || '',
+              _idx: i + j,
+            });
+          });
+          await batch.commit();
+          gUpdate(Math.round(Math.min(i + 499, validData.length) / validData.length * 100));
+        }
+      } catch (e) { throw new Error(`[5단계 레코드 배치저장 권한 오류] ${e.message}\n계정: ${user?.email}`); }
 
       await addDoc(collection(db, 'audit_logs'), {
         action: 'SAVE_MONTHLY_LIST', city, monthId: monthStr,
@@ -887,10 +912,11 @@ export default function App() {
   };
 
   const handleBatchSaveBaseList = async (validData) => {
+    const city = fileInfo?.city;
+    if (!city) return alert('지자체 정보를 감지하지 못했습니다. 파일을 다시 확인해주세요.');
     if (isSavingBaseListRef.current) return;
     isSavingBaseListRef.current = true;
     setIsSavingBaseList(true);
-    const city = fileInfo?.city || '기타';
     const normPhone  = (v) => (v || '').replace(/[^0-9-]/g, ''); // 저장용 (대시 유지)
     const digitKey   = (v) => (v || '').replace(/[^\d]/g, '');   // 인덱스 키용 (숫자만)
 
@@ -942,12 +968,22 @@ export default function App() {
         // 생년월일·휴대폰·유선전화 모두 없으면 제외
         if (!birthKey && mKey.length < 9 && lKey.length < 9) return;
 
+        // 특이사항 정제: ◆이식 내용 제거 → 무시 단어(공제/계좌/현금) 삭제 → 공백 정리
+        const note = (row.특이사항 || '')
+          .replace(/\s*◆[^◆]*/g, '')
+          .replace(/공제|계좌|현금/g, '')
+          .replace(/\s+/g, ' ')
+          .trim();
+
+        // 특이사항 없는 데이터는 저장 제외
+        if (!note) return;
+
         const payload = {
           name, birthKey,
           dong:    row.행정동 || '',
           address: row.주소   || '',
           mobile,  landline,
-          note:    (row.특이사항 || '').replace(/\s*◆[^◆]*/g, '').trim() || '',
+          note,
           sms:     row.문자수신 || '',
           updatedAt: serverTimestamp(),
         };
@@ -1019,10 +1055,16 @@ export default function App() {
 
       const adds = addEntries.map(e => ({ data: e.data }));
 
+      // 동일인이 엑셀에 여러 번 나올 때 같은 문서 ID가 배치에 중복 진입하면
+      // Firebase "Every document must have a unique path" 에러 발생 → 마지막 값으로 중복 제거
+      const deduped = new Map();
+      updates.forEach(u => deduped.set(u.id, u));
+      const dedupedUpdates = [...deduped.values()];
+
       // ③ 499개씩 배치 커밋
       const allOps = [
-        ...updates.map(u => ({ type: 'update', id: u.id, data: u.data })),
-        ...adds.map(a =>    ({ type: 'add',               data: a.data })),
+        ...dedupedUpdates.map(u => ({ type: 'update', id: u.id, data: u.data })),
+        ...adds.map(a =>            ({ type: 'add',             data: a.data })),
       ];
 
       let successCount = 0;
@@ -1056,7 +1098,7 @@ export default function App() {
 
       await addDoc(collection(db, 'audit_logs'), {
         action: 'BATCH_SAVE_BASELIST', city,
-        addCount: adds.length, updateCount: updates.length,
+        addCount: adds.length, updateCount: dedupedUpdates.length,
         successCount, errorCount: errors.length,
         timestamp: serverTimestamp(),
         adminEmail: user?.email || 'unknown',

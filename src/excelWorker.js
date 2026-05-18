@@ -1,4 +1,6 @@
 import * as XLSX from 'xlsx';
+import * as cptable from 'xlsx/dist/cpexcel.full.mjs';
+XLSX.set_cptable(cptable); // .xls BIFF8 CP949(한글) 인코딩 지원
 
 const KOREA_REGION_MAP = {
   "종로구": "서울특별시 종로구", "중구": "서울특별시 중구", "용산구": "서울특별시 용산구", "성동구": "서울특별시 성동구", "광진구": "서울특별시 광진구", "동대문구": "서울특별시 동대문구", "중랑구": "서울특별시 중랑구", "성북구": "서울특별시 성북구", "강북구": "서울특별시 강북구", "도봉구": "서울특별시 도봉구", "노원구": "서울특별시 노원구", "은평구": "서울특별시 은평구", "서대문구": "서울특별시 서대문구", "마포구": "서울특별시 마포구", "양천구": "서울특별시 양천구", "강서구": "서울특별시 강서구", "구로구": "서울특별시 구로구", "금천구": "서울특별시 금천구", "영등포구": "서울특별시 영등포구", "동작구": "서울특별시 동작구", "관악구": "서울특별시 관악구", "서초구": "서울특별시 서초구", "강남구": "서울특별시 강남구", "송파구": "서울특별시 송파구", "강동구": "서울특별시 강동구",
@@ -72,14 +74,16 @@ function parseSheet(name, rawJson, dynamicRules) {
   const colCount = Math.max(
     ...[0, 1, 2].map(o => rawJson[headerIdx + o]?.length || 0)
   );
+  // \r\n 포함 셀 정제 (예: "생년월일\r\n(주민등록앞자리)" → "생년월일(주민등록앞자리)")
+  const cleanCell = c => String(c || '').replace(/[\r\n]+/g, '').trim();
   const headerBuf = Array.from({ length: colCount }, (_, i) =>
-    String(rawJson[headerIdx]?.[i] || '').trim()
+    cleanCell(rawJson[headerIdx]?.[i])
   );
 
   for (let offset = 1; offset <= 2; offset++) {
     const subRow = rawJson[headerIdx + offset];
     if (!subRow) break;
-    const subVals = subRow.map(c => String(c || '').trim());
+    const subVals = subRow.map(c => cleanCell(c));
     const nonEmpty = subVals.filter(Boolean);
     if (!nonEmpty.length) break;
     const looksLikeData = nonEmpty.some(v =>
@@ -112,11 +116,15 @@ function parseSheet(name, rawJson, dynamicRules) {
   const colIndices = {};
   const unmappedCols = [];
 
+  // 헤더 내 연속 공백을 단일 공백으로 정규화 (예: "주  소" → "주소" 매칭 가능하도록)
+  const normalizeH = h => h.replace(/\s+/g, '');
+
   activeReqKeys.forEach(req => {
-    const idx = headers.findIndex(h =>
-      req.kws.some(k => h.includes(k)) &&
-      !(req.excl || []).some(e => h.includes(e))
-    );
+    const idx = headers.findIndex(h => {
+      const hn = normalizeH(h);
+      return req.kws.some(k => hn.includes(normalizeH(k))) &&
+        !(req.excl || []).some(e => hn.includes(normalizeH(e)));
+    });
     if (idx !== -1) { mappedKeys.push(req.k); colIndices[req.k] = idx; }
     else missingKeys.push(req.k);
   });
@@ -124,7 +132,8 @@ function parseSheet(name, rawJson, dynamicRules) {
   // 매핑되지 않은 컬럼 찾기 (빈 컬럼 무시, 알려진 키워드 없는 컬럼)
   headers.forEach((h) => {
     if (h.startsWith('col_') || !h.trim()) return;
-    const isMapped = activeReqKeys.some(req => req.kws.some(k => h.includes(k)));
+    const hn = normalizeH(h);
+    const isMapped = activeReqKeys.some(req => req.kws.some(k => hn.includes(normalizeH(k))));
     if (!isMapped && !['비고', '연번', 'NO', '순번', '주민번호'].some(k => h.includes(k))) {
       unmappedCols.push(h);
     }
@@ -132,8 +141,17 @@ function parseSheet(name, rawJson, dynamicRules) {
 
   let dataStartRowIdx = -1;
 
-  // 연번/순번/NO 컬럼 인덱스 탐지 (있으면 빈 연번 = 합계행 제외)
-  const seqColIdx = headers.findIndex(h => /^(연번|순번|번호|NO|N\.O)$/i.test(h.trim()));
+  // 연번/순번/NO 컬럼 인덱스 탐지
+  // '번호' 단독은 너무 범용적(전화번호 끝자리, 회원번호 등)이므로 제외
+  const seqColIdx = headers.findIndex(h => /^(연번|순번|NO|N\.O)$/i.test(h.trim()));
+
+  // 연번 필터 활성화 여부: 실제 데이터 행의 30% 이상에 숫자가 채워진 경우에만 적용
+  // (연번이 헤더에 있어도 값이 안 채워진 파일은 필터 비활성 — 이 조건 없으면 전 행 제외됨)
+  const seqColEffective = seqColIdx >= 0 && (() => {
+    const sample = rawJson.slice(headerIdx + 1, headerIdx + 31);
+    const filled = sample.filter(r => /^\d+$/.test(String(r[seqColIdx] || '').trim())).length;
+    return filled >= Math.max(3, sample.length * 0.3);
+  })();
 
   // 1차 필터: 표준
   let bodyRows = rawJson.slice(headerIdx + 1).filter((r, idx) => {
@@ -141,8 +159,8 @@ function parseSheet(name, rawJson, dynamicRules) {
     if (nonEmpties.length <= 1) return false;
     const firstFour = r.slice(0, 4).map(c => String(c || '').trim()).join('');
     if (firstFour.includes('총계') || firstFour.includes('합계') || firstFour.includes('통계')) return false;
-    // 연번 컬럼이 있는데 해당 셀이 비어있으면 합계/소계행
-    if (seqColIdx >= 0 && !String(r[seqColIdx] || '').trim()) return false;
+    // 연번 컬럼이 실제로 사용되고(seqColEffective) 해당 셀이 비어있으면 합계/소계행
+    if (seqColEffective && !String(r[seqColIdx] || '').trim()) return false;
     if (colIndices['이름'] !== undefined) {
       const nameVal = String(r[colIndices['이름']] || '').trim();
       if (!nameVal || nameVal === '-') return false;
@@ -162,7 +180,7 @@ function parseSheet(name, rawJson, dynamicRules) {
       if (nonEmpties.length <= 1) return false;
       const firstFour = r.slice(0, 4).map(c => String(c || '').trim()).join('');
       if (firstFour.includes('총계') || firstFour.includes('합계') || firstFour.includes('통계')) return false;
-      if (seqColIdx >= 0 && !String(r[seqColIdx] || '').trim()) return false;
+      if (seqColEffective && !String(r[seqColIdx] || '').trim()) return false;
       if (dataStartRowIdx === -1) dataStartRowIdx = headerIdx + 1 + idx + 1;
       return true;
     });
@@ -180,14 +198,30 @@ function parseSheet(name, rawJson, dynamicRules) {
     .filter(k => emptyCellCounts[k] > 0)
     .map(k => `${k}(${emptyCellCounts[k]}건)`);
 
-  const amtIdx = headers.findIndex(h =>
-    !h.includes('가구원') && (
+  // 포수 컬럼 전체 수집 (10kg(포수)/20kg(포수) 같은 품목별 복수 컬럼 합산 지원)
+  const allAmtIdxs = headers.reduce((acc, h, i) => {
+    if (!h.includes('가구원') && (
       h.includes('포수') || h.includes('수량') || h.includes('구입량') || h.includes('신청수량') || h.includes('신청 수량') ||
       h === '포' || (h.includes('포') && h.length <= 3)
-    )
-  );
+    )) acc.push(i);
+    return acc;
+  }, []);
+
+  let effectiveAmtIdx = allAmtIdxs[0] ?? -1;
+
+  // 복수 포수 컬럼 → 행별 합산 가상 컬럼 추가, colIndices['수량']도 덮어씀
+  if (allAmtIdxs.length > 1) {
+    headers.push('수량(포수)합산');
+    effectiveAmtIdx = headers.length - 1;
+    bodyRows.forEach(row => {
+      const total = allAmtIdxs.reduce((s, i) => s + (parseInt(row[i] || 0) || 0), 0);
+      row[effectiveAmtIdx] = total || 1;
+    });
+    colIndices['수량'] = effectiveAmtIdx;
+  }
+
   let qty = 0;
-  bodyRows.forEach(row => { qty += parseInt(row[amtIdx] || 0) || 1; });
+  bodyRows.forEach(row => { qty += parseInt(row[effectiveAmtIdx] || 0) || 1; });
 
   // ─── 데이터 컬럼 값으로 수급 유형 자동 감지 ──────────────────────────
   let typeColIdx = -1;
@@ -196,13 +230,14 @@ function parseSheet(name, rawJson, dynamicRules) {
       h.includes('구분') || h.includes('유형') || h.includes('계층') || h.includes('자격')
     );
     if (typeCandidateIdx >= 0) {
+      typeColIdx = typeCandidateIdx;
       const detected = new Set();
       bodyRows.slice(0, 30).forEach(r => {
         const v = String(r[typeCandidateIdx] || '').trim();
         if (v.includes('차상위')) detected.add('차상위');
         if (v.includes('수급') || v.includes('기초')) detected.add('기초수급자');
       });
-      if (detected.size > 1) { type = '혼합'; typeColIdx = typeCandidateIdx; }
+      if (detected.size > 1) type = '혼합';
       else if (detected.has('차상위')) type = '차상위';
       else if (detected.has('기초수급자')) type = '기초수급자';
     }
@@ -278,7 +313,7 @@ self.onmessage = ({ data }) => {
 
     // ── 컬럼 재배치 — 파일 분석 ─────────────────────────────────────────
     if (action === 'ANALYZE_REMAP') {
-      const wbR = XLSX.read(new Uint8Array(buffer), { type: 'array', sheetRows: 30000, cellFormula: false, cellHTML: false, cellText: false, cellStyles: false, cellDates: false });
+      const wbR = XLSX.read(new Uint8Array(buffer), { type: 'array', sheetRows: 30000, cellFormula: false, cellHTML: false, cellText: false, cellStyles: false, cellDates: false, codepage: 949 });
       const visR = getVisibleSheetNames(wbR);
       const HKWSR = ['이름', '성명', '주소', '행정동', '포수', '수량', '구분', '연락', '전화', '휴대', '기사', '순번', '비고', '특이', '생년'];
       const analyzeSheetR = (n) => {
@@ -310,7 +345,7 @@ self.onmessage = ({ data }) => {
     if (action === 'EXPORT_REMAP') {
       const { mapping, outputCols, addrSrcIdx, selectedSheets, colOrder, fileName: fnRE } = data;
       const orderedCols = colOrder?.length ? colOrder.map(key => outputCols.find(c => c.key === key)).filter(Boolean) : outputCols;
-      const wbRE = XLSX.read(new Uint8Array(buffer), { type: 'array', sheetRows: 30000, cellFormula: false, cellHTML: false, cellText: false, cellStyles: false, cellDates: false });
+      const wbRE = XLSX.read(new Uint8Array(buffer), { type: 'array', sheetRows: 30000, cellFormula: false, cellHTML: false, cellText: false, cellStyles: false, cellDates: false, codepage: 949 });
       const visRE = getVisibleSheetNames(wbRE);
       let tgtRE = visRE[0], mxRE = 0;
       visRE.forEach(n => { const ref = wbRE.Sheets[n]['!ref']; if (ref) { const r = XLSX.utils.decode_range(ref).e.r; if (r > mxRE) { mxRE = r; tgtRE = n; } } });
@@ -412,7 +447,7 @@ self.onmessage = ({ data }) => {
       };
 
       const extractBodyMG = (buf, selSheets) => {
-        const wbMG = XLSX.read(new Uint8Array(buf), { type: 'array', sheetRows: 30000, cellFormula: false, cellHTML: false, cellText: false, cellStyles: false, cellDates: false });
+        const wbMG = XLSX.read(new Uint8Array(buf), { type: 'array', sheetRows: 30000, cellFormula: false, cellHTML: false, cellText: false, cellStyles: false, cellDates: false, codepage: 949 });
         const vis = getVisibleSheetNames(wbMG);
         const sheets = selSheets?.length > 0 ? selSheets.filter(n => vis.includes(n)) : [vis[0]];
         let rows = [];
@@ -493,7 +528,7 @@ self.onmessage = ({ data }) => {
 
     // ── 행정동 분리 — 파일 분석 ──────────────────────────────────────────
     if (action === 'ANALYZE_DONG_SPLIT') {
-      const wbD = XLSX.read(new Uint8Array(buffer), { type: 'array', sheetRows: 30000, cellFormula: false, cellHTML: false, cellText: false, cellStyles: false, cellDates: false });
+      const wbD = XLSX.read(new Uint8Array(buffer), { type: 'array', sheetRows: 30000, cellFormula: false, cellHTML: false, cellText: false, cellStyles: false, cellDates: false, codepage: 949 });
       const visibleD = getVisibleSheetNames(wbD);
       let targetD = visibleD[0];
       let maxRowsD = 0;
@@ -559,7 +594,7 @@ self.onmessage = ({ data }) => {
     // ── 행정동 분리 — 파일 내보내기 ─────────────────────────────────────
     if (action === 'EXPORT_DONG_SPLIT') {
       const { colMap: cm, selectedColIdxs, options, fileName: fnS } = data;
-      const wbE = XLSX.read(new Uint8Array(buffer), { type: 'array', sheetRows: 30000, cellFormula: false, cellHTML: false, cellText: false, cellStyles: false, cellDates: false });
+      const wbE = XLSX.read(new Uint8Array(buffer), { type: 'array', sheetRows: 30000, cellFormula: false, cellHTML: false, cellText: false, cellStyles: false, cellDates: false, codepage: 949 });
       const visE = getVisibleSheetNames(wbE);
       let tgtE = visE[0]; let mxE = 0;
       visE.forEach(n => { const ref = wbE.Sheets[n]['!ref']; if (ref) { const r = XLSX.utils.decode_range(ref).e.r; if (r > mxE) { mxE = r; tgtE = n; } } });
@@ -645,6 +680,7 @@ self.onmessage = ({ data }) => {
       cellText: false,
       cellStyles: false,
       cellDates: false,
+      codepage: 949,   // .xls BIFF8 CP949(한글) 강제 인코딩
     });
 
     if (action === 'PARSE_BASE' || action === 'PARSE_BASE_WITH_MAP') {
@@ -1036,7 +1072,9 @@ self.onmessage = ({ data }) => {
 
     let allRawData = [];
     const sheetsData = getVisibleSheetNames(wb).map(name => {
-      const rawJson = XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, defval: '', blankrows: false });
+      // raw: false → 숫자/날짜를 표시 문자열로 변환, 전화번호 앞 0 보존
+      const rawJson = XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, defval: '', blankrows: false, raw: false })
+        .map(row => row.map(cell => typeof cell === 'string' ? cell.trim() : cell)); // 주소 앞 공백 등 trim
       allRawData = allRawData.concat(rawJson.slice(0, 30));
       return parseSheet(name, rawJson, data.dynamicRules);
     });

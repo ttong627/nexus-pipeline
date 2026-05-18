@@ -105,16 +105,17 @@ service cloud.firestore {
 
     // ── 월별 배송명단: 읽기는 승인 사용자, 쓰기는 관리자, 기사·배송순번은 담당자도 수정 가능 ──
     match /cloud_lists/{cityId} {
-      allow read: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin());
-      allow write: if isAdmin();
+      // isAdminEmail(): JWT 직접 확인 — isAdmin()의 Firestore get() 실패 시 폴백
+      allow read: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin() || isAdminEmail());
+      allow write: if isAdmin() || isAdminEmail();
 
       match /months/{monthId} {
-        allow read: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin());
-        allow write: if isAdmin();
+        allow read: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin() || isAdminEmail());
+        allow write: if isAdmin() || isAdminEmail();
 
         match /records/{recordId} {
-          allow read: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin());
-          allow write: if isAdmin();
+          allow read: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin() || isAdminEmail());
+          allow write: if isAdmin() || isAdminEmail();
           // 담당자: 기사·배송순번·좌표·isApt 업데이트 허용 (루트맵 배정+좌표 저장용)
           allow update: if isAuthenticated() && hasCityAccess(cityId) &&
             request.resource.data.diff(resource.data).affectedKeys()
@@ -205,6 +206,11 @@ service cloud.firestore {
       match /months/{monthId} {
         allow read: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin());
         allow write: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin());
+
+        match /records/{recordId} {
+          allow read: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin());
+          allow write: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin());
+        }
 
         match /drivers/{driverId} {
           allow read: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin());

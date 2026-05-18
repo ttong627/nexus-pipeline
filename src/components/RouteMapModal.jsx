@@ -350,6 +350,10 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
   // ── 기사 배치 잠금 (브러시 보정 후 실수로 초기화 방지)
   const [isAssignmentLocked, setIsAssignmentLocked] = useState(false);
 
+  // ── 클릭 순번 배정 모드 (지도/목록 클릭 순서대로 1→2→3 순번 부여)
+  const [isSeqClickMode, setIsSeqClickMode] = useState(false);
+  const [seqClickNext, setSeqClickNext] = useState(1);
+
   // ── 페인트 브러시 모드 (2차 보정)
   const [isPaintMode, setIsPaintMode] = useState(false);
   const [paintDriverId, setPaintDriverId] = useState(null);
@@ -742,7 +746,9 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
       shouldFitBoundsRef.current = false; // 이후 업데이트에서는 줌 고정
     }
 
-    const groups = drivers.map(d => mapRecords.filter(r => r._driverId === d.id));
+    // 외부 기사 레코드는 겹침 감지 제외 (의도적 타구역 배송)
+    const overlapDrivers = drivers.filter(d => !d.isExternal);
+    const groups = overlapDrivers.map(d => mapRecords.filter(r => r._driverId === d.id));
     let cnt = 0;
     for (let i = 0; i < groups.length; i++)
       for (let j = i + 1; j < groups.length; j++)
@@ -759,7 +765,8 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
     setTimeout(() => {
       try {
       const target = filteredRecords.filter(r => r._lat && r._lng);
-      const activeDrivers = drivers.slice(0, Math.min(driverCount, drivers.length));
+      // isExternal 기사는 자동배정 대상 제외 (수동 배정 전용)
+      const activeDrivers = drivers.slice(0, Math.min(driverCount, drivers.length)).filter(d => !d.isExternal);
       if (!target.length || !activeDrivers.length) { setIsSplitting(false); return; }
 
       const withLoad = target.map(r => ({ ...r, _effectiveLoad: getEffectiveLoad(r) }));
@@ -1088,16 +1095,18 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
       const CHUNK = 499;
       for (let i = 0; i < records.length; i += CHUNK) {
         const batch = writeBatch(db);
+        let hasOps = false;
         records.slice(i, i + CHUNK).forEach(r => {
           if (!r._cloudDocId) return;
           const driverName = drivers.find(d => d.id === r._driverId)?.name || '';
           const ref = doc(db, 'cloud_lists', cloudCity, 'months', cloudMonthId, 'records', r._cloudDocId);
-          const patch = { 기사: driverName, 배송순번: r.배송순번 || '' };
-          if (r._lat) { patch.lat = r._lat; patch.lng = r._lng; }
+          const patch = { 기사: driverName, 배송순번: r.배송순번 ? String(r.배송순번) : '' };
+          if (r._lat !== undefined && r._lat !== null) { patch.lat = r._lat; patch.lng = r._lng; }
           if (r._isApt !== undefined) patch.isApt = r._isApt;
-          batch.update(ref, patch);
+          batch.set(ref, patch, { merge: true });
+          hasOps = true;
         });
-        await batch.commit();
+        if (hasOps) await batch.commit();
       }
       // driver_assignments 동기화 — RouteSetupModal에서 다음번 기사구성 자동 로드용
       try {
@@ -1380,26 +1389,40 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
     }
   };
 
+  // ── cloud_lists records 일괄 패치 (공통 유틸) ──────────────────────────
+  const patchCloudRecords = async (recs) => {
+    const CHUNK = 499;
+    let patchCount = 0;
+    for (let i = 0; i < recs.length; i += CHUNK) {
+      const batch = writeBatch(db);
+      let hasOps = false;
+      recs.slice(i, i + CHUNK).forEach(r => {
+        if (!r._cloudDocId) return;
+        const driverName = drivers.find(d => d.id === r._driverId)?.name || '';
+        const ref = doc(db, 'cloud_lists', cloudCity, 'months', cloudMonthId, 'records', r._cloudDocId);
+        const patch = { 기사: driverName, 배송순번: r.배송순번 ? String(r.배송순번) : '' };
+        if (r._lat !== undefined && r._lat !== null) { patch.lat = r._lat; patch.lng = r._lng; }
+        if (r._isApt !== undefined) patch.isApt = r._isApt;
+        batch.set(ref, patch, { merge: true });
+        hasOps = true;
+        patchCount++;
+      });
+      if (hasOps) await batch.commit();
+    }
+    return patchCount;
+  };
+
   // ── 클라우드 명단에 기사 배정 저장 + base_lists sync + route_sessions 갱신 ─
   const handleSaveToCloud = async () => {
     if (!isCloudMode) return;
+    if (!cloudCity || !cloudMonthId) {
+      showToast('error', '클라우드 명단을 먼저 불러오세요.');
+      return;
+    }
     setIsSavingCloud(true);
     try {
       // 1단계: cloud_lists에 기사/배송순번/좌표 저장
-      const CHUNK = 499;
-      for (let i = 0; i < records.length; i += CHUNK) {
-        const batch = writeBatch(db);
-        records.slice(i, i + CHUNK).forEach(r => {
-          if (!r._cloudDocId) return;
-          const driverName = drivers.find(d => d.id === r._driverId)?.name || '';
-          const ref = doc(db, 'cloud_lists', cloudCity, 'months', cloudMonthId, 'records', r._cloudDocId);
-          const patch = { 기사: driverName, 배송순번: r.배송순번 || '' };
-          if (r._lat) { patch.lat = r._lat; patch.lng = r._lng; }
-          if (r._isApt !== undefined) patch.isApt = r._isApt;
-          batch.update(ref, patch);
-        });
-        await batch.commit();
-      }
+      await patchCloudRecords(records);
 
       // 2단계: route_sessions도 갱신 — "이어서 작업" 복원이 DB 저장 이후 상태를 반영하도록
       await setDoc(
@@ -1463,6 +1486,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
       });
       const base = window.location.origin;
       setShareModal({
+        shareId,
         links: assignedDrivers.map(d => ({
           driverId: d.id, name: d.name, color: d.color,
           url: `${base}/?r=${shareId}&d=${d.id}`,
@@ -1857,6 +1881,17 @@ ${folders}
     const idx = drivers.length;
     setDrivers(prev => [...prev, { id: `d${Date.now()}`, name: `기사${idx + 1}`, color: DRIVER_COLORS[idx] }]);
     setDriverCount(c => c + 1);
+  };
+
+  const addExternalDriver = () => {
+    if (drivers.length >= 8) return;
+    setDrivers(prev => [...prev, {
+      id: `dext_${Date.now()}`,
+      name: '외부기사',
+      color: '#a855f7',
+      isExternal: true,
+      capacity: 0,
+    }]);
   };
 
   const removeDriver = (id) => {
@@ -2279,6 +2314,11 @@ ${folders}
                   className="text-[10px] text-[#3b82f6] hover:text-[#93c5fd] disabled:text-gray-700 flex items-center gap-0.5">
                   <Plus size={10} /> 추가
                 </button>
+                <button onClick={addExternalDriver} disabled={drivers.length >= 8}
+                  title="외부 기사 추가 — 자동배정 제외, 겹침 감지 제외. 이사 등 예외 케이스 수동 배정용"
+                  className="text-[10px] text-purple-400 hover:text-purple-300 disabled:text-gray-700 flex items-center gap-0.5">
+                  <Plus size={10} /> 외부
+                </button>
               </div>
             </div>
             <div className="space-y-1.5">
@@ -2302,8 +2342,9 @@ ${folders}
                   <div key={d.id}
                     className={`p-2 rounded-lg border transition-colors cursor-pointer`}
                     style={{
-                      borderColor: isActive ? d.color + '60' : '#1e1e1e',
-                      background: isActive ? d.color + '10' : '#0d0d0d',
+                      borderColor: isActive ? d.color + '60' : (d.isExternal ? '#7c3aed40' : '#1e1e1e'),
+                      borderStyle: d.isExternal ? 'dashed' : 'solid',
+                      background: isActive ? d.color + '10' : (d.isExternal ? '#1a0a2e' : '#0d0d0d'),
                     }}
                     onClick={() => setSelectedDriverFilter(isActive ? 'all' : d.id)}>
                     <div className="flex items-center gap-2">
@@ -2312,6 +2353,9 @@ ${folders}
                         onChange={e => setDrivers(prev => prev.map(dr => dr.id === d.id ? { ...dr, name: e.target.value } : dr))}
                         onClick={e => e.stopPropagation()}
                         className="flex-1 bg-transparent text-white text-xs focus:outline-none min-w-0" />
+                      {d.isExternal && (
+                        <span className="text-[8px] font-black px-1 py-0.5 rounded bg-purple-900/40 text-purple-400 border border-purple-500/30 shrink-0">외부</span>
+                      )}
                       <span className="text-[10px] font-black shrink-0" style={{ color: d.color }}>{cnt}건{driverQty > 0 ? ` · ${driverQty}포` : ''}</span>
                       {/* 기사 핀 버튼 */}
                       <button
@@ -2514,7 +2558,7 @@ ${folders}
           {/* ── 목록 패널 — split / list / listfull 모드 ── */}
           {(layoutMode === 'split' || layoutMode === 'list' || layoutMode === 'listfull') && (
             <div className={`overflow-auto bg-[#060606] flex flex-col ${
-              layoutMode === 'split' ? 'w-[42%] shrink-0' : 'flex-1'
+              layoutMode === 'split' ? 'w-[30%] shrink-0' : 'flex-1'
             }`}>
               {/* 목록 필터 바 */}
               <div className="px-3 py-2 border-b border-[#1a1a1a] sticky top-0 bg-[#060606] z-10 flex items-center gap-2 flex-wrap">
@@ -2537,6 +2581,18 @@ ${folders}
                 >
                   {dongList.map(d => <option key={d}>{d}</option>)}
                 </select>
+                {/* 클릭 순번 배정 모드 토글 */}
+                <button
+                  onClick={() => { setIsSeqClickMode(v => !v); setSeqClickNext(1); }}
+                  title={isSeqClickMode ? `클릭 순번 모드 ON — 행을 클릭하면 ${seqClickNext}번 순번이 배정됩니다. 다시 클릭하면 OFF.` : '클릭 순번 모드: 행을 클릭하는 순서대로 1→2→3 순번 자동 배정'}
+                  className={`ml-auto px-2 py-0.5 rounded-lg text-[10px] font-black flex items-center gap-1 transition-colors ${
+                    isSeqClickMode
+                      ? 'bg-amber-500/20 border border-amber-400/50 text-amber-300 animate-pulse'
+                      : 'bg-[#111] border border-[#222] text-gray-500 hover:text-amber-400 hover:border-amber-500/30'
+                  }`}
+                >
+                  {isSeqClickMode ? `▶ 클릭순번 ${seqClickNext}번째` : '클릭순번'}
+                </button>
               </div>
               <table className="w-full border-collapse text-[10px]">
                 <thead className="sticky top-[33px] bg-[#0a0a0a] z-10">
@@ -2559,12 +2615,16 @@ ${folders}
                       <tr
                         key={r.id} id={`rec-${r.id}`}
                         onClick={(e) => {
-                          // select/input 클릭은 행 선택 제외
                           if (['SELECT','INPUT','OPTION'].includes(e.target.tagName)) return;
+                          if (isSeqClickMode) {
+                            setRecords(prev => prev.map(pr => pr.id === r.id ? { ...pr, 배송순번: String(seqClickNext) } : pr));
+                            setSeqClickNext(n => n + 1);
+                            return;
+                          }
                           if (r._lat && r._lng) handleSelectRecord(r);
                           else setSelectedRecordId(r.id);
                         }}
-                        className={`border-b transition-colors ${r._lat ? 'cursor-pointer' : ''} ${!r._lat ? 'opacity-50' : ''} ${isSelected ? 'bg-blue-900/20' : 'hover:bg-[#0f0f0f]'}`}
+                        className={`border-b transition-colors cursor-pointer ${!r._lat ? 'opacity-50' : ''} ${isSeqClickMode ? 'hover:bg-amber-900/20' : isSelected ? 'bg-blue-900/20' : 'hover:bg-[#0f0f0f]'}`}
                         style={{
                           borderBottomColor: '#0e0e0e',
                           ...(isSelected ? { outline: '1px solid rgba(59,130,246,0.35)', outlineOffset: '-1px' } : {}),
@@ -2584,7 +2644,7 @@ ${folders}
                         </td>
                         <td className="px-1 py-0.5 text-white font-bold whitespace-nowrap">{r.이름}</td>
                         <td className="px-1 py-0.5 text-gray-500 max-w-0 w-full">
-                          <span className="block truncate" title={r.주소}>{roadAddr}</span>
+                          <span className="block truncate" title={r.주소}>{r.주소}</span>
                         </td>
                         <td className="px-1 py-0.5 text-center">
                           <input
@@ -3032,32 +3092,63 @@ ${folders}
             <div className="flex items-center justify-between px-5 py-4 border-b border-[#1a1a1a]">
               <div className="flex items-center gap-2">
                 <Share2 size={16} className="text-green-400" />
-                <span className="text-white font-black text-sm">기사 배송루트 공유 링크</span>
+                <span className="text-white font-black text-sm">기사 배송루트 공유</span>
               </div>
               <button onClick={() => setShareModal(null)} className="p-1.5 hover:bg-white/10 rounded-lg text-gray-400 hover:text-white transition-colors">
                 <X size={14} />
               </button>
             </div>
             <div className="px-5 py-4 space-y-3">
-              <p className="text-[10px] text-gray-500">기사에게 링크를 전달하면 모바일에서 자신의 배송루트를 카카오지도로 확인할 수 있습니다.</p>
+              <p className="text-[10px] text-gray-500">링크 전달 → 기사가 모바일에서 배송루트 카카오지도 확인 및 <span className="text-[#FEE500]">★ 즐겨찾기</span> 저장 가능.</p>
               {shareModal.links.map(l => (
-                <div key={l.driverId} className="flex items-center gap-2 bg-[#111] border border-[#2a2a2a] rounded-xl p-3">
-                  <div className="w-3 h-3 rounded-full shrink-0" style={{ background: l.color }} />
-                  <span className="text-white text-[11px] font-bold w-16 shrink-0">{l.name}</span>
-                  <span className="text-gray-500 text-[9px] flex-1 truncate">{l.url}</span>
-                  <button
-                    onClick={() => {
-                      navigator.clipboard.writeText(l.url);
-                      showToast('success', `${l.name} 링크 복사됨`);
-                    }}
-                    className="px-2 py-1 bg-green-900/40 border border-green-600/40 text-green-400 hover:bg-green-800/40 rounded-lg text-[9px] font-bold flex items-center gap-1 shrink-0 transition-colors"
-                  >
-                    <Link size={9} /> 복사
-                  </button>
+                <div key={l.driverId} className="bg-[#111] border border-[#2a2a2a] rounded-xl p-3 space-y-2">
+                  <div className="flex items-center gap-2">
+                    <div className="w-3 h-3 rounded-full shrink-0" style={{ background: l.color }} />
+                    <span className="text-white text-[11px] font-bold w-16 shrink-0">{l.name}</span>
+                    <span className="text-gray-500 text-[9px] flex-1 truncate">{l.url}</span>
+                    <button
+                      onClick={() => {
+                        navigator.clipboard.writeText(l.url);
+                        showToast('success', `${l.name} 링크 복사됨`);
+                      }}
+                      className="px-2 py-1 bg-green-900/40 border border-green-600/40 text-green-400 hover:bg-green-800/40 rounded-lg text-[9px] font-bold flex items-center gap-1 shrink-0 transition-colors"
+                    >
+                      <Link size={9} /> 복사
+                    </button>
+                  </div>
+                  {/* 기사별 즐겨찾기 KML 다운로드 (클라이언트 생성) */}
+                  <div className="flex items-center gap-2 pl-5">
+                    <button
+                      onClick={() => {
+                        const driverRecs = records
+                          .filter(r => r._driverId === l.driverId && r._lat && r._lng)
+                          .sort((a, b) => (parseInt(a.배송순번) || 999) - (parseInt(b.배송순번) || 999));
+                        if (!driverRecs.length) { showToast('error', '좌표 데이터가 없습니다.'); return; }
+                        const esc = (s) => String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+                        const placemarks = driverRecs.map(r => `  <Placemark>
+    <name>${esc((r.배송순번?r.배송순번+'. ':'') + r.이름)}</name>
+    <description>${esc(r.주소)}${(r.포수||1)>1?` / ${r.포수}포`:''}${r.특이사항?'\n⚠ '+r.특이사항:''}${r.휴대폰?'\n📞 '+r.휴대폰:''}</description>
+    <Point><coordinates>${r._lng},${r._lat},0</coordinates></Point>
+  </Placemark>`).join('\n');
+                        const kml = `<?xml version="1.0" encoding="UTF-8"?>\n<kml xmlns="http://www.opengis.net/kml/2.2">\n<Document>\n  <name>${esc(l.name + ' 배송루트')}</name>\n${placemarks}\n</Document>\n</kml>`;
+                        const blob = new Blob([kml], { type: 'application/vnd.google-earth.kml+xml' });
+                        const a = document.createElement('a');
+                        a.href = URL.createObjectURL(blob);
+                        a.download = `${l.name}_배송루트.kml`;
+                        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+                        setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+                        showToast('success', `${l.name} KML 다운로드 완료`);
+                      }}
+                      className="flex items-center gap-1 text-[9px] px-2 py-1 bg-[#FEE500]/10 border border-[#FEE500]/30 text-[#FEE500] hover:bg-[#FEE500]/20 rounded-lg font-bold transition-colors"
+                    >
+                      <Download size={8} /> 즐겨찾기 KML
+                    </button>
+                    <span className="text-[9px] text-gray-700">→ 카카오맵 나만의 지도</span>
+                  </div>
                 </div>
               ))}
             </div>
-            <div className="px-5 pb-4 flex justify-end">
+            <div className="px-5 pb-4 flex gap-2 justify-end">
               <button
                 onClick={() => {
                   const all = shareModal.links.map(l => `[${l.name}]\n${l.url}`).join('\n\n');
