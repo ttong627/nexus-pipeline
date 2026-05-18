@@ -21,7 +21,7 @@ const COORD_FIELDS = [
   { key: '특이사항', label: '특이사항', minW: '160px' },
 ];
 
-export default function ErrorListManager({ gridData, onBack, handleCellEdit, handleAddressKeyDown, handleExportErrors }) {
+export default function ErrorListManager({ gridData, onBack, handleCellEdit, handleAddressKeyDown, handleExportErrors, onRepurifyErrors }) {
   const [activeTab, setActiveTab] = useState('address');
   const [search, setSearch] = useState('');
   const [editingCell, setEditingCell] = useState(null);
@@ -113,6 +113,15 @@ export default function ErrorListManager({ gridData, onBack, handleCellEdit, han
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
+          {activeTab === 'address' && addrErrorRows.length > 0 && onRepurifyErrors && (
+            <button
+              onClick={onRepurifyErrors}
+              title="주소 수정 후 전체 오류 행을 API로 일괄 재처리합니다"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-bold bg-orange-950/70 border border-orange-500/50 text-orange-300 hover:bg-orange-900/70 hover:text-orange-200 transition-colors"
+            >
+              ↺ 일괄 재정제 ({addrErrorRows.length})
+            </button>
+          )}
           {activeTab === 'address' && addrErrorRows.length > 0 && (
             <button
               onClick={handleExportAddr}

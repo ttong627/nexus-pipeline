@@ -8,7 +8,7 @@ export default function ResultGrid({
   handleCellEdit, handleAddressKeyDown, handleUpdateBaseList, handleBatchSaveBaseList, isSavingBaseList,
   handleSaveMonthlyList, setShowExportSetting, handleExport, handleExportErrors, handleExportDongSummary,
   handleExportByDriver, handleDeleteRows, handleBatchSetNote, onHelp, onOpenRouteMap,
-  purifyResult, onClosePurifyResult, onMovePhones,
+  purifyResult, onClosePurifyResult, onMovePhones, onRepurifyErrors,
 }) {
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [batchNoteOpen, setBatchNoteOpen] = useState(false);
@@ -203,6 +203,15 @@ export default function ResultGrid({
                 <CheckCircle size={12}/> 정제완료 <span className="font-mono font-black">{gridData.filter(d=>!d._에러).length.toLocaleString()}</span>
               </button>
             </div>
+            {errorCount > 0 && onRepurifyErrors && (
+              <button
+                onClick={onRepurifyErrors}
+                title="오류 행의 주소를 먼저 수정한 뒤 클릭하세요. 전체 오류 행을 API로 일괄 재처리합니다."
+                className="px-3 py-1.5 bg-orange-950/70 border border-orange-500/50 text-orange-300 text-xs font-bold rounded-lg flex items-center gap-1.5 hover:bg-orange-900/70 hover:border-orange-400/70 hover:text-orange-200 transition-all shrink-0"
+              >
+                ↺ 오류 재정제 <span className="font-mono font-black">{errorCount}</span>
+              </button>
+            )}
             {(() => {
               const matched = gridData.filter(d => d._이식됨);
               if (matched.length === 0) return null;

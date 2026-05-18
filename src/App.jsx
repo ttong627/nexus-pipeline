@@ -680,14 +680,54 @@ export default function App() {
 
   const handleAddressKeyDown = async (e, row) => {
     if (e.key === "Enter") {
-      // adminDong·cityLabel 전달 → 주민센터 등 공공기관 검색 정확도 향상
       const res = await processAddress(row.주소, row.이름, row.행정동 || "", fileInfo?.city || "");
-      const newData = gridData.map(r => r.id === row.id ? { ...r, 주소: res.주소 } : r);
+      const updatedRow = {
+        ...row,
+        주소: res.주소,
+        _에러: res.확인필요 || false,
+        _사유: res.확인사유 || '',
+        _lat: res.lat || null,
+        _lng: res.lng || null,
+        _isApt: res.isApt !== undefined ? res.isApt : row._isApt,
+      };
+      const newData = gridData.map(r => r.id === row.id ? updatedRow : r);
       pushHistory(newData);
       if (res.주소 !== row.주소 && row.주소) {
         addTypoRecord(row.주소, res.주소);
       }
     }
+  };
+
+  const handleRepurifyErrors = async () => {
+    const errorRows = gridData.filter(r => r._에러);
+    if (!errorRows.length) return;
+    if (!window.confirm(`오류 ${errorRows.length}건을 일괄 재정제합니다.\n주소를 먼저 수정한 후 실행하세요.`)) return;
+
+    gStart('오류 재정제 중...', `0 / ${errorRows.length}건`, 0);
+    let done = 0;
+
+    const repurified = await asyncPool(10, errorRows, async (row) => {
+      const res = await processAddress(row.주소, row.이름, row.행정동 || '', fileInfo?.city || '');
+      done++;
+      gUpdate(Math.round(done / errorRows.length * 100), `${done} / ${errorRows.length}건`);
+      return {
+        ...row,
+        주소: res.주소,
+        _에러: res.확인필요 || false,
+        _사유: res.확인사유 || '',
+        _lat: res.lat || null,
+        _lng: res.lng || null,
+        _isApt: res.isApt !== undefined ? res.isApt : row._isApt,
+      };
+    });
+
+    const resultMap = new Map(repurified.map(r => [r.id, r]));
+    const newData = gridData.map(r => resultMap.has(r.id) ? resultMap.get(r.id) : r);
+    pushHistory(newData);
+
+    const remaining = repurified.filter(r => r._에러).length;
+    const fixed = errorRows.length - remaining;
+    gDone(`재정제 완료 — ${fixed}건 해결 / ${remaining}건 남음`);
   };
 
   const handleUpdateBaseList = async (row, updates) => {
@@ -1559,8 +1599,8 @@ export default function App() {
           {step === 2 && <Step2_SheetSelect step={step} setStep={setStep} fileInfo={fileInfo} setFileInfo={setFileInfo} worksheets={worksheets} setWorksheets={setWorksheets} setSelectedSheets={setSelectedSheets} onHelp={onHelp} handleSecondFileUpload={handleSecondFileUpload} />}
           {step === 3 && <Step3_Mapping step={step} setStep={setStep} selectedSheets={selectedSheets} worksheets={worksheets} mapDefs={mapDefs} setMapDefs={setMapDefs} startProcessing={handleAnalyzeAll} onHelp={onHelp} isBasePurifyMode={isBasePurifyMode} setIsBasePurifyMode={setIsBasePurifyMode} onOpenDbImport={() => setShowDbImport(true)} dbImportReady={dbImportReady} onUserMapping={handleUserMapping} />}
           {step === 4 && <LoadingScreen progress={engineProgress} logs={progressLogs} />}
-          {step === 5 && <ResultGrid step={step} setStep={setStep} fileInfo={fileInfo} filter={filter} setFilter={setFilter} dongList={gridDongList} driverList={gridDriverList} gridData={gridData} filteredData={filteredData} paginatedData={paginatedData} currentPage={currentPage} setCurrentPage={setCurrentPage} itemsPerPage={itemsPerPage} colVis={colVis} sortConfig={sortConfig} setSortConfig={setSortConfig} handleCellEdit={handleCellEdit} handleAddressKeyDown={handleAddressKeyDown} handleUpdateBaseList={handleUpdateBaseList} handleBatchSaveBaseList={handleBatchSaveBaseList} isSavingBaseList={isSavingBaseList} handleSaveMonthlyList={handleSaveMonthlyList} setShowExportSetting={setShowExportSetting} handleExport={handleExport} handleExportErrors={handleExportErrors} handleExportDongSummary={handleExportDongSummary} handleExportByDriver={handleExportByDriver} handleDeleteRows={handleDeleteRows} handleBatchSetNote={handleBatchSetNote} onHelp={onHelp} purifyResult={purifyResult} onClosePurifyResult={() => setPurifyResult(null)} onMovePhones={handleMovePhones} onOpenRouteMap={() => { if (!canUseRouteMap(user?.tier)) { setUpgradeReason('routeMap'); setShowUpgrade(true); } else { setCloudRouteConfig(null); setShowRouteSetup(true); } }} />}
-          {step === 10 && <ErrorListManager gridData={gridData} onBack={() => setStep(gridData.length ? 5 : 0)} handleCellEdit={handleCellEdit} handleAddressKeyDown={handleAddressKeyDown} handleExportErrors={handleExportErrors} />}
+          {step === 5 && <ResultGrid step={step} setStep={setStep} fileInfo={fileInfo} filter={filter} setFilter={setFilter} dongList={gridDongList} driverList={gridDriverList} gridData={gridData} filteredData={filteredData} paginatedData={paginatedData} currentPage={currentPage} setCurrentPage={setCurrentPage} itemsPerPage={itemsPerPage} colVis={colVis} sortConfig={sortConfig} setSortConfig={setSortConfig} handleCellEdit={handleCellEdit} handleAddressKeyDown={handleAddressKeyDown} handleUpdateBaseList={handleUpdateBaseList} handleBatchSaveBaseList={handleBatchSaveBaseList} isSavingBaseList={isSavingBaseList} handleSaveMonthlyList={handleSaveMonthlyList} setShowExportSetting={setShowExportSetting} handleExport={handleExport} handleExportErrors={handleExportErrors} handleExportDongSummary={handleExportDongSummary} handleExportByDriver={handleExportByDriver} handleDeleteRows={handleDeleteRows} handleBatchSetNote={handleBatchSetNote} onHelp={onHelp} purifyResult={purifyResult} onClosePurifyResult={() => setPurifyResult(null)} onMovePhones={handleMovePhones} onRepurifyErrors={handleRepurifyErrors} onOpenRouteMap={() => { if (!canUseRouteMap(user?.tier)) { setUpgradeReason('routeMap'); setShowUpgrade(true); } else { setCloudRouteConfig(null); setShowRouteSetup(true); } }} />}
+          {step === 10 && <ErrorListManager gridData={gridData} onBack={() => setStep(gridData.length ? 5 : 0)} handleCellEdit={handleCellEdit} handleAddressKeyDown={handleAddressKeyDown} handleExportErrors={handleExportErrors} onRepurifyErrors={handleRepurifyErrors} />}
           {step === 6 && <BaseListManager user={user} initialCity={dbNavCity} onBack={() => { setStep(0); setDbNavCity(''); }} />}
           {step === 7 && <AdminPanel user={user} onClose={() => setStep(0)} />}
           {step === 8 && <CloudListManager user={user} initialCity={dbNavCity} onBack={() => { setStep(0); setDbNavCity(''); }} onOpenRouteMap={(city, monthId, orgDongs) => { if (!canUseRouteMap(user?.tier)) { setUpgradeReason('routeMap'); setShowUpgrade(true); } else { setCloudRouteConfig({ city, monthId, orgDongs }); setShowRouteSetup(true); } }} onOpenInResultGrid={handleOpenInResultGrid} />}
