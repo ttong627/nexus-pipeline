@@ -187,14 +187,25 @@ service cloud.firestore {
       }
     }
 
+    // ── 사용자 개인 기사: 본인만 읽기·쓰기, 관리자 전체 제어 ─────────────────
+    match /user_drivers/{uid} {
+      allow read: if isAuthenticated() && (request.auth.uid == uid || isAdmin());
+      allow write: if isAuthenticated() && (request.auth.uid == uid || isAdmin());
+
+      match /drivers/{driverId} {
+        allow read: if isAuthenticated() && (request.auth.uid == uid || isAdmin());
+        allow write: if isAuthenticated() && (request.auth.uid == uid || isAdmin());
+      }
+    }
+
     // ── 기사 배정 프리셋: 읽기·쓰기는 승인 사용자 (루트맵 셋업 저장용) ───────────
     match /driver_assignments/{cityId} {
-      allow read: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin());
-      allow write: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin());
+      allow read: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin() || isAdminEmail());
+      allow write: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin() || isAdminEmail());
 
       match /orgs/{orgKey} {
-        allow read: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin());
-        allow write: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin());
+        allow read: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin() || isAdminEmail());
+        allow write: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin() || isAdminEmail());
       }
     }
 

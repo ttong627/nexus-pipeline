@@ -1,5 +1,5 @@
 ﻿import { useState, useEffect, useRef } from 'react';
-import { ChevronLeft, ChevronRight, AlertTriangle, CheckCircle, Columns, Download, Trash2, Edit3, Database, X, MapPin, Users, UserX, StickyNote, User, Phone } from 'lucide-react';
+import { ChevronLeft, ChevronRight, AlertTriangle, CheckCircle, Columns, Download, Trash2, Edit3, Database, X, MapPin, Users, UserX, StickyNote, User, Phone, BookOpen } from 'lucide-react';
 import { formatPhoneInput } from '../utils/parsers.js';
 
 export default function ResultGrid({
@@ -9,6 +9,7 @@ export default function ResultGrid({
   handleSaveMonthlyList, setShowExportSetting, handleExport, handleExportErrors, handleExportDongSummary,
   handleExportByDriver, handleDeleteRows, handleBatchSetNote, onHelp, onOpenRouteMap,
   purifyResult, onClosePurifyResult, onMovePhones, onRepurifyErrors,
+  onFetchBaseNotes, isFetchingNotes,
 }) {
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [batchNoteOpen, setBatchNoteOpen] = useState(false);
@@ -312,6 +313,19 @@ export default function ResultGrid({
                 <div className="h-4 w-px bg-[#222] mx-0.5"/>
                 <button onClick={onMovePhones} className="px-3 py-1.5 bg-[#051818] border border-cyan-800/30 text-cyan-400 font-bold rounded-lg hover:bg-[#0a2020] transition-colors flex items-center gap-1.5 text-xs" title="유선전화에 있는 휴대폰 번호를 휴대폰으로 이동">
                   <Phone size={12}/> 전화번호 이동
+                </button>
+              </>
+            )}
+            {onFetchBaseNotes && (
+              <>
+                <div className="h-4 w-px bg-[#222] mx-0.5"/>
+                <button
+                  onClick={onFetchBaseNotes}
+                  disabled={isFetchingNotes}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-amber-950/40 hover:bg-amber-900/50 text-amber-400 border border-amber-500/30 transition-colors disabled:opacity-40"
+                  title="기본명단에서 특이사항을 불러와 이식"
+                >
+                  <BookOpen size={12}/> {isFetchingNotes ? '이식 중...' : '특이사항 불러오기'}
                 </button>
               </>
             )}

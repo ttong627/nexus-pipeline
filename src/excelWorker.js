@@ -129,9 +129,54 @@ function parseSheet(name, rawJson, dynamicRules) {
     else missingKeys.push(req.k);
   });
 
+  // 보조 연락처: 첫 번째 연락처 컬럼 이후 두 번째 전화 컬럼 자동 탐지
+  // (예: 전화① + 전화② 구조에서 전화②가 누락되는 문제 방지)
+  {
+    const phoneKws = ['휴대', '연락', '전화', '유선', '핸드폰', '핸드', '모바일', '휴폰'];
+    const phoneIdx1 = colIndices['연락처'];
+    const phoneIdx2 = headers.findIndex((h, i) => {
+      if (i === phoneIdx1) return false;
+      const hn = normalizeH(h);
+      return phoneKws.some(k => hn.includes(normalizeH(k)));
+    });
+    if (phoneIdx1 !== undefined && phoneIdx2 !== -1) {
+      colIndices['보조연락처'] = phoneIdx2;
+      mappedKeys.push('보조연락처');
+    }
+  }
+
+  // 생년월일 컬럼 자동 탐지 (activeReqKeys에 없어 자동 매핑 안 되던 문제 수정)
+  if (colIndices['생년월일'] === undefined) {
+    const birthKws = ['생년월일', '생년', '주민등록'];
+    const birthIdx = headers.findIndex(h => {
+      const hn = normalizeH(h);
+      return birthKws.some(k => hn.includes(normalizeH(k)));
+    });
+    if (birthIdx !== -1) {
+      colIndices['생년월일'] = birthIdx;
+      mappedKeys.push('생년월일');
+    }
+  }
+
+  // 문자수신 컬럼 자동 탐지
+  if (colIndices['문자수신'] === undefined) {
+    const smsKws = ['문자수신', '수신동의', '수신여부', 'SMS'];
+    const smsIdx = headers.findIndex(h => {
+      const hn = normalizeH(h);
+      return smsKws.some(k => hn.includes(normalizeH(k)));
+    });
+    if (smsIdx !== -1) {
+      colIndices['문자수신'] = smsIdx;
+      mappedKeys.push('문자수신');
+    }
+  }
+
   // 매핑되지 않은 컬럼 찾기 (빈 컬럼 무시, 알려진 키워드 없는 컬럼)
-  headers.forEach((h) => {
+  // colIndices에 이미 등록된 컬럼 인덱스를 제외 (보조연락처·생년월일·문자수신 포함)
+  const mappedColIdxSet = new Set(Object.values(colIndices));
+  headers.forEach((h, hIdx) => {
     if (h.startsWith('col_') || !h.trim()) return;
+    if (mappedColIdxSet.has(hIdx)) return;
     const hn = normalizeH(h);
     const isMapped = activeReqKeys.some(req => req.kws.some(k => hn.includes(normalizeH(k))));
     if (!isMapped && !['비고', '연번', 'NO', '순번', '주민번호'].some(k => h.includes(k))) {
@@ -159,14 +204,16 @@ function parseSheet(name, rawJson, dynamicRules) {
     if (nonEmpties.length <= 1) return false;
     const firstFour = r.slice(0, 4).map(c => String(c || '').trim()).join('');
     if (firstFour.includes('총계') || firstFour.includes('합계') || firstFour.includes('통계')) return false;
-    // 연번 컬럼이 실제로 사용되고(seqColEffective) 해당 셀이 비어있으면 합계/소계행
-    if (seqColEffective && !String(r[seqColIdx] || '').trim()) return false;
     if (colIndices['이름'] !== undefined) {
       const nameVal = String(r[colIndices['이름']] || '').trim();
       if (!nameVal || nameVal === '-') return false;
       if (/합계|소계|총계|집계|가구$|세대$/.test(nameVal)) return false;
-      // 이름 자리에 숫자(콤마 포함)만 있으면 합계행 (예: 1,982 / 227)
       if (/^[\d,]+$/.test(nameVal)) return false;
+      // 이름 컬럼 자리에 헤더 키워드가 그대로 들어온 경우 (헤더행 오인식 방지)
+      if (/^(이름|성명|대상자|수령자명|성\s*명|이\s*름)$/.test(nameVal)) return false;
+    } else if (seqColEffective && !String(r[seqColIdx] || '').trim()) {
+      // 이름 컬럼 없는 파일: 연번 비어있으면 합계/소계행으로 판단
+      return false;
     }
     if (dataStartRowIdx === -1) dataStartRowIdx = headerIdx + 1 + idx + 1;
     return true;
@@ -180,7 +227,14 @@ function parseSheet(name, rawJson, dynamicRules) {
       if (nonEmpties.length <= 1) return false;
       const firstFour = r.slice(0, 4).map(c => String(c || '').trim()).join('');
       if (firstFour.includes('총계') || firstFour.includes('합계') || firstFour.includes('통계')) return false;
-      if (seqColEffective && !String(r[seqColIdx] || '').trim()) return false;
+      if (colIndices['이름'] !== undefined) {
+        const nameVal = String(r[colIndices['이름']] || '').trim();
+        if (/^(이름|성명|대상자|수령자명|성\s*명|이\s*름)$/.test(nameVal)) return false;
+      }
+      if (seqColEffective && !String(r[seqColIdx] || '').trim()) {
+        const nameVal = colIndices['이름'] !== undefined ? String(r[colIndices['이름']] || '').trim() : '';
+        if (!nameVal || /합계|소계|총계|집계/.test(nameVal) || /^[\d,]+$/.test(nameVal)) return false;
+      }
       if (dataStartRowIdx === -1) dataStartRowIdx = headerIdx + 1 + idx + 1;
       return true;
     });
@@ -271,16 +325,16 @@ self.onmessage = ({ data }) => {
       // Sheet 1 — 요약 (지자체명 + 월)
       const monthStr = String(month).replace(/월/g, '').trim() || '미상';
       const sheet1Name = `${city} ${monthStr}월 정보`.substring(0, 31);
-      const totalSu  = rawRows.filter(r => r.구분 === '기초수급자').reduce((s, r) => s + (Number(r.포수) || 0), 0);
-      const totalCha = rawRows.filter(r => r.구분 === '차상위').reduce((s, r) => s + (Number(r.포수) || 0), 0);
+      const totalSu  = rawRows.filter(r => r.구분 === '기초수급자').reduce((s, r) => s + (Number(r.포수) || 1), 0);
+      const totalCha = rawRows.filter(r => r.구분 === '차상위').reduce((s, r) => s + (Number(r.포수) || 1), 0);
       const summaryAoa = [
         ['구분', '수급자(포)', '차상위(포)', '전체(포)'],
         ['전체합계', totalSu, totalCha, totalSu + totalCha],
       ];
       dongSet.forEach(dong => {
         const dr = rawRows.filter(r => String(r.행정동 || '-').trim() === dong);
-        const dSu  = dr.filter(r => r.구분 === '기초수급자').reduce((s, r) => s + (Number(r.포수) || 0), 0);
-        const dCha = dr.filter(r => r.구분 === '차상위').reduce((s, r) => s + (Number(r.포수) || 0), 0);
+        const dSu  = dr.filter(r => r.구분 === '기초수급자').reduce((s, r) => s + (Number(r.포수) || 1), 0);
+        const dCha = dr.filter(r => r.구분 === '차상위').reduce((s, r) => s + (Number(r.포수) || 1), 0);
         summaryAoa.push([dong, dSu, dCha, dSu + dCha]);
       });
       const ws1 = XLSX.utils.aoa_to_sheet(summaryAoa);
@@ -657,6 +711,106 @@ self.onmessage = ({ data }) => {
       });
       const wbout=XLSX.write(wbOut,{bookType:'xlsx',type:'array'});
       self.postMessage({ok:true,wbout,fileName:fnS});
+      return;
+    }
+
+    // ── DATA 매칭 ─────────────────────────────────────────────────────────
+    if (action === 'DATA_MATCH') {
+      const { targetBuffer, sourceBuffer, targetSheet, sourceSheet, targetKeyMap, sourceKeyMap, transplantFields, fileName: fnDM } = data;
+      const HKWSDM = ['이름', '성명', '주소', '행정동', '포수', '수량', '구분', '연락', '전화', '휴대', '기사', '순번', '비고', '특이', '생년'];
+      const detectHdrDM = (raw) => {
+        let hIdx = 0, hSc = -1;
+        for (let i = 0; i < Math.min(20, raw.length); i++) {
+          const s = raw[i].map(c => String(c || '').trim()).join('');
+          let sc = 0; HKWSDM.forEach(kw => { if (s.includes(kw)) sc++; });
+          if (sc > hSc && raw[i].filter(c => String(c).trim()).length > 2) { hSc = sc; hIdx = i; }
+        }
+        return hIdx;
+      };
+      const normPhoneDM = v => String(v || '').replace(/[^0-9]/g, '');
+      const normBirthDM = v => {
+        const d = String(v || '').replace(/[^0-9]/g, '');
+        if (d.length === 8) return `${d.slice(2,4)}.${d.slice(4,6)}.${d.slice(6,8)}`;
+        if (d.length === 6) return `${d.slice(0,2)}.${d.slice(2,4)}.${d.slice(4,6)}`;
+        return String(v || '').replace(/[-/]/g, '.').trim();
+      };
+      const normNameDM = v => String(v || '').trim();
+
+      const wbT = XLSX.read(new Uint8Array(targetBuffer), { type: 'array', sheetRows: 100000, cellFormula: false, cellHTML: false, cellText: false, cellDates: false });
+      const sheetNameT = targetSheet && wbT.SheetNames.includes(targetSheet) ? targetSheet : wbT.SheetNames[0];
+      const rawT = XLSX.utils.sheet_to_json(wbT.Sheets[sheetNameT], { header: 1, defval: '', blankrows: false });
+      const hIdxT = detectHdrDM(rawT);
+      const colCntT = Math.max(...[0,1,2].map(o => rawT[hIdxT+o]?.length||0), 1);
+      const tHeaders = Array.from({ length: colCntT }, (_, i) => String(rawT[hIdxT]?.[i]||'').trim());
+      for (let off=1; off<=2; off++) {
+        const sub=rawT[hIdxT+off]; if(!sub) break;
+        const isData=sub.some(v=>/\d{2,3}-\d{3,4}-\d{4}/.test(String(v))||(/[가-힣]/.test(String(v))&&String(v).length>10));
+        if(isData) break;
+        sub.forEach((v,i)=>{ if(v&&!tHeaders[i]) tHeaders[i]=String(v).trim(); });
+      }
+      const tDataRows = rawT.slice(hIdxT + 1).filter(r => r.some(c => String(c).trim()));
+
+      const wbS = XLSX.read(new Uint8Array(sourceBuffer), { type: 'array', sheetRows: 100000, cellFormula: false, cellHTML: false, cellText: false, cellDates: false });
+      const sheetNameS = sourceSheet && wbS.SheetNames.includes(sourceSheet) ? sourceSheet : wbS.SheetNames[0];
+      const rawS = XLSX.utils.sheet_to_json(wbS.Sheets[sheetNameS], { header: 1, defval: '', blankrows: false });
+      const hIdxS = detectHdrDM(rawS);
+      const sDataRows = rawS.slice(hIdxS + 1).filter(r => r.some(c => String(c).trim()));
+
+      const byBirthDM = {}, byPhoneDM = {}, byLandlineDM = {};
+      sDataRows.forEach(row => {
+        const name = normNameDM(row[sourceKeyMap.name] ?? '');
+        if (!name) return;
+        const birth = sourceKeyMap.birth >= 0 ? normBirthDM(row[sourceKeyMap.birth] ?? '') : '';
+        const phone = sourceKeyMap.phone >= 0 ? normPhoneDM(row[sourceKeyMap.phone] ?? '') : '';
+        const land  = sourceKeyMap.landline >= 0 ? normPhoneDM(row[sourceKeyMap.landline] ?? '') : '';
+        if (birth) { const k=`${name}__${birth}`; if (!byBirthDM[k]) byBirthDM[k] = row; }
+        if (phone.length >= 9) { const k=`${name}__${phone}`; if (!byPhoneDM[k]) byPhoneDM[k] = row; }
+        if (land.length >= 9)  { const k=`${name}__${land}`;  if (!byLandlineDM[k]) byLandlineDM[k] = row; }
+      });
+
+      const appendFields = transplantFields.filter(f => f.tgtIdx < 0);
+      let matchedCount = 0;
+      const resultRows = tDataRows.map(row => {
+        const newRow = [...row];
+        while (newRow.length < tHeaders.length) newRow.push('');
+        const name = normNameDM(row[targetKeyMap.name] ?? '');
+        if (!name) { appendFields.forEach(() => newRow.push('')); newRow.push('미매칭'); return newRow; }
+        const birth = targetKeyMap.birth >= 0 ? normBirthDM(row[targetKeyMap.birth] ?? '') : '';
+        const phone = targetKeyMap.phone >= 0 ? normPhoneDM(row[targetKeyMap.phone] ?? '') : '';
+        const land  = targetKeyMap.landline >= 0 ? normPhoneDM(row[targetKeyMap.landline] ?? '') : '';
+        let srcRow = null, matchType = '';
+        if (birth && byBirthDM[`${name}__${birth}`])          { srcRow = byBirthDM[`${name}__${birth}`];    matchType = '이름+생년월일'; }
+        else if (phone.length>=9 && byPhoneDM[`${name}__${phone}`]) { srcRow = byPhoneDM[`${name}__${phone}`]; matchType = '이름+휴대폰'; }
+        else if (land.length>=9  && byLandlineDM[`${name}__${land}`]) { srcRow = byLandlineDM[`${name}__${land}`]; matchType = '이름+유선전화'; }
+        if (srcRow) {
+          matchedCount++;
+          transplantFields.filter(f => f.tgtIdx >= 0).forEach(f => { newRow[f.tgtIdx] = String(srcRow[f.srcIdx] ?? ''); });
+          appendFields.forEach(f => newRow.push(String(srcRow[f.srcIdx] ?? '')));
+          newRow.push(matchType);
+        } else {
+          appendFields.forEach(() => newRow.push(''));
+          newRow.push('미매칭');
+        }
+        return newRow;
+      });
+
+      const outHeaders = [...tHeaders];
+      appendFields.forEach(f => outHeaders.push(f.label));
+      outHeaders.push('매칭결과');
+      const wsDM = XLSX.utils.aoa_to_sheet([outHeaders, ...resultRows]);
+      wsDM['!cols'] = outHeaders.map(h => ({ wch: Math.min(Math.max(String(h).length*2+4, 8), 40) }));
+      const wbDM = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wbDM, wsDM, '매칭결과');
+
+      const unmatchedRows = resultRows.filter(r => r[r.length-1] === '미매칭');
+      if (unmatchedRows.length > 0) {
+        const wsUnmatched = XLSX.utils.aoa_to_sheet([outHeaders, ...unmatchedRows]);
+        wsUnmatched['!cols'] = wsDM['!cols'];
+        XLSX.utils.book_append_sheet(wbDM, wsUnmatched, '미매칭목록');
+      }
+
+      const wboutDM = XLSX.write(wbDM, { bookType: 'xlsx', type: 'array' });
+      self.postMessage({ ok: true, wbout: wboutDM, fileName: fnDM, matched: matchedCount, total: tDataRows.length });
       return;
     }
 

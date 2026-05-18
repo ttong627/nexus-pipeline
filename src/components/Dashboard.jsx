@@ -1,14 +1,9 @@
 import { useState, useEffect, useMemo } from 'react';
-import { FileSpreadsheet, CheckCircle, Database, ChevronRight, Truck, BookOpen, Loader2, RefreshCw, Calendar } from 'lucide-react';
+import { FileSpreadsheet, CheckCircle, Database, ChevronRight, Truck, BookOpen, Loader2, RefreshCw, Calendar, AlertTriangle } from 'lucide-react';
 import { APP_VERSION } from '../version.js';
 import { db } from '../config/firebase.js';
-import { collection, getDocs, getDocsFromServer } from 'firebase/firestore';
+import { collection, getDocs } from 'firebase/firestore';
 
-const CursorSVG = () => (
-  <svg width="22" height="22" viewBox="0 0 22 22" fill="none" xmlns="http://www.w3.org/2000/svg">
-    <path d="M3 1L3 17L7.5 13L10.5 20L13 19L10 12L16 12Z" fill="white" stroke="#3b82f6" strokeWidth="1.2" strokeLinejoin="round"/>
-  </svg>
-);
 
 function fmtDate(ts) {
   if (!ts) return '';
@@ -16,20 +11,127 @@ function fmtDate(ts) {
   return `${d.getMonth() + 1}/${d.getDate()}`;
 }
 
+function getCurrentMonth() {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+}
+
+// ── 도시 카드 ─────────────────────────────────────────────────────────────────
+function CityCard({ city, sigungu, cloud, base, curMonth, onCloudCard, onBaseCard }) {
+  const hasCloud = !!cloud;
+  const hasBase = !!base;
+  const isCurrentMonth = cloud?.latestMonthId === curMonth;
+
+  // 상태 점: 둘 다 있고 이번달이면 초록, 이번달 아니면 노랑, 클라우드만 파랑, 기본만 보라
+  const dotColor = hasCloud && hasBase && isCurrentMonth
+    ? '#22c55e'
+    : hasCloud && hasBase
+    ? '#eab308'
+    : hasCloud
+    ? '#3b82f6'
+    : '#a855f7';
+
+  return (
+    <div className="rounded-2xl border border-[#111a2e] overflow-hidden flex flex-col" style={{ background: '#06090f' }}>
+
+      {/* ── 카드 헤더 ── */}
+      <div className="flex items-center justify-between px-4 py-2.5 border-b border-[#0f1520]">
+        <span className="text-white font-black text-[13px] truncate">{sigungu}</span>
+        <div className="flex items-center gap-2 shrink-0 ml-2">
+          {hasCloud && !isCurrentMonth && (
+            <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-900/30 text-amber-500 font-bold border border-amber-700/20">
+              이전달
+            </span>
+          )}
+          <span
+            className="w-2 h-2 rounded-full shrink-0"
+            style={{ background: dotColor, boxShadow: `0 0 6px ${dotColor}80` }}
+          />
+        </div>
+      </div>
+
+      {/* ── 이번달 배송명단 ── */}
+      <button
+        className={`w-full flex items-start gap-3 px-4 py-3 text-left transition-colors border-b border-[#0f1520]
+          ${hasCloud ? 'hover:bg-[#3b82f6]/[0.04] cursor-pointer' : 'cursor-default'}`}
+        onClick={hasCloud ? () => onCloudCard?.(city) : undefined}
+        disabled={!hasCloud}
+      >
+        <div className={`w-6 h-6 rounded-lg flex items-center justify-center shrink-0 mt-0.5 transition-colors
+          ${hasCloud ? 'bg-[#3b82f6]/10 border border-[#3b82f6]/20' : 'bg-[#111] border border-[#1a1a1a]'}`}>
+          <Truck size={11} className={hasCloud ? 'text-[#3b82f6]' : 'text-gray-700'} />
+        </div>
+        <div className="flex-1 min-w-0">
+          {hasCloud ? (
+            <>
+              <div className="flex items-center gap-1.5 mb-1.5">
+                <span className="text-[10px] font-bold text-gray-500">{cloud.latestMonthId}</span>
+                <span className="text-[12px] font-black text-white tabular-nums">{(cloud.totalQty || cloud.totalCount || 0).toLocaleString()}<span className="text-gray-600 font-bold ml-0.5 text-[10px]">포</span></span>
+              </div>
+              <div className="flex flex-wrap gap-1">
+                {(cloud.suQty || cloud.suCount) > 0 && (
+                  <span className="text-[9px] px-1.5 py-0.5 rounded bg-blue-950/60 text-blue-400 font-bold border border-blue-800/20">
+                    수급 {(cloud.suQty || cloud.suCount || 0).toLocaleString()}포
+                  </span>
+                )}
+                {(cloud.chaQty || cloud.chaCount) > 0 && (
+                  <span className="text-[9px] px-1.5 py-0.5 rounded bg-purple-950/60 text-purple-400 font-bold border border-purple-800/20">
+                    차상위 {(cloud.chaQty || cloud.chaCount || 0).toLocaleString()}포
+                  </span>
+                )}
+              </div>
+            </>
+          ) : (
+            <span className="text-[11px] text-gray-700 font-bold">미업로드</span>
+          )}
+        </div>
+        {hasCloud && <ChevronRight size={12} className="text-gray-700 shrink-0 mt-1" />}
+      </button>
+
+      {/* ── 기본명단 ── */}
+      <button
+        className={`w-full flex items-center gap-3 px-4 py-2.5 text-left transition-colors
+          ${hasBase ? 'hover:bg-purple-500/[0.04] cursor-pointer' : 'cursor-default'}`}
+        onClick={hasBase ? () => onBaseCard?.(city) : undefined}
+        disabled={!hasBase}
+      >
+        <div className={`w-6 h-6 rounded-lg flex items-center justify-center shrink-0 transition-colors
+          ${hasBase ? 'bg-purple-950/40 border border-purple-800/20' : 'bg-[#111] border border-[#1a1a1a]'}`}>
+          <BookOpen size={11} className={hasBase ? 'text-purple-400' : 'text-gray-700'} />
+        </div>
+        <div className="flex-1 min-w-0 flex items-center gap-2">
+          {hasBase ? (
+            <>
+              <span className="text-[10px] font-black text-purple-400/80">기본명단</span>
+              {base.updatedAt && (
+                <span className="text-[10px] text-gray-600">{fmtDate(base.updatedAt)} 업데이트</span>
+              )}
+            </>
+          ) : (
+            <span className="text-[11px] text-gray-700 font-bold">미등록</span>
+          )}
+        </div>
+        {hasBase && <ChevronRight size={12} className="text-gray-700 shrink-0" />}
+      </button>
+    </div>
+  );
+}
+
+// ── 메인 대시보드 ──────────────────────────────────────────────────────────────
 export default function Dashboard({ user, onStart, onHelp, onCloudCard, onBaseCard }) {
   const totalRows = user?.totalRowsProcessed || 0;
   const totalFiles = user?.totalFilesProcessed || 0;
   const isAdmin = user?.role === 'admin';
   const approvedCities = user?.citiesApproved || [];
 
-  const [cloudData, setCloudData] = useState([]);   // [{city, sigungu, sido, latestMonthId, totalCount, suCount, chaCount}]
-  const [baseData, setBaseData] = useState([]);      // [{city, sigungu, sido, updatedAt}]
+  const [cloudData, setCloudData] = useState([]);
+  const [baseData, setBaseData] = useState([]);
   const [loading, setLoading] = useState(true);
 
   const loadData = async () => {
     setLoading(true);
     try {
-      // ── cloud_lists: 배송명단 데이터 ──
+      // ── cloud_lists ──
       let cities;
       if (isAdmin) {
         const snap = await getDocs(collection(db, 'cloud_lists'));
@@ -55,13 +157,16 @@ export default function Dashboard({ user, onStart, onHelp, onCloudCard, onBaseCa
               totalCount: latest.totalCount || 0,
               suCount: latest['수급자Count'] || 0,
               chaCount: latest['차상위Count'] || 0,
+              totalQty: latest.totalQty ?? latest.totalCount ?? 0,
+              suQty: latest['수급자Qty'] ?? latest['수급자Count'] ?? 0,
+              chaQty: latest['차상위Qty'] ?? latest['차상위Count'] ?? 0,
             };
           } catch { return null; }
         })
       );
       setCloudData(cloudResults.filter(Boolean).sort((a, b) => a.city.localeCompare(b.city, 'ko')));
 
-      // ── base_lists: 기본명단 데이터 ──
+      // ── base_lists ──
       const parseCity = id => {
         const sido = id.split(' ')[0] || id;
         const sigungu = id.slice(sido.length).trim() || id;
@@ -71,7 +176,9 @@ export default function Dashboard({ user, onStart, onHelp, onCloudCard, onBaseCa
       if (isAdmin) {
         const baseSnap = await getDocs(collection(db, 'base_lists')).catch(() => ({ docs: [] }));
         const cityMap = {};
-        baseSnap.docs.forEach(d => { cityMap[d.id] = { city: d.id, ...parseCity(d.id), updatedAt: d.data().updatedAt || null }; });
+        baseSnap.docs.forEach(d => {
+          cityMap[d.id] = { city: d.id, ...parseCity(d.id), updatedAt: d.data().updatedAt || null };
+        });
         setBaseData(Object.values(cityMap).sort((a, b) => a.city.localeCompare(b.city, 'ko')));
       } else {
         const results = await Promise.all(
@@ -94,18 +201,39 @@ export default function Dashboard({ user, onStart, onHelp, onCloudCard, onBaseCa
 
   useEffect(() => { loadData(); }, []);
 
-  // 시/도별 그룹핑
-  const groupBySido = (list) => {
+  // ── cloudData + baseData 통합 ──
+  const allCities = useMemo(() => {
     const map = {};
-    list.forEach(item => {
+    cloudData.forEach(c => {
+      map[c.city] = { city: c.city, sigungu: c.sigungu, sido: c.sido, cloud: c, base: null };
+    });
+    baseData.forEach(b => {
+      if (map[b.city]) {
+        map[b.city].base = b;
+      } else {
+        map[b.city] = { city: b.city, sigungu: b.sigungu, sido: b.sido, cloud: null, base: b };
+      }
+    });
+    return Object.values(map).sort((a, b) => a.city.localeCompare(b.city, 'ko'));
+  }, [cloudData, baseData]);
+
+  const groupedCities = useMemo(() => {
+    const map = {};
+    allCities.forEach(item => {
       if (!map[item.sido]) map[item.sido] = [];
       map[item.sido].push(item);
     });
     return Object.entries(map).sort(([a], [b]) => a.localeCompare(b, 'ko'));
-  };
+  }, [allCities]);
 
-  const cloudGrouped = useMemo(() => groupBySido(cloudData), [cloudData]);
-  const baseGrouped = useMemo(() => groupBySido(baseData), [baseData]);
+  const curMonth = getCurrentMonth();
+
+  // 요약 통계
+  const summary = useMemo(() => {
+    const thisMonthCount = allCities.filter(c => c.cloud?.latestMonthId === curMonth).length;
+    const totalQty = cloudData.reduce((s, c) => s + (c.latestMonthId === curMonth ? (c.totalQty || c.totalCount || 0) : 0), 0);
+    return { total: allCities.length, thisMonth: thisMonthCount, totalQty };
+  }, [allCities, cloudData, curMonth]);
 
   return (
     <div className="flex-1 w-full h-full flex flex-col overflow-hidden bg-transparent">
@@ -119,9 +247,7 @@ export default function Dashboard({ user, onStart, onHelp, onCloudCard, onBaseCa
           </h1>
         </div>
 
-        {/* 통계 + 버튼 */}
         <div className="flex items-center gap-3">
-          {/* 통계 컴팩트 */}
           <div className="flex items-center gap-2">
             <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-[#060c18] border border-[#0f1a2e]">
               <Database size={12} className="text-[#3b82f6]" />
@@ -142,7 +268,6 @@ export default function Dashboard({ user, onStart, onHelp, onCloudCard, onBaseCa
             </div>
           </div>
 
-          {/* 파이프라인 가동 CTA */}
           <button
             onClick={() => onStart()}
             className="flex items-center gap-2 px-5 py-2 bg-[#3b82f6] text-black font-extrabold rounded-xl text-sm hover:bg-[#60a5fa] transition-all shadow-[0_0_20px_rgba(59,130,246,0.3)] hover:shadow-[0_0_30px_rgba(59,130,246,0.5)]"
@@ -152,164 +277,122 @@ export default function Dashboard({ user, onStart, onHelp, onCloudCard, onBaseCa
             <ChevronRight size={14} />
           </button>
 
-          {/* 도움말 */}
           <button
             onClick={onHelp}
             className="relative w-9 h-9 rounded-full bg-[#060c18] border border-[#3b82f6]/50 text-[#3b82f6] font-black text-base hover:bg-[#3b82f6]/20 transition-all"
             style={{ animation: 'help-pulse 2.5s ease-in-out infinite' }}
           >
-            <span className="absolute inset-0 flex items-center justify-center pointer-events-none">
-              <CursorSVG />
-            </span>
+            <span className="absolute inset-0 flex items-center justify-center pointer-events-none text-[#3b82f6] text-lg font-black">?</span>
             <span className="sr-only">도움말</span>
           </button>
         </div>
       </div>
 
-      {/* ── DB 현황 카드 영역 ── */}
-      <div className="flex-1 overflow-y-auto px-8 py-6 space-y-8">
-
+      {/* ── 본문 ── */}
+      <div className="flex-1 overflow-y-auto px-8 py-6">
         {loading ? (
           <div className="flex flex-col items-center justify-center h-64 gap-3 text-gray-500">
             <Loader2 size={24} className="animate-spin text-[#3b82f6]" />
             <span className="text-sm">등록 현황 불러오는 중...</span>
           </div>
+        ) : allCities.length === 0 ? (
+          <div className="flex flex-col items-center justify-center h-64 gap-4 text-gray-600">
+            <div className="w-14 h-14 rounded-2xl bg-[#060c18] border border-[#0f1a2e] flex items-center justify-center">
+              <Database size={24} className="opacity-20" />
+            </div>
+            <div className="text-center">
+              <p className="text-sm font-bold text-gray-500 mb-1">등록된 지자체가 없습니다</p>
+              <p className="text-xs text-gray-700">파이프라인을 가동해서 명단을 클라우드에 저장하면 여기에 나타납니다</p>
+            </div>
+            <button
+              onClick={() => onStart()}
+              className="flex items-center gap-2 px-4 py-2 bg-[#3b82f6]/10 border border-[#3b82f6]/30 text-[#3b82f6] font-bold rounded-xl text-sm hover:bg-[#3b82f6]/20 transition-colors"
+            >
+              <FileSpreadsheet size={14} /> 파이프라인 가동
+            </button>
+          </div>
         ) : (
           <>
-            {/* ── 이번달 배송명단 ── */}
-            <section>
-              <div className="flex items-center justify-between mb-4">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-7 h-7 rounded-lg bg-[#3b82f6]/10 border border-[#3b82f6]/25 flex items-center justify-center">
-                    <Truck size={14} className="text-[#3b82f6]" />
-                  </div>
-                  <span className="text-white font-black text-sm">이번달 배송명단</span>
-                  {cloudData.length > 0 && (
-                    <span className="text-[11px] text-gray-600 font-medium">
-                      {cloudData.length}개 지자체 등록됨
-                    </span>
-                  )}
+            {/* ── 이번달 요약 바 ── */}
+            <div className="flex items-center gap-3 mb-6">
+              <div className="flex items-center gap-4 px-4 py-2.5 rounded-xl bg-[#060c18] border border-[#0f1a2e]">
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-bold text-gray-600 tracking-widest">지자체</span>
+                  <span className="text-white font-black text-sm">{summary.total}</span>
+                  <span className="text-gray-700 text-[10px]">개</span>
+                </div>
+                <div className="w-px h-4 bg-[#151515]" />
+                <div className="flex items-center gap-2">
+                  <span className="w-1.5 h-1.5 rounded-full bg-green-500 shrink-0" style={{ boxShadow: '0 0 4px #22c55e80' }} />
+                  <span className="text-[10px] font-bold text-gray-600">{curMonth} 업로드</span>
+                  <span className="text-white font-black text-sm">{summary.thisMonth}</span>
+                  <span className="text-gray-700 text-[10px]">개</span>
+                </div>
+                {summary.totalQty > 0 && (
+                  <>
+                    <div className="w-px h-4 bg-[#151515]" />
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] font-bold text-gray-600">이번달 총</span>
+                      <span className="text-[#3b82f6] font-black text-sm">{summary.totalQty.toLocaleString()}</span>
+                      <span className="text-gray-700 text-[10px]">포</span>
+                    </div>
+                  </>
+                )}
+              </div>
+
+              {/* 범례 */}
+              <div className="flex items-center gap-3 text-[10px] text-gray-600 font-bold ml-auto">
+                <div className="flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-green-500" style={{ boxShadow: '0 0 4px #22c55e80' }} />
+                  이번달+기본명단
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-yellow-500" />
+                  이전달+기본명단
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-blue-500" />
+                  배송명단만
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-purple-500" />
+                  기본명단만
                 </div>
                 <button
                   onClick={loadData}
-                  className="flex items-center gap-1.5 text-[11px] text-gray-600 hover:text-gray-400 transition-colors"
+                  className="flex items-center gap-1 text-gray-600 hover:text-gray-400 transition-colors ml-2"
                 >
                   <RefreshCw size={11} /> 새로고침
                 </button>
               </div>
+            </div>
 
-              {cloudData.length === 0 ? (
-                <div className="flex items-center gap-3 px-5 py-4 rounded-2xl border border-dashed border-[#0f1a2e] text-gray-600 text-sm">
-                  <Truck size={16} className="opacity-30" />
-                  <span>등록된 배송명단이 없습니다 · 파이프라인에서 클라우드 저장 후 나타납니다</span>
+            {/* ── 도시 카드 그리드 ── */}
+            <div className="space-y-6">
+              {groupedCities.map(([sido, items]) => (
+                <div key={sido}>
+                  <div className="flex items-center gap-3 mb-3">
+                    <div className="h-px flex-1 bg-[#0f1a2e]" />
+                    <span className="text-[10px] font-black text-gray-600 tracking-widest px-2">{sido}</span>
+                    <div className="h-px flex-1 bg-[#0f1a2e]" />
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-3">
+                    {items.map(({ city, sigungu, cloud, base }) => (
+                      <CityCard
+                        key={city}
+                        city={city}
+                        sigungu={sigungu}
+                        cloud={cloud}
+                        base={base}
+                        curMonth={curMonth}
+                        onCloudCard={onCloudCard}
+                        onBaseCard={onBaseCard}
+                      />
+                    ))}
+                  </div>
                 </div>
-              ) : (
-                <div className="space-y-5">
-                  {cloudGrouped.map(([sido, items]) => (
-                    <div key={sido}>
-                      {/* 광역시/도 구분선 */}
-                      <div className="flex items-center gap-3 mb-3">
-                        <div className="h-px flex-1 bg-[#0f1a2e]" />
-                        <span className="text-[10px] font-black text-gray-600 tracking-widest px-2">{sido}</span>
-                        <div className="h-px flex-1 bg-[#0f1a2e]" />
-                      </div>
-                      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2.5">
-                        {items.map(({ city, sigungu, latestMonthId, totalCount, suCount, chaCount }) => (
-                          <button
-                            key={city}
-                            onClick={() => onCloudCard && onCloudCard(city, latestMonthId)}
-                            className="group flex flex-col gap-2.5 p-3.5 rounded-2xl border border-[#0f1a2e] text-left transition-all hover:border-[#3b82f6]/40 hover:-translate-y-0.5 hover:shadow-[0_4px_16px_rgba(59,130,246,0.1)]"
-                            style={{ background: '#060e1a' }}
-                          >
-                            <div className="flex items-center justify-between">
-                              <span className="text-white font-black text-[13px] group-hover:text-[#93c5fd] transition-colors truncate">{sigungu}</span>
-                              <ChevronRight size={12} className="text-gray-700 group-hover:text-[#3b82f6] transition-colors shrink-0 ml-1" />
-                            </div>
-                            <div className="flex items-center gap-1">
-                              <Calendar size={9} className="text-gray-700" />
-                              <span className="text-[10px] text-gray-600 font-bold">{latestMonthId}</span>
-                            </div>
-                            <div className="flex items-end justify-between gap-1">
-                              <div className="flex flex-wrap gap-1">
-                                {suCount > 0 && (
-                                  <span className="text-[9px] px-1.5 py-0.5 rounded-md bg-blue-900/20 text-blue-400 font-bold border border-blue-800/20">
-                                    수급 {suCount.toLocaleString()}
-                                  </span>
-                                )}
-                                {chaCount > 0 && (
-                                  <span className="text-[9px] px-1.5 py-0.5 rounded-md bg-purple-900/20 text-purple-400 font-bold border border-purple-800/20">
-                                    차상위 {chaCount.toLocaleString()}
-                                  </span>
-                                )}
-                              </div>
-                              <span className="text-[11px] font-black text-[#3b82f6]/70 tabular-nums shrink-0">{totalCount.toLocaleString()}건</span>
-                            </div>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </section>
-
-            {/* ── 기본명단 ── */}
-            <section>
-              <div className="flex items-center gap-2.5 mb-4">
-                <div className="w-7 h-7 rounded-lg bg-purple-900/20 border border-purple-800/25 flex items-center justify-center">
-                  <BookOpen size={14} className="text-purple-400" />
-                </div>
-                <span className="text-white font-black text-sm">기본명단</span>
-                {baseData.length > 0 && (
-                  <span className="text-[11px] text-gray-600 font-medium">
-                    {baseData.length}개 지자체 등록됨
-                  </span>
-                )}
-              </div>
-
-              {baseData.length === 0 ? (
-                <div className="flex items-center gap-3 px-5 py-4 rounded-2xl border border-dashed border-[#0f1a2e] text-gray-600 text-sm">
-                  <BookOpen size={16} className="opacity-30" />
-                  <span>등록된 기본명단이 없습니다 · 고객 노트 관리에서 저장 후 나타납니다</span>
-                </div>
-              ) : (
-                <div className="space-y-5">
-                  {baseGrouped.map(([sido, items]) => (
-                    <div key={sido}>
-                      <div className="flex items-center gap-3 mb-3">
-                        <div className="h-px flex-1 bg-[#0f1a2e]" />
-                        <span className="text-[10px] font-black text-gray-600 tracking-widest px-2">{sido}</span>
-                        <div className="h-px flex-1 bg-[#0f1a2e]" />
-                      </div>
-                      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2.5">
-                        {items.map(({ city, sigungu, updatedAt }) => (
-                          <button
-                            key={city}
-                            onClick={() => onBaseCard && onBaseCard(city)}
-                            className="group flex flex-col gap-2.5 p-3.5 rounded-2xl border border-[#0f1a2e] text-left transition-all hover:border-purple-600/40 hover:-translate-y-0.5 hover:shadow-[0_4px_16px_rgba(168,85,247,0.1)]"
-                            style={{ background: '#080612' }}
-                          >
-                            <div className="flex items-center justify-between">
-                              <span className="text-white font-black text-[13px] group-hover:text-purple-300 transition-colors truncate">{sigungu}</span>
-                              <ChevronRight size={12} className="text-gray-700 group-hover:text-purple-400 transition-colors shrink-0 ml-1" />
-                            </div>
-                            {updatedAt && (
-                              <div className="flex items-center gap-1">
-                                <RefreshCw size={9} className="text-gray-700" />
-                                <span className="text-[10px] text-gray-600 font-bold">{fmtDate(updatedAt)} 업데이트</span>
-                              </div>
-                            )}
-                            <span className="text-[9px] px-1.5 py-0.5 rounded-md bg-purple-900/20 text-purple-400 font-bold border border-purple-800/20 self-start">
-                              기본명단
-                            </span>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </section>
+              ))}
+            </div>
           </>
         )}
       </div>

@@ -70,6 +70,7 @@ export default function App() {
   const [isBasePurifyMode, setIsBasePurifyMode] = useState(false);
   const [isSavingBaseList, setIsSavingBaseList] = useState(false);
   const isSavingBaseListRef = useRef(false);
+  const [isFetchingNotes, setIsFetchingNotes] = useState(false);
   // ── 전역 로딩 게이지 ─────────────────────────────────────────────
   const [gLoad, setGLoad] = useState({ show: false });
   const gLoadTimerRef = useRef(null);
@@ -372,11 +373,13 @@ export default function App() {
               admin: getHeader('행정동'),
               itemName: getHeader('품명'),
               note: getHeader('비고'),
+              birth: getHeader('생년월일'),
+              sms: getHeader('문자수신'),
               type: (s.typeColIdx >= 0) ? s.headers[s.typeColIdx] : "",
             };
           });
           setMapDefs(initialSel);
-          
+
           // AI 자가 진화 서버 - 누락된 컬럼을 관리자 패널로 전송
           sheetsData.forEach(sheet => {
             if (sheet.unmappedCols && sheet.unmappedCols.length > 0) {
@@ -438,6 +441,8 @@ export default function App() {
               admin: getHeader('행정동'),
               itemName: getHeader('품명'),
               note: getHeader('비고'),
+              birth: getHeader('생년월일'),
+              sms: getHeader('문자수신'),
               type: (s.typeColIdx >= 0) ? s.headers[s.typeColIdx] : "",
             };
           });
@@ -772,8 +777,14 @@ export default function App() {
   const handleSaveMonthlyList = async () => {
     const city = fileInfo?.city;
     if (!city) return alert('지자체 정보를 감지하지 못했습니다. 파일을 다시 확인해주세요.');
-    const validData = gridData.filter(d => !d._에러);
-    if (validData.length === 0) return alert('저장할 정상 명단이 없습니다.');
+    // 헤더 키워드가 이름 자리에 들어온 행 제거 (Excel 파싱 오류 방어)
+    const HEADER_NAME_RE = /^(이름|성명|대상자|수령자명)$/;
+    const allData = gridData.filter(d => !HEADER_NAME_RE.test((d.이름 || '').trim()));
+    const skippedCount = gridData.length - allData.length;
+    const validData = allData.filter(d => !d._에러);
+    const errorData = allData.filter(d => d._에러);
+    if (allData.length === 0) return alert('저장할 명단이 없습니다.');
+    if (skippedCount > 0) console.warn(`[저장 방어] 헤더 키워드 이름 행 ${skippedCount}건 제외됨`);
 
     const now = new Date();
     let initMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
@@ -782,7 +793,7 @@ export default function App() {
     if (mMatch) initMonth = `${now.getFullYear()}-${String(mMatch[1]).padStart(2, '0')}`;
 
     const monthStr = window.prompt(
-      `[${city}] 저장할 년월을 입력하세요 (예: ${initMonth})\n\n정상 데이터 ${validData.length}건이 저장됩니다.`,
+      `[${city}] 저장할 년월을 입력하세요 (예: ${initMonth})\n\n전체 ${allData.length}건 (정상 ${validData.length}건 + 오류 ${errorData.length}건) 저장됩니다.`,
       initMonth
     );
     if (!monthStr) return;
@@ -811,12 +822,16 @@ export default function App() {
 
       const 수급자Count = validData.filter(r => r.구분 === '기초수급자').length;
       const 차상위Count = validData.filter(r => r.구분 === '차상위').length;
+      const totalQty   = validData.reduce((s, r) => s + (parseInt(r.포수) || 1), 0);
+      const 수급자Qty  = validData.filter(r => r.구분 === '기초수급자').reduce((s, r) => s + (parseInt(r.포수) || 1), 0);
+      const 차상위Qty  = validData.filter(r => r.구분 === '차상위').reduce((s, r) => s + (parseInt(r.포수) || 1), 0);
 
       // [3단계] 도시 상위 문서
       try {
         await setDoc(doc(db, 'cloud_lists', city), {
           city, lastMonthId: monthStr, lastUpdatedAt: serverTimestamp(),
-          latestTotalCount: validData.length, latest수급자Count: 수급자Count, latest차상위Count: 차상위Count,
+          latestTotalCount: allData.length, latest수급자Count: 수급자Count, latest차상위Count: 차상위Count,
+          latestTotalQty: totalQty, latest수급자Qty: 수급자Qty, latest차상위Qty: 차상위Qty,
         }, { merge: true });
       } catch (e) { throw new Error(`[3단계 도시문서 저장 권한 오류] ${e.message}\n계정: ${user?.email}`); }
 
@@ -825,18 +840,20 @@ export default function App() {
         const metaRef = doc(db, 'cloud_lists', city, 'months', monthStr);
         await setDoc(metaRef, {
           city, monthId: monthStr,
-          totalCount: validData.length, 수급자Count, 차상위Count,
+          totalCount: allData.length, validCount: validData.length, errorCount: errorData.length,
+          수급자Count, 차상위Count,
+          totalQty, 수급자Qty, 차상위Qty,
           uploadedAt: serverTimestamp(), uploadedBy: user?.email || 'unknown',
           hasOriginal: false,
         });
       } catch (e) { throw new Error(`[4단계 월별메타 저장 권한 오류] ${e.message}\n계정: ${user?.email}`); }
 
-      // [5단계] 레코드 499건씩 배치 저장
-      gStart('클라우드 저장 중...', `${city} ${monthStr} · ${validData.length.toLocaleString()}건`, 0);
+      // [5단계] 레코드 499건씩 배치 저장 (정상 + 오류 모두)
+      gStart('클라우드 저장 중...', `${city} ${monthStr} · ${allData.length.toLocaleString()}건`, 0);
       try {
-        for (let i = 0; i < validData.length; i += 499) {
+        for (let i = 0; i < allData.length; i += 499) {
           const batch = writeBatch(db);
-          validData.slice(i, i + 499).forEach((r, j) => {
+          allData.slice(i, i + 499).forEach((r, j) => {
             const ref = doc(collection(db, 'cloud_lists', city, 'months', monthStr, 'records'));
             batch.set(ref, {
               구분: r.구분 || '',
@@ -853,17 +870,20 @@ export default function App() {
               isApt: r._isApt || false,
               기사: r.기사 || '',
               배송순번: r.배송순번 || '',
+              확인필요: r._에러 || false,
+              확인사유: r._사유 || '',
               _idx: i + j,
             });
           });
           await batch.commit();
-          gUpdate(Math.round(Math.min(i + 499, validData.length) / validData.length * 100));
+          gUpdate(Math.round(Math.min(i + 499, allData.length) / allData.length * 100));
         }
       } catch (e) { throw new Error(`[5단계 레코드 배치저장 권한 오류] ${e.message}\n계정: ${user?.email}`); }
 
       await addDoc(collection(db, 'audit_logs'), {
         action: 'SAVE_MONTHLY_LIST', city, monthId: monthStr,
-        count: validData.length, timestamp: serverTimestamp(),
+        count: allData.length, validCount: validData.length, errorCount: errorData.length,
+        timestamp: serverTimestamp(),
         adminEmail: user?.email || 'unknown',
       });
 
@@ -953,10 +973,13 @@ export default function App() {
     }
   };
 
-  const handleBatchSaveBaseList = async (validData) => {
+  const handleBatchSaveBaseList = async (rawValidData) => {
     const city = fileInfo?.city;
     if (!city) return alert('지자체 정보를 감지하지 못했습니다. 파일을 다시 확인해주세요.');
     if (isSavingBaseListRef.current) return;
+    // 헤더 키워드 이름 행 제거 (방어)
+    const HEADER_NAME_RE = /^(이름|성명|대상자|수령자명)$/;
+    const validData = rawValidData.filter(d => !HEADER_NAME_RE.test((d.이름 || '').trim()));
     isSavingBaseListRef.current = true;
     setIsSavingBaseList(true);
     const normPhone  = (v) => (v || '').replace(/[^0-9-]/g, ''); // 저장용 (대시 유지)
@@ -1190,6 +1213,50 @@ export default function App() {
     pushHistory(newData);
   };
 
+  const handleFetchBaseNotes = async () => {
+    const city = fileInfo?.city;
+    if (!city || !gridData.length) return;
+    if (!confirm('기본명단에서 특이사항을 불러와 현재 명단에 이식합니다.\n특이사항이 비어있는 레코드에만 적용됩니다. 계속하시겠습니까?')) return;
+    setIsFetchingNotes(true);
+    try {
+      const normPhone = (v) => (v || '').replace(/[^0-9]/g, '');
+      const baseSnap = await getDocsFromServer(collection(db, `base_lists/${city}/records`));
+      const baseRecs = baseSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+      const HEADER_NAME_RE = /^(이름|성명|대상자|수령자명)$/;
+      const byBirth = {}, byPhone = {};
+      baseRecs.forEach(r => {
+        const name = (r.name || r.이름 || '').trim();
+        const birth = r.birthKey || normalizeBirth(String(r.생년월일 || ''));
+        const mobile = normPhone(r.mobile || r.휴대폰 || '');
+        const note = (r.note || r.특이사항 || '').trim();
+        if (!name || !note) return;
+        if (HEADER_NAME_RE.test(name)) return; // 헤더 키워드 이름 매칭 차단
+        if (birth) byBirth[`${name}__${birth}`] = note;
+        if (mobile.length >= 9) byPhone[`${name}__${mobile}`] = note;
+      });
+
+      let count = 0;
+      const newData = gridData.map(r => {
+        if ((r.특이사항 || '').trim()) return r;
+        const name = (r.이름 || '').trim();
+        const birth = normalizeBirth(String(r.생년월일 || ''));
+        const mobile = normPhone(r.휴대폰 || '');
+        let note = '';
+        if (birth) note = byBirth[`${name}__${birth}`] || '';
+        if (!note && mobile.length >= 9) note = byPhone[`${name}__${mobile}`] || '';
+        if (!note) return r;
+        count++;
+        return { ...r, 특이사항: note };
+      });
+
+      if (!count) { alert('이식할 특이사항이 없습니다.\n(기본명단에 특이사항이 없거나 이미 모두 이식됨)'); return; }
+      pushHistory(newData);
+      alert(`특이사항 이식 완료! ${count}건 업데이트`);
+    } catch (e) { alert('오류: ' + e.message); }
+    finally { setIsFetchingNotes(false); }
+  };
+
   const handleMovePhones = () => {
     const detectMobile = (phone) => {
       const digits = (phone || '').replace(/[^0-9]/g, '');
@@ -1227,8 +1294,8 @@ export default function App() {
     const monthStr = monthRaw.match(/^\d{4}-\d{2}$/)
       ? `${parseInt(monthRaw.split('-')[1])}월`
       : (monthRaw.replace(/월/g,'').trim() ? `${monthRaw.replace(/월/g,'').trim()}월` : '미상');
-    const suCount  = filteredData.filter(r => r.구분 === '기초수급자').reduce((s,r) => s+(Number(r.포수)||0), 0);
-    const chaCount = filteredData.filter(r => r.구분 === '차상위').reduce((s,r) => s+(Number(r.포수)||0), 0);
+    const suCount  = filteredData.filter(r => r.구분 === '기초수급자').reduce((s,r) => s+(Number(r.포수)||1), 0);
+    const chaCount = filteredData.filter(r => r.구분 === '차상위').reduce((s,r) => s+(Number(r.포수)||1), 0);
     const total    = suCount + chaCount;
     const base = `${safeCity}-${monthStr}-기초${suCount},차상위${chaCount},전체${total}-${mmdd}${timeSeq}`;
     return `${prefix}${base}.xlsx`;
@@ -1520,15 +1587,15 @@ export default function App() {
             {step === 5 ? (
               <>
                 <span className="text-blue-300 font-black">
-                  수급자 {gridData.filter(d => d.구분 === '기초수급자').reduce((s, d) => s + (parseInt(d.포수) || 0), 0).toLocaleString()}포
+                  수급자 {gridData.filter(d => d.구분 === '기초수급자').reduce((s, d) => s + (parseInt(d.포수) || 1), 0).toLocaleString()}포
                 </span>
                 <span className="text-gray-700">|</span>
                 <span className="text-amber-300 font-black">
-                  차상위 {gridData.filter(d => d.구분 === '차상위').reduce((s, d) => s + (parseInt(d.포수) || 0), 0).toLocaleString()}포
+                  차상위 {gridData.filter(d => d.구분 === '차상위').reduce((s, d) => s + (parseInt(d.포수) || 1), 0).toLocaleString()}포
                 </span>
                 <span className="text-gray-700">|</span>
                 <span className="text-[#3b82f6] font-black">
-                  전체 {gridData.reduce((s, d) => s + (parseInt(d.포수) || 0), 0).toLocaleString()}포
+                  전체 {gridData.reduce((s, d) => s + (parseInt(d.포수) || 1), 0).toLocaleString()}포
                 </span>
                 <span className="ml-1 text-[10px] text-gray-600">({gridData.length.toLocaleString()}명)</span>
               </>
@@ -1599,7 +1666,7 @@ export default function App() {
           {step === 2 && <Step2_SheetSelect step={step} setStep={setStep} fileInfo={fileInfo} setFileInfo={setFileInfo} worksheets={worksheets} setWorksheets={setWorksheets} setSelectedSheets={setSelectedSheets} onHelp={onHelp} handleSecondFileUpload={handleSecondFileUpload} />}
           {step === 3 && <Step3_Mapping step={step} setStep={setStep} selectedSheets={selectedSheets} worksheets={worksheets} mapDefs={mapDefs} setMapDefs={setMapDefs} startProcessing={handleAnalyzeAll} onHelp={onHelp} isBasePurifyMode={isBasePurifyMode} setIsBasePurifyMode={setIsBasePurifyMode} onOpenDbImport={() => setShowDbImport(true)} dbImportReady={dbImportReady} onUserMapping={handleUserMapping} />}
           {step === 4 && <LoadingScreen progress={engineProgress} logs={progressLogs} />}
-          {step === 5 && <ResultGrid step={step} setStep={setStep} fileInfo={fileInfo} filter={filter} setFilter={setFilter} dongList={gridDongList} driverList={gridDriverList} gridData={gridData} filteredData={filteredData} paginatedData={paginatedData} currentPage={currentPage} setCurrentPage={setCurrentPage} itemsPerPage={itemsPerPage} colVis={colVis} sortConfig={sortConfig} setSortConfig={setSortConfig} handleCellEdit={handleCellEdit} handleAddressKeyDown={handleAddressKeyDown} handleUpdateBaseList={handleUpdateBaseList} handleBatchSaveBaseList={handleBatchSaveBaseList} isSavingBaseList={isSavingBaseList} handleSaveMonthlyList={handleSaveMonthlyList} setShowExportSetting={setShowExportSetting} handleExport={handleExport} handleExportErrors={handleExportErrors} handleExportDongSummary={handleExportDongSummary} handleExportByDriver={handleExportByDriver} handleDeleteRows={handleDeleteRows} handleBatchSetNote={handleBatchSetNote} onHelp={onHelp} purifyResult={purifyResult} onClosePurifyResult={() => setPurifyResult(null)} onMovePhones={handleMovePhones} onRepurifyErrors={handleRepurifyErrors} onOpenRouteMap={() => { if (!canUseRouteMap(user?.tier)) { setUpgradeReason('routeMap'); setShowUpgrade(true); } else { setCloudRouteConfig(null); setShowRouteSetup(true); } }} />}
+          {step === 5 && <ResultGrid step={step} setStep={setStep} fileInfo={fileInfo} filter={filter} setFilter={setFilter} dongList={gridDongList} driverList={gridDriverList} gridData={gridData} filteredData={filteredData} paginatedData={paginatedData} currentPage={currentPage} setCurrentPage={setCurrentPage} itemsPerPage={itemsPerPage} colVis={colVis} sortConfig={sortConfig} setSortConfig={setSortConfig} handleCellEdit={handleCellEdit} handleAddressKeyDown={handleAddressKeyDown} handleUpdateBaseList={handleUpdateBaseList} handleBatchSaveBaseList={handleBatchSaveBaseList} isSavingBaseList={isSavingBaseList} handleSaveMonthlyList={handleSaveMonthlyList} setShowExportSetting={setShowExportSetting} handleExport={handleExport} handleExportErrors={handleExportErrors} handleExportDongSummary={handleExportDongSummary} handleExportByDriver={handleExportByDriver} handleDeleteRows={handleDeleteRows} handleBatchSetNote={handleBatchSetNote} onHelp={onHelp} purifyResult={purifyResult} onClosePurifyResult={() => setPurifyResult(null)} onMovePhones={handleMovePhones} onRepurifyErrors={handleRepurifyErrors} onOpenRouteMap={() => { if (!canUseRouteMap(user?.tier)) { setUpgradeReason('routeMap'); setShowUpgrade(true); } else { setCloudRouteConfig(null); setShowRouteSetup(true); } }} onFetchBaseNotes={handleFetchBaseNotes} isFetchingNotes={isFetchingNotes} />}
           {step === 10 && <ErrorListManager gridData={gridData} onBack={() => setStep(gridData.length ? 5 : 0)} handleCellEdit={handleCellEdit} handleAddressKeyDown={handleAddressKeyDown} handleExportErrors={handleExportErrors} onRepurifyErrors={handleRepurifyErrors} />}
           {step === 6 && <BaseListManager user={user} initialCity={dbNavCity} onBack={() => { setStep(0); setDbNavCity(''); }} />}
           {step === 7 && <AdminPanel user={user} onClose={() => setStep(0)} />}

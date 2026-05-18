@@ -1,22 +1,39 @@
 ﻿import { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { getDocs, getDoc, updateDoc, setDoc, deleteDoc, doc, collection, db, serverTimestamp, addDoc, query, where, orderBy, writeBatch, onSnapshot, arrayUnion, arrayRemove } from '../config/firebase.js';
 import { X, Users, BarChart2, Clock, ShieldOff, ShieldCheck, AlertTriangle, Crown, MessageSquare, CheckCircle2, MapPin, XCircle, Building2, ShieldAlert, Plus, ChevronDown, TrendingUp, AlertCircle, UserX, Activity, Zap, Trash2 } from 'lucide-react';
 import { REGIONS, getSigunguOptions } from '../utils/regions.js';
 
-function OrgSelect({ value, options, onChange }) {
+function OrgSelect({ value, options, onChange, onBulkAssign }) {
   const [open, setOpen] = useState(false);
-  const ref = useRef(null);
+  const btnRef = useRef(null);
+  const dropRef = useRef(null);
+  const [pos, setPos] = useState({ top: 0, left: 0, minWidth: 224 });
 
   useEffect(() => {
-    const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    if (!open) return;
+    const handler = (e) => {
+      if (btnRef.current?.contains(e.target)) return;
+      if (dropRef.current?.contains(e.target)) return;
+      setOpen(false);
+    };
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
-  }, []);
+  }, [open]);
+
+  const handleOpen = () => {
+    if (!open && btnRef.current) {
+      const rect = btnRef.current.getBoundingClientRect();
+      setPos({ top: rect.bottom + 4, left: rect.left, minWidth: Math.max(rect.width, 224) });
+    }
+    setOpen(o => !o);
+  };
 
   return (
-    <div ref={ref} className="relative">
+    <div className="relative">
       <button
-        onClick={() => setOpen(o => !o)}
+        ref={btnRef}
+        onClick={handleOpen}
         className={`w-full flex items-center justify-between gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-bold border transition-colors ${
           value
             ? 'border-purple-600/50 bg-purple-950/40 text-purple-200 hover:border-purple-400/70'
@@ -27,12 +44,16 @@ function OrgSelect({ value, options, onChange }) {
         <ChevronDown size={10} className="shrink-0 opacity-60" />
       </button>
 
-      {open && (
-        <div className="absolute left-0 top-full mt-1 z-[900] w-56 bg-[#111a12] border border-[#3b82f6]/25 rounded-xl shadow-[0_12px_40px_rgba(0,0,0,0.9)] overflow-hidden">
-          <div className="max-h-56 overflow-y-auto scrollbar-thin scrollbar-thumb-[#2d4a35] scrollbar-track-transparent">
+      {open && createPortal(
+        <div
+          ref={dropRef}
+          style={{ position: 'fixed', top: pos.top, left: pos.left, minWidth: pos.minWidth, zIndex: 99999 }}
+          className="bg-[#111a12] border border-[#3b82f6]/25 rounded-xl shadow-[0_20px_50px_rgba(0,0,0,0.95)] overflow-hidden"
+        >
+          <div className="max-h-64 overflow-y-auto scrollbar-thin scrollbar-thumb-[#2d4a35] scrollbar-track-transparent">
             <button
               onClick={() => { onChange(''); setOpen(false); }}
-              className={`w-full text-left px-3 py-2.5 text-[11px] font-bold transition-colors border-b border-[#0f1a2e] ${
+              className={`w-full text-left px-4 py-3 text-[12px] font-bold transition-colors border-b border-[#0f1a2e] ${
                 !value ? 'text-[#3b82f6] bg-[#3b82f6]/10' : 'text-gray-500 hover:bg-white/5 hover:text-gray-300'
               }`}
             >
@@ -42,7 +63,7 @@ function OrgSelect({ value, options, onChange }) {
               <button
                 key={name}
                 onClick={() => { onChange(name); setOpen(false); }}
-                className={`w-full text-left px-3 py-2.5 text-[11px] font-bold transition-colors ${
+                className={`w-full text-left px-4 py-3 text-[12px] font-bold transition-colors ${
                   value === name
                     ? 'text-purple-200 bg-purple-900/40 border-l-2 border-purple-500'
                     : 'text-gray-300 hover:bg-white/5 hover:text-white border-l-2 border-transparent'
@@ -52,7 +73,18 @@ function OrgSelect({ value, options, onChange }) {
               </button>
             ))}
           </div>
-        </div>
+          {onBulkAssign && (
+            <div className="border-t border-[#1a2a1a] p-2">
+              <button
+                onClick={() => { onBulkAssign(value); setOpen(false); }}
+                className="w-full flex items-center justify-center gap-1.5 px-3 py-2.5 text-[11px] font-black text-amber-400 bg-amber-950/30 border border-amber-700/30 rounded-lg hover:bg-amber-900/40 transition-colors"
+              >
+                <Users size={11}/> 소속 없는 사용자 전체 배정
+              </button>
+            </div>
+          )}
+        </div>,
+        document.body
       )}
     </div>
   );
@@ -137,7 +169,7 @@ export default function AdminPanel({ onClose, user }) {
   const fetchAuditLogs = async () => {
     setAuditLoading(true);
     try {
-      const snap = await getDocs(query(collection(db, 'audit_logs'), orderBy('createdAt', 'desc')));
+      const snap = await getDocs(query(collection(db, 'audit_logs'), orderBy('timestamp', 'desc')));
       setAuditLogs(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     } catch { setAuditLogs([]); }
     finally { setAuditLoading(false); }
@@ -192,6 +224,18 @@ export default function AdminPanel({ onClose, user }) {
       await updateDoc(doc(db, 'users', uid), { orgId: orgName || null });
       setUsers(prev => prev.map(u => u.id === uid ? { ...u, orgId: orgName || null } : u));
     } catch (e) { alert('소속사 배정 실패: ' + e.message); }
+  };
+
+  const handleBulkAssignOrg = async (orgName) => {
+    const targets = users.filter(u => !u.orgId);
+    if (!targets.length) { alert('소속이 없는 사용자가 없습니다.'); return; }
+    if (!window.confirm(`소속 없는 사용자 ${targets.length}명에게\n"${orgName || '소속 없음'}"을 일괄 배정하시겠습니까?`)) return;
+    try {
+      const batch = writeBatch(db);
+      targets.forEach(u => batch.update(doc(db, 'users', u.id), { orgId: orgName || null }));
+      await batch.commit();
+      setUsers(prev => prev.map(u => !u.orgId ? { ...u, orgId: orgName || null } : u));
+    } catch (e) { alert('일괄 배정 실패: ' + e.message); }
   };
 
   const addCityToUser = async (uid, cityId) => {
@@ -454,7 +498,7 @@ export default function AdminPanel({ onClose, user }) {
       map[city].sessions++;
       map[city].added += log.addCount || 0;
       map[city].updated += log.updateCount || 0;
-      const sec = log.createdAt?.seconds || 0;
+      const sec = log.timestamp?.seconds || log.createdAt?.seconds || 0;
       if (sec > map[city].lastSec) map[city].lastSec = sec;
     });
     return Object.values(map).sort((a, b) => b.sessions - a.sessions);
@@ -730,6 +774,7 @@ export default function AdminPanel({ onClose, user }) {
                                 ? [...globalOrgs, u.orgId].sort()
                                 : globalOrgs}
                               onChange={name => saveUserOrg(u.id, name)}
+                              onBulkAssign={handleBulkAssignOrg}
                             />
                           </td>
 
@@ -1242,7 +1287,7 @@ export default function AdminPanel({ onClose, user }) {
                     <div className="flex items-center gap-3 text-right">
                       <span className="text-blue-400">+{log.addCount || 0}</span>
                       <span className="text-amber-400">~{log.updateCount || 0}</span>
-                      <span className="text-gray-600 font-mono">{fmt(log.createdAt)}</span>
+                      <span className="text-gray-600 font-mono">{fmt(log.timestamp || log.createdAt)}</span>
                     </div>
                   </div>
                 ))}

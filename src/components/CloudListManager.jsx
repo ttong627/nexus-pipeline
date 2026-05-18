@@ -118,15 +118,22 @@ const VirtualTable = memo(function VirtualTable({ displayRecords, dirtyRecords, 
             {vItems.map(vRow => {
               const r = displayRecords[vRow.index];
               const isDirtyRow = !!dirtyRecords[r.id];
+              const isErrorRow = r.확인필요 === true;
               return (
                 <tr
                   key={r.id}
                   style={{ height: ROW_HEIGHT }}
-                  className={`border-b border-[#111] group ${isDirtyRow ? 'bg-blue-950/10 hover:bg-blue-950/15' : 'hover:bg-white/[0.025]'}`}
+                  className={`border-b border-[#111] group ${
+                    isDirtyRow ? 'bg-blue-950/10 hover:bg-blue-950/15' :
+                    isErrorRow ? 'bg-red-950/10 hover:bg-red-950/20' :
+                    'hover:bg-white/[0.025]'
+                  }`}
+                  title={isErrorRow ? `⚠ 확인필요: ${r.확인사유 || ''}` : undefined}
                 >
                   <td className="px-3 py-2 shrink-0">
                     <span className="flex items-center gap-1 text-[10px] text-gray-700">
                       {isDirtyRow && <span className="w-1.5 h-1.5 rounded-full bg-blue-500 inline-block shrink-0" />}
+                      {isErrorRow && <span className="w-1.5 h-1.5 rounded-full bg-red-500 inline-block shrink-0" title={r.확인사유} />}
                       {vRow.index + 1}
                     </span>
                   </td>
@@ -251,6 +258,16 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
       } catch { setOrgDongs(null); }
     })();
   }, [selectedCity, user?.orgId, isAdmin]);
+
+  // ── 포수 합계 통계 (records 로드 후 실시간 계산)
+  const qtyStats = useMemo(() => {
+    const active = records.filter(r => !deletedRecordIds.has(r.id));
+    const totalQty  = active.reduce((s, r) => s + (parseInt(r.포수) || 1), 0);
+    const 수급자Qty = active.filter(r => r.구분 === '기초수급자').reduce((s, r) => s + (parseInt(r.포수) || 1), 0);
+    const 차상위Qty = active.filter(r => r.구분 === '차상위').reduce((s, r) => s + (parseInt(r.포수) || 1), 0);
+    const errorCount = active.filter(r => r.확인필요).length;
+    return { totalQty, 수급자Qty, 차상위Qty, errorCount };
+  }, [records, deletedRecordIds]);
 
   // ── Derived display records — 행정동>주소>이름 정렬 + 구분·행정동 콤보 필터
   const displayRecords = useMemo(() => {
@@ -387,6 +404,9 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
             totalCount: data.latestTotalCount ?? 0,
             수급자Count: data['latest수급자Count'] ?? 0,
             차상위Count: data['latest차상위Count'] ?? 0,
+            totalQty: data.latestTotalQty ?? data.latestTotalCount ?? 0,
+            수급자Qty: data['latest수급자Qty'] ?? data['latest수급자Count'] ?? 0,
+            차상위Qty: data['latest차상위Qty'] ?? data['latest차상위Count'] ?? 0,
           } : null;
           return { id: cityId, sido, sigungu, latestMonth };
         })
@@ -443,6 +463,7 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
       const baseSnap = await getDocsFromServer(collection(db, `base_lists/${selectedCity}/records`));
       const baseRecs = baseSnap.docs.map(d => ({ id: d.id, ...d.data() }));
 
+      const HEADER_NAME_RE = /^(이름|성명|대상자|수령자명)$/;
       const byBirth = {}, byPhone = {};
       baseRecs.forEach(r => {
         const name = (r.name || r.이름 || '').trim();
@@ -450,6 +471,7 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
         const mobile = normPhone(r.mobile || r.휴대폰 || '');
         const note = (r.note || r.특이사항 || '').trim();
         if (!name || !note) return;
+        if (HEADER_NAME_RE.test(name)) return; // 헤더 키워드 이름 매칭 차단
         if (birth) byBirth[`${name}__${birth}`] = note;
         if (mobile.length >= 9) byPhone[`${name}__${mobile}`] = note;
       });
@@ -546,6 +568,9 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
         latestTotalCount: newLatest?.totalCount ?? 0,
         'latest수급자Count': newLatest?.수급자Count ?? 0,
         'latest차상위Count': newLatest?.차상위Count ?? 0,
+        latestTotalQty: newLatest?.totalQty ?? newLatest?.totalCount ?? 0,
+        'latest수급자Qty': newLatest?.수급자Qty ?? newLatest?.수급자Count ?? 0,
+        'latest차상위Qty': newLatest?.차상위Qty ?? newLatest?.차상위Count ?? 0,
         lastUpdatedAt: serverTimestamp(),
       }, { merge: true });
       fetchMonths();
@@ -672,12 +697,18 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
       const totalCount = remaining.length;
       const 수급자Count = remaining.filter(r => r.구분 === '기초수급자').length;
       const 차상위Count = remaining.filter(r => r.구분 === '차상위').length;
-      await setDoc(doc(db, 'cloud_lists', selectedCity, 'months', selectedMonth.id), { totalCount, 수급자Count, 차상위Count }, { merge: true });
+      const totalQty   = remaining.reduce((s, r) => s + (parseInt(r.포수) || 1), 0);
+      const 수급자Qty  = remaining.filter(r => r.구분 === '기초수급자').reduce((s, r) => s + (parseInt(r.포수) || 1), 0);
+      const 차상위Qty  = remaining.filter(r => r.구분 === '차상위').reduce((s, r) => s + (parseInt(r.포수) || 1), 0);
+      await setDoc(doc(db, 'cloud_lists', selectedCity, 'months', selectedMonth.id), { totalCount, 수급자Count, 차상위Count, totalQty, 수급자Qty, 차상위Qty }, { merge: true });
       // 최상위 city 문서 캐시도 동기화
       await setDoc(doc(db, 'cloud_lists', selectedCity), {
         latestTotalCount: totalCount,
         'latest수급자Count': 수급자Count,
         'latest차상위Count': 차상위Count,
+        latestTotalQty: totalQty,
+        'latest수급자Qty': 수급자Qty,
+        'latest차상위Qty': 차상위Qty,
         lastUpdatedAt: serverTimestamp(),
       }, { merge: true });
       setDirtyRecords({});
@@ -1245,6 +1276,17 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
                     <span>전체 <span className="text-white font-bold">{(selectedMonth.totalCount||0).toLocaleString()}</span>명</span>
                     <span className="text-amber-400">기초수급자 <span className="font-bold">{(selectedMonth.수급자Count||0).toLocaleString()}</span>명</span>
                     <span className="text-blue-400">차상위 <span className="font-bold">{(selectedMonth.차상위Count||0).toLocaleString()}</span>명</span>
+                    {records.length > 0 && (
+                      <>
+                        <span className="text-gray-700">|</span>
+                        <span className="text-amber-300">수급자 <span className="font-bold">{qtyStats.수급자Qty.toLocaleString()}</span>포</span>
+                        <span className="text-blue-300">차상위 <span className="font-bold">{qtyStats.차상위Qty.toLocaleString()}</span>포</span>
+                        <span className="text-white font-bold">{qtyStats.totalQty.toLocaleString()}포</span>
+                        {qtyStats.errorCount > 0 && (
+                          <span className="text-red-400">오류 <span className="font-bold">{qtyStats.errorCount}</span>건</span>
+                        )}
+                      </>
+                    )}
                     {isAdmin && (
                       <span className="text-gray-600">업로드: {fmtTs(selectedMonth.uploadedAt)} · {selectedMonth.uploadedBy}</span>
                     )}
