@@ -1,0 +1,11 @@
+{
+  "name": "nexus-pipeline-functions",
+  "description": "카카오맵 즐겨찾기 API 미들웨어",
+  "engines": { "node": "22" },
+  "main": "index.js",
+  "dependencies": {
+    "firebase-admin": "^12.0.0",
+    "firebase-functions": "^6.0.0"
+  },
+  "private": true
+}
