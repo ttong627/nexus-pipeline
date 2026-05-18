@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { db } from '../config/firebase.js';
-import { doc, getDoc } from 'firebase/firestore';
+import { doc, onSnapshot, updateDoc } from 'firebase/firestore';
 import { MapPin, List, Map as MapIcon, RefreshCw, Building2, Phone, ChevronUp, ChevronDown, Navigation, Crosshair, Star, X, AlertCircle, Share2 } from 'lucide-react';
 
 const KAKAO_JS_KEY = import.meta.env.VITE_KAKAO_JS_KEY;
@@ -161,6 +161,17 @@ export default function ShareRouteView({ shareId, driverId }) {
   const [isMapCreated, setIsMapCreated] = useState(false);
   const [showGpsGuide, setShowGpsGuide] = useState(false);
   const [copiedLink, setCopiedLink]   = useState(false);
+  const [isInAppBrowser, setIsInAppBrowser] = useState(() => {
+    const ua = navigator.userAgent.toLowerCase();
+    return ua.indexOf('kakaotalk') > -1 || ua.indexOf('naver') > -1 || ua.indexOf('line') > -1 || ua.indexOf('instagram') > -1 || ua.indexOf('fban') > -1;
+  });
+
+  // ── 카카오톡 인앱 브라우저 자동 탈출 ─────────────────────────────────────────
+  useEffect(() => {
+    if (isInAppBrowser && navigator.userAgent.toLowerCase().indexOf('kakaotalk') > -1) {
+      window.location.href = 'kakaotalk://web/openExternal?url=' + encodeURIComponent(window.location.href);
+    }
+  }, [isInAppBrowser]);
 
   const mapRef          = useRef(null);
   const kakaoMapRef     = useRef(null);
@@ -168,18 +179,21 @@ export default function ShareRouteView({ shareId, driverId }) {
   const myLocOverlayRef = useRef(null);
   const watchIdRef      = useRef(null);
   const selectedIdRef   = useRef(null);
+  const driverGpsOverlayRef = useRef(null);
+  const latestLocRef    = useRef(null);
+  const isMobile        = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
 
-  // ── Firestore 로드 ──────────────────────────────────────────────────
+  // ── Firestore 실시간 로드 ──────────────────────────────────────────────────
   useEffect(() => {
-    const load = async () => {
-      try {
-        const snap = await getDoc(doc(db, 'route_shares', shareId));
-        if (!snap.exists()) { setError('공유 데이터를 찾을 수 없거나 만료되었습니다.'); return; }
-        setShareData(snap.data());
-      } catch (e) { setError('데이터 로드 실패: ' + e.message); }
-      finally { setLoading(false); }
-    };
-    load();
+    const unsub = onSnapshot(doc(db, 'route_shares', shareId), (snap) => {
+      if (!snap.exists()) { setError('공유 데이터를 찾을 수 없거나 만료되었습니다.'); setLoading(false); return; }
+      setShareData(snap.data());
+      setLoading(false);
+    }, (err) => {
+      setError('데이터 로드 실패: ' + err.message);
+      setLoading(false);
+    });
+    return () => unsub();
   }, [shareId]);
 
   // ── Kakao Maps SDK ──────────────────────────────────────────────────
@@ -224,6 +238,78 @@ export default function ShareRouteView({ shareId, driverId }) {
       cleanup?.();
     };
   }, []); // eslint-disable-line
+
+  // ── 내 위치 최신화 (Firestore 방송용) ──────────────────────────────────
+  useEffect(() => {
+    latestLocRef.current = myLocation;
+  }, [myLocation]);
+
+  // ── 실시간 위치 Firestore 방송 (모바일만 자동) ──────────────────────────
+  useEffect(() => {
+    if (!isMobile) return;
+    const interval = setInterval(() => {
+      const loc = latestLocRef.current;
+      if (loc && gpsStatus === 'ok') {
+        updateDoc(doc(db, 'route_shares', shareId), {
+          [`liveGps.${driverId}`]: {
+            lat: loc.lat,
+            lng: loc.lng,
+            updatedAt: new Date().toISOString()
+          }
+        }).catch(e => console.warn('GPS Upload error:', e));
+      }
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [shareId, driverId, gpsStatus, isMobile]);
+
+  // ── 기사 실시간 위치 (Firestore) 마커 표시 ─────────────────────────────
+  useEffect(() => {
+    if (!isMapCreated || !kakaoMapRef.current || !shareData) return;
+    
+    const driverLive = shareData.liveGps?.[driverId];
+    if (driverLive && driverLive.lat && driverLive.lng) {
+      const latlng = new window.kakao.maps.LatLng(driverLive.lat, driverLive.lng);
+      if (driverGpsOverlayRef.current) {
+        driverGpsOverlayRef.current.setPosition(latlng);
+      } else {
+        const content = `
+          <style>
+            @keyframes truck-bounce { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-5px); } }
+            .driver-marker {
+              position: relative;
+              width: 50px; height: 50px;
+              display: flex; align-items: center; justify-content: center;
+              animation: truck-bounce 1.5s ease-in-out infinite;
+            }
+            .driver-marker-bg {
+              position: absolute; inset: 5px;
+              background: #10b981; border-radius: 50%;
+              border: 3px solid white;
+              box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+            }
+            .driver-marker-icon {
+              position: relative; z-index: 10; font-size: 22px;
+            }
+            .driver-marker-pulse {
+              position: absolute; inset: -5px;
+              border-radius: 50%; background: rgba(16, 185, 129, 0.4);
+              animation: gps-pulse 2s ease-out infinite;
+              z-index: -1;
+            }
+          </style>
+          <div class="driver-marker" title="기사 실시간 위치">
+            <div class="driver-marker-pulse"></div>
+            <div class="driver-marker-bg"></div>
+            <div class="driver-marker-icon">🚚</div>
+          </div>
+        `;
+        driverGpsOverlayRef.current = new window.kakao.maps.CustomOverlay({
+          position: latlng, content, yAnchor: 0.8, xAnchor: 0.5, zIndex: 300,
+        });
+        driverGpsOverlayRef.current.setMap(kakaoMapRef.current);
+      }
+    }
+  }, [isMapCreated, shareData?.liveGps, driverId]);
 
   // ── GPS 마커 실시간 업데이트 ─────────────────────────────────────────
   useEffect(() => {
@@ -369,6 +455,49 @@ export default function ShareRouteView({ shareId, driverId }) {
     return () => clearTimeout(t);
   }, [layoutMode]);
 
+  // ── 인앱 브라우저 차단 UI ──────────────────────────────────────────────
+  if (isInAppBrowser) {
+    const isKakao = navigator.userAgent.toLowerCase().indexOf('kakaotalk') > -1;
+    return (
+      <div className="fixed inset-0 bg-[#050505] flex flex-col items-center justify-center p-6 z-50 font-sans">
+        <div className="w-16 h-16 bg-yellow-500/20 rounded-full flex items-center justify-center mb-6">
+          <AlertCircle size={32} className="text-yellow-500" />
+        </div>
+        <h2 className="text-white text-xl font-black mb-3 text-center">
+          {isKakao ? '카카오톡 브라우저 감지됨' : '앱 내 브라우저 감지됨'}
+        </h2>
+        <p className="text-gray-400 text-center text-sm mb-8 leading-relaxed">
+          현재 화면에서는 <strong className="text-blue-400">GPS(실시간 위치) 기능이 차단</strong>됩니다.<br/><br/>
+          원활한 배송과 실시간 위치 공유를 위해<br/>
+          반드시 <strong className="text-white">크롬, 사파리, 삼성인터넷</strong> 등<br/>
+          기본 브라우저로 접속해주세요.
+        </p>
+
+        {isKakao && (
+          <button 
+            onClick={() => { window.location.href = 'kakaotalk://web/openExternal?url=' + encodeURIComponent(window.location.href); }}
+            className="w-full max-w-xs py-4 bg-[#FEE500] hover:bg-[#FEE500]/90 text-black font-black rounded-xl shadow-lg mb-4 transition-all active:scale-95">
+            기본 브라우저로 열기 (추천)
+          </button>
+        )}
+
+        <div className="w-full max-w-xs bg-[#1a1a1a] rounded-xl p-4 border border-[#2a2a2a]">
+          <div className="text-gray-400 text-xs mb-2 font-bold">수동으로 여는 방법:</div>
+          <ol className="text-gray-500 text-[11px] space-y-2">
+            <li>1. 화면 하단(또는 우측 상단)의 <strong>[⋮]</strong> 버튼 누르기</li>
+            <li>2. <strong>[다른 브라우저로 열기]</strong> 선택</li>
+          </ol>
+        </div>
+
+        <button 
+          onClick={() => setIsInAppBrowser(false)}
+          className="mt-8 text-gray-600 text-xs underline underline-offset-4 hover:text-gray-400 p-2">
+          GPS 없이 그냥 보기 (관리자용)
+        </button>
+      </div>
+    );
+  }
+
   // ── 로딩 / 에러 ──────────────────────────────────────────────────────
   if (loading) return (
     <div className="fixed inset-0 bg-[#050505] flex items-center justify-center">
@@ -389,6 +518,8 @@ export default function ShareRouteView({ shareId, driverId }) {
   const driverColor = driver?.color || '#3b82f6';
   const totalQty = allRecords.reduce((s, r) => s + (parseInt(r.포수) || 1), 0);
   const selectedRecord = allRecords.find(r => r._uid === selectedId);
+  const driverLive = shareData?.liveGps?.[driverId];
+  const isLiveActive = driverLive && (Date.now() - new Date(driverLive.updatedAt).getTime() < 120000);
 
   return (
     <div className="fixed inset-0 bg-[#050505] flex flex-col" style={{ fontFamily: 'inherit' }}>
@@ -401,12 +532,26 @@ export default function ShareRouteView({ shareId, driverId }) {
         <div className="w-3 h-3 rounded-full shrink-0" style={{ background: driverColor }} />
         <div className="flex-1 min-w-0">
           <div className="text-white font-black text-sm truncate">{driver?.name || '기사'} 배송 루트</div>
-          <div className="text-gray-600 text-[10px]">
-            {shareData.city} {shareData.monthId || shareData.month} · <span className="text-white font-bold">{allRecords.length}건</span> <span className="text-blue-400 font-bold">{totalQty}포</span>
-            {gpsStatus === 'ok'      && <span className="ml-1.5 text-green-500">● GPS</span>}
-            {gpsStatus === 'loading' && <span className="ml-1.5 text-yellow-500">◌ GPS...</span>}
-            {gpsStatus === 'denied'  && <button onClick={() => setShowGpsGuide(true)} className="ml-1.5 text-orange-400 underline underline-offset-2">⊘ 위치허용?</button>}
-            {gpsStatus === 'error'   && <span className="ml-1.5 text-red-500">✕ GPS오류</span>}
+          <div className="text-gray-600 text-[10px] flex flex-wrap items-center gap-1.5 mt-0.5">
+            <span>{shareData.city} {shareData.monthId || shareData.month}</span>
+            <span>·</span>
+            <span className="text-white font-bold">{allRecords.length}건</span>
+            <span className="text-blue-400 font-bold">{totalQty}포</span>
+            
+            {gpsStatus === 'ok'      && <span className="text-green-500 ml-1">● GPS</span>}
+            {gpsStatus === 'loading' && <span className="text-yellow-500 ml-1">◌ GPS...</span>}
+            {gpsStatus === 'denied'  && <button onClick={() => setShowGpsGuide(true)} className="text-orange-400 underline underline-offset-2 ml-1">⊘ 위치허용?</button>}
+            {gpsStatus === 'error'   && <span className="text-red-500 ml-1">✕ GPS오류</span>}
+
+            {isLiveActive && (
+              <span className="text-emerald-400 bg-emerald-900/30 px-1.5 py-0.5 rounded-full flex items-center gap-1 ml-1">
+                <span className="relative flex h-2 w-2">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                </span>
+                LIVE
+              </span>
+            )}
           </div>
         </div>
 
