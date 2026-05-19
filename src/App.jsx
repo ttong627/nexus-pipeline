@@ -106,7 +106,15 @@ export default function App() {
   const [exportColOrder, setExportColOrder] = useState(() => {
     try {
       const saved = localStorage.getItem('nexus_export_cols_v2');
-      if (saved) return JSON.parse(saved);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        // 저장된 설정에서 각 키의 on 여부를 보존하되, DEFAULT 기준으로 재정렬+누락 열 추가
+        const savedMap = new Map(parsed.map(c => [c.key, c]));
+        const merged = DEFAULT_EXPORT_COLS.map(def => savedMap.get(def.key) || def);
+        // 기존 저장에만 있는 extra 열도 뒤에 붙임
+        const extra = parsed.filter(c => !DEFAULT_EXPORT_COLS.find(d => d.key === c.key));
+        return [...merged, ...extra];
+      }
     } catch { /* ignore */ }
     return DEFAULT_EXPORT_COLS;
   });
@@ -849,7 +857,7 @@ export default function App() {
       } catch (e) { throw new Error(`[4단계 월별메타 저장 권한 오류] ${e.message}\n계정: ${user?.email}`); }
 
       // [5단계] 레코드 499건씩 배치 저장 (정상 + 오류 모두)
-      gStart('클라우드 저장 중...', `${city} ${monthStr} · ${allData.length.toLocaleString()}건`, 0);
+      setGLoad({ show: true, msg: '클라우드 저장 중...', sub: `${city} ${monthStr} · ${allData.length.toLocaleString()}건`, pct: 0, done: false, blocking: true });
       try {
         for (let i = 0; i < allData.length; i += 499) {
           const batch = writeBatch(db);
@@ -863,7 +871,9 @@ export default function App() {
               주소: r.주소 || '',
               휴대폰: r.휴대폰 || '',
               유선전화: r.유선전화 || '',
+              문자수신: r.문자수신 || 'N',
               포수: parseInt(r.포수 || '1') || 1,
+              품명: r.품명 || '',
               특이사항: r.특이사항 || '',
               lat: r._lat || null,
               lng: r._lng || null,
@@ -963,6 +973,22 @@ export default function App() {
           }
         }
       } catch { /* sync 실패는 무시 — 핵심 저장은 완료됨 */ }
+
+      // [6단계] 구월 자동 정리 — 동일 지자체의 최신 1개월만 유지
+      try {
+        const allMonthsSnap = await getDocs(collection(db, 'cloud_lists', city, 'months'));
+        const oldMonths = allMonthsSnap.docs.filter(d => d.id !== monthStr);
+        for (const oldMonth of oldMonths) {
+          const rSnap = await getDocs(collection(db, 'cloud_lists', city, 'months', oldMonth.id, 'records'));
+          for (let i = 0; i < rSnap.docs.length; i += 499) {
+            const b = writeBatch(db);
+            rSnap.docs.slice(i, i + 499).forEach(d => b.delete(d.ref));
+            await b.commit();
+          }
+          await deleteDoc(doc(db, 'cloud_lists', city, 'months', oldMonth.id));
+        }
+        if (oldMonths.length > 0) console.log(`[구월 자동 정리] ${city}: ${oldMonths.map(d => d.id).join(', ')} 삭제 완료`);
+      } catch (e) { console.warn('[구월 자동 정리 실패 — 저장은 정상]', e.message); }
 
       gDone(`${city} ${monthStr} · ${validData.length.toLocaleString()}건 저장 완료`);
       alert(`✅ ${city} ${monthStr} 월별 명단 ${validData.length}건이 클라우드에 저장되었습니다.`);
@@ -1134,7 +1160,7 @@ export default function App() {
 
       let successCount = 0;
       const errors = [];
-      gStart('기본명단 저장 중...', `${city} · ${allOps.length.toLocaleString()}건`, 0);
+      setGLoad({ show: true, msg: '기본명단 저장 중...', sub: `${city} · ${allOps.length.toLocaleString()}건`, pct: 0, done: false, blocking: true });
 
       for (let i = 0; i < allOps.length; i += 499) {
         try {
@@ -1216,7 +1242,7 @@ export default function App() {
   const handleFetchBaseNotes = async () => {
     const city = fileInfo?.city;
     if (!city || !gridData.length) return;
-    if (!confirm('기본명단에서 특이사항을 불러와 현재 명단에 이식합니다.\n특이사항이 비어있는 레코드에만 적용됩니다. 계속하시겠습니까?')) return;
+    if (!confirm('기본명단에서 특이사항을 불러와 현재 명단에 이식합니다.\n비어있거나 기본명단과 내용이 다른 경우 모두 업데이트됩니다. 계속하시겠습니까?')) return;
     setIsFetchingNotes(true);
     try {
       const normPhone = (v) => (v || '').replace(/[^0-9]/g, '');
@@ -1238,19 +1264,19 @@ export default function App() {
 
       let count = 0;
       const newData = gridData.map(r => {
-        if ((r.특이사항 || '').trim()) return r;
         const name = (r.이름 || '').trim();
         const birth = normalizeBirth(String(r.생년월일 || ''));
         const mobile = normPhone(r.휴대폰 || '');
         let note = '';
         if (birth) note = byBirth[`${name}__${birth}`] || '';
         if (!note && mobile.length >= 9) note = byPhone[`${name}__${mobile}`] || '';
-        if (!note) return r;
+        if (!note) return r; // 기본명단에 특이사항 없음
+        if (note === (r.특이사항 || '').trim()) return r; // 이미 동일
         count++;
         return { ...r, 특이사항: note };
       });
 
-      if (!count) { alert('이식할 특이사항이 없습니다.\n(기본명단에 특이사항이 없거나 이미 모두 이식됨)'); return; }
+      if (!count) { alert('업데이트할 특이사항이 없습니다.\n(기본명단에 특이사항이 없거나 이미 모두 동일)'); return; }
       pushHistory(newData);
       alert(`특이사항 이식 완료! ${count}건 업데이트`);
     } catch (e) { alert('오류: ' + e.message); }

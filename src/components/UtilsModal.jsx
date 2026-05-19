@@ -1,6 +1,7 @@
 ﻿import { useState, useEffect, useRef } from 'react';
-import { X, Layers, Download, Upload, Clock, Send, History, GitMerge, CheckSquare, Square, Trash2, Sparkles, FileX, SplitSquareHorizontal, RefreshCw, SlidersHorizontal, ArrowRight, ArrowUp, ArrowDown, Eye, Combine, Shuffle, ChevronRight, AlertCircle, Palette, Wand2 } from 'lucide-react';
-import { db, collection, query, orderBy, limit, getDocs, addDoc, serverTimestamp } from '../config/firebase.js';
+import { X, Layers, Download, Upload, Clock, Send, History, GitMerge, CheckSquare, Square, Trash2, Sparkles, FileX, SplitSquareHorizontal, RefreshCw, SlidersHorizontal, ArrowRight, ArrowUp, ArrowDown, Eye, Combine, Shuffle, ChevronRight, AlertCircle, Palette, Wand2, Building2 } from 'lucide-react';
+import { db, collection, query, orderBy, limit, getDocs, addDoc, serverTimestamp, doc, getDoc } from '../config/firebase.js';
+import * as XLSX from 'xlsx';
 
 const ADMIN_EMAILS = ['ttong627@gmail.com', 'admin@logis-op.com', 'jsh6270@gmail.com'];
 
@@ -199,6 +200,14 @@ export default function UtilsModal({ onClose, user }) {
   const [isMatchRunning, setIsMatchRunning] = useState(false);
   const [matchStats, setMatchStats] = useState(null);
   const [matchResultBlob, setMatchResultBlob] = useState(null);
+
+  // ── 소속사전용 집계 ───────────────────────────────────────────────────
+  const [orgRptCity, setOrgRptCity] = useState('');
+  const [orgRptCities, setOrgRptCities] = useState([]); // 관리자용 전체 지자체 목록
+  const [orgRptLoadingCities, setOrgRptLoadingCities] = useState(false);
+  const [orgRptLatestMonth, setOrgRptLatestMonth] = useState(null); // { id, totalCount }
+  const [orgRptLoadingMonth, setOrgRptLoadingMonth] = useState(false);
+  const [orgRptExporting, setOrgRptExporting] = useState(false);
 
   // ── Remap computed values ─────────────────────────────────────────────
   const remapActiveSheet = remapResult?.sheets?.find(s => s.name === remapBaseSheet);
@@ -865,6 +874,283 @@ export default function UtilsModal({ onClose, user }) {
 
   const fmtSize = (bytes) => bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)}MB` : `${(bytes / 1024).toFixed(0)}KB`;
 
+  // ── 소속사전용: 관리자용 전체 지자체 목록 로드 ───────────────────────
+  const loadOrgRptAdminCities = async () => {
+    setOrgRptLoadingCities(true);
+    try {
+      const snap = await getDocs(collection(db, 'cloud_lists'));
+      const cities = snap.docs
+        .map(d => ({ id: d.id, lastMonthId: d.data().lastMonthId, totalQty: d.data().latestTotalQty || d.data().latestTotalCount || 0 }))
+        .filter(c => c.lastMonthId)
+        .sort((a, b) => a.id.localeCompare(b.id, 'ko'));
+      setOrgRptCities(cities);
+    } catch (e) { console.error(e); }
+    finally { setOrgRptLoadingCities(false); }
+  };
+
+  // ── 소속사전용: 지자체 선택 시 최신 월 자동 감지 ─────────────────────
+  const handleOrgRptCityChange = async (cityId) => {
+    setOrgRptCity(cityId);
+    setOrgRptLatestMonth(null);
+    if (!cityId) return;
+    setOrgRptLoadingMonth(true);
+    try {
+      const cityDoc = await getDoc(doc(db, 'cloud_lists', cityId));
+      if (cityDoc.exists()) {
+        const d = cityDoc.data();
+        const monthId = d.lastMonthId;
+        if (monthId) {
+          setOrgRptLatestMonth({
+            id: monthId,
+            totalCount: d.latestTotalCount || 0,
+            totalQty: d.latestTotalQty || d.latestTotalCount || 0,
+            수급자Qty: d['latest수급자Qty'] || d['latest수급자Count'] || 0,
+            차상위Qty: d['latest차상위Qty'] || d['latest차상위Count'] || 0,
+          });
+        }
+      }
+    } catch (e) { console.error(e); }
+    finally { setOrgRptLoadingMonth(false); }
+  };
+
+  // ── 소속사전용: 집계표 + 명단 엑셀 추출 ────────────────────────────────
+  const handleOrgRptExport = async () => {
+    if (!orgRptCity || !orgRptLatestMonth) return;
+    setOrgRptExporting(true);
+    const monthId = orgRptLatestMonth.id;
+    try {
+      // 1. 소속사 프리셋 로드
+      const presetSnap = await getDoc(doc(db, 'org_presets', orgRptCity));
+      const orgs = presetSnap.exists() ? (presetSnap.data().orgs || []) : [];
+
+      // 2. 레코드 로드
+      const recSnap = await getDocs(collection(db, 'cloud_lists', orgRptCity, 'months', monthId, 'records'));
+      const allRecs = recSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+      // 3. 행정동 → 소속사 매핑
+      const dongToOrg = {};
+      orgs.forEach(org => {
+        (org.dongs || []).forEach(d => { dongToOrg[d] = org; });
+      });
+
+      // 4. 각 레코드에 소속사 할당
+      const getQty = (r) => parseInt(r.포수 || r['수량(포수)'] || 1) || 1;
+      const isSupp = (r) => (r.구분 || '') === '차상위';
+
+      // 5. 소속사별 행정동별 집계
+      const orgDongMap = {}; // orgId → dongName → { supp, bas, total }
+      const unassigned = [];
+      allRecs.forEach(r => {
+        const dong = (r.행정동 || '').trim();
+        const org = dongToOrg[dong];
+        const qty = getQty(r);
+        const suppQty = isSupp(r) ? qty : 0;
+        const basQty = isSupp(r) ? 0 : qty;
+        if (org) {
+          if (!orgDongMap[org.id]) orgDongMap[org.id] = {};
+          if (!orgDongMap[org.id][dong]) orgDongMap[org.id][dong] = { supp: 0, bas: 0, total: 0 };
+          orgDongMap[org.id][dong].supp += suppQty;
+          orgDongMap[org.id][dong].bas += basQty;
+          orgDongMap[org.id][dong].total += qty;
+        } else {
+          unassigned.push(r);
+        }
+      });
+
+      // ── 소속사 없는 경우: 행정동 집계 + 전체명단 2시트 ──
+      if (orgs.length === 0) {
+        const wb = XLSX.utils.book_new();
+        const getQty2 = (r) => parseInt(r.포수 || r['수량(포수)'] || 1) || 1;
+        const isSupp2 = (r) => (r.구분 || '') === '차상위';
+
+        // 행정동별 집계
+        const dongMap = {};
+        allRecs.forEach(r => {
+          const d = (r.행정동 || '미분류').trim();
+          const qty = getQty2(r);
+          if (!dongMap[d]) dongMap[d] = { bas: 0, supp: 0, total: 0 };
+          if (isSupp2(r)) dongMap[d].supp += qty; else dongMap[d].bas += qty;
+          dongMap[d].total += qty;
+        });
+        const sortedDongs = Object.keys(dongMap).sort((a, b) => a.localeCompare(b, 'ko'));
+        let gBas = 0, gSupp = 0, gTotal = 0;
+        const sumAoa = [['행정동', '수급자(포)', '차상위(포)', '전체(포)']];
+        sortedDongs.forEach(d => {
+          const { bas, supp, total } = dongMap[d];
+          sumAoa.push([d, bas, supp, total]);
+          gBas += bas; gSupp += supp; gTotal += total;
+        });
+        sumAoa.push(['합계', gBas, gSupp, gTotal]);
+        const sumWs = XLSX.utils.aoa_to_sheet(sumAoa);
+        sumWs['!cols'] = [{ wch: 16 }, { wch: 12 }, { wch: 12 }, { wch: 12 }];
+        XLSX.utils.book_append_sheet(wb, sumWs, '행정동집계');
+
+        // 전체명단
+        const sorted2 = [...allRecs].sort((a, b) => {
+          const da = a.행정동 || '', db2 = b.행정동 || '';
+          if (da !== db2) return da.localeCompare(db2, 'ko');
+          const sa = parseInt(a.배송순번) || 9999, sb = parseInt(b.배송순번) || 9999;
+          if (sa !== sb) return sa - sb;
+          return (a.이름 || '').localeCompare(b.이름 || '', 'ko');
+        });
+        const allAoa = [['번호', '구분', '이름', '생년월일', '행정동', '주소', '휴대폰', '유선전화', '문자수신', '포수', '품명', '특이사항', '기사', '배송순번']];
+        sorted2.forEach((r, i) => {
+          allAoa.push([i + 1, r.구분 || '', r.이름 || '', r.생년월일 || '', r.행정동 || '',
+            r.주소 || '', r.휴대폰 || '', r.유선전화 || '', r.문자수신 || '',
+            getQty2(r), r.품명 || '', r.특이사항 || '', r.기사 || '', r.배송순번 || '']);
+        });
+        const allWs = XLSX.utils.aoa_to_sheet(allAoa);
+        allWs['!cols'] = [{ wch: 5 }, { wch: 8 }, { wch: 10 }, { wch: 10 }, { wch: 14 },
+          { wch: 35 }, { wch: 14 }, { wch: 14 }, { wch: 8 }, { wch: 6 }, { wch: 12 }, { wch: 30 }, { wch: 10 }, { wch: 7 }];
+        XLSX.utils.book_append_sheet(wb, allWs, '전체명단');
+
+        const ts = new Date().toLocaleDateString('ko-KR', { month: '2-digit', day: '2-digit' }).replace(/\. /g, '').replace('.', '');
+        XLSX.writeFile(wb, `${orgRptCity}_${monthId}_행정동집계_${ts}.xlsx`);
+        return;
+      }
+
+      // ── 워크북 생성 ──
+      const wb = XLSX.utils.book_new();
+      const s = (v, bold, bg, align, sz) => ({
+        v, t: typeof v === 'number' ? 'n' : 's',
+        s: {
+          font: { bold: !!bold, sz: sz || 10, name: '맑은 고딕' },
+          fill: bg ? { fgColor: { rgb: bg } } : undefined,
+          alignment: { horizontal: align || 'left', vertical: 'center', wrapText: true },
+          border: {
+            top: { style: 'thin', color: { rgb: 'CCCCCC' } },
+            bottom: { style: 'thin', color: { rgb: 'CCCCCC' } },
+            left: { style: 'thin', color: { rgb: 'CCCCCC' } },
+            right: { style: 'thin', color: { rgb: 'CCCCCC' } },
+          },
+        },
+      });
+
+      // ── [시트1] 전체 집계표 ──
+      const summaryRows = [
+        [s('소속사', true, 'E8F0FE', 'center', 11), s('행정동', true, 'E8F0FE', 'center', 11),
+         s('수급자(포)', true, 'E8F0FE', 'center', 11), s('차상위(포)', true, 'E8F0FE', 'center', 11),
+         s('전체(포)', true, 'E8F0FE', 'center', 11)],
+      ];
+
+      let grandBas = 0, grandSupp = 0, grandTotal = 0;
+
+      orgs.forEach(org => {
+        const dongData = orgDongMap[org.id] || {};
+        // 해당 소속사 행정동 순서: org.dongs 순서 기준
+        const validDongs = (org.dongs || []).filter(d => dongData[d]);
+        let orgBas = 0, orgSupp = 0, orgTotal = 0;
+
+        validDongs.forEach(dong => {
+          const { bas, supp, total } = dongData[dong];
+          summaryRows.push([
+            s(org.name, false, null, 'center'),
+            s(dong, false, null, 'left'),
+            s(bas, false, null, 'center'),
+            s(supp, false, null, 'center'),
+            s(total, false, null, 'center'),
+          ]);
+          orgBas += bas; orgSupp += supp; orgTotal += total;
+        });
+
+        // 소속사 소계
+        if (validDongs.length > 0) {
+          summaryRows.push([
+            s(`${org.name} 소계`, true, 'EEF2FF', 'center'),
+            s('', true, 'EEF2FF'),
+            s(orgBas, true, 'EEF2FF', 'center'),
+            s(orgSupp, true, 'EEF2FF', 'center'),
+            s(orgTotal, true, 'EEF2FF', 'center'),
+          ]);
+        }
+        grandBas += orgBas; grandSupp += orgSupp; grandTotal += orgTotal;
+      });
+
+      // 미배정 행정동이 있으면 추가
+      if (unassigned.length > 0) {
+        const unDongMap = {};
+        unassigned.forEach(r => {
+          const d = (r.행정동 || '미분류').trim();
+          const qty = getQty(r);
+          if (!unDongMap[d]) unDongMap[d] = { bas: 0, supp: 0, total: 0 };
+          if (isSupp(r)) unDongMap[d].supp += qty; else unDongMap[d].bas += qty;
+          unDongMap[d].total += qty;
+        });
+        let uBas = 0, uSupp = 0, uTotal = 0;
+        Object.entries(unDongMap).forEach(([dong, v]) => {
+          summaryRows.push([s('미배정', false, 'FFF3CD', 'center'), s(dong), s(v.bas, false, 'FFF3CD', 'center'), s(v.supp, false, 'FFF3CD', 'center'), s(v.total, false, 'FFF3CD', 'center')]);
+          uBas += v.bas; uSupp += v.supp; uTotal += v.total;
+        });
+        summaryRows.push([s('미배정 소계', true, 'FFF3CD', 'center'), s('', true, 'FFF3CD'), s(uBas, true, 'FFF3CD', 'center'), s(uSupp, true, 'FFF3CD', 'center'), s(uTotal, true, 'FFF3CD', 'center')]);
+        grandBas += uBas; grandSupp += uSupp; grandTotal += uTotal;
+      }
+
+      // 전체 합계
+      summaryRows.push([
+        s('전체 합계', true, '1E40AF', 'center', 12),
+        s('', true, '1E40AF'),
+        s(grandBas, true, '1E40AF', 'center', 12),
+        s(grandSupp, true, '1E40AF', 'center', 12),
+        s(grandTotal, true, '1E40AF', 'center', 12),
+      ]);
+
+      // 합계 행 폰트색 흰색으로
+      const lastRow = summaryRows[summaryRows.length - 1];
+      lastRow.forEach(cell => { if (cell.s?.font) cell.s.font.color = { rgb: 'FFFFFF' }; });
+
+      const summaryWs = XLSX.utils.aoa_to_sheet(summaryRows.map(row => row.map(c => c.v)));
+      // 셀 스타일 적용 (xlsx-js-style 없이 기본 xlsx로 처리)
+      summaryWs['!cols'] = [{ wch: 14 }, { wch: 16 }, { wch: 12 }, { wch: 12 }, { wch: 12 }];
+      XLSX.utils.book_append_sheet(wb, summaryWs, '전체집계');
+
+      // ── [시트2] 전체명단 ──
+      const makeRecSheet = (recs) => {
+        const sorted = [...recs].sort((a, b) => {
+          const da = (a.행정동 || ''), db = (b.행정동 || '');
+          if (da !== db) return da.localeCompare(db, 'ko');
+          const sa = parseInt(a.배송순번) || 9999, sb = parseInt(b.배송순번) || 9999;
+          if (sa !== sb) return sa - sb;
+          return (a.이름 || '').localeCompare(b.이름 || '', 'ko');
+        });
+        const aoa = [['번호', '구분', '이름', '생년월일', '행정동', '주소', '휴대폰', '유선전화', '문자수신', '포수', '품명', '특이사항', '기사', '배송순번']];
+        sorted.forEach((r, i) => {
+          aoa.push([i + 1, r.구분 || '', r.이름 || '', r.생년월일 || '', r.행정동 || '',
+            r.주소 || '', r.휴대폰 || '', r.유선전화 || '', r.문자수신 || '',
+            getQty(r), r.품명 || '', r.특이사항 || '', r.기사 || '', r.배송순번 || '']);
+        });
+        const ws = XLSX.utils.aoa_to_sheet(aoa);
+        ws['!cols'] = [{ wch: 5 }, { wch: 8 }, { wch: 10 }, { wch: 10 }, { wch: 14 },
+          { wch: 35 }, { wch: 14 }, { wch: 14 }, { wch: 8 }, { wch: 6 }, { wch: 12 }, { wch: 30 }, { wch: 10 }, { wch: 7 }];
+        return ws;
+      };
+
+      XLSX.utils.book_append_sheet(wb, makeRecSheet(allRecs), '전체명단');
+
+      // ── [시트3~] 소속사별 명단 시트 ──
+      const orgSheetOrder = [...orgs];
+      if (unassigned.length > 0) orgSheetOrder.push({ id: '__unassigned__', name: '미배정', dongs: [] });
+
+      orgSheetOrder.forEach(org => {
+        const recs = org.id === '__unassigned__'
+          ? unassigned
+          : allRecs.filter(r => dongToOrg[(r.행정동 || '').trim()]?.id === org.id);
+        if (recs.length === 0) return;
+        const sheetName = (org.name + '명단').slice(0, 30);
+        XLSX.utils.book_append_sheet(wb, makeRecSheet(recs), sheetName);
+      });
+
+      // ── 파일 저장 ──
+      const ts = new Date().toLocaleDateString('ko-KR', { month: '2-digit', day: '2-digit' }).replace(/\. /g, '').replace('.', '');
+      const fileName = `${orgRptCity}_${monthId}_소속사집계_${ts}.xlsx`;
+      XLSX.writeFile(wb, fileName);
+    } catch (e) {
+      alert('집계 추출 실패: ' + e.message);
+      console.error(e);
+    } finally {
+      setOrgRptExporting(false);
+    }
+  };
+
   const TABS = [
     { id: 'merger', label: '시트 병합',    icon: <GitMerge size={14} /> },
     { id: 'dedup',  label: '중복 정리',    icon: <Trash2 size={14} /> },
@@ -874,6 +1160,7 @@ export default function UtilsModal({ onClose, user }) {
     { id: 'filemerge', label: '파일 합치기',  icon: <Combine size={14} /> },
     { id: 'match',     label: 'DATA 매칭',    icon: <Shuffle size={14} /> },
     { id: 'format',    label: '스타일 서식',  icon: <Palette size={14} /> },
+    { id: 'orgReport', label: '소속사전용',   icon: <Building2 size={14} /> },
     { id: 'audit',     label: '이력 관리',    icon: <History size={14} /> },
   ];
 
@@ -2326,7 +2613,104 @@ export default function UtilsModal({ onClose, user }) {
               );
             })()}
 
-            {/* ── 이력 관리 ── */}
+            {/* ── 소속사전용 ── */}
+            {activeTab === 'orgReport' && (() => {
+              const approvedCities = user?.citiesApproved || [];
+
+              // 탭 진입 시 관리자 도시 목록 로드 (1회)
+              if (isAdmin && orgRptCities.length === 0 && !orgRptLoadingCities) {
+                loadOrgRptAdminCities();
+              }
+
+              const cityOptions = isAdmin
+                ? orgRptCities
+                : approvedCities.map(id => ({ id, lastMonthId: null }));
+
+              return (
+                <div className="flex flex-col h-full animate-in slide-in-from-right-4 duration-300">
+                  <div className="mb-1">
+                    <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                      <Building2 size={18} className="text-blue-400" /> 소속사 전용 집계표
+                    </h3>
+                    <p className="text-sm text-gray-400 mt-1">
+                      최근 등록된 월 명단 기준으로 소속사별 · 행정동별 집계표와 명단을 추출합니다.
+                    </p>
+                  </div>
+
+                  <div className="mt-5 space-y-5">
+                    {/* 지자체 선택 */}
+                    <div>
+                      <label className="block text-xs font-bold text-gray-400 mb-2">지자체(시군구) 선택</label>
+                      {!isAdmin && approvedCities.length === 0 ? (
+                        <p className="text-sm text-yellow-400">승인된 지자체가 없습니다.</p>
+                      ) : isAdmin && orgRptLoadingCities ? (
+                        <div className="text-sm text-gray-500 flex items-center gap-2"><RefreshCw size={14} className="animate-spin" /> 지자체 목록 로딩 중...</div>
+                      ) : (
+                        <select
+                          value={orgRptCity}
+                          onChange={e => handleOrgRptCityChange(e.target.value)}
+                          className="w-full bg-[#1a1a1a] border border-gray-700 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-blue-500">
+                          <option value="">-- 지자체 선택 --</option>
+                          {cityOptions.map(c => (
+                            <option key={c.id} value={c.id}>
+                              {c.id}{c.lastMonthId ? ` (${c.lastMonthId})` : ''}
+                            </option>
+                          ))}
+                        </select>
+                      )}
+                    </div>
+
+                    {/* 최신 월 정보 표시 */}
+                    {orgRptCity && (
+                      <div className="bg-[#0d0d0d] border border-gray-800 rounded-xl px-4 py-3 flex items-center gap-3">
+                        {orgRptLoadingMonth ? (
+                          <><RefreshCw size={14} className="animate-spin text-gray-500" /><span className="text-sm text-gray-500">월 정보 확인 중...</span></>
+                        ) : orgRptLatestMonth ? (
+                          <>
+                            <span className="text-blue-400 font-black text-sm">📅 {orgRptLatestMonth.id}</span>
+                            <span className="text-gray-500 text-xs">|</span>
+                            <span className="text-white text-xs font-bold">{(orgRptLatestMonth.totalQty || 0).toLocaleString()}포</span>
+                            <span className="text-amber-400 text-xs">수급자 {(orgRptLatestMonth.수급자Qty || 0).toLocaleString()}포</span>
+                            <span className="text-blue-400 text-xs">차상위 {(orgRptLatestMonth.차상위Qty || 0).toLocaleString()}포</span>
+                          </>
+                        ) : (
+                          <span className="text-yellow-400 text-sm">등록된 월 데이터가 없습니다.</span>
+                        )}
+                      </div>
+                    )}
+
+                    {/* 추출 안내 */}
+                    {orgRptLatestMonth && (
+                      <div className="bg-[#0d1117] border border-blue-900/40 rounded-xl p-4 space-y-1.5">
+                        <p className="text-xs font-bold text-blue-300">📋 추출될 시트 구성</p>
+                        <div className="text-xs text-gray-400 space-y-1">
+                          <div className="flex items-center gap-2">
+                            <span className="w-2 h-2 rounded-full bg-blue-500 inline-block shrink-0" />
+                            <span><b className="text-white">집계표 시트</b> — {isAdmin ? '소속사 × 행정동별' : '행정동별'} 수급자·차상위·전체 포수 집계</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="w-2 h-2 rounded-full bg-green-500 inline-block shrink-0" />
+                            <span><b className="text-white">명단 시트</b> — 소속사별 명단 (소속사 미설정 시 전체명단 1개)</span>
+                          </div>
+                        </div>
+                        <p className="text-[10px] text-gray-600 mt-1">※ 소속사·행정동 배정은 메뉴 → 소속사 구역 설정에서 관리됩니다.</p>
+                      </div>
+                    )}
+
+                    {/* 추출 버튼 */}
+                    <button
+                      onClick={handleOrgRptExport}
+                      disabled={!orgRptCity || !orgRptLatestMonth || orgRptExporting}
+                      className="w-full py-4 bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-500 hover:to-blue-600 disabled:from-gray-700 disabled:to-gray-700 disabled:text-gray-500 text-white font-black text-sm rounded-xl flex items-center justify-center gap-2 transition-all active:scale-[0.99]">
+                      {orgRptExporting
+                        ? <><RefreshCw size={16} className="animate-spin" /> 집계 추출 중...</>
+                        : <><Download size={16} /> 집계표 + 명단 다운로드</>}
+                    </button>
+                  </div>
+                </div>
+              );
+            })()}
+
             {activeTab === 'audit' && (
               <div className="flex flex-col h-full animate-in slide-in-from-right-4 duration-300">
                 <div className="flex justify-between items-center mb-1">

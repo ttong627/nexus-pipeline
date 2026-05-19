@@ -4,6 +4,7 @@ import * as XLSX from 'xlsx';
 import {
   db, storage,
   collection, getDocs, getDocsFromServer, getDoc, setDoc, doc, deleteDoc, writeBatch, serverTimestamp,
+  query, orderBy, limit, startAfter, documentId,
   ref, getDownloadURL, deleteObject,
 } from '../config/firebase.js';
 import { normalizeBirth, formatPhoneInput } from '../utils/parsers.js';
@@ -220,17 +221,14 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
   const [isFetchingNotes, setIsFetchingNotes] = useState(false);
   const [isMovingPhones, setIsMovingPhones] = useState(false);
 
-  // 카드 클릭 → ResultGrid 로드
+  // 카드 클릭 → 관리 뷰 직접 진입 (이전: ResultGrid로 이동 → 혼란 유발)
   const [loadingCardId, setLoadingCardId] = useState(null);
-  const handleCardClick = async (cityItem) => {
-    if (!cityItem.latestMonth || !onOpenInResultGrid) return;
-    setLoadingCardId(cityItem.id);
-    try {
-      const snap = await getDocs(collection(db, 'cloud_lists', cityItem.id, 'months', cityItem.latestMonth.id, 'records'));
-      const recs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-      onOpenInResultGrid(cityItem.id, cityItem.latestMonth.id, recs);
-    } catch (e) { alert('불러오기 실패: ' + e.message); }
-    finally { setLoadingCardId(null); }
+  const handleCardClick = (cityItem) => {
+    if (!cityItem.latestMonth) return;
+    setSelectedSido(cityItem.sido);
+    setSelectedSigungu(cityItem.sigungu);
+    setSelectedMonth(cityItem.latestMonth);
+    fetchRecords(cityItem.latestMonth.id, cityItem.id);
   };
 
   // 관리 모드 진입 (카드 편집 아이콘 클릭)
@@ -326,7 +324,8 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
 
   // ── Effects ──────────────────────────────────────────────────────
   useEffect(() => {
-    fetchAllCities();
+    if (initialCity) loadForInitialCity(); // 1 getDoc → 즉시 관리 뷰 진입 (빠름)
+    fetchAllCities(); // 카드 그리드용 전체 도시 목록 (병렬 백그라운드)
   }, []);
 
   useEffect(() => {
@@ -334,7 +333,17 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
     fetchMonths();
   }, [selectedCity]);
 
-  // 월이 1개뿐이면 자동 선택 (관리 모드 진입 시)
+  // fetchAllCities 완료 후 아직 관리 뷰 미진입 상태면 진입 (loadForInitialCity 실패 폴백)
+  useEffect(() => {
+    if (!initialCity || selectedMonth || cityList.length === 0) return;
+    const match = cityList.find(c => c.id === selectedCity);
+    if (match?.latestMonth) {
+      setSelectedMonth(match.latestMonth);
+      fetchRecords(match.latestMonth.id, selectedCity);
+    }
+  }, [cityList]);
+
+  // 월이 1개뿐이면 자동 선택 (카드 그리드에서 관리 아이콘으로 진입 시)
   useEffect(() => {
     if (months.length === 1 && !selectedMonth) {
       handleSelectMonth(months[0]);
@@ -366,13 +375,98 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
     finally { setLoadingMonths(false); }
   };
 
-  const fetchRecords = async (monthId) => {
-    setLoadingRecords(true);
+  // initialCity로 진입 시 fetchAllCities 완료 대기 없이 즉시 관리 뷰 진입
+  const loadForInitialCity = async () => {
+    if (!selectedCity) return;
     try {
-      const snap = await getDocs(collection(db, 'cloud_lists', selectedCity, 'months', monthId, 'records'));
-      setRecords(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-    } catch (e) { console.error('[CloudListManager] fetchRecords:', e); }
-    finally { setLoadingRecords(false); }
+      const cityDoc = await getDoc(doc(db, 'cloud_lists', selectedCity));
+      if (!cityDoc.exists()) return;
+      const data = cityDoc.data() || {};
+      const lastMonthId = data.lastMonthId;
+      if (!lastMonthId) return;
+      const spaceIdx = selectedCity.indexOf(' ');
+      const sido = selectedCity.slice(0, spaceIdx);
+      const sigungu = selectedCity.slice(spaceIdx + 1);
+      const latestMonth = {
+        id: lastMonthId,
+        totalCount: data.latestTotalCount ?? 0,
+        수급자Count: data['latest수급자Count'] ?? 0,
+        차상위Count: data['latest차상위Count'] ?? 0,
+        totalQty: data.latestTotalQty ?? data.latestTotalCount ?? 0,
+        수급자Qty: data['latest수급자Qty'] ?? data['latest수급자Count'] ?? 0,
+        차상위Qty: data['latest차상위Qty'] ?? data['latest차상위Count'] ?? 0,
+      };
+      setSelectedMonth(latestMonth);
+      setCityList(prev => prev.length ? prev : [{ id: selectedCity, sido, sigungu, latestMonth }]);
+      fetchRecords(lastMonthId, selectedCity);
+    } catch (e) { console.error('[loadForInitialCity]', e); }
+  };
+
+  // 문자수신 전체 Y 설정 (관리자 전용)
+  const [isSettingSmsY, setIsSettingSmsY] = useState(false);
+  const handleSetAllSmsY = async () => {
+    if (!selectedCity || !selectedMonth || !records.length) return;
+    const targets = records.filter(r => r.문자수신 !== 'Y');
+    if (!targets.length) return alert('이미 모든 레코드의 문자수신이 Y입니다.');
+    if (!confirm(`${targets.length}건의 문자수신을 Y로 일괄 설정하시겠습니까?`)) return;
+    setIsSettingSmsY(true);
+    try {
+      for (let i = 0; i < targets.length; i += 499) {
+        const batch = writeBatch(db);
+        targets.slice(i, i + 499).forEach(r =>
+          batch.update(doc(db, 'cloud_lists', selectedCity, 'months', selectedMonth.id, 'records', r.id), { 문자수신: 'Y' })
+        );
+        await batch.commit();
+      }
+      await fetchRecords(selectedMonth.id);
+      alert(`문자수신 Y 설정 완료! ${targets.length}건`);
+    } catch (e) { alert('오류: ' + e.message); }
+    finally { setIsSettingSmsY(false); }
+  };
+
+  // Progressive loading: 첫 300건 즉시 표시 → 나머지 500건씩 백그라운드 스트리밍
+  const fetchCallIdRef = useRef(0);
+  const [loadingMoreRecords, setLoadingMoreRecords] = useState(false);
+
+  const fetchRecords = async (monthId, cityIdOverride) => {
+    const cityId = cityIdOverride || selectedCity;
+    if (!cityId) return;
+    const myId = ++fetchCallIdRef.current;
+    setLoadingRecords(true);
+    setLoadingMoreRecords(false);
+    setRecords([]);
+    try {
+      const colRef = collection(db, 'cloud_lists', cityId, 'months', monthId, 'records');
+      // 1단계: 첫 300건 즉시 표시
+      const firstSnap = await getDocs(query(colRef, orderBy(documentId()), limit(300)));
+      if (myId !== fetchCallIdRef.current) return;
+      setRecords(firstSnap.docs.map(d => ({ id: d.id, ...d.data() })));
+      setLoadingRecords(false);
+      if (firstSnap.docs.length < 300) return; // 전체 로드 완료
+      // 2단계: 나머지 500건씩 백그라운드 로드
+      setLoadingMoreRecords(true);
+      let cursor = firstSnap.docs[firstSnap.docs.length - 1];
+      while (cursor) {
+        if (myId !== fetchCallIdRef.current) return;
+        const nextSnap = await getDocs(query(colRef, orderBy(documentId()), startAfter(cursor), limit(500)));
+        if (myId !== fetchCallIdRef.current) return;
+        if (nextSnap.empty) break;
+        setRecords(prev => [...prev, ...nextSnap.docs.map(d => ({ id: d.id, ...d.data() }))]);
+        if (nextSnap.docs.length < 500) break;
+        cursor = nextSnap.docs[nextSnap.docs.length - 1];
+      }
+    } catch (e) {
+      // Fallback: 인덱스 없는 경우 전체 로드
+      if (myId === fetchCallIdRef.current) {
+        try {
+          const snap = await getDocs(collection(db, 'cloud_lists', cityId, 'months', monthId, 'records'));
+          if (myId !== fetchCallIdRef.current) return;
+          setRecords(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+        } catch (e2) { console.error('[fetchRecords fallback]', e2); }
+      }
+    } finally {
+      if (myId === fetchCallIdRef.current) { setLoadingRecords(false); setLoadingMoreRecords(false); }
+    }
   };
 
   const fetchAllCities = useCallback(async () => {
@@ -417,34 +511,34 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
           return a.sigungu.localeCompare(b.sigungu, 'ko');
         });
 
-      // 카드 카운트가 0인데 lastMonthId가 있으면 month 문서를 직접 읽어 자동 복구
-      await Promise.all(
-        cities
-          .filter(c => c.latestMonth && c.latestMonth.totalCount === 0)
-          .map(async (c) => {
-            try {
-              const monthSnap = await getDoc(doc(db, 'cloud_lists', c.id, 'months', c.latestMonth.id));
-              if (!monthSnap.exists()) return;
-              const m = monthSnap.data();
-              const totalCount = m.totalCount ?? 0;
-              const 수급자Count = m.수급자Count ?? 0;
-              const 차상위Count = m.차상위Count ?? 0;
-              c.latestMonth.totalCount = totalCount;
-              c.latestMonth.수급자Count = 수급자Count;
-              c.latestMonth.차상위Count = 차상위Count;
-              // 최상위 문서 캐시도 동기화 (이후 로드 시 추가 읽기 불필요)
-              if (totalCount > 0) {
-                setDoc(doc(db, 'cloud_lists', c.id), {
-                  latestTotalCount: totalCount,
-                  'latest수급자Count': 수급자Count,
-                  'latest차상위Count': 차상위Count,
-                }, { merge: true }).catch(() => {});
-              }
-            } catch { /* 복구 실패 무시 */ }
-          })
-      );
-
+      // 도시 카드 즉시 표시 (자동 복구는 백그라운드 비동기 처리)
       setCityList(cities);
+      setLoadingCities(false);
+
+      // 카드 카운트 0 자동복구 — 블로킹 없이 백그라운드에서 실행
+      const staleCities = cities.filter(c => c.latestMonth && c.latestMonth.totalCount === 0);
+      if (staleCities.length > 0) {
+        Promise.all(staleCities.map(async (c) => {
+          try {
+            const monthSnap = await getDoc(doc(db, 'cloud_lists', c.id, 'months', c.latestMonth.id));
+            if (!monthSnap.exists()) return;
+            const m = monthSnap.data();
+            const totalCount = m.totalCount ?? 0;
+            if (totalCount === 0) return;
+            const 수급자Count = m.수급자Count ?? 0;
+            const 차상위Count = m.차상위Count ?? 0;
+            // 해당 도시만 업데이트
+            setCityList(prev => prev.map(city => city.id === c.id
+              ? { ...city, latestMonth: { ...city.latestMonth, totalCount, 수급자Count, 차상위Count } }
+              : city
+            ));
+            setDoc(doc(db, 'cloud_lists', c.id), {
+              latestTotalCount: totalCount, 'latest수급자Count': 수급자Count, 'latest차상위Count': 차상위Count,
+            }, { merge: true }).catch(() => {});
+          } catch { /* 복구 실패 무시 */ }
+        })).catch(() => {});
+      }
+      return; // finally에서 setLoadingCities(false) 중복 방지
     } catch (e) { console.error('[fetchAllCities]', e); }
     finally { setLoadingCities(false); }
   }, [isAdmin, approvedCities]);
@@ -456,7 +550,7 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
 
   const handleFetchBaseNotes = async () => {
     if (!selectedCity || !selectedMonth || !records.length) return;
-    if (!confirm(`기본명단에서 특이사항을 불러와 현재 명단에 이식합니다.\n특이사항이 비어있는 레코드에만 적용됩니다. 계속하시겠습니까?`)) return;
+    if (!confirm(`기본명단에서 특이사항을 불러와 현재 명단에 이식합니다.\n비어있거나 기본명단과 내용이 다른 경우 모두 업데이트됩니다. 계속하시겠습니까?`)) return;
     setIsFetchingNotes(true);
     try {
       const normPhone = (v) => (v || '').replace(/[^0-9]/g, '');
@@ -478,17 +572,18 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
 
       const updates = [];
       records.forEach(r => {
-        if ((r.특이사항 || '').trim()) return;
         const name = (r.이름 || '').trim();
         const birth = normalizeBirth(String(r.생년월일 || ''));
         const mobile = normPhone(r.휴대폰 || '');
         let note = '';
         if (birth) note = byBirth[`${name}__${birth}`] || '';
         if (!note && mobile.length >= 9) note = byPhone[`${name}__${mobile}`] || '';
-        if (note) updates.push({ id: r.id, 특이사항: note });
+        if (!note) return; // 기본명단에 특이사항 없음
+        if (note === (r.특이사항 || '').trim()) return; // 이미 동일
+        updates.push({ id: r.id, 특이사항: note });
       });
 
-      if (!updates.length) { alert('이식할 특이사항이 없습니다.\n(기본명단에 특이사항이 없거나 이미 모두 이식됨)'); return; }
+      if (!updates.length) { alert('업데이트할 특이사항이 없습니다.\n(기본명단에 특이사항이 없거나 이미 모두 동일)'); return; }
 
       for (let i = 0; i < updates.length; i += 499) {
         const batch = writeBatch(db);
@@ -539,6 +634,53 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
       alert(`전화번호 이동 완료! ${targets.length}건`);
     } catch (e) { alert('오류: ' + e.message); }
     finally { setIsMovingPhones(false); }
+  };
+
+  // ── 전체 구월 일괄 정리 (관리자 전용) ───────────────────────────────
+  const [isPurgingOldMonths, setIsPurgingOldMonths] = useState(false);
+  const [purgeProgress, setPurgeProgress] = useState(null); // { done, total, deleted } | null
+
+  const handlePurgeAllOldMonths = async () => {
+    if (!isAdmin) return;
+    const snap = await getDocs(collection(db, 'cloud_lists'));
+    const cities = snap.docs;
+    // 구월이 존재하는 지자체 사전 확인
+    const targets = [];
+    for (const cityDoc of cities) {
+      const monthsSnap = await getDocs(collection(db, 'cloud_lists', cityDoc.id, 'months'));
+      const allMonths = monthsSnap.docs.map(d => d.id).sort((a, b) => b.localeCompare(a));
+      if (allMonths.length > 1) {
+        targets.push({ cityId: cityDoc.id, latestMonthId: allMonths[0], oldMonthIds: allMonths.slice(1) });
+      }
+    }
+    if (targets.length === 0) return alert('모든 지자체가 최신 1개월만 보유 중입니다. 정리할 구월이 없습니다.');
+
+    const preview = targets.map(t => `• ${t.cityId}: ${t.oldMonthIds.join(', ')} 삭제 예정`).join('\n');
+    const ok = confirm(`구월 데이터가 발견된 지자체 ${targets.length}곳:\n\n${preview}\n\n위 구월 데이터를 모두 삭제하시겠습니까?\n(최신 월 데이터는 유지됩니다)`);
+    if (!ok) return;
+
+    setIsPurgingOldMonths(true);
+    let totalDeleted = 0;
+    setPurgeProgress({ done: 0, total: targets.length, deleted: 0 });
+    try {
+      for (let ti = 0; ti < targets.length; ti++) {
+        const { cityId, oldMonthIds } = targets[ti];
+        for (const oldMonthId of oldMonthIds) {
+          const rSnap = await getDocs(collection(db, 'cloud_lists', cityId, 'months', oldMonthId, 'records'));
+          for (let i = 0; i < rSnap.docs.length; i += 499) {
+            const batch = writeBatch(db);
+            rSnap.docs.slice(i, i + 499).forEach(d => batch.delete(d.ref));
+            await batch.commit();
+          }
+          await deleteDoc(doc(db, 'cloud_lists', cityId, 'months', oldMonthId));
+          totalDeleted++;
+        }
+        setPurgeProgress({ done: ti + 1, total: targets.length, deleted: totalDeleted });
+      }
+      await fetchAllCities();
+      alert(`✅ 구월 정리 완료! ${targets.length}개 지자체에서 ${totalDeleted}개 월 데이터를 삭제했습니다.`);
+    } catch (e) { alert('구월 정리 오류: ' + e.message); }
+    finally { setIsPurgingOldMonths(false); setPurgeProgress(null); }
   };
 
   // ── Delete month ──────────────────────────────────────────────────
@@ -1008,7 +1150,8 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
       구분: r.구분 || '', 이름: r.이름 || '', 생년월일: r.생년월일 || '',
       행정동: r.행정동 || '', 주소: r.주소 || '',
       휴대폰: r.휴대폰 || '', 유선전화: r.유선전화 || '',
-      포수: r.포수 || '', 특이사항: r.특이사항 || '',
+      문자수신: r.문자수신 || '',
+      포수: r.포수 || '', 품명: r.품명 || '', 특이사항: r.특이사항 || '',
       기사: r.기사 || '', 배송순번: r.배송순번 || '',
       좌표: r.lat ? 'Y' : 'N',
     }));
@@ -1043,6 +1186,25 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
             </p>
           </div>
         </div>
+
+        {/* 구월 일괄 정리 버튼 (관리자 · 카드 그리드 뷰에서만) */}
+        {isAdmin && !selectedMonth && (
+          <div className="flex items-center gap-2 shrink-0">
+            {purgeProgress && (
+              <span className="text-[11px] text-orange-400 animate-pulse">
+                정리 중 {purgeProgress.done}/{purgeProgress.total} (삭제 {purgeProgress.deleted}개)
+              </span>
+            )}
+            <button
+              onClick={handlePurgeAllOldMonths}
+              disabled={isPurgingOldMonths}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-bold bg-orange-950/40 hover:bg-orange-900/50 text-orange-400 border border-orange-500/30 transition-colors disabled:opacity-40"
+              title="최신 월 이외의 구월 데이터를 전체 지자체에서 일괄 삭제"
+            >
+              <Trash2 size={13} /> {isPurgingOldMonths ? '정리 중...' : '구월 일괄 정리'}
+            </button>
+          </div>
+        )}
 
         {/* Action buttons (shown when month selected) */}
         {selectedMonth && (
@@ -1108,6 +1270,16 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
                 title="이 월의 레코드 전체 삭제 (월 항목은 유지)"
               >
                 <DatabaseZap size={13} /> {isClearing ? '삭제 중...' : 'DB 초기화'}
+              </button>
+            )}
+            {isAdmin && records.length > 0 && (
+              <button
+                onClick={handleSetAllSmsY}
+                disabled={isSettingSmsY}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-bold bg-green-950/40 hover:bg-green-900/50 text-green-400 border border-green-500/30 transition-colors disabled:opacity-40"
+                title="전체 레코드의 문자수신을 Y로 일괄 설정"
+              >
+                <CheckCircle size={13} /> {isSettingSmsY ? '설정 중...' : '문자수신 Y 설정'}
               </button>
             )}
             {records.length > 0 && (
@@ -1226,16 +1398,16 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
                             {/* 통계 */}
                             <div className="grid grid-cols-3 gap-2">
                               <div className="bg-black/40 rounded-xl p-2 text-center">
-                                <p className="text-[15px] font-black text-white">{(m.totalCount||0).toLocaleString()}</p>
-                                <p className="text-[9px] text-gray-600 mt-0.5 font-bold">전체</p>
+                                <p className="text-[15px] font-black text-white">{(m.totalQty||m.totalCount||0).toLocaleString()}</p>
+                                <p className="text-[9px] text-gray-600 mt-0.5 font-bold">전체(포)</p>
                               </div>
                               <div className="bg-black/40 rounded-xl p-2 text-center">
-                                <p className="text-[15px] font-black text-amber-400">{(m.수급자Count||0).toLocaleString()}</p>
-                                <p className="text-[9px] text-gray-600 mt-0.5 font-bold">수급자</p>
+                                <p className="text-[15px] font-black text-amber-400">{(m.수급자Qty||m.수급자Count||0).toLocaleString()}</p>
+                                <p className="text-[9px] text-gray-600 mt-0.5 font-bold">수급자(포)</p>
                               </div>
                               <div className="bg-black/40 rounded-xl p-2 text-center">
-                                <p className="text-[15px] font-black text-blue-400">{(m.차상위Count||0).toLocaleString()}</p>
-                                <p className="text-[9px] text-gray-600 mt-0.5 font-bold">차상위</p>
+                                <p className="text-[15px] font-black text-blue-400">{(m.차상위Qty||m.차상위Count||0).toLocaleString()}</p>
+                                <p className="text-[9px] text-gray-600 mt-0.5 font-bold">차상위(포)</p>
                               </div>
                             </div>
                             {/* 로딩 오버레이 */}
@@ -1286,6 +1458,12 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
                           <span className="text-red-400">오류 <span className="font-bold">{qtyStats.errorCount}</span>건</span>
                         )}
                       </>
+                    )}
+                    {loadingMoreRecords && (
+                      <span className="flex items-center gap-1 text-blue-500 text-[10px] font-bold animate-pulse">
+                        <span className="w-2.5 h-2.5 rounded-full border-2 border-blue-400 border-t-transparent animate-spin inline-block" />
+                        {records.length.toLocaleString()}건 로드됨 · 추가 로딩 중...
+                      </span>
                     )}
                     {isAdmin && (
                       <span className="text-gray-600">업로드: {fmtTs(selectedMonth.uploadedAt)} · {selectedMonth.uploadedBy}</span>
