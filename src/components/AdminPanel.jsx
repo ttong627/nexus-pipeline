@@ -2,7 +2,7 @@
 import { createPortal } from 'react-dom';
 import { getDocs, getDoc, updateDoc, setDoc, deleteDoc, doc, collection, db, serverTimestamp, Timestamp, addDoc, query, where, orderBy, limit, writeBatch, onSnapshot, arrayUnion, arrayRemove } from '../config/firebase.js';
 const ttl90 = () => Timestamp.fromMillis(Date.now() + 90 * 24 * 60 * 60 * 1000);
-import { X, Users, BarChart2, Clock, ShieldOff, ShieldCheck, AlertTriangle, Crown, MessageSquare, CheckCircle2, MapPin, XCircle, Building2, ShieldAlert, Plus, ChevronDown, TrendingUp, AlertCircle, UserX, Activity, Zap, Trash2 } from 'lucide-react';
+import { X, Users, BarChart2, Clock, ShieldOff, ShieldCheck, AlertTriangle, Crown, MessageSquare, CheckCircle2, MapPin, XCircle, Building2, ShieldAlert, Plus, ChevronDown, TrendingUp, AlertCircle, UserX, Activity, Zap, Trash2, Truck, Edit2, RefreshCw, UserCheck, ChevronRight } from 'lucide-react';
 import { REGIONS, getSigunguOptions } from '../utils/regions.js';
 
 function OrgSelect({ value, options, onChange, onBulkAssign }) {
@@ -223,6 +223,13 @@ export default function AdminPanel({ onClose, user }) {
   const [tierTarget, setTierTarget] = useState(null);
   const [roleTarget, setRoleTarget] = useState(null);
   const [editingCity, setEditingCity] = useState({});
+
+  // 사용자 기사 관리 모달
+  const [driverManageTarget, setDriverManageTarget] = useState(null); // 선택된 user 객체
+  const [driverManageList, setDriverManageList] = useState([]);
+  const [driverManageLoading, setDriverManageLoading] = useState(false);
+  const [driverManageForm, setDriverManageForm] = useState(null); // null|{id,name,capacity,color,status,memo}
+  const [driverManageSaving, setDriverManageSaving] = useState(false);
 
   // AI Advisor States
   const [aiLogs, setAiLogs] = useState([]);
@@ -773,6 +780,81 @@ export default function AdminPanel({ onClose, user }) {
     } finally { setProcessing(false); }
   };
 
+  // ── 사용자 기사 관리 ──────────────────────────────────────────────────────
+  const getTargetDriversCol = (u) => {
+    if (!u) return null;
+    if (u.orgId) return collection(db, 'org_drivers', u.orgId, 'drivers');
+    if (u.companyCode) return collection(db, 'user_companies', u.companyCode, 'drivers');
+    return collection(db, 'user_drivers', u.id, 'drivers');
+  };
+  const getTargetDriverPath = (u) => {
+    if (!u) return '';
+    if (u.orgId) return `소속사: ${u.orgId}`;
+    if (u.companyCode) return `회사: ${u.companyCode}`;
+    return '개인';
+  };
+
+  const openDriverManage = async (u) => {
+    setDriverManageTarget(u);
+    setDriverManageList([]);
+    setDriverManageForm(null);
+    setDriverManageLoading(true);
+    try {
+      const col = getTargetDriversCol(u);
+      if (!col) return;
+      const snap = await getDocs(col);
+      setDriverManageList(snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (a.name || '').localeCompare(b.name || '', 'ko')));
+    } catch (e) { alert('기사 목록 로드 실패: ' + e.message); }
+    finally { setDriverManageLoading(false); }
+  };
+
+  const saveTargetDriver = async () => {
+    if (!driverManageTarget || !driverManageForm) return;
+    if (!driverManageForm.name?.trim()) { alert('기사 이름을 입력하세요.'); return; }
+    setDriverManageSaving(true);
+    try {
+      const col = getTargetDriversCol(driverManageTarget);
+      const payload = {
+        name: driverManageForm.name.trim(),
+        capacity: parseInt(driverManageForm.capacity) || 100,
+        color: driverManageForm.color || '#3b82f6',
+        memo: driverManageForm.memo || '',
+        status: driverManageForm.status || 'active',
+        updatedAt: serverTimestamp(),
+      };
+      if (driverManageForm.id === 'new') {
+        payload.createdAt = serverTimestamp();
+        await addDoc(col, payload);
+      } else {
+        await setDoc(doc(db, col.path, driverManageForm.id), payload, { merge: true });
+      }
+      await openDriverManage(driverManageTarget);
+      setDriverManageForm(null);
+    } catch (e) { alert('저장 실패: ' + e.message); }
+    finally { setDriverManageSaving(false); }
+  };
+
+  const deleteTargetDriver = async (driverId) => {
+    if (!driverManageTarget || !window.confirm('이 기사를 삭제하시겠습니까?')) return;
+    try {
+      const col = getTargetDriversCol(driverManageTarget);
+      await deleteDoc(doc(db, col.path, driverId));
+      setDriverManageList(prev => prev.filter(d => d.id !== driverId));
+    } catch (e) { alert('삭제 실패: ' + e.message); }
+  };
+
+  const toggleTargetDriverStatus = async (driver) => {
+    if (!driverManageTarget) return;
+    const newStatus = driver.status === 'active' ? 'inactive' : 'active';
+    try {
+      const col = getTargetDriversCol(driverManageTarget);
+      await setDoc(doc(db, col.path, driver.id), { status: newStatus, updatedAt: serverTimestamp() }, { merge: true });
+      setDriverManageList(prev => prev.map(d => d.id === driver.id ? { ...d, status: newStatus } : d));
+    } catch (e) { alert('상태 변경 실패: ' + e.message); }
+  };
+
+  const DRIVER_COLORS_ADMIN = ['#3b82f6','#10b981','#f59e0b','#ef4444','#8b5cf6','#06b6d4','#f97316','#ec4899','#14b8a6','#a855f7','#84cc16','#f43f5e'];
+
   const handleDeleteUser = async () => {
     if (!deleteTarget) return;
     setProcessing(true);
@@ -942,6 +1024,7 @@ export default function AdminPanel({ onClose, user }) {
                       <th className="px-4 py-3 text-center">등급변경</th>
                       <th className="px-4 py-3 text-center">권한</th>
                       <th className="px-4 py-3 text-center">제재</th>
+                      <th className="px-4 py-3 text-center">기사</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-[#0f1a2e] text-gray-300">
@@ -1157,11 +1240,22 @@ export default function AdminPanel({ onClose, user }) {
                               <Trash2 size={11}/> 삭제
                             </button>
                           </td>
+
+                          {/* 기사 관리 */}
+                          <td className="px-4 py-3 text-center">
+                            <button
+                              onClick={() => openDriverManage(u)}
+                              className="px-3 py-1 bg-emerald-950/40 border border-emerald-700/50 text-emerald-400 text-[11px] font-black rounded-lg hover:bg-emerald-900/60 hover:border-emerald-500/70 transition-colors flex items-center gap-1 mx-auto"
+                              title="이 사용자의 기사 목록 관리"
+                            >
+                              <Truck size={11}/> 기사
+                            </button>
+                          </td>
                         </tr>
                       );
                     })}
                     {users.length === 0 && (
-                      <tr><td colSpan={13} className="px-6 py-10 text-center text-gray-600">등록된 사용자 없음</td></tr>
+                      <tr><td colSpan={14} className="px-6 py-10 text-center text-gray-600">등록된 사용자 없음</td></tr>
                     )}
                   </tbody>
                 </table>
@@ -1870,6 +1964,134 @@ export default function AdminPanel({ onClose, user }) {
                 <button onClick={handleBan} disabled={processing} className="flex-1 py-2.5 bg-red-950/60 border border-red-500/60 text-red-400 font-extrabold rounded-xl hover:bg-red-900/60 transition-colors text-sm disabled:opacity-50">
                   {processing ? '처리 중...' : '제재 실행'}
                 </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── 사용자 기사 관리 모달 ──────────────────────────────────────── */}
+        {driverManageTarget && (
+          <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-[200]" onClick={e => { if (e.target === e.currentTarget) { setDriverManageTarget(null); setDriverManageForm(null); } }}>
+            <div className="w-full max-w-xl bg-[#0a0a0a] border border-emerald-700/40 rounded-2xl shadow-[0_0_60px_rgba(16,185,129,0.15)] flex flex-col max-h-[85vh]">
+              {/* 헤더 */}
+              <div className="shrink-0 flex items-center justify-between px-6 py-4 border-b border-[#1a1a1a]">
+                <div className="flex items-center gap-3">
+                  <div className="w-8 h-8 rounded-xl bg-emerald-900/40 border border-emerald-600/30 flex items-center justify-center">
+                    <Truck size={14} className="text-emerald-400"/>
+                  </div>
+                  <div>
+                    <h3 className="text-white font-black text-sm flex items-center gap-2">
+                      {driverManageTarget.realName || driverManageTarget.email}
+                      <span className="text-[10px] bg-emerald-900/40 border border-emerald-700/40 text-emerald-300 px-2 py-0.5 rounded-lg font-black">
+                        {getTargetDriverPath(driverManageTarget)}
+                      </span>
+                    </h3>
+                    <p className="text-gray-500 text-[11px]">{driverManageTarget.email} · 기사 {driverManageList.filter(d => d.status !== 'inactive').length}명 활성</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setDriverManageForm({ id: 'new', name: '', capacity: 100, color: '#3b82f6', memo: '', status: 'active' })}
+                    className="flex items-center gap-1 px-3 py-1.5 bg-emerald-900/40 border border-emerald-600/40 text-emerald-300 text-[11px] font-black rounded-lg hover:bg-emerald-800/50 transition-colors"
+                  ><Plus size={11}/> 기사 추가</button>
+                  <button onClick={() => { setDriverManageTarget(null); setDriverManageForm(null); }} className="w-7 h-7 flex items-center justify-center text-gray-500 hover:text-white rounded-lg hover:bg-white/10 transition-colors">
+                    <X size={14}/>
+                  </button>
+                </div>
+              </div>
+
+              {/* 기사 추가/수정 폼 */}
+              {driverManageForm && (
+                <div className="shrink-0 px-6 py-4 border-b border-[#1a1a1a] bg-emerald-950/20">
+                  <div className="flex items-center gap-2 mb-3">
+                    <Edit2 size={12} className="text-emerald-400"/>
+                    <span className="text-emerald-300 text-[11px] font-black">{driverManageForm.id === 'new' ? '새 기사 추가' : '기사 정보 수정'}</span>
+                  </div>
+                  <div className="flex gap-2 flex-wrap">
+                    <input
+                      placeholder="기사 이름 *"
+                      value={driverManageForm.name}
+                      onChange={e => setDriverManageForm(prev => ({ ...prev, name: e.target.value }))}
+                      className="flex-1 min-w-[120px] bg-black/60 border border-[#333] focus:border-emerald-500/60 text-white px-3 py-1.5 rounded-lg text-xs outline-none"
+                    />
+                    <input
+                      type="number" min={1} max={200} placeholder="업무능력%"
+                      value={driverManageForm.capacity}
+                      onChange={e => setDriverManageForm(prev => ({ ...prev, capacity: e.target.value }))}
+                      className="w-24 bg-black/60 border border-[#333] focus:border-emerald-500/60 text-white px-3 py-1.5 rounded-lg text-xs outline-none"
+                    />
+                    <input
+                      placeholder="메모"
+                      value={driverManageForm.memo}
+                      onChange={e => setDriverManageForm(prev => ({ ...prev, memo: e.target.value }))}
+                      className="flex-1 min-w-[100px] bg-black/60 border border-[#333] focus:border-emerald-500/60 text-white px-3 py-1.5 rounded-lg text-xs outline-none"
+                    />
+                    <div className="flex gap-1 items-center flex-wrap">
+                      {DRIVER_COLORS_ADMIN.map(c => (
+                        <button key={c} onClick={() => setDriverManageForm(prev => ({ ...prev, color: c }))}
+                          className={`w-5 h-5 rounded-full border-2 transition-transform ${driverManageForm.color === c ? 'border-white scale-125' : 'border-transparent hover:scale-110'}`}
+                          style={{ background: c }}/>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="flex gap-2 mt-2 justify-end">
+                    <button onClick={() => setDriverManageForm(null)} className="px-4 py-1.5 bg-black/40 border border-[#333] text-gray-400 text-xs font-black rounded-lg hover:bg-[#1a1a1a] transition-colors">취소</button>
+                    <button onClick={saveTargetDriver} disabled={driverManageSaving || !driverManageForm.name?.trim()}
+                      className="px-4 py-1.5 bg-emerald-700/60 border border-emerald-600/50 text-emerald-200 text-xs font-black rounded-lg hover:bg-emerald-600/70 disabled:opacity-40 flex items-center gap-1 transition-colors">
+                      {driverManageSaving ? <><RefreshCw size={10} className="animate-spin"/>저장 중...</> : '저장'}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* 기사 목록 */}
+              <div className="flex-1 overflow-y-auto px-6 py-4 space-y-2">
+                {driverManageLoading ? (
+                  <div className="flex items-center justify-center h-20 text-gray-500 text-sm gap-2"><RefreshCw size={14} className="animate-spin"/> 불러오는 중...</div>
+                ) : driverManageList.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center h-24 text-gray-600">
+                    <Truck size={28} className="mb-2 opacity-30"/>
+                    <p className="text-sm">등록된 기사 없음</p>
+                    <p className="text-[11px] mt-1">위 [기사 추가] 버튼으로 등록하세요</p>
+                  </div>
+                ) : (
+                  driverManageList.map(driver => {
+                    const isInactive = driver.status === 'inactive';
+                    return (
+                      <div key={driver.id} className={`flex items-center gap-3 p-3 rounded-xl border transition-colors ${isInactive ? 'opacity-50 border-[#1a1a1a] bg-black/20' : 'border-[#1e1e1e] bg-[#0d0d0d] hover:border-[#2a2a2a]'}`}>
+                        <div className="w-8 h-8 rounded-xl flex items-center justify-center font-black text-white text-sm shrink-0" style={{ background: driver.color || '#3b82f6' }}>
+                          {(driver.name || '?')[0]}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="text-white font-black text-sm">{driver.name}</span>
+                            <span className="text-[10px] font-bold" style={{ color: driver.color || '#3b82f6' }}>업무능력 {driver.capacity || 100}%</span>
+                            {isInactive && <span className="text-[10px] text-gray-600 font-bold">비활성</span>}
+                          </div>
+                          {driver.memo && <p className="text-gray-500 text-[11px] truncate">{driver.memo}</p>}
+                          {driver.assignedZones?.length > 0 && (
+                            <p className="text-[10px] text-gray-600 truncate">{driver.assignedZones.flatMap(z => z.dongs || []).slice(0, 5).join(' · ')}{driver.assignedZones.flatMap(z => z.dongs || []).length > 5 ? ' ...' : ''}</p>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <button onClick={() => setDriverManageForm({ ...driver })}
+                            className="w-7 h-7 flex items-center justify-center text-gray-500 hover:text-blue-400 hover:bg-blue-900/30 rounded-lg transition-colors" title="수정">
+                            <Edit2 size={12}/>
+                          </button>
+                          <button onClick={() => toggleTargetDriverStatus(driver)}
+                            className={`w-7 h-7 flex items-center justify-center rounded-lg transition-colors ${isInactive ? 'text-gray-600 hover:text-emerald-400 hover:bg-emerald-900/30' : 'text-emerald-500 hover:text-gray-500 hover:bg-black/40'}`}
+                            title={isInactive ? '활성화' : '비활성화'}>
+                            <UserCheck size={12}/>
+                          </button>
+                          <button onClick={() => deleteTargetDriver(driver.id)}
+                            className="w-7 h-7 flex items-center justify-center text-gray-600 hover:text-red-400 hover:bg-red-900/30 rounded-lg transition-colors" title="삭제">
+                            <Trash2 size={12}/>
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
               </div>
             </div>
           </div>
