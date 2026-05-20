@@ -366,6 +366,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
   const pendingPaintRef = useRef(new Map()); // id → newDriverId (드래그 중 누적, mouseup 시 commit)
   const recordsRef = useRef([]);             // stale-closure 방지용 최신 records 미러
   const autoSaveDataRef = useRef({ records: [], drivers: [] }); // 자동저장용 최신값 (setInterval deps 제거용)
+  const routeWorkerRef = useRef(null);       // K-means Web Worker
 
   const mapRef = useRef(null);
   const kakaoMapRef = useRef(null);
@@ -484,6 +485,13 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
     setAptMultiModal(null);
     showToast('success', `${aptMultiModal.aptName} — ${aptMultiModal.dongs.length}개 동 배정 완료`);
   }, [aptMultiModal, showToast]);
+
+  // ── Route Worker 초기화 / 정리 ──────────────────────────────────────────
+  useEffect(() => {
+    const worker = new Worker(new URL('../workers/routeWorker.js', import.meta.url), { type: 'module' });
+    routeWorkerRef.current = worker;
+    return () => { worker.terminate(); routeWorkerRef.current = null; };
+  }, []);
 
   // ── 클라우드 명단에서 자동 로드 (CloudListManager에서 열린 경우) ──────
   useEffect(() => {
@@ -790,163 +798,48 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
   // ── K-means 지리적 클러스터 자동 배정 ─────────────────────────────────
   const handleAutoSplit = useCallback(() => {
     if (isAssignmentLocked) { showToast('error', '🔒 기사 배치가 잠겨 있습니다. 잠금을 해제하세요.'); return; }
+    const activeDrivers = drivers.slice(0, Math.min(driverCount, drivers.length)).filter(d => !d.isExternal);
+    const target = filteredRecords.filter(r => r._lat && r._lng);
+    if (!target.length || !activeDrivers.length) return;
     setIsSplitting(true);
-    setTimeout(() => {
-      try {
-      const target = filteredRecords.filter(r => r._lat && r._lng);
-      // isExternal 기사는 자동배정 대상 제외 (수동 배정 전용)
-      const activeDrivers = drivers.slice(0, Math.min(driverCount, drivers.length)).filter(d => !d.isExternal);
-      if (!target.length || !activeDrivers.length) { setIsSplitting(false); return; }
 
-      const withLoad = target.map(r => ({ ...r, _effectiveLoad: getEffectiveLoad(r) }));
-      // 기사 핀이 전부 있으면 핀 위치를 초기 중심으로 사용
-      const pinCentroids = activeDrivers.map(d => driverPins[d.id] || null);
-      const clusterMap = kMeansCluster(withLoad, activeDrivers, 30, pinCentroids.every(c => c) ? pinCentroids : null);
-      // ── 좌표 없는 레코드 → 같은 행정동 메인기사 자동 배정 (R-4 보완)
-      const noCoordRecs = filteredRecords.filter(r => !r._lat || !r._lng);
-      if (noCoordRecs.length > 0) {
-        const dongDriverCount = {};
-        target.forEach(r => {
-          const did = clusterMap[r.id];
-          if (!did || !r.행정동) return;
-          if (!dongDriverCount[r.행정동]) dongDriverCount[r.행정동] = {};
-          dongDriverCount[r.행정동][did] = (dongDriverCount[r.행정동][did] || 0) + 1;
-        });
-        noCoordRecs.forEach(r => {
-          const dongMap = dongDriverCount[r.행정동];
-          if (!dongMap) return;
-          const best = Object.entries(dongMap).sort((a, b) => b[1] - a[1])[0]?.[0];
-          if (best) clusterMap[r.id] = best;
-        });
-      }
+    const worker = routeWorkerRef.current;
+    if (!worker) {
+      showToast('error', 'Worker 초기화 실패. 잠시 후 다시 시도하세요.');
+      setIsSplitting(false);
+      return;
+    }
 
-      const allWithLoad = filteredRecords.map(r => ({ ...r, _effectiveLoad: getEffectiveLoad(r) }));
+    const noCoordRecs = filteredRecords.filter(r => !r._lat || !r._lng);
+    const allWithLoad = filteredRecords.map(r => ({ ...r, _effectiveLoad: undefined }));
 
-      // ── 이웃 그래프 1회 계산 → 스무딩 2회 모두 재사용 (성능 최적화)
-      const snapRecs = allWithLoad.filter(r => r._lat && r._lng);
-      const K_SMOOTH = Math.min(11, snapRecs.length - 1);
-      const neighborIds = {};
-      if (snapRecs.length > 1) {
-        const cosLat = Math.cos(snapRecs[0]._lat * Math.PI / 180);
-        const sqDist = (r, o) => {
-          const dlat = r._lat - o._lat, dlng = (r._lng - o._lng) * cosLat;
-          return dlat * dlat + dlng * dlng;
-        };
-        snapRecs.forEach(r => {
-          neighborIds[r.id] = snapRecs
-            .filter(o => o.id !== r.id)
-            .map(o => [o.id, sqDist(r, o)])
-            .sort((a, b) => a[1] - b[1])
-            .slice(0, K_SMOOTH)
-            .map(([id]) => id);
-        });
-      }
-
-      // ── 공간 다수결 스무딩 헬퍼 (재사용)
-      // threshold: 이웃 중 몇 표 이상이어야 변경 (단순 과반 → threshold=K/2+1)
-      const runSmoothing = (rounds, threshold) => {
-        const active = snapRecs.filter(r => clusterMap[r.id]);
-        for (let round = 0; round < rounds; round++) {
-          const patches = {};
-          active.forEach(r => {
-            if (!clusterMap[r.id]) return;
-            const cur = clusterMap[r.id];
-            const votes = {};
-            (neighborIds[r.id] || []).forEach(nId => {
-              const d = clusterMap[nId]; if (d) votes[d] = (votes[d] || 0) + 1;
-            });
-            const best = Object.entries(votes).sort((a, b) => b[1] - a[1])[0];
-            if (best && best[0] !== cur && best[1] >= threshold) patches[r.id] = best[0];
-          });
-          if (!Object.keys(patches).length) break;
-          Object.entries(patches).forEach(([id, dId]) => { clusterMap[id] = dId; });
-        }
-      };
-
-      // ── 스무딩 1차: K-means 결과 정리 (threshold=K×0.5 → 과반)
-      runSmoothing(20, Math.ceil(K_SMOOTH * 0.5));
-
-      // ── 후처리 R-I: 아파트 단지 동일 기사 통일
-      const aptGroups = {};
-      filteredRecords.forEach(r => {
-        if (!r._isApt) return;
-        const aptName = extractAptName(r.주소 || '') || '기타아파트';
-        if (!aptGroups[aptName]) aptGroups[aptName] = [];
-        aptGroups[aptName].push(r.id);
-      });
-      Object.values(aptGroups).forEach(ids => {
-        if (ids.length <= 1) return;
-        const votes = {};
-        ids.forEach(id => { const d = clusterMap[id]; if (d) votes[d] = (votes[d] || 0) + 1; });
-        const winner = Object.entries(votes).sort((a, b) => b[1] - a[1])[0]?.[0];
-        if (!winner) return;
-        ids.forEach(id => { clusterMap[id] = winner; });
-      });
-
-      // ── 후처리 R-E: 동일 주소 동일 기사 통일
-      const addrGroups = {};
-      filteredRecords.forEach(r => {
-        const addr = (r.주소 || '').trim();
-        if (!addr) return;
-        if (!addrGroups[addr]) addrGroups[addr] = [];
-        addrGroups[addr].push(r.id);
-      });
-      Object.values(addrGroups).forEach(ids => {
-        if (ids.length <= 1) return;
-        const votes = {};
-        ids.forEach(id => { const d = clusterMap[id]; if (d) votes[d] = (votes[d] || 0) + 1; });
-        const winner = Object.entries(votes).sort((a, b) => b[1] - a[1])[0]?.[0];
-        if (!winner) return;
-        ids.forEach(id => { clusterMap[id] = winner; });
-      });
-
-      // ── 스무딩 2차: R-I/R-E 텔레포트 정리 (threshold=K×0.6 → 60% 강한 기준)
-      // R-I/R-E가 구역 경계 너머로 핀을 보낸 경우 이웃 60% 이상이 다른 색이면 되돌림
-      runSmoothing(15, Math.ceil(K_SMOOTH * 0.6));
-
-      // ── 유효부담 최소 기사 / 최근접 기사 헬퍼 (R-A용)
-      const getLoads = () => {
-        const loads = {};
-        activeDrivers.forEach(d => { loads[d.id] = 0; });
-        allWithLoad.forEach(r => { if (clusterMap[r.id]) loads[clusterMap[r.id]] = (loads[clusterMap[r.id]] || 0) + r._effectiveLoad; });
-        return loads;
-      };
-      const nearestDriverId = (lat, lng) => {
-        const centroids = activeDrivers.map(d => {
-          const dRecs = allWithLoad.filter(r => clusterMap[r.id] === d.id && r._lat && r._lng);
-          if (!dRecs.length) return null;
-          return { lat: dRecs.reduce((s, r) => s + r._lat, 0) / dRecs.length, lng: dRecs.reduce((s, r) => s + r._lng, 0) / dRecs.length };
-        });
-        let minD = Infinity, minId = null;
-        activeDrivers.forEach((d, i) => {
-          const c = centroids[i]; if (!c) return;
-          const dist = haversine(lat, lng, c.lat, c.lng);
-          if (dist < minD) { minD = dist; minId = d.id; }
-        });
-        return minId;
-      };
-
-      // ── 후처리 R-A: 전건 배정 보장 (미배정 → 최근접 기준 중심 기사 강제)
-      const loads = getLoads();
-      filteredRecords.filter(r => !clusterMap[r.id]).forEach(r => {
-        const driverId = (r._lat && r._lng) ? nearestDriverId(r._lat, r._lng)
-          : activeDrivers.slice().sort((a, b) => (loads[a.id] || 0) - (loads[b.id] || 0))[0]?.id;
-        if (driverId) { clusterMap[r.id] = driverId; loads[driverId] = (loads[driverId] || 0) + (r._effectiveLoad || 1); }
-      });
-
-      setRecords(prev => prev.map(r => clusterMap[r.id] ? { ...r, _driverId: clusterMap[r.id] } : r));
-
-      // 배분 완료 후 겹침 예상 안내 (setRecords 비동기 → 다음 프레임에서 overlayEffect가 setOverlapCount 갱신)
-      setTimeout(() => {
-        showToast('success', `자동 배정 완료 — 겹침이 남아있으면 상단 노란색 버튼을 클릭하세요.`, 4000);
-      }, 500);
-      } catch (e) {
-        console.error('자동 배정 오류:', e);
+    const onMessage = (e) => {
+      worker.removeEventListener('message', onMessage);
+      if (e.data.type === 'autoSplitError') {
+        console.error('자동 배정 오류:', e.data.message);
         showToast('error', '자동 배정 중 오류가 발생했습니다.');
-      } finally {
+        setIsSplitting(false);
+        return;
+      }
+      if (e.data.type === 'autoSplitResult') {
+        const { clusterMap } = e.data;
+        setRecords(prev => prev.map(r => clusterMap[r.id] ? { ...r, _driverId: clusterMap[r.id] } : r));
+        setTimeout(() => {
+          showToast('success', '자동 배정 완료 — 겹침이 남아있으면 상단 노란색 버튼을 클릭하세요.', 4000);
+        }, 500);
         setIsSplitting(false);
       }
-    }, 0);
+    };
+    worker.addEventListener('message', onMessage);
+    worker.postMessage({
+      type: 'autoSplit',
+      target,
+      noCoordRecs,
+      allWithLoad,
+      filteredRecords,
+      activeDrivers,
+      driverPins,
+    });
   }, [filteredRecords, drivers, driverCount, driverPins, showToast, isAssignmentLocked]);
 
   // ── 핀 DOM 색상 직접 업데이트 (React re-render 없이 즉시 시각 반영)

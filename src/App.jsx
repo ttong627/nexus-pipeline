@@ -1,9 +1,10 @@
-﻿import { useState, useEffect, useMemo, useRef } from "react";
-import { auth, onAuthStateChanged, signOut, setDoc, getDoc, updateDoc, doc, db, serverTimestamp, addDoc, collection, getDocs, getDocsFromServer, writeBatch, query, where, onSnapshot, GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult } from "./config/firebase.js";
+﻿import { useState, useEffect, useMemo, useRef, lazy, Suspense } from "react";
+import { auth, onAuthStateChanged, signOut, setDoc, getDoc, updateDoc, doc, db, serverTimestamp, Timestamp, addDoc, collection, getDocs, getDocsFromServer, writeBatch, query, where, onSnapshot, GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult } from "./config/firebase.js";
+const ttl90 = () => Timestamp.fromMillis(Date.now() + 90 * 24 * 60 * 60 * 1000);
 import { APP_VERSION } from "./version.js";
 
+// ── 즉시 로드 (초기 화면에 필요)
 import Dashboard from "./components/Dashboard.jsx";
-import AdminPanel from "./components/AdminPanel.jsx";
 import ProfileSetupModal from "./components/ProfileSetupModal.jsx";
 import AuthScreen from "./components/AuthScreen.jsx";
 import Step1_Upload from "./components/Step1_Upload.jsx";
@@ -11,29 +12,33 @@ import Step2_SheetSelect from "./components/Step2_SheetSelect.jsx";
 import Step3_Mapping from "./components/Step3_Mapping.jsx";
 import LoadingScreen from "./components/LoadingScreen.jsx";
 import ResultGrid from "./components/ResultGrid.jsx";
-import HelpModal from "./components/HelpModal.jsx";
-import UpgradeModal from "./components/UpgradeModal.jsx";
-import UtilsModal from "./components/UtilsModal.jsx";
-import CloudBaseModal from "./components/CloudBaseModal.jsx";
-import DbImportModal from "./components/DbImportModal.jsx";
 import ErrorBoundary from "./components/ErrorBoundary.jsx";
 import GlobalLoadingBar from "./components/GlobalLoadingBar.jsx";
-import BaseListManager from "./components/BaseListManager.jsx";
-import CloudListManager from "./components/CloudListManager.jsx";
-import ErrorListManager from "./components/ErrorListManager.jsx";
-import DbOverview from "./components/DbOverview.jsx";
 import IntroScreen from "./components/IntroScreen.jsx";
-import PrevMonthCompareModal from "./components/PrevMonthCompareModal.jsx";
+import ShareRouteView from "./components/ShareRouteView.jsx";
+
+// ── 지연 로드 (버튼 클릭 시 처음 필요 — 초기 번들에서 제외)
+const AdminPanel            = lazy(() => import("./components/AdminPanel.jsx"));
+const HelpModal             = lazy(() => import("./components/HelpModal.jsx"));
+const UpgradeModal          = lazy(() => import("./components/UpgradeModal.jsx"));
+const UtilsModal            = lazy(() => import("./components/UtilsModal.jsx"));
+const CloudBaseModal        = lazy(() => import("./components/CloudBaseModal.jsx"));
+const DbImportModal         = lazy(() => import("./components/DbImportModal.jsx"));
+const BaseListManager       = lazy(() => import("./components/BaseListManager.jsx"));
+const CloudListManager      = lazy(() => import("./components/CloudListManager.jsx"));
+const ErrorListManager      = lazy(() => import("./components/ErrorListManager.jsx"));
+const DbOverview            = lazy(() => import("./components/DbOverview.jsx"));
+const PrevMonthCompareModal = lazy(() => import("./components/PrevMonthCompareModal.jsx"));
+const RouteMapModal         = lazy(() => import("./components/RouteMapModal.jsx"));
+const RouteSetupModal       = lazy(() => import("./components/RouteSetupModal.jsx"));
+const RouteQuickModal       = lazy(() => import("./components/RouteQuickModal.jsx"));
+const DriverRegistryModal   = lazy(() => import("./components/DriverRegistryModal.jsx"));
+const ScheduleTab           = lazy(() => import("./components/ScheduleTab.jsx"));
 
 import { processAddress, asyncPool, addTypoRecord, loadTypoDict } from "./engine/addressEngine.js";
 import { parsePhoneNumbers, parseSMS, parseBirthDate, normalizeBirth, extractPhoneNote, formatPhone } from "./utils/parsers.js";
 import { canUseRouteMap, canUseDbOverview, canUseDriverRegistry, getMonthlyLimit } from "./utils/tierUtils.js";
-import { LogOut, ShieldCheck, CheckCircle, Database, Crown, Layers, UserCircle, Undo2, Menu, BarChart3, MapPin, Truck } from "lucide-react";
-import RouteMapModal from "./components/RouteMapModal.jsx";
-import RouteSetupModal from "./components/RouteSetupModal.jsx";
-import RouteQuickModal from "./components/RouteQuickModal.jsx";
-import ShareRouteView from "./components/ShareRouteView.jsx";
-import DriverRegistryModal from "./components/DriverRegistryModal.jsx";
+import { LogOut, ShieldCheck, CheckCircle, Database, Crown, Layers, UserCircle, Undo2, Menu, BarChart3, MapPin, Truck, CalendarDays } from "lucide-react";
 
 export default function App() {
   const [user, setUser] = useState(null);
@@ -86,6 +91,7 @@ export default function App() {
   const [introReason, setIntroReason] = useState('new'); // 'new' | 'region' | 'upgrade'
   const [introMeta, setIntroMeta] = useState({}); // { region, tier } 등 이유별 추가 정보
   const inqUnsubRef = useRef(null);
+  const userUnsubRef = useRef(null); // user 문서 실시간 구독 해제용
 
   const DEFAULT_EXPORT_COLS = [
     { key: 'NO',      label: 'NO',      on: true },
@@ -213,7 +219,30 @@ export default function App() {
           userData.tier = 'basic';
         }
 
+        // 3. 일반 사용자 회사코드 자동 생성 (없는 경우에만)
+        if (!isAdminEmail && !userData.companyCode) {
+          const ts = Date.now().toString(36).toUpperCase().slice(-5);
+          const rand = Math.random().toString(36).substr(2, 5).toUpperCase();
+          const code = `NX-${ts}${rand}`;
+          await setDoc(doc(db, 'users', u.uid), { companyCode: code }, { merge: true });
+          await setDoc(doc(db, 'user_companies', code), {
+            ownerUid: u.uid, email: u.email,
+            name: userData.realName || u.displayName || '',
+            cities: userData.citiesApproved || [],
+            createdAt: serverTimestamp(),
+          }, { merge: true });
+          userData.companyCode = code;
+        }
+
         setUser({ ...u, ...userData });
+
+        // 사용자 문서 실시간 구독 — totalRowsProcessed 등 통계 즉시 반영
+        if (userUnsubRef.current) userUnsubRef.current();
+        userUnsubRef.current = onSnapshot(doc(db, 'users', u.uid), snap => {
+          if (snap.exists()) {
+            setUser(prev => prev ? { ...prev, ...snap.data() } : null);
+          }
+        });
 
         // 티어 승급 감지 (관리자 제외)
         if (!isAdminEmail && userData.profileCompleted) {
@@ -246,13 +275,14 @@ export default function App() {
         setShowAuth(false);
         setAuthStatus('authenticated');
       } else {
+        if (userUnsubRef.current) { userUnsubRef.current(); userUnsubRef.current = null; }
         setUser(null);
         setShowAuth(true);
         setAuthStatus('unauthenticated');
         setAuthLoading(false);
       }
     });
-    return () => { unsub(); if (inqUnsubRef.current) inqUnsubRef.current(); };
+    return () => { unsub(); if (inqUnsubRef.current) inqUnsubRef.current(); if (userUnsubRef.current) userUnsubRef.current(); };
   }, []);
 
   const handleGoogleLogin = async () => {
@@ -399,6 +429,7 @@ export default function App() {
                     detectedAt: serverTimestamp(),
                     fileName: String(file.name).slice(0, 200),
                     sheetName: String(sheet.name).slice(0, 100),
+                    expireAt: ttl90(),
                   });
                 } catch (e) {
                   console.error("AI Log upload failed:", e);
@@ -464,6 +495,7 @@ export default function App() {
                     columnName: String(col).slice(0, 100).replace(/[<>&"'`]/g, ''),
                     status: "pending", detectedAt: serverTimestamp(),
                     fileName: String(file.name).slice(0, 200), sheetName: String(sheet.name).slice(0, 100),
+                    expireAt: ttl90(),
                   });
                 } catch (e) { console.error("AI Log upload failed:", e); }
               });
@@ -490,6 +522,7 @@ export default function App() {
         loggedAt: serverTimestamp(),
         userEmail: user?.email || 'unknown',
         city: fileInfo?.city || '',
+        expireAt: ttl90(),
       });
     } catch (e) {
       console.error('user_mapping log failed:', e);
@@ -773,7 +806,8 @@ export default function App() {
         targetName: row.이름,
         updates,
         timestamp: serverTimestamp(),
-        adminEmail: user?.email || "unknown"
+        adminEmail: user?.email || "unknown",
+        expireAt: ttl90(),
       });
       alert("기본명단 및 감사 로그가 성공적으로 업데이트 되었습니다.");
     } catch (e) {
@@ -895,6 +929,7 @@ export default function App() {
         count: allData.length, validCount: validData.length, errorCount: errorData.length,
         timestamp: serverTimestamp(),
         adminEmail: user?.email || 'unknown',
+        expireAt: ttl90(),
       });
 
       // delivery_history 동시 저장 (전월 비교·기사/순번/좌표 복원 기반 데이터)
@@ -1193,6 +1228,7 @@ export default function App() {
         successCount, errorCount: errors.length,
         timestamp: serverTimestamp(),
         adminEmail: user?.email || 'unknown',
+        expireAt: ttl90(),
       });
 
       if (errors.length > 0) {
@@ -1440,8 +1476,12 @@ export default function App() {
 
   if (showAuth) return <AuthScreen authStatus={authStatus} authLoading={authLoading} handleGoogleLogin={handleGoogleLogin} />;
 
+  // Lazy 컴포넌트용 fallback — 투명하게 처리 (로딩 스피너 없음)
+  const LazyFallback = null;
+
   return (
     <ErrorBoundary>
+    <Suspense fallback={LazyFallback}>
       <div className="w-full h-screen bg-[#050505] text-white flex flex-col font-sans overflow-hidden">
 
         {showIntro && <IntroScreen user={user} reason={introReason} meta={introMeta} onComplete={() => setShowIntro(false)} />}
@@ -1493,6 +1533,13 @@ export default function App() {
                   <div className="absolute right-0 top-full mt-2 w-52 bg-[#060c18] border border-[#3b82f6]/20 rounded-xl shadow-[0_8px_32px_rgba(0,0,0,0.6)] z-50 overflow-hidden">
                     <div className="p-1.5 space-y-0.5">
                       <button
+                        onClick={() => { setStep(11); setShowHeaderMenu(false); }}
+                        className="w-full px-4 py-2.5 flex items-center gap-3 text-sky-300 hover:bg-sky-900/30 rounded-lg text-xs font-bold transition-colors text-left"
+                      >
+                        <CalendarDays size={15} /> 배송일정
+                      </button>
+                      <div className="my-0.5 border-t border-[#1a1a1a]" />
+                      <button
                         onClick={() => {
                           if (!canUseDbOverview(user?.tier)) {
                             setUpgradeReason('dbOverview'); setShowUpgrade(true); setShowHeaderMenu(false);
@@ -1506,17 +1553,10 @@ export default function App() {
                         {!canUseDbOverview(user?.tier) && <span className="ml-auto text-[9px] bg-purple-900/40 text-purple-400 border border-purple-700/40 px-1.5 py-0.5 rounded font-black">VVIP+</span>}
                       </button>
                       <button
-                        onClick={() => {
-                          if (!canUseDriverRegistry(user?.tier)) {
-                            setUpgradeReason('city_limit'); setShowUpgrade(true); setShowHeaderMenu(false);
-                          } else {
-                            setShowDriverRegistry(true); setShowHeaderMenu(false);
-                          }
-                        }}
+                        onClick={() => { setShowDriverRegistry(true); setShowHeaderMenu(false); }}
                         className="w-full px-4 py-2.5 flex items-center gap-3 text-emerald-300 hover:bg-emerald-900/30 rounded-lg text-xs font-bold transition-colors text-left"
                       >
-                        <Truck size={15} /> 소속사 기사 관리
-                        {!canUseDriverRegistry(user?.tier) && <span className="ml-auto text-[9px] bg-purple-900/40 text-purple-400 border border-purple-700/40 px-1.5 py-0.5 rounded font-black">VVIP+</span>}
+                        <Truck size={15} /> {user?.orgId || canUseDriverRegistry(user?.tier) ? '소속사 기사 관리' : '기사설정'}
                       </button>
                       <div className="my-0.5 border-t border-[#1a1a1a]" />
                       <button
@@ -1694,6 +1734,7 @@ export default function App() {
           {step === 4 && <LoadingScreen progress={engineProgress} logs={progressLogs} />}
           {step === 5 && <ResultGrid step={step} setStep={setStep} fileInfo={fileInfo} filter={filter} setFilter={setFilter} dongList={gridDongList} driverList={gridDriverList} gridData={gridData} filteredData={filteredData} paginatedData={paginatedData} currentPage={currentPage} setCurrentPage={setCurrentPage} itemsPerPage={itemsPerPage} colVis={colVis} sortConfig={sortConfig} setSortConfig={setSortConfig} handleCellEdit={handleCellEdit} handleAddressKeyDown={handleAddressKeyDown} handleUpdateBaseList={handleUpdateBaseList} handleBatchSaveBaseList={handleBatchSaveBaseList} isSavingBaseList={isSavingBaseList} handleSaveMonthlyList={handleSaveMonthlyList} setShowExportSetting={setShowExportSetting} handleExport={handleExport} handleExportErrors={handleExportErrors} handleExportDongSummary={handleExportDongSummary} handleExportByDriver={handleExportByDriver} handleDeleteRows={handleDeleteRows} handleBatchSetNote={handleBatchSetNote} onHelp={onHelp} purifyResult={purifyResult} onClosePurifyResult={() => setPurifyResult(null)} onMovePhones={handleMovePhones} onRepurifyErrors={handleRepurifyErrors} onOpenRouteMap={() => { if (!canUseRouteMap(user?.tier)) { setUpgradeReason('routeMap'); setShowUpgrade(true); } else { setCloudRouteConfig(null); setShowRouteSetup(true); } }} onFetchBaseNotes={handleFetchBaseNotes} isFetchingNotes={isFetchingNotes} />}
           {step === 10 && <ErrorListManager gridData={gridData} onBack={() => setStep(gridData.length ? 5 : 0)} handleCellEdit={handleCellEdit} handleAddressKeyDown={handleAddressKeyDown} handleExportErrors={handleExportErrors} onRepurifyErrors={handleRepurifyErrors} />}
+          {step === 11 && <ScheduleTab user={user} onBack={() => setStep(0)} />}
           {step === 6 && <BaseListManager user={user} initialCity={dbNavCity} onBack={() => { setStep(0); setDbNavCity(''); }} />}
           {step === 7 && <AdminPanel user={user} onClose={() => setStep(0)} />}
           {step === 8 && <CloudListManager user={user} initialCity={dbNavCity} onBack={() => { setStep(0); setDbNavCity(''); }} onOpenRouteMap={(city, monthId, orgDongs) => { if (!canUseRouteMap(user?.tier)) { setUpgradeReason('routeMap'); setShowUpgrade(true); } else { setCloudRouteConfig({ city, monthId, orgDongs }); setShowRouteSetup(true); } }} onOpenInResultGrid={handleOpenInResultGrid} />}
@@ -1769,6 +1810,7 @@ export default function App() {
         )}
         <GlobalLoadingBar state={gLoad} />
       </div>
+    </Suspense>
     </ErrorBoundary>
   );
 }

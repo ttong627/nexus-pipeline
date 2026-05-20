@@ -1,8 +1,8 @@
-﻿import { useState, useEffect, useRef } from 'react';
+﻿import { useState, useEffect, useRef, memo } from 'react';
 import { ChevronLeft, ChevronRight, AlertTriangle, CheckCircle, Columns, Download, Trash2, Edit3, Database, X, MapPin, Users, UserX, StickyNote, User, Phone, BookOpen } from 'lucide-react';
 import { formatPhoneInput } from '../utils/parsers.js';
 
-export default function ResultGrid({
+const ResultGrid = memo(function ResultGrid({
   step, setStep, filter, setFilter, dongList = [], driverList = [], gridData, filteredData, paginatedData,
   currentPage, setCurrentPage, itemsPerPage, colVis, sortConfig, setSortConfig,
   handleCellEdit, handleAddressKeyDown, handleUpdateBaseList, handleBatchSaveBaseList, isSavingBaseList,
@@ -605,7 +605,9 @@ export default function ResultGrid({
       )}
     </>
   );
-}
+});
+
+export default ResultGrid;
 
 function UpdateBaseListModal({ row, onClose, onConfirm }) {
   const [updates, setUpdates] = useState({

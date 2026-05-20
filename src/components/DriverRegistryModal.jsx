@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { X, Plus, Edit2, UserX, UserCheck, Truck, BarChart3, RefreshCw, MapPin, ChevronDown, ChevronUp, Download, Check, Building2, CheckSquare, Square } from 'lucide-react';
+import { X, Plus, Edit2, UserX, UserCheck, Truck, BarChart3, RefreshCw, MapPin, ChevronDown, ChevronUp, Download, Check, Building2, CheckSquare, Square, Users } from 'lucide-react';
 import { db, auth } from '../config/firebase.js';
-import { getDocs, getDoc, setDoc, addDoc, collection, doc, serverTimestamp } from 'firebase/firestore';
+import { getDocs, getDoc, setDoc, addDoc, updateDoc, collection, doc, serverTimestamp, writeBatch } from 'firebase/firestore';
 import * as XLSX from 'xlsx';
 import { formatPhoneInput } from '../utils/parsers.js';
 
@@ -83,31 +83,47 @@ export default function DriverRegistryModal({ user, onClose }) {
     }).catch(() => {});
   }, [isAdmin]);
 
+  // 개인 모드 저장 경로: companyCode 있으면 user_companies/{code}/drivers, 없으면 uid 기반 fallback
+  const personalColKey = user?.companyCode || uid;
+  const personalColBase = user?.companyCode ? 'user_companies' : 'user_drivers';
+
   // ── 컬렉션 경로 헬퍼
   const getDriversCol = useCallback(() => {
-    if (isPersonalMode) return collection(db, 'user_drivers', uid, 'drivers');
+    if (isPersonalMode) return collection(db, personalColBase, personalColKey, 'drivers');
     return collection(db, 'org_drivers', selectedOrg, 'drivers');
-  }, [isPersonalMode, uid, selectedOrg]);
+  }, [isPersonalMode, personalColBase, personalColKey, selectedOrg]);
 
   const getDriverDocRef = useCallback((driverId) => {
-    if (isPersonalMode) return doc(db, 'user_drivers', uid, 'drivers', driverId);
+    if (isPersonalMode) return doc(db, personalColBase, personalColKey, 'drivers', driverId);
     return doc(db, 'org_drivers', selectedOrg, 'drivers', driverId);
-  }, [isPersonalMode, uid, selectedOrg]);
+  }, [isPersonalMode, personalColBase, personalColKey, selectedOrg]);
 
-  // ── 기사 목록 로드
+  // ── 기사 목록 로드 (개인 모드: companyCode 신경로 우선, 구경로 자동 이전)
   const loadDrivers = useCallback(async () => {
     if (!isPersonalMode && !selectedOrg) { setDrivers([]); return; }
     if (isPersonalMode && !uid) { setDrivers([]); return; }
     setIsLoading(true);
     try {
-      const snap = await getDocs(getDriversCol());
+      let snap = await getDocs(getDriversCol());
+      // 신 경로(companyCode)가 비어있고 구 경로(user_drivers/uid)에 데이터가 있으면 자동 이전
+      if (isPersonalMode && user?.companyCode && snap.empty) {
+        const oldSnap = await getDocs(collection(db, 'user_drivers', uid, 'drivers'));
+        if (!oldSnap.empty) {
+          const batch = writeBatch(db);
+          oldSnap.docs.forEach(d => {
+            batch.set(doc(db, 'user_companies', user.companyCode, 'drivers', d.id), d.data());
+          });
+          await batch.commit();
+          snap = await getDocs(getDriversCol());
+        }
+      }
       setDrivers(
         snap.docs.map(d => ({ id: d.id, ...d.data() }))
           .sort((a, b) => (a.name||'').localeCompare(b.name||'', 'ko'))
       );
     } catch (e) { console.error('기사 로드:', e); }
     finally { setIsLoading(false); }
-  }, [isPersonalMode, uid, selectedOrg, getDriversCol]);
+  }, [isPersonalMode, uid, selectedOrg, getDriversCol, user?.companyCode]);
 
   useEffect(() => { loadDrivers(); }, [loadDrivers]);
 
@@ -565,7 +581,7 @@ export default function DriverRegistryModal({ user, onClose }) {
   // 메인 모달
   // ════════════════════════════════════════════════
   return (
-    <div className="fixed inset-0 z-[900] flex flex-col bg-[#060606] relative">
+    <div className="fixed inset-0 z-[900] flex flex-col bg-[#060606]">
 
       {/* 헤더 */}
       <div className="shrink-0 flex items-center justify-between px-8 py-4 border-b border-[#1a1a1a] bg-[#0a0a0a]">
@@ -575,15 +591,24 @@ export default function DriverRegistryModal({ user, onClose }) {
           </div>
           <div>
             <h2 className="text-white font-black text-sm flex items-center gap-2">
-              {isPersonalMode ? '내 기사 관리' : '소속사 기사 관리'}
+              {isPersonalMode ? '기사설정' : '소속사 기사 관리'}
               {isPersonalMode
                 ? <span className="text-[10px] bg-green-900/40 border border-green-700/40 text-green-300 px-2 py-0.5 rounded-lg font-black">개인</span>
-                : <span className="text-[10px] bg-purple-900/40 border border-purple-700/40 text-purple-300 px-2 py-0.5 rounded-lg font-black">VVIP</span>}
+                : <span className="text-[10px] bg-purple-900/40 border border-purple-700/40 text-purple-300 px-2 py-0.5 rounded-lg font-black">소속사</span>}
             </h2>
-            <p className="text-gray-500 text-[11px]">
+            <p className="text-gray-500 text-[11px] flex items-center gap-2">
               {isPersonalMode
-                ? `내 기사 ${activeDrivers.length}명 · 소속사 없이 루트맵 사용 가능`
+                ? `기사 ${activeDrivers.length}명 · 루트맵 자동 연동`
                 : (selectedOrg ? `${selectedOrg} · 기사 ${activeDrivers.length}명` : '소속사를 선택하세요')}
+              {isPersonalMode && user?.companyCode && (
+                <span
+                  className="font-mono text-[9px] bg-[#1a1a1a] border border-[#2a2a2a] text-gray-500 px-1.5 py-0.5 rounded cursor-pointer hover:text-blue-400 hover:border-blue-700/50 transition-colors"
+                  title="회사코드 클릭 시 복사"
+                  onClick={() => { navigator.clipboard?.writeText(user.companyCode); alert(`회사코드 복사됨: ${user.companyCode}`); }}
+                >
+                  코드: {user.companyCode}
+                </span>
+              )}
             </p>
           </div>
         </div>

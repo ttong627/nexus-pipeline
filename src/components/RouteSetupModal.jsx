@@ -1,7 +1,7 @@
 ﻿import React, { useState, useEffect, useMemo } from 'react';
 import { X, MapPin, Play, ChevronRight, Truck, Building2, ChevronLeft, Plus, Trash2, Phone, Percent, Users, LayoutGrid, Navigation2, Crosshair, Loader2, CheckCircle, RefreshCw, CloudDownload } from 'lucide-react';
 import { db, writeBatch } from '../config/firebase.js';
-import { getDocs, collection, getDoc, doc, setDoc, serverTimestamp } from 'firebase/firestore';
+import { getDocs, collection, getDoc, doc, setDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
 
 const KAKAO_REST_KEY = import.meta.env.VITE_KAKAO_REST_KEY;
 
@@ -205,11 +205,16 @@ export default function RouteSetupModal({
     if (effectiveCity) {
       (async () => {
         try {
-          const orgKey = selectedOrgId === '__personal__'
-            ? `__personal__${user?.uid || ''}`
-            : (selectedOrgId || 'all');
-          const snap = await getDoc(doc(db, 'driver_assignments', effectiveCity, 'orgs', orgKey));
-          const hasUsefulDrivers = snap.exists() && snap.data().drivers?.some(d => d.name?.trim());
+          let snap;
+          if (selectedOrgId === '__personal__') {
+            const uid = user?.uid;
+            if (!uid) return;
+            snap = await getDoc(doc(db, 'user_driver_presets', uid, 'cities', effectiveCity));
+          } else {
+            const orgKey = selectedOrgId || 'all';
+            snap = await getDoc(doc(db, 'driver_assignments', effectiveCity, 'orgs', orgKey));
+          }
+          const hasUsefulDrivers = snap?.exists() && snap.data().drivers?.some(d => d.name?.trim());
           if (hasUsefulDrivers) {
             const d = snap.data();
             setDrivers(d.drivers);
@@ -245,9 +250,15 @@ export default function RouteSetupModal({
         setDongDriverMap({});
         // 저장된 기사매칭 프리셋 자동로드 (driver_assignments → route_sessions fallback)
         try {
-          const orgKey = selectedOrgId || 'all';
-          const presetSnap = await getDoc(doc(db, 'driver_assignments', effectiveCity, 'orgs', orgKey));
-          const hasUsefulDrivers = presetSnap.exists() && presetSnap.data().drivers?.some(d => d.name?.trim());
+          let presetSnap;
+          if (selectedOrgId === '__personal__') {
+            const uid = user?.uid;
+            if (uid) presetSnap = await getDoc(doc(db, 'user_driver_presets', uid, 'cities', effectiveCity));
+          } else {
+            const orgKey = selectedOrgId || 'all';
+            presetSnap = await getDoc(doc(db, 'driver_assignments', effectiveCity, 'orgs', orgKey));
+          }
+          const hasUsefulDrivers = presetSnap?.exists() && presetSnap.data().drivers?.some(d => d.name?.trim());
 
           if (hasUsefulDrivers) {
             // 정상 경로: driver_assignments 에 이름 있는 기사 데이터 존재
@@ -474,23 +485,37 @@ export default function RouteSetupModal({
     }
   };
 
-  // ── 기사매칭 프리셋 저장 (driver_assignments/{city}/orgs/{orgKey})
+  // ── 기사매칭 프리셋 저장
+  // 개인 모드: user_driver_presets/{uid}/cities/{city} (사용자 소유, 권한 보장)
+  // 소속사 모드: driver_assignments/{city}/orgs/{orgKey} (소속사 관리 경로)
   const saveDriverAssignmentPreset = async () => {
-    if (!effectiveCity || drivers.filter(d => d.name.trim()).length === 0) return;
-    const orgKey = isPersonalDriverMode
-      ? `__personal__${user?.uid || ''}`
-      : (selectedOrgId || 'all');
-    const orgObj = orgs.find(o => o.id === selectedOrgId);
-    const orgName = isPersonalDriverMode ? '내 기사' : (orgObj?.name || '전체');
-    await setDoc(doc(db, 'driver_assignments', effectiveCity, 'orgs', orgKey), {
-      city: effectiveCity,
-      orgId: isPersonalDriverMode ? null : (selectedOrgId || null),
-      orgName,
-      drivers,
-      dongDriverMap,
-      baseDailyQty,
-      savedAt: serverTimestamp(),
-    });
+    if (!effectiveCity) return;
+    const namedDrivers = drivers.filter(d => d.name.trim());
+    if (namedDrivers.length === 0) return;
+    if (isPersonalDriverMode) {
+      const uid = user?.uid;
+      if (!uid) return;
+      await setDoc(doc(db, 'user_driver_presets', uid, 'cities', effectiveCity), {
+        city: effectiveCity,
+        drivers,
+        dongDriverMap,
+        baseDailyQty,
+        savedAt: serverTimestamp(),
+      });
+    } else {
+      const orgKey = selectedOrgId || 'all';
+      const orgObj = orgs.find(o => o.id === selectedOrgId);
+      const orgName = orgObj?.name || '전체';
+      await setDoc(doc(db, 'driver_assignments', effectiveCity, 'orgs', orgKey), {
+        city: effectiveCity,
+        orgId: selectedOrgId || null,
+        orgName,
+        drivers,
+        dongDriverMap,
+        baseDailyQty,
+        savedAt: serverTimestamp(),
+      });
+    }
   };
 
   // ── "다음" 버튼 핸들러 — 배정 저장 후 매칭 단계 이동
@@ -533,7 +558,11 @@ export default function RouteSetupModal({
       if (!uid) { alert('사용자 정보가 없습니다.'); return; }
       setIsLoadingOrgDrivers(true);
       try {
-        const snap = await getDocs(collection(db, 'user_drivers', uid, 'drivers'));
+        const companyCode = user?.companyCode;
+        const colPath = companyCode
+          ? collection(db, 'user_companies', companyCode, 'drivers')
+          : collection(db, 'user_drivers', uid, 'drivers');
+        const snap = await getDocs(colPath);
         const loaded = snap.docs
           .map(d => ({ _docId: d.id, ...d.data() }))
           .filter(d => d.status !== 'inactive')
@@ -923,7 +952,7 @@ export default function RouteSetupModal({
                   ))}
                   <span className="text-blue-500/70 ml-2">— 행정동 클릭 배정 (다시 클릭 해제)</span>
                 </span>
-              ) : '← 왼쪽에서 기사 카드를 클릭해 선택하세요 · 여러 명 동시 선택 가능'}
+              ) : '← 기사 카드를 클릭해 활성화 → 오른쪽 행정동 클릭으로 배정 (여러 명 동시 선택 가능)'}
             </div>
 
             <div className="flex items-center justify-between mb-3 shrink-0">
