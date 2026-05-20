@@ -2,7 +2,7 @@
 import { X, Layers, Download, Upload, Clock, Send, History, GitMerge, CheckSquare, Square, Trash2, Sparkles, FileX, SplitSquareHorizontal, RefreshCw, SlidersHorizontal, ArrowRight, ArrowUp, ArrowDown, Eye, Combine } from 'lucide-react';
 import { db, collection, query, orderBy, limit, getDocs, addDoc, serverTimestamp } from '../config/firebase.js';
 
-const ADMIN_EMAILS = ['ttong627@gmail.com', 'admin@logis-op.com', 'jsh6270@gmail.com'];
+const ADMIN_EMAILS = ['ttong627@gmail.com'];
 
 const fmtPhone = (v) => {
   const d = String(v ?? '').replace(/[^0-9]/g, '');

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { X, Plus, Edit2, UserX, UserCheck, Truck, BarChart3, RefreshCw, MapPin, ChevronDown, ChevronUp, Download, Check, Building2, CheckSquare, Square } from 'lucide-react';
 import { db, auth } from '../config/firebase.js';
 import { getDocs, getDoc, setDoc, addDoc, collection, doc, serverTimestamp } from 'firebase/firestore';
@@ -79,7 +80,10 @@ export default function DriverRegistryModal({ user, onClose }) {
         snap.docs.map(d => ({ id: d.id, ...d.data() }))
           .sort((a, b) => (a.name||'').localeCompare(b.name||'', 'ko'))
       );
-    } catch (e) { console.error('기사 로드:', e); }
+    } catch (e) {
+      console.error('기사 로드:', e);
+      setDrivers([]);
+    }
     finally { setIsLoading(false); }
   }, [selectedOrg]);
 
@@ -266,7 +270,7 @@ export default function DriverRegistryModal({ user, onClose }) {
   // ════════════════════════════════════════════════
   if (editingId !== null) {
     const totalAssigned = (form.assignedZones||[]).reduce((s,z)=>s+z.dongs.length,0);
-    return (
+    return createPortal(
       <div className="fixed inset-0 z-[900] flex flex-col bg-[#060606]">
         <div className="shrink-0 flex items-center justify-between px-8 py-4 border-b border-[#1a1a1a] bg-[#0a0a0a]">
           <div className="flex items-center gap-3">
@@ -456,13 +460,13 @@ export default function DriverRegistryModal({ user, onClose }) {
           </div>
         </div>
       </div>
-    );
+    , document.body);
   }
 
   // ════════════════════════════════════════════════
   // 메인 모달
   // ════════════════════════════════════════════════
-  return (
+  return createPortal(
     <div className="fixed inset-0 z-[900] flex flex-col bg-[#060606]">
 
       {/* 헤더 */}
@@ -757,7 +761,7 @@ export default function DriverRegistryModal({ user, onClose }) {
         )}
       </div>
     </div>
-  );
+  , document.body);
 }
 
 function DriverCard({ driver, onEdit, onToggle, inactive = false }) {

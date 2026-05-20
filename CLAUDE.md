@@ -195,7 +195,7 @@
 
 | 규칙 | 내용 |
 |------|------|
-| 관리자 이메일 | `ttong627@gmail.com`, `admin@logis-op.com`, `jsh6270@gmail.com` |
+| 관리자 이메일 | `ttong627@gmail.com` |
 | 관리자 강제 보정 | admin 이메일이면 role=admin, tier=vvip 강제 설정 (onAuthStateChanged 시 자동 복구) |
 | 일반 유저 강등 | 비admin이 role=admin인 경우 role=user, tier=basic으로 강등 |
 

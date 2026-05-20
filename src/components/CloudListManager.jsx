@@ -17,6 +17,30 @@ import { canUseCoords, canUseCoordsBg } from '../utils/tierUtils.js';
 
 const KAKAO_REST_KEY = import.meta.env.VITE_KAKAO_REST_KEY;
 
+// ─── Records Cache (sessionStorage, 10분 TTL) ─────────────────────────────────
+const RECS_CACHE_KEY = 'cloud_recs_v2';
+const RECS_CACHE_TTL = 10 * 60 * 1000;
+
+function readRecsCache(city, monthId) {
+  try {
+    const raw = sessionStorage.getItem(`${RECS_CACHE_KEY}_${city}_${monthId}`);
+    if (!raw) return null;
+    const { ts, data } = JSON.parse(raw);
+    if (Date.now() - ts > RECS_CACHE_TTL) { sessionStorage.removeItem(`${RECS_CACHE_KEY}_${city}_${monthId}`); return null; }
+    return data;
+  } catch { return null; }
+}
+function writeRecsCache(city, monthId, data) {
+  try {
+    const str = JSON.stringify({ ts: Date.now(), data });
+    if (str.length > 4 * 1024 * 1024) return; // 4MB 초과 시 캐시 생략
+    sessionStorage.setItem(`${RECS_CACHE_KEY}_${city}_${monthId}`, str);
+  } catch { /* quota 초과 시 무시 */ }
+}
+function bustRecsCache(city, monthId) {
+  try { sessionStorage.removeItem(`${RECS_CACHE_KEY}_${city}_${monthId}`); } catch {}
+}
+
 const fmtTs = (ts) => {
   if (!ts) return '-';
   const d = ts.toDate ? ts.toDate() : new Date(ts);
@@ -213,17 +237,28 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
   const [isFetchingNotes, setIsFetchingNotes] = useState(false);
   const [isMovingPhones, setIsMovingPhones] = useState(false);
 
-  // 카드 클릭 → ResultGrid 로드
-  const [loadingCardId, setLoadingCardId] = useState(null);
-  const handleCardClick = async (cityItem) => {
-    if (!cityItem.latestMonth || !onOpenInResultGrid) return;
-    setLoadingCardId(cityItem.id);
-    try {
-      const snap = await getDocs(collection(db, 'cloud_lists', cityItem.id, 'months', cityItem.latestMonth.id, 'records'));
-      const recs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-      onOpenInResultGrid(cityItem.id, cityItem.latestMonth.id, recs);
-    } catch (e) { alert('불러오기 실패: ' + e.message); }
-    finally { setLoadingCardId(null); }
+  // 카드 클릭 → 관리 뷰 즉시 진입 (최신 월 자동 선택 + 캐시 우선)
+  const handleOpenCity = (cityItem) => {
+    if (!cityItem.latestMonth) return;
+    const fullCity = `${cityItem.sido} ${cityItem.sigungu}`;
+    setSelectedSido(cityItem.sido);
+    setSelectedSigungu(cityItem.sigungu);
+    setSelectedMonth(cityItem.latestMonth);
+    setMonths([cityItem.latestMonth]); // 월 목록 즉시 세팅 (나머지는 백그라운드 fetchMonths가 채움)
+    setRecords([]);
+    setDirtyRecords({});
+    setDeletedRecordIds(new Set());
+    // fetchRecords는 selectedCity 갱신 전에 호출되므로 cityId 직접 전달
+    fetchRecordsFor(fullCity, cityItem.latestMonth.id);
+    // 백그라운드에서 전체 월 목록도 갱신 (다른 월로 전환 가능하게)
+    setTimeout(() => {
+      getDocs(collection(db, 'cloud_lists', fullCity, 'months'))
+        .then(snap => {
+          const data = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => b.id.localeCompare(a.id));
+          if (data.length > 0) setMonths(data);
+        })
+        .catch(() => {});
+    }, 100);
   };
 
   // 관리 모드 진입 (카드 편집 아이콘 클릭)
@@ -349,14 +384,23 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
     finally { setLoadingMonths(false); }
   };
 
-  const fetchRecords = async (monthId) => {
+  // cityId를 직접 받는 버전 (카드 클릭 시 state 갱신 전 호출 대응)
+  const fetchRecordsFor = async (cityId, monthId, force = false) => {
+    if (!force) {
+      const cached = readRecsCache(cityId, monthId);
+      if (cached) { setRecords(cached); setLoadingRecords(false); return; }
+    }
     setLoadingRecords(true);
     try {
-      const snap = await getDocs(collection(db, 'cloud_lists', selectedCity, 'months', monthId, 'records'));
-      setRecords(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+      const snap = await getDocs(collection(db, 'cloud_lists', cityId, 'months', monthId, 'records'));
+      const recs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      setRecords(recs);
+      writeRecsCache(cityId, monthId, recs);
     } catch (e) { console.error('[CloudListManager] fetchRecords:', e); }
     finally { setLoadingRecords(false); }
   };
+
+  const fetchRecords = (monthId, force = false) => fetchRecordsFor(selectedCity, monthId, force);
 
   const fetchAllCities = useCallback(async () => {
     setLoadingCities(true);
@@ -431,7 +475,7 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
 
   const handleSelectMonth = (month) => {
     setSelectedMonth(month);
-    fetchRecords(month.id);
+    fetchRecordsFor(selectedCity, month.id);
   };
 
   const handleFetchBaseNotes = async () => {
@@ -475,7 +519,8 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
         );
         await batch.commit();
       }
-      await fetchRecords(selectedMonth.id);
+      bustRecsCache(selectedCity, selectedMonth.id);
+      await fetchRecords(selectedMonth.id, true);
       alert(`특이사항 이식 완료! ${updates.length}건 업데이트`);
     } catch (e) { alert('오류: ' + e.message); }
     finally { setIsFetchingNotes(false); }
@@ -513,7 +558,8 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
         });
         await batch.commit();
       }
-      await fetchRecords(selectedMonth.id);
+      bustRecsCache(selectedCity, selectedMonth.id);
+      await fetchRecords(selectedMonth.id, true);
       alert(`전화번호 이동 완료! ${targets.length}건`);
     } catch (e) { alert('오류: ' + e.message); }
     finally { setIsMovingPhones(false); }
@@ -682,7 +728,8 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
       }, { merge: true });
       setDirtyRecords({});
       setDeletedRecordIds(new Set());
-      await fetchRecords(selectedMonth.id);
+      bustRecsCache(selectedCity, selectedMonth.id);
+      await fetchRecords(selectedMonth.id, true);
       await fetchMonths();
       alert(`저장 완료! (수정 ${modCount}건, 삭제 ${delCount}건)`);
     } catch (e) { alert('저장 오류: ' + e.message); }
@@ -1147,17 +1194,16 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
                 <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-4">
                   {cities.map(cityItem => {
                     const m = cityItem.latestMonth;
-                    const isLoading = loadingCardId === cityItem.id;
                     return (
                       <button
                         key={cityItem.id}
-                        onClick={() => handleCardClick(cityItem)}
-                        disabled={isLoading || !m}
+                        onClick={() => handleOpenCity(cityItem)}
+                        disabled={!m}
                         className={`group relative text-left p-5 rounded-2xl border transition-all duration-200 ${
                           m
                             ? 'bg-[#0c0c0c] border-[#1e1e1e] hover:bg-[#121a2a] hover:border-[#3b82f6]/40 hover:shadow-[0_0_20px_rgba(59,130,246,0.08)] cursor-pointer'
                             : 'bg-[#0a0a0a] border-[#181818] opacity-50 cursor-not-allowed'
-                        } ${isLoading ? 'opacity-70' : ''}`}
+                        }`}
                       >
                         {/* 관리 모드 버튼 (관리자만) */}
                         {isAdmin && m && (
@@ -1207,13 +1253,6 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
                                 <p className="text-[9px] text-gray-600 mt-0.5 font-bold">차상위</p>
                               </div>
                             </div>
-                            {/* 로딩 오버레이 */}
-                            {isLoading && (
-                              <div className="absolute inset-0 rounded-2xl bg-[#0c0c0c]/80 flex items-center justify-center gap-2">
-                                <span className="w-4 h-4 rounded-full border-2 border-blue-400 border-t-transparent animate-spin inline-block" />
-                                <span className="text-xs text-blue-400 font-bold">불러오는 중...</span>
-                              </div>
-                            )}
                           </>
                         ) : (
                           <p className="text-[11px] text-gray-700">저장된 명단 없음</p>

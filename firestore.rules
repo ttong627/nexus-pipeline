@@ -16,9 +16,7 @@ service cloud.firestore {
     function isAdminEmail() {
       return isAuthenticated() &&
         request.auth.token.email in [
-          'ttong627@gmail.com',
-          'admin@logis-op.com',
-          'jsh6270@gmail.com'
+          'ttong627@gmail.com'
         ];
     }
 
@@ -217,6 +215,16 @@ service cloud.firestore {
           allow write: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin());
         }
       }
+    }
+
+    // ── 배송일정: 본인 데이터만 읽기·쓰기 ─────────────────────────────────────
+    match /schedule_records/{userId}/{document=**} {
+      allow read, write: if isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // ── 배송일정 기사 목록: 본인만 읽기·쓰기 ──────────────────────────────────
+    match /schedule_drivers/{userId} {
+      allow read, write: if isAuthenticated() && request.auth.uid == userId;
     }
 
     // ── 기본 차단 (Zero Trust) ───────────────────────────────────────────────

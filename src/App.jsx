@@ -28,12 +28,13 @@ import PrevMonthCompareModal from "./components/PrevMonthCompareModal.jsx";
 import { processAddress, asyncPool, addTypoRecord, loadTypoDict } from "./engine/addressEngine.js";
 import { parsePhoneNumbers, parseSMS, parseBirthDate, normalizeBirth, extractPhoneNote, formatPhone } from "./utils/parsers.js";
 import { canUseRouteMap, canUseDbOverview, canUseDriverRegistry, getMonthlyLimit } from "./utils/tierUtils.js";
-import { LogOut, ShieldCheck, CheckCircle, Database, Crown, Layers, UserCircle, Undo2, Menu, BarChart3, MapPin, Truck } from "lucide-react";
+import { LogOut, ShieldCheck, CheckCircle, Database, Crown, Layers, UserCircle, Undo2, Menu, BarChart3, MapPin, Truck, CalendarDays } from "lucide-react";
 import RouteMapModal from "./components/RouteMapModal.jsx";
 import RouteSetupModal from "./components/RouteSetupModal.jsx";
 import RouteQuickModal from "./components/RouteQuickModal.jsx";
 import ShareRouteView from "./components/ShareRouteView.jsx";
 import DriverRegistryModal from "./components/DriverRegistryModal.jsx";
+import ScheduleTab from "./components/ScheduleTab.jsx";
 
 export default function App() {
   const [user, setUser] = useState(null);
@@ -187,7 +188,7 @@ export default function App() {
           updateDoc(userRef, { lastLogin: serverTimestamp() }).catch(() => {});
         }
         
-        const ADMIN_EMAILS = ['ttong627@gmail.com', 'admin@logis-op.com', 'jsh6270@gmail.com'];
+        const ADMIN_EMAILS = ['ttong627@gmail.com'];
         const isAdminEmail = ADMIN_EMAILS.includes(u.email);
 
         // 1. 최고 관리자 계정이 일반 유저로 꼬여있다면 복구 (Root Cause Fix)
@@ -1425,6 +1426,12 @@ export default function App() {
                         <Truck size={15} /> 소속사 기사 관리
                         {!canUseDriverRegistry(user?.tier) && <span className="ml-auto text-[9px] bg-purple-900/40 text-purple-400 border border-purple-700/40 px-1.5 py-0.5 rounded font-black">VVIP+</span>}
                       </button>
+                      <button
+                        onClick={() => { setStep(11); setShowHeaderMenu(false); }}
+                        className="w-full px-4 py-2.5 flex items-center gap-3 text-sky-300 hover:bg-sky-900/30 rounded-lg text-xs font-bold transition-colors text-left"
+                      >
+                        <CalendarDays size={15} /> 배송일정 관리
+                      </button>
                       <div className="my-0.5 border-t border-[#1a1a1a]" />
                       <button
                         onClick={() => { setStep(8); setDbNavCity(''); setShowHeaderMenu(false); }}
@@ -1611,6 +1618,7 @@ export default function App() {
               onGoToCloud={(city) => { setDbNavCity(city); setStep(8); }}
             />
           )}
+          {step === 11 && <ScheduleTab user={user} onBack={() => setStep(0)} />}
         </main>
         
         {/* RESTORED MODAL RENDERS */}
