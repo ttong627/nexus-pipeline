@@ -1089,8 +1089,19 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
 
     await asyncPool(10, records, async (rec) => {
       try {
+        // A-21: 주소·특이사항 내 동사무소/읍사무소/면사무소 → 주민센터 정규화
+        const normNote = (rec.특이사항 || '').replace(/동사무소|읍사무소|면사무소/g, '주민센터');
+        const normAddr = (rec.주소 || '').replace(/동사무소|읍사무소|면사무소/g, '주민센터');
+        if (normNote !== (rec.특이사항 || '') || normAddr !== (rec.주소 || '')) {
+          dirtyUpdates[rec.id] = {
+            ...(dirtyUpdates[rec.id] || {}),
+            ...(normNote !== (rec.특이사항 || '') ? { 특이사항: normNote } : {}),
+            ...(normAddr !== (rec.주소 || '') ? { 주소: normAddr } : {}),
+          };
+        }
+
         const refined = await processAddress(
-          rec.주소 || '', rec.이름 || '', rec.행정동 || '', selectedCity, rec.특이사항 || ''
+          normAddr, rec.이름 || '', rec.행정동 || '', selectedCity, normNote
         );
         current++;
         setRefineProgress({ current, total: records.length });

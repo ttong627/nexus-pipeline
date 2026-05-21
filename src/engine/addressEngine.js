@@ -361,6 +361,9 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
   // ── 괄호 내부 보호 (쉼표 분리 전) ────────────────────────────────
   const parens = [];
   text = text.replace(/\(.*?\)/g, m => { parens.push(m); return `__P${parens.length - 1}__`; });
+  // A-28: 짝 없는 닫는 괄호 제거 — 중첩 괄호(삼화에코빌(6차)) 입력 시 non-greedy 추출 후
+  // 바깥 ')' 가 text에 잔류하여 "103- 501호 ) (장안동)" 형태로 출력되는 버그 방지
+  text = text.replace(/\)/g, '');
 
   // ── 본주소 / 상세주소 분리 ────────────────────────────────────────
   let mainAddr = '', detailAddr = '';
@@ -507,37 +510,76 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
     if (dongPart) dongPart = dongPart.replace(/^([가-힣]+)\d+(동)$/, '$1$2');
 
     buildingName = apiResult.bdNm || '';
-    if (!buildingName && parens.length > 0) {
-      let parenContent = parens.map(p => p.replace(/^\(|\)$/g, '').trim()).filter(Boolean).join(' ');
-      // dongPart와 같은 동명이 paren 앞에 있으면 제거
-      if (dongPart && parenContent.startsWith(dongPart)) {
-        parenContent = parenContent.slice(dongPart.length).replace(/^[,\s]+/, '').trim();
+    // 괄호 분류: 긴 문장(3단어↑ or 10자↑+공백) → 특이사항, 동명 토큰 → 제거, 나머지 → buildingName
+    parens.forEach(p => {
+      const inner = p.replace(/^\(|\)$/g, '').trim();
+      if (!inner) return;
+      const wordCount = inner.split(/\s+/).length;
+      if (wordCount >= 3 || (inner.length >= 10 && /\s/.test(inner))) {
+        result.특이사항 += (result.특이사항 ? ' ' : '') + inner;
+        return;
       }
-      // 동/읍/면 접미어 토큰 제거 (한글 시작 필터) — 건물 동 번호(101동)는 유지
-      // 예: '용두동' '답십리1동' → 제거, '101동' 'LH아파트' → 유지
-      parenContent = parenContent.split(/[,\s]+/)
-        .filter(tok => tok && !/^[가-힣][가-힣\d]*(읍|면|동)$/.test(tok.trim()))
-        .join(' ')
-        .trim();
-      buildingName = parenContent;
-    }
+      if (!buildingName) {
+        const toks = inner.split(/[,\s]+/)
+          .filter(tok => tok && !/^[가-힣][가-힣\d]*(읍|면|동)$/.test(tok.trim()));
+        const candidate = toks.join(' ').trim();
+        if (candidate) buildingName = candidate;
+      }
+    });
     detailAddr = detailAddr.replace(/__P\d+__/g, '').replace(/\s+/g, ' ').trim();
+    // mainAddr에서 도로명+번호 이후 내용(지층·호 등)을 detailAddr로 이동 (A-11 쉼표 누락 방지)
+    if (!detailAddr) {
+      const mainClean = mainAddr.replace(/__P\d+__/g, '').replace(/\s+/g, ' ').trim();
+      const roadNumMatch = mainClean.match(/^[가-힣\d]+(대로|로|길)[가-힣\d]*\s*\d+(?:-\d+)?\s+(.*)/);
+      if (roadNumMatch?.[2]) detailAddr = roadNumMatch[2].trim();
+    }
   } else {
     // ── A-12 ②: 도로명 미발견 + API 실패 플래그 ─────────────────────
     if (!/(로|길|대로)/.test(finalRoadAddr)) {
       result.확인필요 = true;
       result.확인사유 = '도로명 미발견 및 API 변환 실패';
     }
+    // 괄호에서 dong/building/특이사항 추출 후 도로명 이후 내용 → detailAddr 이동
     parens.forEach((p, i) => {
-      finalRoadAddr = finalRoadAddr.replace(`__P${i}__`, p);
-      detailAddr    = detailAddr.replace(`__P${i}__`, p);
+      const inner = p.replace(/^\(|\)$/g, '').trim();
+      const wordCount = inner ? inner.split(/\s+/).length : 0;
+      if (!inner) {
+        finalRoadAddr = finalRoadAddr.replace(`__P${i}__`, '');
+        detailAddr    = detailAddr.replace(`__P${i}__`, '');
+        return;
+      }
+      if (wordCount >= 3 || (inner.length >= 10 && /\s/.test(inner))) {
+        result.특이사항 += (result.특이사항 ? ' ' : '') + inner;
+      } else if (!dongPart && DONG_SUFFIX.test(inner)) {
+        dongPart = inner.replace(/^([가-힣]+)\d+(동)$/, '$1$2');
+      } else if (!dongPart) {
+        const dongTok = inner.split(/[,\s]+/).find(t => DONG_SUFFIX.test(t.trim()));
+        if (dongTok) {
+          dongPart = dongTok.trim().replace(/^([가-힣]+)\d+(동)$/, '$1$2');
+          const rest = inner.replace(dongTok, '').replace(/^[,\s]+|[,\s]+$/g, '').trim();
+          if (rest && !buildingName) buildingName = rest;
+        } else if (!buildingName) {
+          buildingName = inner;
+        }
+      } else if (!buildingName) {
+        buildingName = inner;
+      }
+      finalRoadAddr = finalRoadAddr.replace(`__P${i}__`, '');
+      detailAddr    = detailAddr.replace(`__P${i}__`, '');
     });
+    if (!detailAddr) {
+      const mainCleanNA = finalRoadAddr.replace(/\s+/g, ' ').trim();
+      const roadMatchNA = mainCleanNA.match(/^([가-힣\d]+(대로|로|길)[가-힣\d]*\s*\d+(?:-\d+)?)\s+(.*)/);
+      if (roadMatchNA?.[3]) {
+        detailAddr    = roadMatchNA[3].trim();
+        finalRoadAddr = roadMatchNA[1];
+      }
+    }
+    finalRoadAddr = finalRoadAddr.replace(/\s+/g, ' ').trim();
+    detailAddr    = detailAddr.replace(/\s+/g, ' ').trim();
   }
 
   let finalDetail = detailAddr;
-  if (!apiResult && parens.length > 0 && !finalRoadAddr.includes('(') && !finalDetail.includes('(')) {
-    finalDetail += ' ' + parens.join(' ');
-  }
 
   // ── finalDetail 전처리 (A-18 → A-19 → A-17 → A-10 순서) ─────────
 
@@ -613,7 +655,23 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
   // 단, 주소 자체가 이미 주민센터 주소인 경우(CENTER_RE) 중복 방지
   if (normalizedInputNote && /주민\s*센터/.test(normalizedInputNote) && result.주소 && !CENTER_RE.test(text)) {
     const ckw = generateCenterKeyword(normalizedInputNote, adminDong, cityLabel);
-    const cres = await lookupAddr(ckw);
+    let cres = await lookupAddr(ckw);
+    // JUSO 실패 시 Kakao POI 검색으로 주민센터 도로명 취득 후 재조회
+    if (!cres) {
+      const localPfx = cityLabel ? cityLabel.trim().split(/\s+/).pop() + ' ' : '';
+      const queries = [
+        ckw,
+        adminDong?.trim() ? `${localPfx}${adminDong.trim()} 주민센터` : null,
+        dongPart          ? `${localPfx}${dongPart} 주민센터`          : null,
+      ].filter((q, i, arr) => q && arr.indexOf(q) === i);
+      for (const q of queries) {
+        const kd = await searchKakaoFull(q);
+        if (kd?.road_address_name) {
+          cres = await lookupAddr(kd.road_address_name) || kakaoDocToApiResult(kd);
+          if (cres) break;
+        }
+      }
+    }
     if (cres) {
       const cRaw = (cres.roadAddrPart1 || cres.roadAddr || '').trim();
       if (cRaw) {

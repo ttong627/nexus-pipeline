@@ -201,17 +201,42 @@ const parseRoadInfo = (addr) => {
   return { road: '', num: 9999, sub: 0 };
 };
 
-// ── 도로 기반 TSP (도로명 그룹 → 건물번호 정렬 → 도로 간 뱀 패턴) ──────────
+// ── 2-opt 교차 제거 (도로 그룹 배열 in-place 최적화) ────────────────────────
+// edge (i→i+1) 과 edge (j→j+1) 을 바꿨을 때 총 거리가 줄면 구간 반전 적용
+const twoOptRoads = (roads) => {
+  const n = roads.length;
+  if (n < 4) return;
+  let improved = true;
+  while (improved) {
+    improved = false;
+    for (let i = 0; i < n - 1; i++) {
+      for (let j = i + 2; j < n; j++) {
+        const a = roads[i], b = roads[i + 1], c = roads[j];
+        const d = j + 1 < n ? roads[j + 1] : null;
+        const oldD = haversine(a.lat, a.lng, b.lat, b.lng)
+                   + (d ? haversine(c.lat, c.lng, d.lat, d.lng) : 0);
+        const newD = haversine(a.lat, a.lng, c.lat, c.lng)
+                   + (d ? haversine(b.lat, b.lng, d.lat, d.lng) : 0);
+        if (newD < oldD - 1) { // 1m 이상 개선될 때만 반전
+          roads.splice(i + 1, j - i, ...roads.slice(i + 1, j + 1).reverse());
+          improved = true;
+        }
+      }
+    }
+  }
+};
+
+// ── 도로 기반 TSP + 2-opt 교차 제거 + 진입 방향 최적화 ─────────────────────
+// ① 도로명 그룹화 → ② 건물번호 오름차순 → ③ 최근접 이웃 초기 순서
+// ④ 2-opt 교차 제거 → ⑤ 각 도로 진입 방향(정/역방향) 최소거리로 선택
 const roadAwareTSP = (points) => {
   if (!points.length) return [];
 
-  // 좌표 없는 건 마지막에 붙임
   const withCoord = points.filter(p => p._lat && p._lng);
-  const noCoord = points.filter(p => !p._lat || !p._lng);
-
+  const noCoord   = points.filter(p => !p._lat || !p._lng);
   if (!withCoord.length) return [...noCoord];
 
-  // 도로명으로 그룹화
+  // ① 도로명으로 그룹화
   const roadMap = new Map();
   withCoord.forEach(p => {
     const { road } = parseRoadInfo(p.주소 || '');
@@ -220,46 +245,60 @@ const roadAwareTSP = (points) => {
     roadMap.get(key).push(p);
   });
 
-  // 각 도로 그룹 내 건물번호 오름차순 정렬
+  // ② 그룹 내 건물번호 오름차순 정렬
   roadMap.forEach(group => {
     group.sort((a, b) => {
-      const rA = parseRoadInfo(a.주소 || '');
-      const rB = parseRoadInfo(b.주소 || '');
+      const rA = parseRoadInfo(a.주소 || ''), rB = parseRoadInfo(b.주소 || '');
       return rA.num !== rB.num ? rA.num - rB.num : rA.sub - rB.sub;
     });
   });
 
-  // 도로 그룹의 무게중심 계산
+  // 도로 그룹 → centroid + 양 끝 좌표(진입 방향 최적화용)
   const roads = [...roadMap.values()].map(group => ({
     group,
-    lat: group.reduce((s, p) => s + (p._lat || 0), 0) / group.length,
-    lng: group.reduce((s, p) => s + (p._lng || 0), 0) / group.length,
+    lat:  group.reduce((s, p) => s + p._lat, 0) / group.length,
+    lng:  group.reduce((s, p) => s + p._lng, 0) / group.length,
+    sLat: group[0]._lat,                        sLng: group[0]._lng,
+    eLat: group[group.length - 1]._lat,         eLng: group[group.length - 1]._lng,
   }));
 
-  // 도로 간 최근접 이웃 TSP (가장 북쪽 도로부터 출발)
+  if (roads.length === 1) {
+    return [...roads[0].group, ...noCoord];
+  }
+
+  // ③ 최근접 이웃 초기 순서 (가장 북쪽 도로부터)
   const rem = [...roads];
   const startIdx = rem.reduce((mi, r, i) => r.lat > rem[mi].lat ? i : mi, 0);
-  const orderedRoads = [rem.splice(startIdx, 1)[0]];
+  const ordered  = [rem.splice(startIdx, 1)[0]];
   while (rem.length) {
-    const last = orderedRoads[orderedRoads.length - 1];
+    const last = ordered[ordered.length - 1];
     let minD = Infinity, minI = 0;
     rem.forEach((r, i) => {
       const d = haversine(last.lat, last.lng, r.lat, r.lng);
       if (d < minD) { minD = d; minI = i; }
     });
-    orderedRoads.push(rem.splice(minI, 1)[0]);
+    ordered.push(rem.splice(minI, 1)[0]);
   }
 
-  // 뱀 패턴: 짝수 도로는 정방향, 홀수 도로는 역방향 (U턴 최소화)
+  // ④ 2-opt 교차 제거
+  twoOptRoads(ordered);
+
+  // ⑤ 진입 방향 최적화: 이전 exit → 현재 도로 start vs end 중 가까운 쪽 선택
   const result = [];
-  orderedRoads.forEach((road, i) => {
-    result.push(...(i % 2 === 0 ? road.group : [...road.group].reverse()));
+  let prevLat = ordered[0].lat, prevLng = ordered[0].lng;
+  ordered.forEach(road => {
+    const fwdD = haversine(prevLat, prevLng, road.sLat, road.sLng);
+    const revD = haversine(prevLat, prevLng, road.eLat, road.eLng);
+    const group = revD < fwdD ? [...road.group].reverse() : road.group;
+    result.push(...group);
+    const last = group[group.length - 1];
+    prevLat = last._lat; prevLng = last._lng;
   });
 
   return [...result, ...noCoord];
 };
 
-// 하위호환용 (좌표 없는 단순 최근접 — 도로 정보 없을 때 폴백)
+// ── 좌표 기반 TSP + 2-opt 교차 제거 (도로 정보 없을 때 폴백) ────────────────
 const nearestNeighborTSP = (points) => {
   if (!points.length) return [];
   const rem = [...points];
@@ -268,8 +307,31 @@ const nearestNeighborTSP = (points) => {
   while (rem.length) {
     const last = result[result.length - 1];
     let minD = Infinity, minI = 0;
-    rem.forEach((p, i) => { const d = haversine(last._lat, last._lng, p._lat, p._lng); if (d < minD) { minD = d; minI = i; } });
+    rem.forEach((p, i) => {
+      const d = haversine(last._lat, last._lng, p._lat, p._lng);
+      if (d < minD) { minD = d; minI = i; }
+    });
     result.push(rem.splice(minI, 1)[0]);
+  }
+  // 2-opt 교차 제거 (개별 포인트 단위)
+  const n = result.length;
+  let improved = true;
+  while (improved) {
+    improved = false;
+    for (let i = 0; i < n - 1; i++) {
+      for (let j = i + 2; j < n; j++) {
+        const a = result[i], b = result[i + 1], c = result[j];
+        const dd = j + 1 < n ? result[j + 1] : null;
+        const oldD = haversine(a._lat, a._lng, b._lat, b._lng)
+                   + (dd ? haversine(c._lat, c._lng, dd._lat, dd._lng) : 0);
+        const newD = haversine(a._lat, a._lng, c._lat, c._lng)
+                   + (dd ? haversine(b._lat, b._lng, dd._lat, dd._lng) : 0);
+        if (newD < oldD - 1) {
+          result.splice(i + 1, j - i, ...result.slice(i + 1, j + 1).reverse());
+          improved = true;
+        }
+      }
+    }
   }
   return result;
 };
@@ -349,6 +411,9 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
 
   // ── 기사 배치 잠금 (브러시 보정 후 실수로 초기화 방지)
   const [isAssignmentLocked, setIsAssignmentLocked] = useState(false);
+
+  // ── 같은 좌표 팝업
+  const [samePointPopup, setSamePointPopup] = useState(null); // { recs, x, y }
 
   // ── 클릭 순번 배정 모드 (지도/목록 클릭 순서대로 1→2→3 순번 부여)
   const [isSeqClickMode, setIsSeqClickMode] = useState(false);
@@ -697,12 +762,29 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
     polylinesRef.current = [];
     if (!mapRecords.length) return;
 
+    // 같은 좌표 그룹 카운트 (소수점 5자리 ≈ 1m 정밀도)
+    const coordCountMap = new Map();
+    const coordRecsMap  = new Map();
+    mapRecords.forEach(r => {
+      if (!r._lat || !r._lng) return;
+      const key = `${r._lat.toFixed(5)},${r._lng.toFixed(5)}`;
+      coordCountMap.set(key, (coordCountMap.get(key) || 0) + 1);
+      if (!coordRecsMap.has(key)) coordRecsMap.set(key, []);
+      coordRecsMap.get(key).push(r);
+    });
+
     mapRecords.forEach(r => {
       const driver = drivers.find(d => d.id === r._driverId);
       const color = r._에러 ? '#ef4444' : (driver?.color || '#6b7280');
       const seq = r.배송순번 || '';
       const name = escHtml((r.이름 || '').slice(0, 5));
       const qtyNum = parseInt(r.포수 || r['수량(포수)']) || 1;
+
+      const coordKey = `${r._lat.toFixed(5)},${r._lng.toFixed(5)}`;
+      const sameCount = coordCountMap.get(coordKey) || 1;
+      const samePointBadgeHtml = sameCount > 1
+        ? `<div style="position:absolute;top:-9px;left:-8px;background:#7c3aed;color:#fff;font-size:8px;font-weight:900;padding:1px 4px;border-radius:8px;border:2px solid #000;line-height:1.5;white-space:nowrap;z-index:2;">${sameCount}명</div>`
+        : '';
 
       // 포수 강조 레벨 (0=1포, 1=2포, 2=3-4포, 3=5-9포, 4=10포+)
       const qtyLv = qtyNum >= 10 ? 4 : qtyNum >= 5 ? 3 : qtyNum >= 3 ? 2 : qtyNum >= 2 ? 1 : 0;
@@ -731,11 +813,20 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
       const pinEl = document.createElement('div');
       pinEl.setAttribute('data-record-id', r.id);
       pinEl.style.cssText = 'display:flex;flex-direction:column;align-items:center;cursor:pointer;user-select:none;';
-      pinEl.innerHTML = `<div style="width:${pinSize}px;height:${pinSize}px;border-radius:50%;background:${color};display:flex;align-items:center;justify-content:center;border:3px solid rgba(255,255,255,0.9);box-shadow:${glowStyle};flex-shrink:0;position:relative;">${seq ? `<span style="font-size:${pinSize >= 40 ? 9 : 10}px;font-weight:900;color:white;line-height:1;">${seq}</span>` : `<div style="width:${dotPx}px;height:${dotPx}px;border-radius:50%;background:rgba(255,255,255,0.35);"></div>`}${qtyBadgeHtml}</div><div style="width:0;height:0;border-left:${arrowPx}px solid transparent;border-right:${arrowPx}px solid transparent;border-top:${arrowPx * 2}px solid ${color};margin-top:-1px;flex-shrink:0;"></div><div style="background:${qtyNum >= 5 ? 'rgba(20,10,5,0.95)' : 'rgba(8,8,8,0.88)'};color:white;font-size:11px;font-weight:800;padding:2px 6px;border-radius:4px;margin-top:2px;white-space:nowrap;max-width:92px;overflow:hidden;text-overflow:ellipsis;border:1px solid ${color}${qtyNum >= 5 ? '88' : '45'};">${name}·<span style="color:${qtyColor};font-weight:900;">${qtyNum}포</span></div>`;
+      pinEl.innerHTML = `<div style="width:${pinSize}px;height:${pinSize}px;border-radius:50%;background:${color};display:flex;align-items:center;justify-content:center;border:3px solid rgba(255,255,255,0.9);box-shadow:${glowStyle};flex-shrink:0;position:relative;">${seq ? `<span style="font-size:${pinSize >= 40 ? 9 : 10}px;font-weight:900;color:white;line-height:1;">${seq}</span>` : `<div style="width:${dotPx}px;height:${dotPx}px;border-radius:50%;background:rgba(255,255,255,0.35);"></div>`}${qtyBadgeHtml}${samePointBadgeHtml}</div><div style="width:0;height:0;border-left:${arrowPx}px solid transparent;border-right:${arrowPx}px solid transparent;border-top:${arrowPx * 2}px solid ${color};margin-top:-1px;flex-shrink:0;"></div><div style="background:${qtyNum >= 5 ? 'rgba(20,10,5,0.95)' : 'rgba(8,8,8,0.88)'};color:white;font-size:11px;font-weight:800;padding:2px 6px;border-radius:4px;margin-top:2px;white-space:nowrap;max-width:92px;overflow:hidden;text-overflow:ellipsis;border:1px solid ${color}${qtyNum >= 5 ? '88' : '45'};">${name}·<span style="color:${qtyColor};font-weight:900;">${qtyNum}포</span></div>`;
       pinEl.addEventListener('click', (e) => {
         e.stopPropagation();
-        setLayoutMode(prev => (prev === 'map' || prev === 'mapfull') ? 'split' : prev);
-        handleSelectRecord(r);
+        if (sameCount > 1) {
+          // 같은 좌표 여러 명 → 팝업으로 목록 표시
+          const rect = mapRef.current?.getBoundingClientRect();
+          const mapCont = mapRef.current?.parentElement?.getBoundingClientRect();
+          const ox = rect ? e.clientX - (mapCont?.left || 0) : e.clientX;
+          const oy = rect ? e.clientY - (mapCont?.top  || 0) : e.clientY;
+          setSamePointPopup({ recs: coordRecsMap.get(coordKey) || [], x: ox, y: oy });
+        } else {
+          setLayoutMode(prev => (prev === 'map' || prev === 'mapfull') ? 'split' : prev);
+          handleSelectRecord(r);
+        }
       });
       // 우클릭: 배정 취소
       pinEl.addEventListener('contextmenu', (e) => {
@@ -748,7 +839,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
         content: pinEl,
         yAnchor: 0.63,
         xAnchor: 0.5,
-        zIndex: r._에러 ? 10 : (qtyNum >= 5 ? 8 : qtyNum >= 2 ? 6 : seq ? 5 : 1),
+        zIndex: r._에러 ? 10 : (sameCount > 1 ? 9 : qtyNum >= 5 ? 8 : qtyNum >= 2 ? 6 : seq ? 5 : 1),
       });
       overlay.setMap(kakaoMapRef.current);
       overlaysRef.current.push(overlay);
@@ -984,7 +1075,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
       });
       return updated;
     });
-    showToast('success', '도로명 기반 배송순번 적용 완료');
+    showToast('success', '최단 동선 순번 적용 완료 (2-opt 교차 제거)');
   }, [drivers, showToast]);
 
   // ── 지난달 배정 불러오기 ─────────────────────────────────────────────
@@ -2398,6 +2489,7 @@ ${folders}
             )}
             <div ref={mapRef} className="flex-1 relative"
               onDoubleClick={() => { if (!isPaintMode) setLayoutMode('mapfull'); }}
+              onClick={() => samePointPopup && setSamePointPopup(null)}
               style={{ cursor: placingPinForDriver ? 'crosshair' : undefined }}
             >
               {/* ── 페인트 브러시 인터셉터: 지도 위를 완전히 덮어 카카오맵 이벤트 차단 */}
@@ -2437,6 +2529,42 @@ ${folders}
                 </div>
               )}
             </div>
+
+            {/* ── 같은 좌표 팝업 ─────────────────────────────────────── */}
+            {samePointPopup && (
+              <div
+                className="absolute z-[300] pointer-events-auto"
+                style={{ left: samePointPopup.x, top: samePointPopup.y, transform: 'translate(-50%, -110%)' }}
+              >
+                <div className="bg-[#0e0e0e] border border-purple-500/40 rounded-xl shadow-2xl overflow-hidden min-w-[180px] max-w-[260px]">
+                  <div className="flex items-center justify-between px-3 py-2 border-b border-white/10 bg-purple-900/30">
+                    <span className="text-[10px] font-black text-purple-300 tracking-widest uppercase">같은 위치 {samePointPopup.recs.length}명</span>
+                    <button onClick={() => setSamePointPopup(null)} className="text-gray-500 hover:text-white transition-colors ml-2">
+                      <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><path d="M1 1l10 10M11 1L1 11" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/></svg>
+                    </button>
+                  </div>
+                  <div className="py-1 max-h-[220px] overflow-y-auto">
+                    {samePointPopup.recs.map((rec, i) => {
+                      const drv = drivers.find(d => d.id === rec._driverId);
+                      const qty = parseInt(rec.포수 || rec['수량(포수)']) || 1;
+                      return (
+                        <button
+                          key={rec.id}
+                          onClick={() => { setSamePointPopup(null); setLayoutMode(prev => (prev === 'map' || prev === 'mapfull') ? 'split' : prev); handleSelectRecord(rec); }}
+                          className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-white/5 transition-colors text-left"
+                        >
+                          <span className="text-[10px] text-gray-500 w-4 shrink-0">{i + 1}</span>
+                          <span className="text-[11px] font-bold text-white shrink-0">{rec.이름 || '-'}</span>
+                          <span className="text-[10px] text-gray-400 flex-1 truncate">{(rec.주소 || '').slice(0, 20)}</span>
+                          <span className="text-[10px] font-bold shrink-0" style={{ color: drv?.color || '#6b7280' }}>{qty}포</span>
+                          {rec.배송순번 && <span className="text-[9px] text-gray-600 shrink-0">#{rec.배송순번}</span>}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* 핀 배치 모드 안내 배너 */}
             {placingPinForDriver && (() => {
