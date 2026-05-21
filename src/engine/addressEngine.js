@@ -541,10 +541,15 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
   finalDetail = finalDetail.replace(/^[,\s]+|[,\s]+$/g, '');
 
   // ── A-11: 최종 주소 형식 조합 ─────────────────────────────────────
-  // "도로명주소, 상세주소 (동명, 건물명)"
-  const parenParts = [dongPart, buildingName].filter(Boolean);
-  const parenStr   = parenParts.length ? ` (${parenParts.join(', ')})` : '';
-  result.주소 = finalRoadAddr + (finalDetail ? ', ' + finalDetail : '') + parenStr;
+  // 동호수 없음: "도로명주소, (동명) 건물명"
+  // 동호수 있음: "도로명주소, 동호수 (동명) 건물명"
+  // ※ () 안에는 동명만, 건물명은 () 뒤로 출력
+  const parenStr   = dongPart ? `(${dongPart})` : '';
+  const bldgStr    = buildingName ? ` ${buildingName}` : '';
+  result.주소 = finalRoadAddr
+    + (finalDetail ? ', ' + finalDetail : '')
+    + (parenStr ? (finalDetail ? ' ' : ', ') + parenStr : '')
+    + bldgStr;
 
   // ── A-12 ③: 변환 후 주소 3자 미만 플래그 ────────────────────────
   if (result.주소.length < 3) {
