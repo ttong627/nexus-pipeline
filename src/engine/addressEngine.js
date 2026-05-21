@@ -106,13 +106,18 @@ export const asyncPool = async (poolLimit, array, iteratorFn) => {
 };
 
 // ── Kakao: 좌표 취득 (도로명 → WGS84) ────────────────────────────
-const fetchKakaoCoord = async (roadAddr) => {
+// cityPrefix: 시군구/시 등 지자체 토큰 — 도로명 단독 검색 시 타 지역 오매칭 방지
+const fetchKakaoCoord = async (roadAddr, cityPrefix = '') => {
   if (!KAKAO_REST_KEY || !roadAddr) return null;
-  const key = `coord_${roadAddr}`;
+  // JUSO roadAddr은 이미 전체 주소(도시명 포함) → 접두어 중복 추가 불필요
+  // 도시명이 없는 짧은 주소(result.주소 fallback)에만 cityPrefix 붙임
+  const hasCity = /특별시|광역시|특별자치시|도$|시$/.test(roadAddr.slice(0, 10));
+  const queryAddr = (!hasCity && cityPrefix) ? `${cityPrefix} ${roadAddr}` : roadAddr;
+  const key = `coord_${queryAddr}`;
   if (coordCache.has(key)) return coordCache.get(key);
   try {
     const res = await fetch(
-      `https://dapi.kakao.com/v2/local/search/address.json?query=${encodeURIComponent(roadAddr)}&size=1`,
+      `https://dapi.kakao.com/v2/local/search/address.json?query=${encodeURIComponent(queryAddr)}&size=1`,
       { headers: { Authorization: `KakaoAK ${KAKAO_REST_KEY}` } }
     );
     if (!res.ok) { coordCache.set(key, null); return null; }
@@ -632,7 +637,12 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
   result.lat   = null;
   result.lng   = null;
   if (result.주소) {
-    const coord = await fetchKakaoCoord(apiResult?.roadAddr || result.주소);
+    // JUSO roadAddr이 있으면 도시명 포함 전체 주소 → cityPrefix 불필요
+    // 없으면 result.주소(도시명 없음)에 cityLabel에서 추출한 시군구 접두어 추가
+    const cityPrefix = !apiResult?.roadAddr && cityLabel
+      ? (cityLabel.trim().split(/\s+/).filter(t => /(시|군|구)$/.test(t)).pop() || '')
+      : '';
+    const coord = await fetchKakaoCoord(apiResult?.roadAddr || result.주소, cityPrefix);
     if (coord) { result.lat = coord.lat; result.lng = coord.lng; }
   }
 

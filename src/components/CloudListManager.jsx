@@ -792,16 +792,22 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
     };
 
     // 단건 좌표 조회 (행정동 정보도 받아 건물명 전용 폴백에 활용)
-    //   1) 도로명 address 검색 (이미 도시명 포함 → 지역 이탈 없음)
-    //   2) 전체 주소 keyword 검색 → 지역 내 결과만 채택
-    //   3) 시군구 접두 + 도로명 keyword 검색 → 지역 내 결과만 채택
-    //   4) 행정동 + 건물명 keyword 검색 → 건물명만 있는 경우 전용 (주민센터·구청 등)
+    // 지자체 접두어 — 항상 포함하여 타 지역 동명 도로 오매칭 완전 차단
+    // 예) "장한로27길 29" → "동대문구 장한로27길 29"
+    const cityPrefix = sigungu || sido; // 시군구 우선, 없으면 시도
+
+    //   1) 지자체+도로명 address 검색
+    //   2) 지자체+도로명 keyword 검색 (파싱 실패 보완)
+    //   3) 지자체+전체주소(건물명 포함) keyword 검색
+    //   4) 행정동+건물명 keyword 검색 (건물명 전용)
+    // ※ 모든 단계에 반드시 지자체 컨텍스트 포함 — 도로명 단독 검색 금지
     const getCoord = async (주소, 행정동 = '') => {
       const road = cleanRoad(주소);
+      const prefixedRoad = cityPrefix ? `${cityPrefix} ${road}` : road;
 
-      // 1단계: 도로명만으로 address 검색 — 전국 동명 도로 대비 지역 필터 적용
+      // 1단계: 지자체+도로명으로 address 검색 (가장 정확)
       const res1 = await kakaoFetch(
-        `https://dapi.kakao.com/v2/local/search/address.json?query=${encodeURIComponent(road)}&size=5`
+        `https://dapi.kakao.com/v2/local/search/address.json?query=${encodeURIComponent(prefixedRoad)}&size=5`
       );
       if (res1?.ok) {
         const docs = (await res1.json()).documents || [];
@@ -809,9 +815,9 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
         if (d?.x && d?.y) return { lat: parseFloat(d.y), lng: parseFloat(d.x), _step: 1 };
       }
 
-      // 2단계: 원본 전체로 keyword 검색 (아파트·건물명 포함) → 지역 내 결과만
+      // 2단계: 지자체+도로명으로 keyword 검색 (address 파싱 실패 보완)
       const res2 = await kakaoFetch(
-        `https://dapi.kakao.com/v2/local/search/keyword.json?query=${encodeURIComponent(주소)}&size=5`
+        `https://dapi.kakao.com/v2/local/search/keyword.json?query=${encodeURIComponent(prefixedRoad)}&size=5`
       );
       if (res2?.ok) {
         const docs = (await res2.json()).documents || [];
@@ -819,11 +825,11 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
         if (d?.x && d?.y) return { lat: parseFloat(d.y), lng: parseFloat(d.x), _step: 2 };
       }
 
-      // 3단계: 시군구명 + 도로명으로 keyword 검색 → 지역 내 결과만
-      const step3Query = sigungu ? `${sigungu} ${road}` : road;
-      if (step3Query !== 주소) {
+      // 3단계: 지자체+전체주소(건물명 포함) keyword 검색 (아파트 단지명 등)
+      const fullQuery = cityPrefix ? `${cityPrefix} ${주소}` : 주소;
+      if (fullQuery !== prefixedRoad) {
         const res3 = await kakaoFetch(
-          `https://dapi.kakao.com/v2/local/search/keyword.json?query=${encodeURIComponent(step3Query)}&size=5`
+          `https://dapi.kakao.com/v2/local/search/keyword.json?query=${encodeURIComponent(fullQuery)}&size=5`
         );
         if (res3?.ok) {
           const docs = (await res3.json()).documents || [];
@@ -832,8 +838,7 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
         }
       }
 
-      // 4단계: 행정동 + 건물명 keyword 검색 (주민센터·행정복지관·구청 등 건물명만 있는 경우)
-      // 도로번호 패턴이 없으면 건물명 전용으로 판단
+      // 4단계: 행정동+건물명 keyword 검색 (건물명만 있는 경우 — 주민센터·구청 등)
       const isOnlyBuildingName = !/\d+(-\d+)?(로|길|번길|번지|가)\b/.test(road);
       if (isOnlyBuildingName) {
         const dongPrefix = 행정동?.trim() || sigungu;
@@ -843,7 +848,7 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
         );
         if (res4?.ok) {
           const docs = (await res4.json()).documents || [];
-          const d = docs.find(isInRegion) || docs.find(doc => doc.category_group_code === 'PO3'); // 공공기관 우선
+          const d = docs.find(isInRegion) || docs.find(doc => doc.category_group_code === 'PO3');
           if (d?.x && d?.y && isInRegion(d)) return { lat: parseFloat(d.y), lng: parseFloat(d.x), _step: 4 };
         }
       }
