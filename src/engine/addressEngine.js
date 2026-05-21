@@ -549,10 +549,8 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
     .replace(/([가-힣A-Za-z\d]+동)(\d+호)/g, '$1 $2')
     .replace(/([가-힣A-Za-z\d]+호)(\d+층)/g, '$1 $2');
 
-  // A-17: 층 표기 정규화 — 3F → 3층 (숫자+F만 변환)
-  // B1→지하1층 변환 제거: 아파트 B동(B1동, B2호 등)을 잘못 변환하는 오탐 발생
-  finalDetail = finalDetail
-    .replace(/(?<![가-힣])(\d+)[Ff]\b/g, '$1층');
+  // A-17: 층/F 표기 변환 제거 — B동·F동 등 건물동 명칭과 혼동 오탐 발생
+  // (3F→3층, B1→지하1층 모두 적용 안 함)
 
   // A-10: 동호 형식 정규화 + 호수 4자리 패딩
   // "101동 203호"   → "101-  203호"  (3자리: 공백 1개)
