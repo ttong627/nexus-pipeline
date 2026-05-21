@@ -216,6 +216,7 @@ export default function AdminPanel({ onClose, user }) {
   const [activeTab, setActiveTab] = useState('users');
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [migrationStatus, setMigrationStatus] = useState(null); // null | 'running' | { done, total, updated }
   const [banTarget, setBanTarget] = useState(null);
   const [banReason, setBanReason] = useState('');
   const [deleteTarget, setDeleteTarget] = useState(null);
@@ -284,6 +285,48 @@ export default function AdminPanel({ onClose, user }) {
       setAuditLogs(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     } catch { setAuditLogs([]); }
     finally { setAuditLoading(false); }
+  };
+
+  // DB 마이그레이션: 동사무소/읍사무소/면사무소 → 주민센터
+  const runOfficeMigration = async () => {
+    if (migrationStatus === 'running') return;
+    if (!window.confirm('base_lists 전체를 스캔하여 "동사무소/읍사무소/면사무소"를 "주민센터"로 일괄 변경합니다.\n\n계속하시겠습니까?')) return;
+    setMigrationStatus('running');
+    const OFFICE_RE = /동사무소|읍사무소|면사무소/g;
+    const replace   = (v) => typeof v === 'string' ? v.replace(OFFICE_RE, '주민센터') : v;
+    let totalScanned = 0, totalUpdated = 0;
+    try {
+      // 모든 도시(base_lists 최상위 문서) 목록 조회
+      const citySnap = await getDocs(collection(db, 'base_lists'));
+      const cities   = citySnap.docs.map(d => d.id);
+      for (const city of cities) {
+        const recSnap = await getDocs(collection(db, 'base_lists', city, 'records'));
+        const toUpdate = [];
+        recSnap.docs.forEach(d => {
+          const data = d.data();
+          const newNote    = replace(data.note    || '');
+          const newAddress = replace(data.address || '');
+          if (newNote !== (data.note || '') || newAddress !== (data.address || '')) {
+            toUpdate.push({ id: d.id, note: newNote, address: newAddress });
+          }
+          totalScanned++;
+        });
+        // 499건씩 배치 커밋
+        for (let i = 0; i < toUpdate.length; i += 499) {
+          const batch = writeBatch(db);
+          toUpdate.slice(i, i + 499).forEach(({ id, note, address }) => {
+            batch.set(doc(db, 'base_lists', city, 'records', id), { note, address }, { merge: true });
+          });
+          await batch.commit();
+          totalUpdated += toUpdate.slice(i, i + 499).length;
+        }
+        setMigrationStatus({ done: totalScanned, updated: totalUpdated });
+      }
+      setMigrationStatus({ done: totalScanned, updated: totalUpdated, finished: true });
+    } catch (e) {
+      console.error('[Migration]', e);
+      setMigrationStatus({ error: e.message || '오류 발생' });
+    }
   };
 
   const handleTierUpgradeInquiry = async () => {
@@ -1607,6 +1650,37 @@ export default function AdminPanel({ onClose, user }) {
                   </table>
                 </div>
               )}
+            </div>
+
+            {/* DB 마이그레이션 — 동사무소→주민센터 */}
+            <div>
+              <h3 className="text-orange-400 font-black text-base flex items-center gap-2 mb-3">
+                <RefreshCw size={18}/> DB 마이그레이션
+              </h3>
+              <div className="bg-orange-950/20 border border-orange-700/30 rounded-xl p-4">
+                <p className="text-orange-200/80 text-sm mb-1 font-bold">동사무소 / 읍사무소 / 면사무소 → 주민센터</p>
+                <p className="text-gray-500 text-xs mb-4">base_lists 전체의 note·address 필드에서 구식 명칭을 일괄 변경합니다.</p>
+                {migrationStatus === 'running' && (
+                  <div className="flex items-center gap-2 text-orange-400 text-sm mb-3">
+                    <RefreshCw size={14} className="animate-spin"/> 마이그레이션 진행 중...
+                    {typeof migrationStatus === 'object' && <span className="text-xs text-gray-500">스캔 {migrationStatus.done}건 / 변경 {migrationStatus.updated}건</span>}
+                  </div>
+                )}
+                {migrationStatus && migrationStatus !== 'running' && typeof migrationStatus === 'object' && (
+                  <div className={`text-sm mb-3 font-bold ${migrationStatus.error ? 'text-red-400' : 'text-emerald-400'}`}>
+                    {migrationStatus.error
+                      ? `오류: ${migrationStatus.error}`
+                      : `완료 — 스캔 ${migrationStatus.done}건 / 변경 ${migrationStatus.updated}건`}
+                  </div>
+                )}
+                <button
+                  onClick={runOfficeMigration}
+                  disabled={migrationStatus === 'running'}
+                  className="px-4 py-2 bg-orange-900/60 border border-orange-600/50 text-orange-300 font-black rounded-xl hover:bg-orange-800/60 transition-colors disabled:opacity-40 flex items-center gap-2 text-sm"
+                >
+                  <RefreshCw size={14} className={migrationStatus === 'running' ? 'animate-spin' : ''}/> 마이그레이션 실행
+                </button>
+              </div>
             </div>
 
             {/* 최근 배치 저장 로그 */}

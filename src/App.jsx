@@ -564,7 +564,7 @@ export default function App() {
           let addr = getVal(row, 'address');
           let name = getVal(row, 'name');
           let adminDong = getVal(row, 'admin') || "";
-          const processedRow = await processAddress(addr, name, adminDong, fileInfo?.city || "");
+          const processedRow = await processAddress(addr, name, adminDong, fileInfo?.city || "", getVal(row, 'note'));
           count++;
           if (Date.now() - lastProgressTime > 200) {
             setEngineProgress({ current: count, total, percent: Math.round((count/total)*100) });
@@ -726,7 +726,7 @@ export default function App() {
 
   const handleAddressKeyDown = async (e, row) => {
     if (e.key === "Enter") {
-      const res = await processAddress(row.주소, row.이름, row.행정동 || "", fileInfo?.city || "");
+      const res = await processAddress(row.주소, row.이름, row.행정동 || "", fileInfo?.city || "", row.특이사항 || "");
       const updatedRow = {
         ...row,
         주소: res.주소,
@@ -753,7 +753,7 @@ export default function App() {
     let done = 0;
 
     const repurified = await asyncPool(10, errorRows, async (row) => {
-      const res = await processAddress(row.주소, row.이름, row.행정동 || '', fileInfo?.city || '');
+      const res = await processAddress(row.주소, row.이름, row.행정동 || '', fileInfo?.city || '', row.특이사항 || '');
       done++;
       gUpdate(Math.round(done / errorRows.length * 100), `${done} / ${errorRows.length}건`);
       return {
