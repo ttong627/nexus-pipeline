@@ -1076,6 +1076,13 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
       });
     } catch (e) { console.warn('[주소정제] 저번달 로드 실패:', e); }
 
+    // 도로명+번호만 추출 (공백·괄호·쉼표 이후 무시) — 이사 판별용 유사값 비교
+    const getRoadPart = (addr) => {
+      const clean = (addr || '').replace(/\s+/g, '').replace(/\(.*?\)/g, '');
+      const m = clean.match(/[가-힣\d]+(대로|로|길)[가-힣\d]*\d+(?:-\d+)?/);
+      return m ? m[0] : clean.slice(0, 10);
+    };
+
     const changes = [];
     const dirtyUpdates = {};
     let current = 0;
@@ -1099,10 +1106,11 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
         const k2 = ph.length >= 7 ? `${rec.이름}__${ph}` : null;
         const prevAddr = (k1 && prevMap.get(k1)) || (k2 && prevMap.get(k2)) || null;
 
-        // 변경 유형 자동 감지
+        // 변경 유형 자동 감지 — 도로명+번호 기준 유사값 비교
+        // 도로가 같으면 정제(포맷 변경), 도로가 다르면 이사
         let changeType = '정제';
         if (refined.확인필요) changeType = '오류';
-        else if (prevAddr && prevAddr.slice(0, 12) !== newAddr.slice(0, 12)) changeType = '이사';
+        else if (prevAddr && getRoadPart(prevAddr) !== getRoadPart(newAddr)) changeType = '이사';
 
         changes.push({
           rowId: rec.id,
@@ -1143,7 +1151,7 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
       const prevAddr = (k1 && prevMap.get(k1)) || (k2 && prevMap.get(k2)) || null;
       if (!prevAddr) return;
       const currentAddr = (dirtyUpdates[rec.id]?.주소 || rec.주소 || '').trim();
-      if (prevAddr.trim() !== currentAddr) {
+      if (getRoadPart(prevAddr) !== getRoadPart(currentAddr)) {
         const dong = rec.행정동 || '미분류';
         dongCount[dong] = (dongCount[dong] || 0) + 1;
       }

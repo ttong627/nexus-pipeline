@@ -529,56 +529,75 @@ export default function App() {
     }
   };
 
-  // 같은 도로명+번호 주소의 () 내용을 가장 완전한 버전으로 통일
+  // 같은 도로명+번호 주소의 () 건물명을 통일 (A-25)
+  // 규칙: 동명은 각 레코드 유지, 건물명만 최빈값으로 통일
   // 예: "장한로27길 29, 805호 (장안동)"과 "장한로27길 29, 301호 (장안동, 두리빌딩)"
   //      → 둘 다 "(장안동, 두리빌딩)"으로 통일
   const unifyParenContent = (rows) => {
-    // 도로명+번호 기준 그룹화 (첫 번째 ',' 이전)
+    const DONG_NAME_RE = /^[가-힣][가-힣\d]*(읍|면|동)$/; // 한글 시작 행정동명 (숫자 시작 건물동호 제외)
+
+    // 도로명+번호 키 — 공백 제거 후 비교 (쉼표·괄호 위치 무관하게 같은 도로로 묶음)
+    const getRoadKey = (addr) => {
+      const clean = (addr || '').replace(/\s+/g, '');
+      const m = clean.match(/[가-힣\d]+(대로|로|길)[가-힣\d]*\d+(?:-\d+)?/);
+      return m ? m[0] : null;
+    };
+
+    // () 내부 동명 / 건물명 분리
+    const splitParenInner = (inner) => {
+      const parts = inner.split(/,\s*/);
+      const dong = parts.find(p => DONG_NAME_RE.test(p.trim())) || '';
+      const bd   = parts.filter(p => p.trim() && !DONG_NAME_RE.test(p.trim())).join(', ');
+      return { dong, bd };
+    };
+
+    // 그룹핑 (도로명+번호 기준)
     const groupMap = new Map();
-    rows.forEach((row, idx) => {
-      const addr = row.주소 || '';
-      const roadBase = addr.split(',')[0].trim();
-      if (!roadBase || roadBase.length < 4) return;
-      const parenMatch = addr.match(/\(([^)]*)\)/);
-      const parenContent = parenMatch ? parenMatch[1].trim() : null;
-      if (!groupMap.has(roadBase)) groupMap.set(roadBase, []);
-      groupMap.get(roadBase).push({ idx, parenContent });
+    rows.forEach(row => {
+      const key = getRoadKey(row.주소 || '');
+      if (!key || key.length < 4) return;
+      const pm    = (row.주소 || '').match(/\(([^)]*)\)/);
+      const inner = pm ? pm[1].trim() : null;
+      if (!groupMap.has(key)) groupMap.set(key, []);
+      groupMap.get(key).push({ row, inner });
     });
 
-    // 그룹별 최적 () 내용 결정 (빈도 우선, 동률 시 길이 우선)
-    const bestParen = new Map();
-    for (const [roadBase, entries] of groupMap) {
+    for (const [, entries] of groupMap) {
       if (entries.length < 2) continue;
+
+      // 건물명 최빈값 (빈도 우선, 동률 시 길이 우선)
       const freq = new Map();
-      for (const { parenContent } of entries) {
-        if (parenContent !== null && parenContent !== '') {
-          freq.set(parenContent, (freq.get(parenContent) || 0) + 1);
-        }
+      for (const { inner } of entries) {
+        if (!inner) continue;
+        const { bd } = splitParenInner(inner);
+        if (bd) freq.set(bd, (freq.get(bd) || 0) + 1);
       }
       if (!freq.size) continue;
-      let best = '', bestCount = 0, bestLen = 0;
-      for (const [content, count] of freq) {
-        if (count > bestCount || (count === bestCount && content.length > bestLen)) {
-          best = content; bestCount = count; bestLen = content.length;
+
+      let bestBd = '', bestCnt = 0, bestLen = 0;
+      for (const [bd, cnt] of freq) {
+        if (cnt > bestCnt || (cnt === bestCnt && bd.length > bestLen)) {
+          bestBd = bd; bestCnt = cnt; bestLen = bd.length;
         }
       }
-      if (best) bestParen.set(roadBase, best);
-    }
+      if (!bestBd) continue;
 
-    if (!bestParen.size) return;
-
-    // () 내용 통일 적용 (인플레이스)
-    rows.forEach(row => {
-      const addr = row.주소 || '';
-      const roadBase = addr.split(',')[0].trim();
-      if (!bestParen.has(roadBase)) return;
-      const best = bestParen.get(roadBase);
-      if (addr.includes('(')) {
-        row.주소 = addr.replace(/\([^)]*\)/, `(${best})`);
-      } else {
-        row.주소 = `${addr} (${best})`;
+      // 건물명만 통일 — 동명은 각 레코드 그대로 보존
+      for (const { row } of entries) {
+        const addr = row.주소 || '';
+        const pm   = addr.match(/\(([^)]*)\)/);
+        if (!pm) {
+          // 괄호 없는 레코드: `, (건물명)` 추가 (쉼표 필수)
+          row.주소 = `${addr}, (${bestBd})`;
+          continue;
+        }
+        const { dong } = splitParenInner(pm[1]);
+        const newInner = [dong, bestBd].filter(Boolean).join(', ');
+        if (newInner !== pm[1].trim()) {
+          row.주소 = addr.replace(/\([^)]*\)/, `(${newInner})`);
+        }
       }
-    });
+    }
   };
 
   const handleAnalyzeAll = async () => {

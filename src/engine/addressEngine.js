@@ -42,7 +42,7 @@ const _buildTypoRegex = () => {
 };
 
 // ── A-9: 특수문자 구분자 사전 ─────────────────────────────────────
-let specialChars      = new Set(['**', '/', '☆', '★', '*', '｜', '|', '~', '#', '§', '※']);
+let specialChars      = new Set(['**', '/', '☆', '★', '*', '｜', '|', '~', '#', '§', '※', '=>', '->']);
 let _specialCharRegex = null;
 
 const _buildSpecialCharRegex = () => {
@@ -505,12 +505,17 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
 
     buildingName = apiResult.bdNm || '';
     if (!buildingName && parens.length > 0) {
-      let parenContent = parens.map(p => p.replace(/^\(|\)$/g, '').trim()).filter(Boolean).join(', ');
-      // dongPart가 paren 내용 앞에 중복으로 포함된 경우 제거
-      // 예: dongPart='장안동', parenContent='장안동, 뒤족으로 계단 위' → '뒤족으로 계단 위'
+      let parenContent = parens.map(p => p.replace(/^\(|\)$/g, '').trim()).filter(Boolean).join(' ');
+      // dongPart와 같은 동명이 paren 앞에 있으면 제거
       if (dongPart && parenContent.startsWith(dongPart)) {
         parenContent = parenContent.slice(dongPart.length).replace(/^[,\s]+/, '').trim();
       }
+      // 동/읍/면 접미어 토큰 제거 (한글 시작 필터) — 건물 동 번호(101동)는 유지
+      // 예: '용두동' '답십리1동' → 제거, '101동' 'LH아파트' → 유지
+      parenContent = parenContent.split(/[,\s]+/)
+        .filter(tok => tok && !/^[가-힣][가-힣\d]*(읍|면|동)$/.test(tok.trim()))
+        .join(' ')
+        .trim();
       buildingName = parenContent;
     }
     detailAddr = detailAddr.replace(/__P\d+__/g, '').replace(/\s+/g, ' ').trim();
