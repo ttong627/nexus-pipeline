@@ -529,6 +529,58 @@ export default function App() {
     }
   };
 
+  // 같은 도로명+번호 주소의 () 내용을 가장 완전한 버전으로 통일
+  // 예: "장한로27길 29, 805호 (장안동)"과 "장한로27길 29, 301호 (장안동, 두리빌딩)"
+  //      → 둘 다 "(장안동, 두리빌딩)"으로 통일
+  const unifyParenContent = (rows) => {
+    // 도로명+번호 기준 그룹화 (첫 번째 ',' 이전)
+    const groupMap = new Map();
+    rows.forEach((row, idx) => {
+      const addr = row.주소 || '';
+      const roadBase = addr.split(',')[0].trim();
+      if (!roadBase || roadBase.length < 4) return;
+      const parenMatch = addr.match(/\(([^)]*)\)/);
+      const parenContent = parenMatch ? parenMatch[1].trim() : null;
+      if (!groupMap.has(roadBase)) groupMap.set(roadBase, []);
+      groupMap.get(roadBase).push({ idx, parenContent });
+    });
+
+    // 그룹별 최적 () 내용 결정 (빈도 우선, 동률 시 길이 우선)
+    const bestParen = new Map();
+    for (const [roadBase, entries] of groupMap) {
+      if (entries.length < 2) continue;
+      const freq = new Map();
+      for (const { parenContent } of entries) {
+        if (parenContent !== null && parenContent !== '') {
+          freq.set(parenContent, (freq.get(parenContent) || 0) + 1);
+        }
+      }
+      if (!freq.size) continue;
+      let best = '', bestCount = 0, bestLen = 0;
+      for (const [content, count] of freq) {
+        if (count > bestCount || (count === bestCount && content.length > bestLen)) {
+          best = content; bestCount = count; bestLen = content.length;
+        }
+      }
+      if (best) bestParen.set(roadBase, best);
+    }
+
+    if (!bestParen.size) return;
+
+    // () 내용 통일 적용 (인플레이스)
+    rows.forEach(row => {
+      const addr = row.주소 || '';
+      const roadBase = addr.split(',')[0].trim();
+      if (!bestParen.has(roadBase)) return;
+      const best = bestParen.get(roadBase);
+      if (addr.includes('(')) {
+        row.주소 = addr.replace(/\([^)]*\)/, `(${best})`);
+      } else {
+        row.주소 = `${addr} (${best})`;
+      }
+    });
+  };
+
   const handleAnalyzeAll = async () => {
     if (!selectedSheets || selectedSheets.length === 0) return;
     const total = selectedSheets.reduce((acc, s) => acc + (s.bodyRows?.length || 0), 0);
@@ -632,6 +684,7 @@ export default function App() {
     }
     
     setEngineProgress({ current: total, total, percent: 100 });
+    unifyParenContent(results); // 같은 도로명 주소 () 내용 통일
     pushHistory(results);
 
     // 정제 결과 요약

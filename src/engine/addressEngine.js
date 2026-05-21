@@ -493,10 +493,20 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
     if (!dongPart && adminDong?.trim() && DONG_SUFFIX.test(adminDong.trim())) {
       dongPart = adminDong.trim();
     }
+    // adminDong도 없으면 JUSO API emdNm(읍면동명) 사용 — 도로명 뒤 (행정동) 미표시 방지
+    if (!dongPart && apiResult.emdNm?.trim() && DONG_SUFFIX.test(apiResult.emdNm.trim())) {
+      dongPart = apiResult.emdNm.trim();
+    }
 
     buildingName = apiResult.bdNm || '';
     if (!buildingName && parens.length > 0) {
-      buildingName = parens.map(p => p.replace(/^\(|\)$/g, '').trim()).filter(Boolean).join(', ');
+      let parenContent = parens.map(p => p.replace(/^\(|\)$/g, '').trim()).filter(Boolean).join(', ');
+      // dongPart가 paren 내용 앞에 중복으로 포함된 경우 제거
+      // 예: dongPart='장안동', parenContent='장안동, 뒤족으로 계단 위' → '뒤족으로 계단 위'
+      if (dongPart && parenContent.startsWith(dongPart)) {
+        parenContent = parenContent.slice(dongPart.length).replace(/^[,\s]+/, '').trim();
+      }
+      buildingName = parenContent;
     }
     detailAddr = detailAddr.replace(/__P\d+__/g, '').replace(/\s+/g, ' ').trim();
   } else {
