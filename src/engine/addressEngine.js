@@ -566,15 +566,22 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
   finalDetail = finalDetail.replace(/^[,\s]+|[,\s]+$/g, '');
 
   // ── A-11: 최종 주소 형식 조합 ─────────────────────────────────────
-  // 동호수 없음: "도로명주소, (동명) 건물명"
-  // 동호수 있음: "도로명주소, 동호수 (동명) 건물명"
-  // ※ () 안에는 동명만, 건물명은 () 뒤로 출력
-  const parenStr   = dongPart ? `(${dongPart})` : '';
-  const bldgStr    = buildingName ? ` ${buildingName}` : '';
+  // 동호수(숫자+호 포함) → () 앞 유지: "도로명, 동호수 (동명, 건물명)"
+  // 동호수 아닌 설명문   → () 뒤로:   "도로명, (동명, 건물명) 기타설명"
+  // 동호수 없음          → 도로명 뒤 바로 ','+"도로명, (동명, 건물명)"
+  // () 내부 동명·건물명은 ',' 로 구분, trailing 쉼표/공백 제거
+  const isUnitDetail = finalDetail ? /\d+호/.test(finalDetail) : false;
+  const preDetail    = isUnitDetail ? finalDetail : '';
+  const postDetail   = isUnitDetail ? '' : finalDetail;
+
+  const parenParts  = [dongPart, buildingName].filter(Boolean);
+  const parenInner  = parenParts.join(', ').replace(/,\s*$/, '').trim();
+  const parenStr    = parenInner ? `(${parenInner})` : '';
+
   result.주소 = finalRoadAddr
-    + (finalDetail ? ', ' + finalDetail : '')
-    + (parenStr ? (finalDetail ? ' ' : ', ') + parenStr : '')
-    + bldgStr;
+    + (preDetail  ? ', ' + preDetail  : '')
+    + (parenStr   ? (preDetail ? ' ' : ', ') + parenStr : '')
+    + (postDetail ? (parenStr ? ' ' : ', ') + postDetail : '');
 
   // ── A-12 ③: 변환 후 주소 3자 미만 플래그 ────────────────────────
   if (result.주소.length < 3) {
