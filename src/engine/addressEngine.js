@@ -392,9 +392,17 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
     }
   }
 
-  // ── A-13: API 조회 (1차: 원문) ───────────────────────────────────
-  const searchKeyword = mainAddr.replace(/__P\d+__/g, '').trim();
+  // ── A-13: API 조회 — 시/구 컨텍스트 포함으로 오지역 매칭 방지 ──────
+  // "왕산로 72" 같은 도로명이 전국 여러 곳에 존재할 때 틀린 지역 반환 방지
+  // cityLabel에서 가장 하위 시·군·구 토큰을 추출해 검색 앞에 붙임
+  // 예: "동대문구 왕산로 72" → 서울 동대문구 결과만 반환
+  const baseSearch   = mainAddr.replace(/__P\d+__/g, '').trim();
+  const districtTok  = cityLabel
+    ? (cityLabel.trim().split(/\s+/).filter(t => /(시|군|구)$/.test(t)).pop() || '')
+    : '';
+  const searchKeyword = districtTok ? `${districtTok} ${baseSearch}` : baseSearch;
   let apiResult = await lookupAddr(searchKeyword);
+  if (!apiResult && districtTok) apiResult = await lookupAddr(baseSearch); // districtTok 포함 실패 시 원문 재시도
 
   // ── Fallback A: 주민센터·행정복지센터·읍·면·동사무소 ───────────────
   if (!apiResult && CENTER_RE.test(text)) {
@@ -468,6 +476,23 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
     let remain = rParts.slice(keepIdx);
     if (remain.length > 0 && DONG_SUFFIX.test(remain[0])) dongPart = remain.shift();
     finalRoadAddr = remain.join(' ') || rawFinal;
+
+    // ── dongPart 오지역 보정 ──────────────────────────────────────────
+    // 도시(시/구) 지역인데 API가 '면'을 반환하면 오매칭으로 간주
+    // 예: 서울 동대문구인데 dongPart='왕산면' → adminDong(용두동)으로 대체
+    if (dongPart.endsWith('면') && cityLabel) {
+      const lastTok = cityLabel.trim().split(/\s+/).pop() || '';
+      const isUrban = /(특별시|광역시|특별자치시|시$|구$)/.test(lastTok);
+      if (isUrban) {
+        dongPart = (adminDong?.trim() && DONG_SUFFIX.test(adminDong.trim()))
+          ? adminDong.trim()
+          : '';
+      }
+    }
+    // adminDong이 있고 API dongPart가 비어있으면 adminDong 사용
+    if (!dongPart && adminDong?.trim() && DONG_SUFFIX.test(adminDong.trim())) {
+      dongPart = adminDong.trim();
+    }
 
     buildingName = apiResult.bdNm || '';
     if (!buildingName && parens.length > 0) {
