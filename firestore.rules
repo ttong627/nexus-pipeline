@@ -90,14 +90,14 @@ service cloud.firestore {
 
     // ── 기본명단: 생성·수정은 승인 사용자, 삭제는 관리자만 (#5) ──────────────
     match /base_lists/{cityId} {
-      allow read: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin());
-      allow create, update: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin());
-      allow delete: if isAdmin();
+      allow read: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin() || isAdminEmail());
+      allow create, update: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin() || isAdminEmail());
+      allow delete: if isAdmin() || isAdminEmail();
 
       match /records/{recordId} {
-        allow read: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin());
-        allow create, update: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin());
-        allow delete: if isAdmin();
+        allow read: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin() || isAdminEmail());
+        allow create, update: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin() || isAdminEmail());
+        allow delete: if isAdmin() || isAdminEmail();
       }
     }
 
