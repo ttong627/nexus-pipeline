@@ -1337,7 +1337,7 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
                   {cloudDongList.map(d => <option key={d} value={d}>{d}</option>)}
                 </select>
                 {/* VIP+: 단일 행정동 선택 시 좌표 받아오기 버튼 */}
-                {filterDong && (canUseCoords(user?.tier) || isAdmin) && (
+                {filterDong && canUseCoords(user) && (
                   <button
                     onClick={handleFetchCoordsForDong}
                     disabled={isFetchingCoords}

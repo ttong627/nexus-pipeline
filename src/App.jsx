@@ -532,7 +532,7 @@ export default function App() {
   const handleAnalyzeAll = async () => {
     if (!selectedSheets || selectedSheets.length === 0) return;
     const total = selectedSheets.reduce((acc, s) => acc + (s.bodyRows?.length || 0), 0);
-    const monthlyLimit = getMonthlyLimit(user?.tier);
+    const monthlyLimit = getMonthlyLimit(user);
     if (monthlyLimit < Infinity && total > monthlyLimit) {
       setUpgradeReason('monthlyLimit');
       setShowUpgrade(true);
@@ -1541,7 +1541,7 @@ export default function App() {
                       <div className="my-0.5 border-t border-[#1a1a1a]" />
                       <button
                         onClick={() => {
-                          if (!canUseDbOverview(user?.tier)) {
+                          if (!canUseDbOverview(user)) {
                             setUpgradeReason('dbOverview'); setShowUpgrade(true); setShowHeaderMenu(false);
                           } else {
                             setStep(9); setDbNavCity(''); setShowHeaderMenu(false);
@@ -1550,13 +1550,13 @@ export default function App() {
                         className="w-full px-4 py-2.5 flex items-center gap-3 text-violet-300 hover:bg-violet-900/30 rounded-lg text-xs font-bold transition-colors text-left"
                       >
                         <BarChart3 size={15} /> DB 현황 조회
-                        {!canUseDbOverview(user?.tier) && <span className="ml-auto text-[9px] bg-purple-900/40 text-purple-400 border border-purple-700/40 px-1.5 py-0.5 rounded font-black">VVIP+</span>}
+                        {!canUseDbOverview(user) && <span className="ml-auto text-[9px] bg-purple-900/40 text-purple-400 border border-purple-700/40 px-1.5 py-0.5 rounded font-black">VVIP+</span>}
                       </button>
                       <button
                         onClick={() => { setShowDriverRegistry(true); setShowHeaderMenu(false); }}
                         className="w-full px-4 py-2.5 flex items-center gap-3 text-emerald-300 hover:bg-emerald-900/30 rounded-lg text-xs font-bold transition-colors text-left"
                       >
-                        <Truck size={15} /> {user?.orgId || canUseDriverRegistry(user?.tier) ? '소속사 기사 관리' : '기사설정'}
+                        <Truck size={15} /> {user?.orgId || canUseDriverRegistry(user) ? '소속사 기사 관리' : '기사설정'}
                       </button>
                       <button
                         onClick={() => { setStep(11); setShowHeaderMenu(false); }}
@@ -1573,7 +1573,7 @@ export default function App() {
                       </button>
                       <button
                         onClick={() => {
-                          if (!canUseRouteMap(user?.tier)) {
+                          if (!canUseRouteMap(user)) {
                             setUpgradeReason('routeMap'); setShowUpgrade(true); setShowHeaderMenu(false);
                           } else {
                             setShowRouteQuick(true); setShowHeaderMenu(false);
@@ -1582,7 +1582,7 @@ export default function App() {
                         className="w-full px-4 py-2.5 flex items-center gap-3 text-[#3b82f6] hover:bg-[#3b82f6]/10 rounded-lg text-xs font-bold transition-colors text-left"
                       >
                         <MapPin size={15} /> 기사 배정 / 루트맵
-                        {!canUseRouteMap(user?.tier) && <span className="ml-auto text-[9px] bg-blue-900/40 text-blue-400 border border-blue-700/40 px-1.5 py-0.5 rounded font-black">VIP+</span>}
+                        {!canUseRouteMap(user) && <span className="ml-auto text-[9px] bg-blue-900/40 text-blue-400 border border-blue-700/40 px-1.5 py-0.5 rounded font-black">VIP+</span>}
                       </button>
                       <button
                         onClick={() => { setStep(6); setDbNavCity(''); setShowHeaderMenu(false); }}
@@ -1614,7 +1614,7 @@ export default function App() {
               )}
             </div>
 
-            {canUseRouteMap(user?.tier) ? (
+            {canUseRouteMap(user) ? (
               <button
                 onClick={() => { setShowRouteQuick(true); }}
                 className="px-4 py-2 bg-[#050c18] border border-[#3b82f6]/40 text-[#3b82f6] font-bold rounded-lg text-xs transition-all flex items-center gap-2 hover:bg-[#0a1a30]"
@@ -1738,12 +1738,12 @@ export default function App() {
           {step === 2 && <Step2_SheetSelect step={step} setStep={setStep} fileInfo={fileInfo} setFileInfo={setFileInfo} worksheets={worksheets} setWorksheets={setWorksheets} setSelectedSheets={setSelectedSheets} onHelp={onHelp} handleSecondFileUpload={handleSecondFileUpload} />}
           {step === 3 && <Step3_Mapping step={step} setStep={setStep} selectedSheets={selectedSheets} worksheets={worksheets} mapDefs={mapDefs} setMapDefs={setMapDefs} startProcessing={handleAnalyzeAll} onHelp={onHelp} isBasePurifyMode={isBasePurifyMode} setIsBasePurifyMode={setIsBasePurifyMode} onOpenDbImport={() => setShowDbImport(true)} dbImportReady={dbImportReady} onUserMapping={handleUserMapping} />}
           {step === 4 && <LoadingScreen progress={engineProgress} logs={progressLogs} />}
-          {step === 5 && <ResultGrid step={step} setStep={setStep} fileInfo={fileInfo} filter={filter} setFilter={setFilter} dongList={gridDongList} driverList={gridDriverList} gridData={gridData} filteredData={filteredData} paginatedData={paginatedData} currentPage={currentPage} setCurrentPage={setCurrentPage} itemsPerPage={itemsPerPage} colVis={colVis} sortConfig={sortConfig} setSortConfig={setSortConfig} handleCellEdit={handleCellEdit} handleAddressKeyDown={handleAddressKeyDown} handleUpdateBaseList={handleUpdateBaseList} handleBatchSaveBaseList={handleBatchSaveBaseList} isSavingBaseList={isSavingBaseList} handleSaveMonthlyList={handleSaveMonthlyList} setShowExportSetting={setShowExportSetting} handleExport={handleExport} handleExportErrors={handleExportErrors} handleExportDongSummary={handleExportDongSummary} handleExportByDriver={handleExportByDriver} handleDeleteRows={handleDeleteRows} handleBatchSetNote={handleBatchSetNote} onHelp={onHelp} purifyResult={purifyResult} onClosePurifyResult={() => setPurifyResult(null)} onMovePhones={handleMovePhones} onRepurifyErrors={handleRepurifyErrors} onOpenRouteMap={() => { if (!canUseRouteMap(user?.tier)) { setUpgradeReason('routeMap'); setShowUpgrade(true); } else { setCloudRouteConfig(null); setShowRouteSetup(true); } }} onFetchBaseNotes={handleFetchBaseNotes} isFetchingNotes={isFetchingNotes} />}
+          {step === 5 && <ResultGrid step={step} setStep={setStep} fileInfo={fileInfo} filter={filter} setFilter={setFilter} dongList={gridDongList} driverList={gridDriverList} gridData={gridData} filteredData={filteredData} paginatedData={paginatedData} currentPage={currentPage} setCurrentPage={setCurrentPage} itemsPerPage={itemsPerPage} colVis={colVis} sortConfig={sortConfig} setSortConfig={setSortConfig} handleCellEdit={handleCellEdit} handleAddressKeyDown={handleAddressKeyDown} handleUpdateBaseList={handleUpdateBaseList} handleBatchSaveBaseList={handleBatchSaveBaseList} isSavingBaseList={isSavingBaseList} handleSaveMonthlyList={handleSaveMonthlyList} setShowExportSetting={setShowExportSetting} handleExport={handleExport} handleExportErrors={handleExportErrors} handleExportDongSummary={handleExportDongSummary} handleExportByDriver={handleExportByDriver} handleDeleteRows={handleDeleteRows} handleBatchSetNote={handleBatchSetNote} onHelp={onHelp} purifyResult={purifyResult} onClosePurifyResult={() => setPurifyResult(null)} onMovePhones={handleMovePhones} onRepurifyErrors={handleRepurifyErrors} onOpenRouteMap={() => { if (!canUseRouteMap(user)) { setUpgradeReason('routeMap'); setShowUpgrade(true); } else { setCloudRouteConfig(null); setShowRouteSetup(true); } }} onFetchBaseNotes={handleFetchBaseNotes} isFetchingNotes={isFetchingNotes} />}
           {step === 10 && <ErrorListManager gridData={gridData} onBack={() => setStep(gridData.length ? 5 : 0)} handleCellEdit={handleCellEdit} handleAddressKeyDown={handleAddressKeyDown} handleExportErrors={handleExportErrors} onRepurifyErrors={handleRepurifyErrors} />}
           {step === 11 && <ScheduleTab user={user} onBack={() => setStep(0)} />}
           {step === 6 && <BaseListManager user={user} initialCity={dbNavCity} onBack={() => { setStep(0); setDbNavCity(''); }} />}
           {step === 7 && <AdminPanel user={user} onClose={() => setStep(0)} />}
-          {step === 8 && <CloudListManager user={user} initialCity={dbNavCity} onBack={() => { setStep(0); setDbNavCity(''); }} onOpenRouteMap={(city, monthId, orgDongs) => { if (!canUseRouteMap(user?.tier)) { setUpgradeReason('routeMap'); setShowUpgrade(true); } else { setCloudRouteConfig({ city, monthId, orgDongs }); setShowRouteSetup(true); } }} onOpenInResultGrid={handleOpenInResultGrid} />}
+          {step === 8 && <CloudListManager user={user} initialCity={dbNavCity} onBack={() => { setStep(0); setDbNavCity(''); }} onOpenRouteMap={(city, monthId, orgDongs) => { if (!canUseRouteMap(user)) { setUpgradeReason('routeMap'); setShowUpgrade(true); } else { setCloudRouteConfig({ city, monthId, orgDongs }); setShowRouteSetup(true); } }} onOpenInResultGrid={handleOpenInResultGrid} />}
           {step === 9 && (
             <DbOverview
               onBack={() => setStep(0)}

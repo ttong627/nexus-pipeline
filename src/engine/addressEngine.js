@@ -257,6 +257,8 @@ export const processAddress = async (inputAddr, inputName = "", adminDong = "", 
   text = text.replace(/\([^)]*$/, '').trim();
   text = text.replace(/[,\s]+$/, '');
   text = text.replace(/,(?=\S)/g, ', ');
+  // A-15: 도로명 번호 뒤 구분자 "." → "," (예: "테헤란로 123. 456호" → "테헤란로 123, 456호")
+  text = text.replace(/(\d)\.\s+(?=\S)/g, '$1, ');
 
   // 주소 전체에 공공기관 키워드 포함 여부 사전 감지
   // → 해당 주소는 읍·면·동 토큰 삭제 절대 금지 (지우면 "주민센터"만 남아 API 오탐)
