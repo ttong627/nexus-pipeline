@@ -11,8 +11,10 @@ import {
   Cloud, Trash2, ArrowLeft, Download, Calendar, FileSpreadsheet,
   AlertCircle, ChevronRight, Search, Save, RotateCcw, X, CheckCircle, MapPin,
   Building2, DatabaseZap, Ghost, BookOpen, Phone, RefreshCw, LayoutGrid,
+  Wand2, AlertTriangle, List,
 } from 'lucide-react';
 import OrgPresetModal from './OrgPresetModal.jsx';
+import { processAddress, asyncPool } from '../engine/addressEngine.js';
 import { canUseCoords, canUseCoordsBg } from '../utils/tierUtils.js';
 
 const KAKAO_REST_KEY = import.meta.env.VITE_KAKAO_REST_KEY;
@@ -967,6 +969,15 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
 
   // ── 유령데이터 정리 (이름 없거나 주소+행정동 모두 없는 행) ────────────────
   const [isPurging, setIsPurging] = useState(false);
+
+  // ── 주소 정제 ───────────────────────────────────────────────────────
+  const [isRefiningAddr, setIsRefiningAddr] = useState(false);
+  const [refineProgress, setRefineProgress] = useState(null); // null | {current, total}
+  const [addrChanges, setAddrChanges] = useState([]);         // 변경된 주소 목록
+  const [showAddrChanges, setShowAddrChanges] = useState(false);
+  const [dongAddrWarnings, setDongAddrWarnings] = useState({}); // {dong: count}
+  const [addrChangeTab, setAddrChangeTab] = useState('dong');  // 'dong' | 'list'
+
   const handlePurgeGhostData = async () => {
     if (!isAdmin || !selectedCity || !selectedMonth) return;
     const ghosts = records.filter(r => {
@@ -1014,6 +1025,165 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
     } finally {
       setIsPurging(false);
     }
+  };
+
+  // ── 주소 정제 (저장된 명단에 addressEngine 직접 적용) ────────────────
+  const handleRefineAddresses = async () => {
+    if (!records.length || isRefiningAddr) return;
+    if (!confirm(`${records.length.toLocaleString()}건의 주소를 정제합니다.\n기존 주소와 다른 경우 변경 목록에 표시되며, '변경사항 저장'으로 확정됩니다. 계속할까요?`)) return;
+
+    setIsRefiningAddr(true);
+    setRefineProgress({ current: 0, total: records.length });
+    setAddrChanges([]);
+    setDongAddrWarnings({});
+
+    // 저번달 delivery_history 로드 (name+birthKey 또는 name+phone 키)
+    const prevMap = new Map();
+    try {
+      const now = new Date();
+      const pd = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      const prevId = `${pd.getFullYear()}-${String(pd.getMonth() + 1).padStart(2, '0')}`;
+      const prevSnap = await getDocs(collection(db, 'delivery_history', selectedCity, 'months', prevId, 'records'));
+      prevSnap.docs.forEach(d => {
+        const r = d.data();
+        const digits = v => String(v || '').replace(/[^\d]/g, '');
+        const k1 = r.birthKey ? `${r.name}__${r.birthKey}` : null;
+        const ph = digits(r.mobile || '').slice(-7);
+        const k2 = ph.length >= 7 ? `${r.name}__${ph}` : null;
+        if (k1) prevMap.set(k1, r.address || '');
+        if (k2) prevMap.set(k2, r.address || '');
+      });
+    } catch (e) { console.warn('[주소정제] 저번달 로드 실패:', e); }
+
+    const changes = [];
+    const dirtyUpdates = {};
+    let current = 0;
+
+    await asyncPool(10, records, async (rec) => {
+      try {
+        const refined = await processAddress(
+          rec.주소 || '', rec.이름 || '', rec.행정동 || '', selectedCity, rec.특이사항 || ''
+        );
+        current++;
+        setRefineProgress({ current, total: records.length });
+
+        const oldAddr = (rec.주소 || '').trim();
+        const newAddr = (refined.주소 || '').trim();
+        if (!newAddr || newAddr === oldAddr) return;
+
+        // 저번달 주소 매칭
+        const digits = v => String(v || '').replace(/[^\d]/g, '');
+        const ph = digits(rec.휴대폰 || '').slice(-7);
+        const k1 = rec.생년월일 ? `${rec.이름}__${rec.생년월일}` : null;
+        const k2 = ph.length >= 7 ? `${rec.이름}__${ph}` : null;
+        const prevAddr = (k1 && prevMap.get(k1)) || (k2 && prevMap.get(k2)) || null;
+
+        // 변경 유형 자동 감지
+        let changeType = '정제';
+        if (refined.확인필요) changeType = '오류';
+        else if (prevAddr && prevAddr.slice(0, 12) !== newAddr.slice(0, 12)) changeType = '이사';
+
+        changes.push({
+          rowId: rec.id,
+          이름: rec.이름 || '',
+          생년월일: rec.생년월일 || '',
+          행정동: rec.행정동 || '미분류',
+          oldAddr,
+          newAddr,
+          prevAddr: prevAddr || null,
+          changeType,
+          status: 'pending',   // pending | reverted
+          _에러: !!refined.확인필요,
+        });
+
+        dirtyUpdates[rec.id] = {
+          ...(dirtyUpdates[rec.id] || {}),
+          주소: newAddr,
+          ...(refined.확인필요 ? { 확인필요: true, 확인사유: refined.확인사유 || '' } : {}),
+        };
+      } catch {
+        current++;
+        setRefineProgress({ current, total: records.length });
+      }
+    });
+
+    // dirtyRecords에 변경사항 반영 (기존 저장 메커니즘 활용)
+    if (Object.keys(dirtyUpdates).length > 0) {
+      setDirtyRecords(prev => ({ ...prev, ...dirtyUpdates }));
+    }
+
+    // 행정동별 저번달 대비 주소 변경 건수 (경고 기준: 10건+)
+    const dongCount = {};
+    records.forEach(rec => {
+      const digits = v => String(v || '').replace(/[^\d]/g, '');
+      const ph = digits(rec.휴대폰 || '').slice(-7);
+      const k1 = rec.생년월일 ? `${rec.이름}__${rec.생년월일}` : null;
+      const k2 = ph.length >= 7 ? `${rec.이름}__${ph}` : null;
+      const prevAddr = (k1 && prevMap.get(k1)) || (k2 && prevMap.get(k2)) || null;
+      if (!prevAddr) return;
+      const currentAddr = (dirtyUpdates[rec.id]?.주소 || rec.주소 || '').trim();
+      if (prevAddr.trim() !== currentAddr) {
+        const dong = rec.행정동 || '미분류';
+        dongCount[dong] = (dongCount[dong] || 0) + 1;
+      }
+    });
+    setDongAddrWarnings(dongCount);
+
+    setAddrChanges(changes);
+    setIsRefiningAddr(false);
+    setRefineProgress(null);
+    setAddrChangeTab('dong');
+
+    if (changes.length > 0) {
+      setShowAddrChanges(true);
+    } else {
+      alert('변경된 주소가 없습니다. 이미 모두 정제된 상태입니다.');
+    }
+  };
+
+  // 개별 변경 원복 (dirtyRecords에서 주소 제거)
+  const handleRevertAddrChange = (rowId) => {
+    setAddrChanges(prev => prev.map(c => c.rowId === rowId ? { ...c, status: 'reverted' } : c));
+    setDirtyRecords(prev => {
+      const entry = { ...(prev[rowId] || {}) };
+      delete entry.주소; delete entry.확인필요; delete entry.확인사유;
+      const next = { ...prev };
+      if (!Object.keys(entry).length) delete next[rowId]; else next[rowId] = entry;
+      return next;
+    });
+  };
+
+  // 원복된 항목 재적용
+  const handleReApplyAddrChange = (change) => {
+    setAddrChanges(prev => prev.map(c => c.rowId === change.rowId ? { ...c, status: 'pending' } : c));
+    setDirtyRecords(prev => ({
+      ...prev,
+      [change.rowId]: {
+        ...(prev[change.rowId] || {}),
+        주소: change.newAddr,
+        ...(change._에러 ? { 확인필요: true } : {}),
+      },
+    }));
+  };
+
+  // 변경 유형 수동 지정
+  const handleMarkChangeType = (rowId, type) => {
+    setAddrChanges(prev => prev.map(c => c.rowId === rowId ? { ...c, changeType: type } : c));
+  };
+
+  // 전체 원복
+  const handleRevertAllAddrChanges = () => {
+    if (!confirm('모든 주소 정제 변경사항을 원복하시겠습니까?')) return;
+    setAddrChanges(prev => prev.map(c => ({ ...c, status: 'reverted' })));
+    setDirtyRecords(prev => {
+      const next = { ...prev };
+      addrChanges.forEach(({ rowId }) => {
+        const entry = { ...(next[rowId] || {}) };
+        delete entry.주소; delete entry.확인필요; delete entry.확인사유;
+        if (!Object.keys(entry).length) delete next[rowId]; else next[rowId] = entry;
+      });
+      return next;
+    });
   };
 
   // ── Download xlsx ─────────────────────────────────────────────────
@@ -1144,6 +1314,29 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
                 title="유선전화에 있는 휴대폰 번호를 휴대폰으로 이동"
               >
                 <Phone size={13} /> {isMovingPhones ? '이동 중...' : '전화번호 이동'}
+              </button>
+            )}
+            {records.length > 0 && (
+              <button
+                onClick={handleRefineAddresses}
+                disabled={isRefiningAddr}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-bold bg-violet-950/40 hover:bg-violet-900/50 text-violet-400 border border-violet-500/30 transition-colors disabled:opacity-40"
+                title="저장된 명단의 주소를 정제합니다"
+              >
+                <Wand2 size={13} /> {isRefiningAddr ? '정제 중...' : '주소 정제'}
+              </button>
+            )}
+            {addrChanges.length > 0 && (
+              <button
+                onClick={() => setShowAddrChanges(true)}
+                className="relative flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-bold bg-amber-950/40 hover:bg-amber-900/50 text-amber-400 border border-amber-500/30 transition-colors"
+                title="주소 정제로 변경된 항목 확인"
+              >
+                <AlertTriangle size={13} />
+                주소변경확인
+                <span className="absolute -top-1.5 -right-1.5 bg-amber-500 text-black text-[9px] font-black rounded-full w-4 h-4 flex items-center justify-center leading-none">
+                  {addrChanges.filter(c => c.status === 'pending').length}
+                </span>
               </button>
             )}
             {onOpenInResultGrid && records.length > 0 && (
@@ -1439,6 +1632,210 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
           </div>
         </div>
       )}
+
+      {/* ═══ 주소 정제 진행 플로팅 표시기 ═══ */}
+      {isRefiningAddr && refineProgress && (
+        <div className="fixed bottom-5 right-5 z-[210] bg-[#111] border border-violet-500/30 rounded-2xl px-4 py-3 shadow-2xl text-xs flex items-center gap-3 min-w-[280px]">
+          <span className="w-3.5 h-3.5 rounded-full border-2 border-violet-400 border-t-transparent animate-spin shrink-0" />
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-violet-300 font-bold">주소 정제 중</span>
+              <span className="text-violet-400 font-black ml-2">
+                {refineProgress.current}/{refineProgress.total}
+                <span className="text-gray-500 ml-1">({Math.round(refineProgress.current / refineProgress.total * 100)}%)</span>
+              </span>
+            </div>
+            <div className="w-full bg-[#222] rounded-full h-1.5">
+              <div
+                className="h-full rounded-full bg-violet-500 transition-all duration-300"
+                style={{ width: `${refineProgress.total > 0 ? Math.round(refineProgress.current / refineProgress.total * 100) : 0}%` }}
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ═══ 주소 변경 확인 모달 ═══ */}
+      {showAddrChanges && (() => {
+        const pendingCount  = addrChanges.filter(c => c.status === 'pending').length;
+        const revertedCount = addrChanges.filter(c => c.status === 'reverted').length;
+        const warnDongs = Object.entries(dongAddrWarnings).filter(([, c]) => c >= 10);
+
+        // 행정동 요약 계산
+        const dongStats = {};
+        addrChanges.forEach(c => {
+          const d = c.행정동 || '미분류';
+          if (!dongStats[d]) dongStats[d] = { total: 0, 정제: 0, 이사: 0, 오류: 0, reverted: 0 };
+          dongStats[d].total++;
+          if (c.status === 'reverted') dongStats[d].reverted++;
+          else dongStats[d][c.changeType] = (dongStats[d][c.changeType] || 0) + 1;
+        });
+
+        return (
+          <div className="absolute inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-[150] p-4">
+            <div className="bg-[#0e0e0e] border border-white/10 rounded-2xl w-full max-w-5xl max-h-[88vh] flex flex-col shadow-2xl">
+
+              {/* Header */}
+              <div className="flex items-center justify-between px-5 py-4 border-b border-white/10">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <AlertTriangle size={15} className="text-amber-400 shrink-0" />
+                  <h2 className="text-sm font-black text-white">주소 변경 확인</h2>
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/15 text-amber-400 border border-amber-500/30">
+                    전체 {addrChanges.length}건
+                  </span>
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-green-500/15 text-green-400 border border-green-500/30">
+                    적용 {pendingCount}건
+                  </span>
+                  {revertedCount > 0 && (
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-gray-500/15 text-gray-400 border border-gray-500/30">
+                      원복 {revertedCount}건
+                    </span>
+                  )}
+                  {warnDongs.map(([dong, cnt]) => (
+                    <span key={dong} className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-500/15 text-red-400 border border-red-500/30">
+                      ⚠ {dong} 이상 {cnt}건
+                    </span>
+                  ))}
+                </div>
+                <button onClick={() => setShowAddrChanges(false)} className="p-1.5 hover:bg-white/10 rounded-lg text-gray-500 hover:text-white transition-colors shrink-0">
+                  <X size={15} />
+                </button>
+              </div>
+
+              {/* Tabs */}
+              <div className="flex gap-1 px-5 pt-2 border-b border-white/5">
+                <button
+                  onClick={() => setAddrChangeTab('dong')}
+                  className={`flex items-center gap-1 px-3 py-1.5 text-[11px] font-bold rounded-t-lg transition-colors ${addrChangeTab === 'dong' ? 'bg-white/10 text-white' : 'text-gray-500 hover:text-gray-300'}`}
+                >
+                  <Building2 size={11} /> 행정동 요약
+                </button>
+                <button
+                  onClick={() => setAddrChangeTab('list')}
+                  className={`flex items-center gap-1 px-3 py-1.5 text-[11px] font-bold rounded-t-lg transition-colors ${addrChangeTab === 'list' ? 'bg-white/10 text-white' : 'text-gray-500 hover:text-gray-300'}`}
+                >
+                  <List size={11} /> 전체 목록 ({addrChanges.length})
+                </button>
+              </div>
+
+              {/* Content */}
+              <div className="flex-1 overflow-auto p-4">
+                {addrChangeTab === 'dong' ? (
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="text-gray-500 text-[10px] font-bold uppercase tracking-wider border-b border-white/10">
+                        <th className="text-left pb-2.5 font-bold">행정동</th>
+                        <th className="text-center pb-2.5 font-bold">전체</th>
+                        <th className="text-center pb-2.5 font-bold">정제</th>
+                        <th className="text-center pb-2.5 font-bold">이사</th>
+                        <th className="text-center pb-2.5 font-bold">오류</th>
+                        <th className="text-center pb-2.5 font-bold">원복</th>
+                        <th className="text-left pb-2.5 font-bold">상태</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {Object.entries(dongStats)
+                        .sort((a, b) => b[1].total - a[1].total)
+                        .map(([dong, s]) => {
+                          const warn = dongAddrWarnings[dong] >= 10;
+                          return (
+                            <tr key={dong} className={`border-b border-white/5 hover:bg-white/3 transition-colors ${warn ? 'bg-red-950/10' : ''}`}>
+                              <td className="py-2 font-bold text-white">
+                                {warn && <span className="text-red-400 mr-1">⚠</span>}
+                                {dong}
+                              </td>
+                              <td className="py-2 text-center text-gray-300 font-black">{s.total}</td>
+                              <td className="py-2 text-center"><span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-blue-500/15 text-blue-400">{s.정제 || 0}</span></td>
+                              <td className="py-2 text-center"><span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-orange-500/15 text-orange-400">{s.이사 || 0}</span></td>
+                              <td className="py-2 text-center"><span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-red-500/15 text-red-400">{s.오류 || 0}</span></td>
+                              <td className="py-2 text-center text-gray-600">{s.reverted || 0}</td>
+                              <td className="py-2">
+                                {warn
+                                  ? <span className="text-[10px] font-bold text-red-400">행정동 주소이상</span>
+                                  : <span className="text-[10px] text-gray-600">정상 범위</span>}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                    </tbody>
+                  </table>
+                ) : (
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="text-gray-500 text-[10px] border-b border-white/10">
+                        <th className="text-left py-2 pr-3 font-bold">이름</th>
+                        <th className="text-left py-2 pr-3 font-bold">행정동</th>
+                        <th className="text-left py-2 pr-3 font-bold min-w-[160px]">기존 주소</th>
+                        <th className="text-left py-2 pr-3 font-bold min-w-[160px]">정제 주소</th>
+                        <th className="text-left py-2 pr-3 font-bold min-w-[140px]">저번달 주소</th>
+                        <th className="text-center py-2 pr-3 font-bold">유형</th>
+                        <th className="text-center py-2 font-bold">처리</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {addrChanges.map(c => (
+                        <tr key={c.rowId} className={`border-b border-white/5 transition-colors hover:bg-white/3 ${c.status === 'reverted' ? 'opacity-40' : ''}`}>
+                          <td className="py-1.5 pr-3 font-bold text-white whitespace-nowrap">{c.이름}</td>
+                          <td className="py-1.5 pr-3 text-gray-400 whitespace-nowrap">{c.행정동}</td>
+                          <td className="py-1.5 pr-3 text-gray-500 line-through max-w-[200px] truncate" title={c.oldAddr}>{c.oldAddr}</td>
+                          <td className={`py-1.5 pr-3 max-w-[200px] truncate ${c.status === 'reverted' ? 'text-gray-600 line-through' : 'text-green-400 font-bold'}`} title={c.newAddr}>{c.newAddr}</td>
+                          <td className="py-1.5 pr-3 text-blue-300 max-w-[180px] truncate" title={c.prevAddr || '-'}>{c.prevAddr || <span className="text-gray-600">-</span>}</td>
+                          <td className="py-1.5 pr-3 text-center">
+                            <select
+                              value={c.changeType}
+                              onChange={e => handleMarkChangeType(c.rowId, e.target.value)}
+                              disabled={c.status === 'reverted'}
+                              className="text-[10px] font-bold rounded px-1 py-0.5 bg-transparent border border-white/10 text-gray-300 cursor-pointer disabled:opacity-50"
+                            >
+                              <option value="정제">🔧 정제</option>
+                              <option value="이사">🚚 이사</option>
+                              <option value="오류">⚠ 오류</option>
+                            </select>
+                          </td>
+                          <td className="py-1.5 text-center">
+                            {c.status === 'reverted' ? (
+                              <button
+                                onClick={() => handleReApplyAddrChange(c)}
+                                className="px-2 py-0.5 rounded text-[10px] font-bold bg-green-950/40 hover:bg-green-900/50 text-green-400 border border-green-500/20 transition-colors"
+                              >재적용</button>
+                            ) : (
+                              <button
+                                onClick={() => handleRevertAddrChange(c.rowId)}
+                                className="px-2 py-0.5 rounded text-[10px] font-bold bg-red-950/30 hover:bg-red-900/40 text-red-400 border border-red-500/20 transition-colors"
+                              >원복</button>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+
+              {/* Footer */}
+              <div className="flex items-center justify-between px-5 py-3 border-t border-white/10">
+                <p className="text-[11px] text-gray-500">
+                  ※ 닫기 후 <span className="text-blue-400 font-bold">변경사항 저장</span> 버튼을 눌러야 Firestore에 반영됩니다.
+                </p>
+                <div className="flex gap-2">
+                  <button
+                    onClick={handleRevertAllAddrChanges}
+                    className="px-3 py-1.5 rounded-xl text-[11px] bg-red-950/30 hover:bg-red-900/40 text-red-400 border border-red-500/20 font-bold transition-colors"
+                  >
+                    전체 원복
+                  </button>
+                  <button
+                    onClick={() => setShowAddrChanges(false)}
+                    className="px-4 py-1.5 rounded-xl text-[11px] bg-blue-600 hover:bg-blue-500 text-white font-bold transition-colors"
+                  >
+                    확인
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ═══ VVIP 백그라운드 좌표 매칭 플로팅 표시기 ═══ */}
       {bgCoordState && (
