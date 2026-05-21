@@ -29,3 +29,9 @@ dist-ssr
 *.sw?
 *.xls
 *.xlsx
+
+# Firebase hosting cache (배포 시 자동 생성)
+.firebase/
+
+# AI/ML 학습 캐시 (로컬 전용)
+unsloth_compiled_cache/
