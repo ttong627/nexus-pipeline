@@ -502,6 +502,9 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
     if (!dongPart && apiResult.emdNm?.trim() && DONG_SUFFIX.test(apiResult.emdNm.trim())) {
       dongPart = apiResult.emdNm.trim();
     }
+    // A-27: 행정동 번호 접미어 제거 — 도로명주소 () 내 동명은 법정동(번호 없음) 표기
+    // 예: 답십리2동 → 답십리동, 청량리3동 → 청량리동, 신설1동 → 신설동
+    if (dongPart) dongPart = dongPart.replace(/^([가-힣]+)\d+(동)$/, '$1$2');
 
     buildingName = apiResult.bdNm || '';
     if (!buildingName && parens.length > 0) {

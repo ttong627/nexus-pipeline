@@ -543,10 +543,14 @@ export default function App() {
       return m ? m[0] : null;
     };
 
+    // 동명 번호 접미어 제거 (답십리2동 → 답십리동) — 법정동 표기 통일
+    const normDong = (d) => d ? d.replace(/^([가-힣]+)\d+(동)$/, '$1$2') : '';
+
     // () 내부 동명 / 건물명 분리
     const splitParenInner = (inner) => {
       const parts = inner.split(/,\s*/);
-      const dong = parts.find(p => DONG_NAME_RE.test(p.trim())) || '';
+      const rawDong = parts.find(p => DONG_NAME_RE.test(p.trim())) || '';
+      const dong = normDong(rawDong.trim());
       const bd   = parts.filter(p => p.trim() && !DONG_NAME_RE.test(p.trim())).join(', ');
       return { dong, bd };
     };
