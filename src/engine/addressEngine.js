@@ -549,10 +549,9 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
     .replace(/([가-힣A-Za-z\d]+동)(\d+호)/g, '$1 $2')
     .replace(/([가-힣A-Za-z\d]+호)(\d+층)/g, '$1 $2');
 
-  // A-17: 층 표기 정규화 — 3F → 3층, B1 → 지하1층
-  // 앞에 한글이 있는 경우 제외 (예: '전자B동' 오탐 방지)
+  // A-17: 층 표기 정규화 — 3F → 3층 (숫자+F만 변환)
+  // B1→지하1층 변환 제거: 아파트 B동(B1동, B2호 등)을 잘못 변환하는 오탐 발생
   finalDetail = finalDetail
-    .replace(/(?<![가-힣])([Bb])(\d+)[Ff]?\b/g, '지하$2층')
     .replace(/(?<![가-힣])(\d+)[Ff]\b/g, '$1층');
 
   // A-10: 동호 형식 정규화 + 호수 4자리 패딩
