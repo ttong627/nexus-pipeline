@@ -11,9 +11,10 @@ import {
   Cloud, Trash2, ArrowLeft, Download, Calendar, FileSpreadsheet,
   AlertCircle, ChevronRight, Search, Save, RotateCcw, X, CheckCircle, MapPin,
   Building2, DatabaseZap, Ghost, BookOpen, Phone, RefreshCw, LayoutGrid,
-  Wand2, AlertTriangle, List,
+  Wand2, AlertTriangle, List, Eraser,
 } from 'lucide-react';
 import OrgPresetModal from './OrgPresetModal.jsx';
+import CoordBrushModal from './CoordBrushModal.jsx';
 import { processAddress, asyncPool } from '../engine/addressEngine.js';
 import { canUseCoords, canUseCoordsBg } from '../utils/tierUtils.js';
 
@@ -975,6 +976,21 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
   // ── 유령데이터 정리 (이름 없거나 주소+행정동 모두 없는 행) ────────────────
   const [isPurging, setIsPurging] = useState(false);
 
+  // ── 좌표 삭제 브러시 ─────────────────────────────────────────────────
+  const [showCoordBrush, setShowCoordBrush] = useState(false);
+
+  const handleCoordBrushApply = useCallback((deletedIds) => {
+    setDirtyRecords(prev => {
+      const next = { ...prev };
+      deletedIds.forEach(id => {
+        next[id] = { ...(next[id] || {}), lat: null, lng: null };
+      });
+      return next;
+    });
+    setRecords(prev => prev.map(r => deletedIds.has(r.id) ? { ...r, lat: null, lng: null } : r));
+    setShowCoordBrush(false);
+  }, []);
+
   // ── 주소 정제 ───────────────────────────────────────────────────────
   const [isRefiningAddr, setIsRefiningAddr] = useState(false);
   const [refineProgress, setRefineProgress] = useState(null); // null | {current, total}
@@ -1344,6 +1360,15 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
                 </span>
               </button>
             )}
+            {records.some(r => r.lat && r.lng) && (
+              <button
+                onClick={() => setShowCoordBrush(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-bold bg-cyan-950/40 hover:bg-cyan-900/50 text-cyan-400 border border-cyan-500/30 transition-colors"
+                title="잘못 매칭된 좌표를 브러시로 선택해 삭제"
+              >
+                <Eraser size={13} /> 좌표 삭제 브러시
+              </button>
+            )}
             {onOpenInResultGrid && records.length > 0 && (
               <button
                 onClick={() => onOpenInResultGrid(selectedCity, selectedMonth.id, records)}
@@ -1609,6 +1634,16 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
           records={records}
           monthId={selectedMonth.id}
           onClose={() => setShowOrgPreset(false)}
+        />
+      )}
+
+      {/* ═══ 좌표 삭제 브러시 ═══ */}
+      {showCoordBrush && selectedCity && (
+        <CoordBrushModal
+          records={records}
+          selectedCity={selectedCity}
+          onClose={() => setShowCoordBrush(false)}
+          onApplyDelete={handleCoordBrushApply}
         />
       )}
 
