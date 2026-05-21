@@ -502,12 +502,17 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
     .replace(/(?<![가-힣])([Bb])(\d+)[Ff]?\b/g, '지하$2층')
     .replace(/(?<![가-힣])(\d+)[Ff]\b/g, '$1층');
 
-  // A-10: 동호 형식 정규화
-  // "101동 203호" → "101-203호"
-  // "101동 3층 203호" → "101-203호 3층"  (지하·B·b 포함)
+  // A-10: 동호 형식 정규화 + 호수 4자리 패딩
+  // "101동 203호"   → "101-  203호"  (3자리: 공백 1개)
+  // "101동 21호"    → "101-   21호"  (2자리: 공백 2개)
+  // "101동 1203호"  → "101-1203호"   (4자리: 패딩 없음)
+  // "101동 3층 203호" → "101-  203호 3층"
   finalDetail = finalDetail.replace(
     /([가-힣A-Za-z\d]+)동\s*(?:(지하|[Bb])?\s*(\d+)\s*층\s*)?(?:제\s*)?(\d+)\s*호/g,
-    (_, dong, flrPfx, flr, ho) => `${dong}-${ho}호${flr ? ` ${flrPfx || ''}${flr}층` : ''}`
+    (_, dong, flrPfx, flr, ho) => {
+      const pad = ' '.repeat(Math.max(0, 4 - ho.length));
+      return `${dong}-${pad}${ho}호${flr ? ` ${flrPfx || ''}${flr}층` : ''}`;
+    }
   );
 
   // A-9 2차: 상세주소에 남아있는 특수문자 재처리
