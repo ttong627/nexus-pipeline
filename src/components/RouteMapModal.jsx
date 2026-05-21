@@ -353,6 +353,9 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
   // ── 클릭 순번 배정 모드 (지도/목록 클릭 순서대로 1→2→3 순번 부여)
   const [isSeqClickMode, setIsSeqClickMode] = useState(false);
   const [seqClickNext, setSeqClickNext] = useState(1);
+  const [isSeqDragMode, setIsSeqDragMode] = useState(false);
+  const [dragOverId, setDragOverId] = useState(null);
+  const dragSrcIdRef = useRef(null);
 
   // ── 페인트 브러시 모드 (2차 보정)
   const [isPaintMode, setIsPaintMode] = useState(false);
@@ -363,6 +366,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
   const pendingPaintRef = useRef(new Map()); // id → newDriverId (드래그 중 누적, mouseup 시 commit)
   const recordsRef = useRef([]);             // stale-closure 방지용 최신 records 미러
   const autoSaveDataRef = useRef({ records: [], drivers: [] }); // 자동저장용 최신값 (setInterval deps 제거용)
+  const routeWorkerRef = useRef(null);       // K-means Web Worker
 
   const mapRef = useRef(null);
   const kakaoMapRef = useRef(null);
@@ -392,6 +396,10 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
       return cmp !== 0 ? cmp : (a.이름 || '').localeCompare(b.이름 || '', 'ko');
     });
   })();
+  // 드래그 순번 모드: 배송순번 기준 정렬로 전환
+  const listRecords = isSeqDragMode
+    ? [...displayRecords].sort((a, b) => (parseInt(a.배송순번) || 9999) - (parseInt(b.배송순번) || 9999))
+    : displayRecords;
 
   const mapRecords = displayRecords.filter(r => r._lat && r._lng);
   const aptRecords = filteredRecords.filter(r => r._isApt);
@@ -477,6 +485,13 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
     setAptMultiModal(null);
     showToast('success', `${aptMultiModal.aptName} — ${aptMultiModal.dongs.length}개 동 배정 완료`);
   }, [aptMultiModal, showToast]);
+
+  // ── Route Worker 초기화 / 정리 ──────────────────────────────────────────
+  useEffect(() => {
+    const worker = new Worker(new URL('../workers/routeWorker.js', import.meta.url), { type: 'module' });
+    routeWorkerRef.current = worker;
+    return () => { worker.terminate(); routeWorkerRef.current = null; };
+  }, []);
 
   // ── 클라우드 명단에서 자동 로드 (CloudListManager에서 열린 경우) ──────
   useEffect(() => {
@@ -687,14 +702,36 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
       const color = r._에러 ? '#ef4444' : (driver?.color || '#6b7280');
       const seq = r.배송순번 || '';
       const name = escHtml((r.이름 || '').slice(0, 5));
-      const qty = r.포수 || r['수량(포수)'] || '';
+      const qtyNum = parseInt(r.포수 || r['수량(포수)']) || 1;
 
-      // 옷핀(thumbtack) DOM 마커 — filter 대신 box-shadow 직접 적용 (GPU 성능 개선)
+      // 포수 강조 레벨 (0=1포, 1=2포, 2=3-4포, 3=5-9포, 4=10포+)
+      const qtyLv = qtyNum >= 10 ? 4 : qtyNum >= 5 ? 3 : qtyNum >= 3 ? 2 : qtyNum >= 2 ? 1 : 0;
+      const pinSize = [32, 34, 36, 39, 44][qtyLv];
+      const glowStyle = [
+        `0 0 0 2px ${color}55,0 3px 10px rgba(0,0,0,0.7)`,
+        `0 0 0 2px ${color}99,0 0 8px 3px ${color}30,0 3px 10px rgba(0,0,0,0.7)`,
+        `0 0 0 2px ${color},0 0 0 4px ${color}55,0 0 10px 4px ${color}33,0 3px 10px rgba(0,0,0,0.7)`,
+        `0 0 0 3px ${color},0 0 0 6px ${color}66,0 0 14px 6px ${color}44,0 3px 12px rgba(0,0,0,0.8)`,
+        `0 0 0 3px ${color},0 0 0 7px ${color}88,0 0 20px 8px ${color}55,0 4px 14px rgba(0,0,0,0.9)`,
+      ][qtyLv];
+      const qtyBadgeHtml = qtyNum >= 10
+        ? `<div style="position:absolute;top:-7px;right:-7px;background:linear-gradient(135deg,#f59e0b,#ef4444);color:white;font-size:9px;font-weight:900;padding:1px 4px;border-radius:8px;border:2px solid #000;line-height:1.4;white-space:nowrap;">${qtyNum}</div>`
+        : qtyNum >= 5
+          ? `<div style="position:absolute;top:-6px;right:-6px;background:#f97316;color:white;font-size:9px;font-weight:900;padding:1px 4px;border-radius:7px;border:2px solid #000;line-height:1.4;">${qtyNum}</div>`
+          : qtyNum >= 3
+            ? `<div style="position:absolute;top:-5px;right:-5px;background:#eab308;color:#000;font-size:9px;font-weight:900;padding:1px 3px;border-radius:6px;border:1.5px solid #000;line-height:1.4;">${qtyNum}</div>`
+            : qtyNum >= 2
+              ? `<div style="position:absolute;top:-5px;right:-5px;background:#facc15;color:#000;font-size:9px;font-weight:900;padding:1px 3px;border-radius:6px;border:1.5px solid #000;line-height:1.4;">2</div>`
+              : '';
+      const qtyColor = qtyNum >= 10 ? '#fbbf24' : qtyNum >= 5 ? '#fb923c' : qtyNum >= 3 ? '#fde047' : qtyNum >= 2 ? '#facc15' : color;
+      const arrowPx = Math.round(pinSize / 5.3);
+      const dotPx = Math.round(pinSize * 0.28);
+
+      // 옷핀(thumbtack) DOM 마커 — 포수 강조: 2포↑ 뱃지·링·크기 확대
       const pinEl = document.createElement('div');
       pinEl.setAttribute('data-record-id', r.id);
       pinEl.style.cssText = 'display:flex;flex-direction:column;align-items:center;cursor:pointer;user-select:none;';
-      const glowColor = color + '55';
-      pinEl.innerHTML = `<div style="width:32px;height:32px;border-radius:50%;background:${color};display:flex;align-items:center;justify-content:center;border:3px solid rgba(255,255,255,0.9);box-shadow:0 0 0 2px ${glowColor},0 3px 10px rgba(0,0,0,0.7);flex-shrink:0;position:relative;">${seq ? `<span style="font-size:10px;font-weight:900;color:white;line-height:1;">${seq}</span>` : `<div style="width:9px;height:9px;border-radius:50%;background:rgba(255,255,255,0.35);"></div>`}</div><div style="width:0;height:0;border-left:6px solid transparent;border-right:6px solid transparent;border-top:12px solid ${color};margin-top:-1px;flex-shrink:0;"></div><div style="background:rgba(8,8,8,0.88);color:white;font-size:11px;font-weight:800;padding:2px 6px;border-radius:4px;margin-top:2px;white-space:nowrap;max-width:88px;overflow:hidden;text-overflow:ellipsis;border:1px solid ${color}45;">${name}${qty ? `·<span style="color:${color};">${qty}포</span>` : ''}</div>`;
+      pinEl.innerHTML = `<div style="width:${pinSize}px;height:${pinSize}px;border-radius:50%;background:${color};display:flex;align-items:center;justify-content:center;border:3px solid rgba(255,255,255,0.9);box-shadow:${glowStyle};flex-shrink:0;position:relative;">${seq ? `<span style="font-size:${pinSize >= 40 ? 9 : 10}px;font-weight:900;color:white;line-height:1;">${seq}</span>` : `<div style="width:${dotPx}px;height:${dotPx}px;border-radius:50%;background:rgba(255,255,255,0.35);"></div>`}${qtyBadgeHtml}</div><div style="width:0;height:0;border-left:${arrowPx}px solid transparent;border-right:${arrowPx}px solid transparent;border-top:${arrowPx * 2}px solid ${color};margin-top:-1px;flex-shrink:0;"></div><div style="background:${qtyNum >= 5 ? 'rgba(20,10,5,0.95)' : 'rgba(8,8,8,0.88)'};color:white;font-size:11px;font-weight:800;padding:2px 6px;border-radius:4px;margin-top:2px;white-space:nowrap;max-width:92px;overflow:hidden;text-overflow:ellipsis;border:1px solid ${color}${qtyNum >= 5 ? '88' : '45'};">${name}·<span style="color:${qtyColor};font-weight:900;">${qtyNum}포</span></div>`;
       pinEl.addEventListener('click', (e) => {
         e.stopPropagation();
         setLayoutMode(prev => (prev === 'map' || prev === 'mapfull') ? 'split' : prev);
@@ -711,7 +748,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
         content: pinEl,
         yAnchor: 0.63,
         xAnchor: 0.5,
-        zIndex: r._에러 ? 10 : (seq ? 5 : 1),
+        zIndex: r._에러 ? 10 : (qtyNum >= 5 ? 8 : qtyNum >= 2 ? 6 : seq ? 5 : 1),
       });
       overlay.setMap(kakaoMapRef.current);
       overlaysRef.current.push(overlay);
@@ -761,163 +798,48 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
   // ── K-means 지리적 클러스터 자동 배정 ─────────────────────────────────
   const handleAutoSplit = useCallback(() => {
     if (isAssignmentLocked) { showToast('error', '🔒 기사 배치가 잠겨 있습니다. 잠금을 해제하세요.'); return; }
+    const activeDrivers = drivers.slice(0, Math.min(driverCount, drivers.length)).filter(d => !d.isExternal);
+    const target = filteredRecords.filter(r => r._lat && r._lng);
+    if (!target.length || !activeDrivers.length) return;
     setIsSplitting(true);
-    setTimeout(() => {
-      try {
-      const target = filteredRecords.filter(r => r._lat && r._lng);
-      // isExternal 기사는 자동배정 대상 제외 (수동 배정 전용)
-      const activeDrivers = drivers.slice(0, Math.min(driverCount, drivers.length)).filter(d => !d.isExternal);
-      if (!target.length || !activeDrivers.length) { setIsSplitting(false); return; }
 
-      const withLoad = target.map(r => ({ ...r, _effectiveLoad: getEffectiveLoad(r) }));
-      // 기사 핀이 전부 있으면 핀 위치를 초기 중심으로 사용
-      const pinCentroids = activeDrivers.map(d => driverPins[d.id] || null);
-      const clusterMap = kMeansCluster(withLoad, activeDrivers, 30, pinCentroids.every(c => c) ? pinCentroids : null);
-      // ── 좌표 없는 레코드 → 같은 행정동 메인기사 자동 배정 (R-4 보완)
-      const noCoordRecs = filteredRecords.filter(r => !r._lat || !r._lng);
-      if (noCoordRecs.length > 0) {
-        const dongDriverCount = {};
-        target.forEach(r => {
-          const did = clusterMap[r.id];
-          if (!did || !r.행정동) return;
-          if (!dongDriverCount[r.행정동]) dongDriverCount[r.행정동] = {};
-          dongDriverCount[r.행정동][did] = (dongDriverCount[r.행정동][did] || 0) + 1;
-        });
-        noCoordRecs.forEach(r => {
-          const dongMap = dongDriverCount[r.행정동];
-          if (!dongMap) return;
-          const best = Object.entries(dongMap).sort((a, b) => b[1] - a[1])[0]?.[0];
-          if (best) clusterMap[r.id] = best;
-        });
-      }
+    const worker = routeWorkerRef.current;
+    if (!worker) {
+      showToast('error', 'Worker 초기화 실패. 잠시 후 다시 시도하세요.');
+      setIsSplitting(false);
+      return;
+    }
 
-      const allWithLoad = filteredRecords.map(r => ({ ...r, _effectiveLoad: getEffectiveLoad(r) }));
+    const noCoordRecs = filteredRecords.filter(r => !r._lat || !r._lng);
+    const allWithLoad = filteredRecords.map(r => ({ ...r, _effectiveLoad: undefined }));
 
-      // ── 이웃 그래프 1회 계산 → 스무딩 2회 모두 재사용 (성능 최적화)
-      const snapRecs = allWithLoad.filter(r => r._lat && r._lng);
-      const K_SMOOTH = Math.min(11, snapRecs.length - 1);
-      const neighborIds = {};
-      if (snapRecs.length > 1) {
-        const cosLat = Math.cos(snapRecs[0]._lat * Math.PI / 180);
-        const sqDist = (r, o) => {
-          const dlat = r._lat - o._lat, dlng = (r._lng - o._lng) * cosLat;
-          return dlat * dlat + dlng * dlng;
-        };
-        snapRecs.forEach(r => {
-          neighborIds[r.id] = snapRecs
-            .filter(o => o.id !== r.id)
-            .map(o => [o.id, sqDist(r, o)])
-            .sort((a, b) => a[1] - b[1])
-            .slice(0, K_SMOOTH)
-            .map(([id]) => id);
-        });
-      }
-
-      // ── 공간 다수결 스무딩 헬퍼 (재사용)
-      // threshold: 이웃 중 몇 표 이상이어야 변경 (단순 과반 → threshold=K/2+1)
-      const runSmoothing = (rounds, threshold) => {
-        const active = snapRecs.filter(r => clusterMap[r.id]);
-        for (let round = 0; round < rounds; round++) {
-          const patches = {};
-          active.forEach(r => {
-            if (!clusterMap[r.id]) return;
-            const cur = clusterMap[r.id];
-            const votes = {};
-            (neighborIds[r.id] || []).forEach(nId => {
-              const d = clusterMap[nId]; if (d) votes[d] = (votes[d] || 0) + 1;
-            });
-            const best = Object.entries(votes).sort((a, b) => b[1] - a[1])[0];
-            if (best && best[0] !== cur && best[1] >= threshold) patches[r.id] = best[0];
-          });
-          if (!Object.keys(patches).length) break;
-          Object.entries(patches).forEach(([id, dId]) => { clusterMap[id] = dId; });
-        }
-      };
-
-      // ── 스무딩 1차: K-means 결과 정리 (threshold=K×0.5 → 과반)
-      runSmoothing(20, Math.ceil(K_SMOOTH * 0.5));
-
-      // ── 후처리 R-I: 아파트 단지 동일 기사 통일
-      const aptGroups = {};
-      filteredRecords.forEach(r => {
-        if (!r._isApt) return;
-        const aptName = extractAptName(r.주소 || '') || '기타아파트';
-        if (!aptGroups[aptName]) aptGroups[aptName] = [];
-        aptGroups[aptName].push(r.id);
-      });
-      Object.values(aptGroups).forEach(ids => {
-        if (ids.length <= 1) return;
-        const votes = {};
-        ids.forEach(id => { const d = clusterMap[id]; if (d) votes[d] = (votes[d] || 0) + 1; });
-        const winner = Object.entries(votes).sort((a, b) => b[1] - a[1])[0]?.[0];
-        if (!winner) return;
-        ids.forEach(id => { clusterMap[id] = winner; });
-      });
-
-      // ── 후처리 R-E: 동일 주소 동일 기사 통일
-      const addrGroups = {};
-      filteredRecords.forEach(r => {
-        const addr = (r.주소 || '').trim();
-        if (!addr) return;
-        if (!addrGroups[addr]) addrGroups[addr] = [];
-        addrGroups[addr].push(r.id);
-      });
-      Object.values(addrGroups).forEach(ids => {
-        if (ids.length <= 1) return;
-        const votes = {};
-        ids.forEach(id => { const d = clusterMap[id]; if (d) votes[d] = (votes[d] || 0) + 1; });
-        const winner = Object.entries(votes).sort((a, b) => b[1] - a[1])[0]?.[0];
-        if (!winner) return;
-        ids.forEach(id => { clusterMap[id] = winner; });
-      });
-
-      // ── 스무딩 2차: R-I/R-E 텔레포트 정리 (threshold=K×0.6 → 60% 강한 기준)
-      // R-I/R-E가 구역 경계 너머로 핀을 보낸 경우 이웃 60% 이상이 다른 색이면 되돌림
-      runSmoothing(15, Math.ceil(K_SMOOTH * 0.6));
-
-      // ── 유효부담 최소 기사 / 최근접 기사 헬퍼 (R-A용)
-      const getLoads = () => {
-        const loads = {};
-        activeDrivers.forEach(d => { loads[d.id] = 0; });
-        allWithLoad.forEach(r => { if (clusterMap[r.id]) loads[clusterMap[r.id]] = (loads[clusterMap[r.id]] || 0) + r._effectiveLoad; });
-        return loads;
-      };
-      const nearestDriverId = (lat, lng) => {
-        const centroids = activeDrivers.map(d => {
-          const dRecs = allWithLoad.filter(r => clusterMap[r.id] === d.id && r._lat && r._lng);
-          if (!dRecs.length) return null;
-          return { lat: dRecs.reduce((s, r) => s + r._lat, 0) / dRecs.length, lng: dRecs.reduce((s, r) => s + r._lng, 0) / dRecs.length };
-        });
-        let minD = Infinity, minId = null;
-        activeDrivers.forEach((d, i) => {
-          const c = centroids[i]; if (!c) return;
-          const dist = haversine(lat, lng, c.lat, c.lng);
-          if (dist < minD) { minD = dist; minId = d.id; }
-        });
-        return minId;
-      };
-
-      // ── 후처리 R-A: 전건 배정 보장 (미배정 → 최근접 기준 중심 기사 강제)
-      const loads = getLoads();
-      filteredRecords.filter(r => !clusterMap[r.id]).forEach(r => {
-        const driverId = (r._lat && r._lng) ? nearestDriverId(r._lat, r._lng)
-          : activeDrivers.slice().sort((a, b) => (loads[a.id] || 0) - (loads[b.id] || 0))[0]?.id;
-        if (driverId) { clusterMap[r.id] = driverId; loads[driverId] = (loads[driverId] || 0) + (r._effectiveLoad || 1); }
-      });
-
-      setRecords(prev => prev.map(r => clusterMap[r.id] ? { ...r, _driverId: clusterMap[r.id] } : r));
-
-      // 배분 완료 후 겹침 예상 안내 (setRecords 비동기 → 다음 프레임에서 overlayEffect가 setOverlapCount 갱신)
-      setTimeout(() => {
-        showToast('success', `자동 배정 완료 — 겹침이 남아있으면 상단 노란색 버튼을 클릭하세요.`, 4000);
-      }, 500);
-      } catch (e) {
-        console.error('자동 배정 오류:', e);
+    const onMessage = (e) => {
+      worker.removeEventListener('message', onMessage);
+      if (e.data.type === 'autoSplitError') {
+        console.error('자동 배정 오류:', e.data.message);
         showToast('error', '자동 배정 중 오류가 발생했습니다.');
-      } finally {
+        setIsSplitting(false);
+        return;
+      }
+      if (e.data.type === 'autoSplitResult') {
+        const { clusterMap } = e.data;
+        setRecords(prev => prev.map(r => clusterMap[r.id] ? { ...r, _driverId: clusterMap[r.id] } : r));
+        setTimeout(() => {
+          showToast('success', '자동 배정 완료 — 겹침이 남아있으면 상단 노란색 버튼을 클릭하세요.', 4000);
+        }, 500);
         setIsSplitting(false);
       }
-    }, 0);
+    };
+    worker.addEventListener('message', onMessage);
+    worker.postMessage({
+      type: 'autoSplit',
+      target,
+      noCoordRecs,
+      allWithLoad,
+      filteredRecords,
+      activeDrivers,
+      driverPins,
+    });
   }, [filteredRecords, drivers, driverCount, driverPins, showToast, isAssignmentLocked]);
 
   // ── 핀 DOM 색상 직접 업데이트 (React re-render 없이 즉시 시각 반영)
@@ -1018,6 +940,27 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
 
 
   // ── 배송순번 자동 정렬 (도로명 기반 — 도로 그룹 → 건물번호 → 뱀 패턴) ───
+  // ── 드래그 순번 재배정 ────────────────────────────────────────────────
+  const handleSeqDrop = useCallback((dstId) => {
+    const srcId = dragSrcIdRef.current;
+    dragSrcIdRef.current = null;
+    setDragOverId(null);
+    if (!srcId || srcId === dstId) return;
+    const srcRec = records.find(r => r.id === srcId);
+    const dstRec = records.find(r => r.id === dstId);
+    if (!srcRec || !dstRec || srcRec._driverId !== dstRec._driverId) return;
+    // 해당 기사의 레코드를 순번순으로 정렬 후 재배치
+    const driverRecs = records
+      .filter(r => r._driverId === srcRec._driverId)
+      .sort((a, b) => (parseInt(a.배송순번) || 9999) - (parseInt(b.배송순번) || 9999));
+    const reordered = driverRecs.filter(r => r.id !== srcId);
+    const insertAt = reordered.findIndex(r => r.id === dstId);
+    reordered.splice(insertAt, 0, srcRec);
+    const newSeqMap = {};
+    reordered.forEach((r, i) => { newSeqMap[r.id] = String(i + 1); });
+    setRecords(prev => prev.map(r => newSeqMap[r.id] !== undefined ? { ...r, 배송순번: newSeqMap[r.id] } : r));
+  }, [records]);
+
   const handleAutoSequence = useCallback(() => {
     // pendingPaintRef 잔류분을 먼저 state에 반영 (브러시 보정 직후 클릭 시 배치 유실 방지)
     const snapshot = new Map(pendingPaintRef.current); // updater 실행 전 복사
@@ -1582,8 +1525,8 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
 
   // ── KML 경로 파일 다운로드 (네이버 지도·Google Maps 가져오기 가능) ────────
   const handleDownloadKML = useCallback(() => {
-    const city = fileInfo?.city || cloudCity || '지자체';
-    const month = fileInfo?.month || cloudMonthId || '';
+    const city = cloudCity || fileInfo?.city || '지자체';
+    const month = cloudMonthId || fileInfo?.month || '';
     const assignedDrivers = drivers.filter(d => records.some(r => r._driverId === d.id));
     if (!assignedDrivers.length) { showToast('error', '배정된 기사가 없습니다.'); return; }
 
@@ -1638,8 +1581,8 @@ ${folders}
     const wb = XLSX.utils.book_new();
     const now = new Date();
     const ts = String(now.getHours()).padStart(2,'0') + String(now.getMinutes()).padStart(2,'0');
-    const city = fileInfo?.city || '지자체';
-    const month = fileInfo?.month || '';
+    const city = cloudCity || fileInfo?.city || '지자체';
+    const month = cloudMonthId || fileInfo?.month || '';
 
     const COLS = ['배송순번','행정동','이름','주소','포수','특이사항','휴대폰'];
 
@@ -1714,8 +1657,8 @@ ${folders}
     handleExportDriverExcel();
 
     // 2) 기사별 카카오 정적 지도 이미지 다운로드
-    const city = fileInfo?.city || '';
-    const month = fileInfo?.month || '';
+    const city = cloudCity || fileInfo?.city || '';
+    const month = cloudMonthId || fileInfo?.month || '';
 
     for (const driver of drivers) {
       const dRecs = records
@@ -2107,14 +2050,6 @@ ${folders}
 
           {/* ── 그룹 4: 내보내기 ─────────────────────────────────────── */}
           <div className="flex items-center gap-1 bg-[#0a0a0a] border border-[#1e1e1e] rounded-xl px-2 py-1">
-            <span className="text-[8px] text-gray-700 font-black tracking-widest mr-1">내보내기</span>
-            <button
-              onClick={() => setShowCloudPicker(true)}
-              title="다른 지자체·월 명단을 클라우드에서 불러옵니다"
-              className="px-2 py-1 bg-[#111] border border-[#2a2a2a] text-gray-400 hover:text-blue-400 hover:border-blue-500/40 rounded-lg text-[10px] font-bold flex items-center gap-1 transition-colors"
-            >
-              <HardDrive size={10} /> 명단 불러오기
-            </button>
             {/* DB 저장 (cloud_lists에 기사/순번 반영) */}
             {isCloudMode && (
               <button
@@ -2581,23 +2516,37 @@ ${folders}
                 >
                   {dongList.map(d => <option key={d}>{d}</option>)}
                 </select>
-                {/* 클릭 순번 배정 모드 토글 */}
-                <button
-                  onClick={() => { setIsSeqClickMode(v => !v); setSeqClickNext(1); }}
-                  title={isSeqClickMode ? `클릭 순번 모드 ON — 행을 클릭하면 ${seqClickNext}번 순번이 배정됩니다. 다시 클릭하면 OFF.` : '클릭 순번 모드: 행을 클릭하는 순서대로 1→2→3 순번 자동 배정'}
-                  className={`ml-auto px-2 py-0.5 rounded-lg text-[10px] font-black flex items-center gap-1 transition-colors ${
-                    isSeqClickMode
-                      ? 'bg-amber-500/20 border border-amber-400/50 text-amber-300 animate-pulse'
-                      : 'bg-[#111] border border-[#222] text-gray-500 hover:text-amber-400 hover:border-amber-500/30'
-                  }`}
-                >
-                  {isSeqClickMode ? `▶ 클릭순번 ${seqClickNext}번째` : '클릭순번'}
-                </button>
+                {/* 순번 편집 버튼 그룹 */}
+                <div className="ml-auto flex gap-1 shrink-0">
+                  <button
+                    onClick={() => { setIsSeqClickMode(v => !v); setSeqClickNext(1); if (isSeqDragMode) setIsSeqDragMode(false); }}
+                    title={isSeqClickMode ? `클릭 순번 모드 ON — 행을 클릭하면 ${seqClickNext}번째 순번이 배정됩니다.` : '클릭 순번: 행을 클릭하는 순서대로 1→2→3 자동 배정'}
+                    className={`px-2 py-0.5 rounded-lg text-[10px] font-black flex items-center gap-1 transition-colors ${
+                      isSeqClickMode
+                        ? 'bg-amber-500/20 border border-amber-400/50 text-amber-300 animate-pulse'
+                        : 'bg-[#111] border border-[#222] text-gray-500 hover:text-amber-400 hover:border-amber-500/30'
+                    }`}
+                  >
+                    {isSeqClickMode ? `▶${seqClickNext}번` : '클릭'}
+                  </button>
+                  <button
+                    onClick={() => { setIsSeqDragMode(v => !v); if (isSeqClickMode) setIsSeqClickMode(false); }}
+                    title={isSeqDragMode ? '드래그 모드 ON — 행을 드래그해서 순번을 조정하세요.' : '드래그 순번: 행을 드래그해서 순서 세밀 조정'}
+                    className={`px-2 py-0.5 rounded-lg text-[10px] font-black flex items-center gap-1 transition-colors ${
+                      isSeqDragMode
+                        ? 'bg-purple-500/20 border border-purple-400/50 text-purple-300'
+                        : 'bg-[#111] border border-[#222] text-gray-500 hover:text-purple-400 hover:border-purple-500/30'
+                    }`}
+                  >
+                    ⠿ 드래그
+                  </button>
+                </div>
               </div>
               <table className="w-full border-collapse text-[10px]">
                 <thead className="sticky top-[33px] bg-[#0a0a0a] z-10">
                   <tr className="border-b border-[#1a1a1a]">
                     <th className="w-1 p-0" />
+                    {isSeqDragMode && <th className="w-5 p-0" />}
                     <th className="px-2 py-1 text-left text-[9px] text-gray-700 font-black w-7">#</th>
                     <th className="px-1 py-1 text-left text-[9px] text-gray-700 font-black">기사</th>
                     <th className="px-1 py-1 text-left text-[9px] text-gray-700 font-black">이름</th>
@@ -2607,15 +2556,22 @@ ${folders}
                   </tr>
                 </thead>
                 <tbody>
-                  {displayRecords.map((r, idx) => {
+                  {listRecords.map((r, idx) => {
                     const driver = drivers.find(d => d.id === r._driverId);
                     const isSelected = selectedRecordId === r.id;
-                    const roadAddr = extractRoadAddress(r.주소 || '');
+                    const isDragOver = isSeqDragMode && dragOverId === r.id;
                     return (
                       <tr
                         key={r.id} id={`rec-${r.id}`}
+                        draggable={isSeqDragMode}
+                        onDragStart={isSeqDragMode ? () => { dragSrcIdRef.current = r.id; } : undefined}
+                        onDragOver={isSeqDragMode ? (e) => { e.preventDefault(); setDragOverId(r.id); } : undefined}
+                        onDragLeave={isSeqDragMode ? () => setDragOverId(null) : undefined}
+                        onDrop={isSeqDragMode ? () => handleSeqDrop(r.id) : undefined}
+                        onDragEnd={isSeqDragMode ? () => { dragSrcIdRef.current = null; setDragOverId(null); } : undefined}
                         onClick={(e) => {
                           if (['SELECT','INPUT','OPTION'].includes(e.target.tagName)) return;
+                          if (isSeqDragMode) return;
                           if (isSeqClickMode) {
                             setRecords(prev => prev.map(pr => pr.id === r.id ? { ...pr, 배송순번: String(seqClickNext) } : pr));
                             setSeqClickNext(n => n + 1);
@@ -2624,13 +2580,19 @@ ${folders}
                           if (r._lat && r._lng) handleSelectRecord(r);
                           else setSelectedRecordId(r.id);
                         }}
-                        className={`border-b transition-colors cursor-pointer ${!r._lat ? 'opacity-50' : ''} ${isSeqClickMode ? 'hover:bg-amber-900/20' : isSelected ? 'bg-blue-900/20' : 'hover:bg-[#0f0f0f]'}`}
+                        className={`border-b transition-colors cursor-pointer ${!r._lat ? 'opacity-50' : ''} ${isSeqDragMode ? 'hover:bg-purple-900/10' : isSeqClickMode ? 'hover:bg-amber-900/20' : isSelected ? 'bg-blue-900/20' : 'hover:bg-[#0f0f0f]'}`}
                         style={{
-                          borderBottomColor: '#0e0e0e',
-                          ...(isSelected ? { outline: '1px solid rgba(59,130,246,0.35)', outlineOffset: '-1px' } : {}),
+                          borderBottomColor: isDragOver ? '#a855f7' : '#0e0e0e',
+                          borderBottomWidth: isDragOver ? '2px' : '1px',
+                          ...(isSelected && !isSeqDragMode ? { outline: '1px solid rgba(59,130,246,0.35)', outlineOffset: '-1px' } : {}),
+                          cursor: isSeqDragMode ? 'grab' : 'pointer',
                         }}>
                         {/* 기사 컬러 스트라이프 */}
                         <td className="w-1 p-0 rounded-l" style={{ background: driver?.color || 'transparent', opacity: driver ? 0.85 : 0 }} />
+                        {/* 드래그 핸들 */}
+                        {isSeqDragMode && (
+                          <td className="w-5 px-1 text-center text-gray-600 select-none" style={{ cursor: 'grab', fontSize: 11 }}>⠿</td>
+                        )}
                         <td className="pl-2 pr-1 py-0.5 text-gray-600 tabular-nums text-[9px]">{idx + 1}</td>
                         <td className="px-1 py-0.5">
                           <select
@@ -3099,9 +3061,9 @@ ${folders}
               </button>
             </div>
             <div className="px-5 py-4 space-y-3">
-              <p className="text-[10px] text-gray-500">링크 전달 → 기사가 모바일에서 배송루트 카카오지도 확인 및 <span className="text-[#FEE500]">★ 즐겨찾기</span> 저장 가능.</p>
+              <p className="text-[10px] text-gray-500">링크 전달 → 기사가 모바일에서 배송루트 카카오지도 확인 및 <span className="text-green-400">● 내 위치 실시간 표시</span> 가능.</p>
               {shareModal.links.map(l => (
-                <div key={l.driverId} className="bg-[#111] border border-[#2a2a2a] rounded-xl p-3 space-y-2">
+                <div key={l.driverId} className="bg-[#111] border border-[#2a2a2a] rounded-xl p-3">
                   <div className="flex items-center gap-2">
                     <div className="w-3 h-3 rounded-full shrink-0" style={{ background: l.color }} />
                     <span className="text-white text-[11px] font-bold w-16 shrink-0">{l.name}</span>
@@ -3115,35 +3077,6 @@ ${folders}
                     >
                       <Link size={9} /> 복사
                     </button>
-                  </div>
-                  {/* 기사별 즐겨찾기 KML 다운로드 (클라이언트 생성) */}
-                  <div className="flex items-center gap-2 pl-5">
-                    <button
-                      onClick={() => {
-                        const driverRecs = records
-                          .filter(r => r._driverId === l.driverId && r._lat && r._lng)
-                          .sort((a, b) => (parseInt(a.배송순번) || 999) - (parseInt(b.배송순번) || 999));
-                        if (!driverRecs.length) { showToast('error', '좌표 데이터가 없습니다.'); return; }
-                        const esc = (s) => String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-                        const placemarks = driverRecs.map(r => `  <Placemark>
-    <name>${esc((r.배송순번?r.배송순번+'. ':'') + r.이름)}</name>
-    <description>${esc(r.주소)}${(r.포수||1)>1?` / ${r.포수}포`:''}${r.특이사항?'\n⚠ '+r.특이사항:''}${r.휴대폰?'\n📞 '+r.휴대폰:''}</description>
-    <Point><coordinates>${r._lng},${r._lat},0</coordinates></Point>
-  </Placemark>`).join('\n');
-                        const kml = `<?xml version="1.0" encoding="UTF-8"?>\n<kml xmlns="http://www.opengis.net/kml/2.2">\n<Document>\n  <name>${esc(l.name + ' 배송루트')}</name>\n${placemarks}\n</Document>\n</kml>`;
-                        const blob = new Blob([kml], { type: 'application/vnd.google-earth.kml+xml' });
-                        const a = document.createElement('a');
-                        a.href = URL.createObjectURL(blob);
-                        a.download = `${l.name}_배송루트.kml`;
-                        document.body.appendChild(a); a.click(); document.body.removeChild(a);
-                        setTimeout(() => URL.revokeObjectURL(a.href), 1000);
-                        showToast('success', `${l.name} KML 다운로드 완료`);
-                      }}
-                      className="flex items-center gap-1 text-[9px] px-2 py-1 bg-[#FEE500]/10 border border-[#FEE500]/30 text-[#FEE500] hover:bg-[#FEE500]/20 rounded-lg font-bold transition-colors"
-                    >
-                      <Download size={8} /> 즐겨찾기 KML
-                    </button>
-                    <span className="text-[9px] text-gray-700">→ 카카오맵 나만의 지도</span>
                   </div>
                 </div>
               ))}

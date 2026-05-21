@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { X, Plus, Edit2, UserX, UserCheck, Truck, BarChart3, RefreshCw, MapPin, ChevronDown, ChevronUp, Download, Check, Building2, CheckSquare, Square } from 'lucide-react';
+import { X, Plus, Edit2, UserX, UserCheck, Truck, BarChart3, RefreshCw, MapPin, ChevronDown, ChevronUp, Download, Check, Building2, CheckSquare, Square, Users } from 'lucide-react';
 import { db, auth } from '../config/firebase.js';
-import { getDocs, getDoc, setDoc, addDoc, collection, doc, serverTimestamp } from 'firebase/firestore';
+import { getDocs, getDoc, setDoc, addDoc, updateDoc, collection, doc, serverTimestamp, writeBatch } from 'firebase/firestore';
 import * as XLSX from 'xlsx';
 import { formatPhoneInput } from '../utils/parsers.js';
 
@@ -29,6 +29,10 @@ const getLast6Months = () => {
 
 export default function DriverRegistryModal({ user, onClose }) {
   const isAdmin = user?.role === 'admin';
+  const uid = user?.uid || auth.currentUser?.uid;
+
+  // 소속사 없는 일반 사용자 → 개인 기사 모드
+  const isPersonalMode = !isAdmin && !user?.orgId && !!uid;
 
   // ── 소속사 선택
   const [orgList, setOrgList] = useState([]);
@@ -52,6 +56,16 @@ export default function DriverRegistryModal({ user, onClose }) {
   // ── 탭
   const [tab, setTab] = useState('drivers');
 
+  // ── 관리자 개인기사 가져오기
+  const [showImportPanel, setShowImportPanel] = useState(false);
+  const [importSearchEmail, setImportSearchEmail] = useState('');
+  const [importUserList, setImportUserList] = useState([]); // 전체 유저 목록 (admin)
+  const [importUser, setImportUser] = useState(null); // 선택된 유저
+  const [importDrivers, setImportDrivers] = useState([]); // 해당 유저의 개인기사
+  const [importSelected, setImportSelected] = useState(new Set()); // 선택된 기사 id
+  const [isLoadingImport, setIsLoadingImport] = useState(false);
+  const [isImporting, setIsImporting] = useState(false);
+
   // ── 실적 탭
   const [statsCity, setStatsCity] = useState(user?.citiesApproved?.[0] || '');
   const [statsMonth, setStatsMonth] = useState(currentMonth());
@@ -70,12 +84,40 @@ export default function DriverRegistryModal({ user, onClose }) {
     }).catch(() => {});
   }, [isAdmin]);
 
-  // ── 기사 목록 로드
+  // 개인 모드 저장 경로: companyCode 있으면 user_companies/{code}/drivers, 없으면 uid 기반 fallback
+  const personalColKey = user?.companyCode || uid;
+  const personalColBase = user?.companyCode ? 'user_companies' : 'user_drivers';
+
+  // ── 컬렉션 경로 헬퍼
+  const getDriversCol = useCallback(() => {
+    if (isPersonalMode) return collection(db, personalColBase, personalColKey, 'drivers');
+    return collection(db, 'org_drivers', selectedOrg, 'drivers');
+  }, [isPersonalMode, personalColBase, personalColKey, selectedOrg]);
+
+  const getDriverDocRef = useCallback((driverId) => {
+    if (isPersonalMode) return doc(db, personalColBase, personalColKey, 'drivers', driverId);
+    return doc(db, 'org_drivers', selectedOrg, 'drivers', driverId);
+  }, [isPersonalMode, personalColBase, personalColKey, selectedOrg]);
+
+  // ── 기사 목록 로드 (개인 모드: companyCode 신경로 우선, 구경로 자동 이전)
   const loadDrivers = useCallback(async () => {
-    if (!selectedOrg) { setDrivers([]); return; }
+    if (!isPersonalMode && !selectedOrg) { setDrivers([]); return; }
+    if (isPersonalMode && !uid) { setDrivers([]); return; }
     setIsLoading(true);
     try {
-      const snap = await getDocs(collection(db, 'org_drivers', selectedOrg, 'drivers'));
+      let snap = await getDocs(getDriversCol());
+      // 신 경로(companyCode)가 비어있고 구 경로(user_drivers/uid)에 데이터가 있으면 자동 이전
+      if (isPersonalMode && user?.companyCode && snap.empty) {
+        const oldSnap = await getDocs(collection(db, 'user_drivers', uid, 'drivers'));
+        if (!oldSnap.empty) {
+          const batch = writeBatch(db);
+          oldSnap.docs.forEach(d => {
+            batch.set(doc(db, 'user_companies', user.companyCode, 'drivers', d.id), d.data());
+          });
+          await batch.commit();
+          snap = await getDocs(getDriversCol());
+        }
+      }
       setDrivers(
         snap.docs.map(d => ({ id: d.id, ...d.data() }))
           .sort((a, b) => (a.name||'').localeCompare(b.name||'', 'ko'))
@@ -85,7 +127,7 @@ export default function DriverRegistryModal({ user, onClose }) {
       setDrivers([]);
     }
     finally { setIsLoading(false); }
-  }, [selectedOrg]);
+  }, [isPersonalMode, uid, selectedOrg, getDriversCol, user?.companyCode]);
 
   useEffect(() => { loadDrivers(); }, [loadDrivers]);
 
@@ -128,28 +170,51 @@ export default function DriverRegistryModal({ user, onClose }) {
     setDriverHistory(history); setIsLoadingHistory(false);
   }, []);
 
-  // ── 지역매칭 피커: org의 행정동을 org_presets에서 로드
+  // ── 지역매칭 피커: org_presets 우선 → 없으면 cloud_lists 레코드에서 행정동 직접 추출
   const openZonePicker = async () => {
     if (showZonePicker) { setShowZonePicker(false); return; }
-    if (!selectedOrg) { alert('소속사를 먼저 선택하세요.'); return; }
+    if (!selectedOrg && !isPersonalMode) { alert('소속사를 먼저 선택하세요.'); return; }
     setLoadingZone(true);
     try {
       let uniqueCities;
       if (isAdmin) {
-        // 관리자: cloud_lists 전체 지자체 로드
         const snap = await getDocs(collection(db, 'cloud_lists'));
         uniqueCities = snap.docs.map(d => d.id);
       } else {
         uniqueCities = [...new Set(user?.citiesApproved || [])];
       }
       if (!uniqueCities.length) { alert('배정된 지자체가 없습니다.\n관리자에게 지자체 승인을 요청하세요.'); return; }
-      // org_presets에서 해당 소속사 행정동 로드 (없으면 빈 배열)
+
       const result = {};
       for (const city of uniqueCities) {
-        const snap = await getDoc(doc(db, 'org_presets', city));
-        if (!snap.exists()) { result[city] = []; continue; }
-        const org = (snap.data().orgs||[]).find(o => o.name === selectedOrg || o.id === selectedOrg);
-        result[city] = org?.dongs || [];
+        // 1순위: org_presets에서 소속사 행정동 로드
+        let dongs = [];
+        try {
+          const presetSnap = await getDoc(doc(db, 'org_presets', city));
+          if (presetSnap.exists()) {
+            const org = (presetSnap.data().orgs || []).find(o => o.name === selectedOrg || o.id === selectedOrg);
+            dongs = org?.dongs || [];
+          }
+        } catch { /* org_presets 접근 실패 시 fallback으로 */ }
+
+        // 2순위 fallback: cloud_lists 최신 월 레코드에서 행정동 추출
+        if (!dongs.length) {
+          try {
+            const monthsSnap = await getDocs(collection(db, 'cloud_lists', city, 'months'));
+            if (!monthsSnap.empty) {
+              const latestMonth = monthsSnap.docs.map(d => d.id).sort().reverse()[0];
+              const recordsSnap = await getDocs(collection(db, 'cloud_lists', city, 'months', latestMonth, 'records'));
+              const dongSet = new Set();
+              recordsSnap.docs.forEach(d => {
+                const dong = d.data()['행정동'];
+                if (dong) dongSet.add(dong);
+              });
+              dongs = [...dongSet].sort((a, b) => a.localeCompare(b, 'ko'));
+            }
+          } catch (e) { console.warn(`${city} 행정동 fallback 실패:`, e.message); }
+        }
+
+        result[city] = dongs;
       }
       setZoneDongsPerCity(result);
       setShowZonePicker(true);
@@ -217,7 +282,7 @@ export default function DriverRegistryModal({ user, onClose }) {
   // ── 저장
   const handleSave = async () => {
     if (!form.name.trim()) { alert('이름을 입력하세요.'); return; }
-    if (!selectedOrg) { alert('소속사를 선택하세요.'); return; }
+    if (!isPersonalMode && !selectedOrg) { alert('소속사를 선택하세요.'); return; }
     setIsSaving(true);
     try {
       const payload = {
@@ -225,15 +290,15 @@ export default function DriverRegistryModal({ user, onClose }) {
         capacity: parseInt(form.capacity)||100, color: form.color,
         memo: form.memo.trim(), status: 'active',
         assignedZones: form.assignedZones||[],
-        org: selectedOrg,
+        org: isPersonalMode ? `personal:${uid}` : selectedOrg,
       };
       if (editingId === 'new') {
         payload.joinedAt = serverTimestamp();
         payload.createdBy = auth.currentUser?.email||'';
-        await addDoc(collection(db, 'org_drivers', selectedOrg, 'drivers'), payload);
+        await addDoc(getDriversCol(), payload);
       } else {
         payload.updatedAt = serverTimestamp();
-        await setDoc(doc(db, 'org_drivers', selectedOrg, 'drivers', editingId), payload, { merge: true });
+        await setDoc(getDriverDocRef(editingId), payload, { merge: true });
       }
       setEditingId(null); setShowZonePicker(false);
       await loadDrivers();
@@ -245,9 +310,60 @@ export default function DriverRegistryModal({ user, onClose }) {
   const handleToggleStatus = async (driver) => {
     const newStatus = driver.status === 'active' ? 'inactive' : 'active';
     try {
-      await setDoc(doc(db, 'org_drivers', selectedOrg, 'drivers', driver.id), { status: newStatus, updatedAt: serverTimestamp() }, { merge: true });
+      await setDoc(getDriverDocRef(driver.id), { status: newStatus, updatedAt: serverTimestamp() }, { merge: true });
       await loadDrivers();
     } catch (e) { alert('상태 변경 실패: ' + e.message); }
+  };
+
+  // ── 관리자: 유저 목록 로드 (개인기사 가져오기용)
+  const handleOpenImportPanel = async () => {
+    setShowImportPanel(true);
+    setIsLoadingImport(true);
+    try {
+      const snap = await getDocs(collection(db, 'users'));
+      setImportUserList(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(u => u.id !== uid));
+    } catch (e) { alert('유저 목록 로드 실패: ' + e.message); }
+    finally { setIsLoadingImport(false); }
+  };
+
+  const handleSelectImportUser = async (u) => {
+    setImportUser(u);
+    setImportDrivers([]);
+    setImportSelected(new Set());
+    setIsLoadingImport(true);
+    try {
+      const snap = await getDocs(collection(db, 'user_drivers', u.id, 'drivers'));
+      setImportDrivers(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(d => d.status !== 'inactive'));
+    } catch { setImportDrivers([]); }
+    finally { setIsLoadingImport(false); }
+  };
+
+  const toggleImportSelect = (id) => {
+    setImportSelected(prev => {
+      const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n;
+    });
+  };
+
+  const handleImportSelected = async () => {
+    if (!importSelected.size || !selectedOrg) return;
+    setIsImporting(true);
+    try {
+      const toImport = importDrivers.filter(d => importSelected.has(d.id));
+      for (const d of toImport) {
+        const { id: _id, ...rest } = d;
+        await addDoc(collection(db, 'org_drivers', selectedOrg, 'drivers'), {
+          ...rest,
+          org: selectedOrg,
+          importedFrom: importUser?.id || '',
+          importedAt: serverTimestamp(),
+        });
+      }
+      await loadDrivers();
+      setShowImportPanel(false);
+      setImportUser(null); setImportDrivers([]); setImportSelected(new Set()); setImportSearchEmail('');
+      alert(`✅ ${toImport.length}명 가져오기 완료`);
+    } catch (e) { alert('가져오기 실패: ' + e.message); }
+    finally { setIsImporting(false); }
   };
 
   // ── 실적 엑셀
@@ -279,7 +395,9 @@ export default function DriverRegistryModal({ user, onClose }) {
             </div>
             <div>
               <h2 className="text-white font-black text-sm">{editingId==='new'?'기사 추가':'기사 정보 수정'}</h2>
-              <p className="text-gray-500 text-[11px]">{selectedOrg} · 소속사 기사 마스터</p>
+              <p className="text-gray-500 text-[11px]">
+                {isPersonalMode ? '내 기사 관리 · 개인 기사 명단' : `${selectedOrg} · 소속사 기사 마스터`}
+              </p>
             </div>
           </div>
           <button onClick={()=>{setEditingId(null);setShowZonePicker(false);}}
@@ -477,32 +595,59 @@ export default function DriverRegistryModal({ user, onClose }) {
           </div>
           <div>
             <h2 className="text-white font-black text-sm flex items-center gap-2">
-              소속사 기사 관리
-              <span className="text-[10px] bg-purple-900/40 border border-purple-700/40 text-purple-300 px-2 py-0.5 rounded-lg font-black">VVIP</span>
+              {isPersonalMode ? '기사설정' : '소속사 기사 관리'}
+              {isPersonalMode
+                ? <span className="text-[10px] bg-green-900/40 border border-green-700/40 text-green-300 px-2 py-0.5 rounded-lg font-black">개인</span>
+                : <span className="text-[10px] bg-purple-900/40 border border-purple-700/40 text-purple-300 px-2 py-0.5 rounded-lg font-black">소속사</span>}
             </h2>
-            <p className="text-gray-500 text-[11px]">
-              {selectedOrg ? `${selectedOrg} · 기사 ${activeDrivers.length}명` : '소속사를 선택하세요'}
+            <p className="text-gray-500 text-[11px] flex items-center gap-2">
+              {isPersonalMode
+                ? `기사 ${activeDrivers.length}명 · 루트맵 자동 연동`
+                : (selectedOrg ? `${selectedOrg} · 기사 ${activeDrivers.length}명` : '소속사를 선택하세요')}
+              {isPersonalMode && user?.companyCode && (
+                <span
+                  className="font-mono text-[9px] bg-[#1a1a1a] border border-[#2a2a2a] text-gray-500 px-1.5 py-0.5 rounded cursor-pointer hover:text-blue-400 hover:border-blue-700/50 transition-colors"
+                  title="회사코드 클릭 시 복사"
+                  onClick={() => { navigator.clipboard?.writeText(user.companyCode); alert(`회사코드 복사됨: ${user.companyCode}`); }}
+                >
+                  코드: {user.companyCode}
+                </span>
+              )}
             </p>
           </div>
         </div>
 
         <div className="flex items-center gap-3">
-          {/* 관리자: 소속사 드롭다운 */}
+          {/* 관리자: 소속사 드롭다운 + 개인기사 가져오기 */}
           {isAdmin && (
-            <div className="flex items-center gap-2">
-              <Building2 size={13} className="text-gray-600" />
-              <select value={selectedOrg} onChange={e=>setSelectedOrg(e.target.value)}
-                className="bg-[#111] border border-[#2a2a2a] text-white text-xs rounded-xl px-3 py-2 outline-none focus:border-blue-500/50 cursor-pointer">
-                <option value="">소속사 선택</option>
-                {orgList.map(org=><option key={org} value={org}>{org}</option>)}
-              </select>
-            </div>
+            <>
+              <div className="flex items-center gap-2">
+                <Building2 size={13} className="text-gray-600" />
+                <select value={selectedOrg} onChange={e=>setSelectedOrg(e.target.value)}
+                  className="bg-[#111] border border-[#2a2a2a] text-white text-xs rounded-xl px-3 py-2 outline-none focus:border-blue-500/50 cursor-pointer">
+                  <option value="">소속사 선택</option>
+                  {orgList.map(org=><option key={org} value={org}>{org}</option>)}
+                </select>
+              </div>
+              {selectedOrg && (
+                <button onClick={handleOpenImportPanel}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-900/30 border border-amber-700/40 text-amber-300 text-[11px] font-bold rounded-xl hover:bg-amber-800/40 transition-colors">
+                  <Users size={12}/> 개인기사 가져오기
+                </button>
+              )}
+            </>
           )}
-          {/* 비관리자: 소속사명 표시 */}
+          {/* 비관리자: 소속사명 또는 개인모드 표시 */}
           {!isAdmin && selectedOrg && (
             <div className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-900/20 border border-emerald-700/30 rounded-xl">
               <Building2 size={11} className="text-emerald-400" />
               <span className="text-emerald-300 text-[11px] font-bold">{selectedOrg}</span>
+            </div>
+          )}
+          {isPersonalMode && (
+            <div className="flex items-center gap-1.5 px-3 py-1.5 bg-green-900/20 border border-green-700/30 rounded-xl">
+              <Users size={11} className="text-green-400" />
+              <span className="text-green-300 text-[11px] font-bold">내 기사</span>
             </div>
           )}
           <button onClick={onClose}
@@ -532,13 +677,22 @@ export default function DriverRegistryModal({ user, onClose }) {
         {/* ══ 탭 1: 기사 관리 ══════════════════════════════════════════ */}
         {tab === 'drivers' && (
           <div className="flex-1 overflow-y-auto px-8 py-6">
-            {!selectedOrg ? (
+            {!isPersonalMode && !selectedOrg ? (
               <div className="flex flex-col items-center justify-center h-48 text-gray-600 gap-3">
                 <Building2 size={32} className="opacity-20" />
                 <div className="text-sm">{isAdmin ? '상단에서 소속사를 선택하세요' : '소속사 정보를 확인할 수 없습니다'}</div>
               </div>
             ) : (
               <div className="max-w-4xl mx-auto">
+                {isPersonalMode && (
+                  <div className="mb-5 px-4 py-3 bg-green-900/15 border border-green-700/30 rounded-xl flex items-start gap-3">
+                    <Users size={14} className="text-green-400 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="text-green-300 text-[12px] font-bold">개인 기사 명단</p>
+                      <p className="text-gray-500 text-[11px] mt-0.5">소속사 없이 기사를 직접 등록하고 루트맵에서 사용할 수 있습니다. 지역매칭을 설정하면 자동 배정도 가능합니다.</p>
+                    </div>
+                  </div>
+                )}
                 <div className="flex items-center justify-between mb-5">
                   <div className="text-gray-500 text-[12px]">
                     활성 <span className="text-blue-400 font-black">{activeDrivers.length}명</span>
@@ -760,6 +914,115 @@ export default function DriverRegistryModal({ user, onClose }) {
           </div>
         )}
       </div>
+
+      {/* ── 관리자: 개인기사 가져오기 패널 ──────────────────────────────────── */}
+      {showImportPanel && (
+        <div className="absolute inset-0 bg-black/80 flex items-center justify-center z-10 p-6">
+          <div className="w-full max-w-2xl bg-[#0a0f0a] border border-amber-600/30 rounded-2xl flex flex-col max-h-[85vh] shadow-[0_0_60px_rgba(245,158,11,0.1)]">
+            {/* 패널 헤더 */}
+            <div className="shrink-0 flex items-center justify-between px-6 py-4 border-b border-[#1a2a1a]">
+              <div className="flex items-center gap-2">
+                <Users size={16} className="text-amber-400" />
+                <h3 className="text-white font-black text-sm">개인 기사 가져오기</h3>
+                <span className="text-[10px] bg-amber-900/40 border border-amber-700/40 text-amber-300 px-2 py-0.5 rounded-lg font-bold">→ {selectedOrg}</span>
+              </div>
+              <button onClick={()=>{setShowImportPanel(false);setImportUser(null);setImportDrivers([]);setImportSelected(new Set());setImportSearchEmail('');}}
+                className="text-gray-600 hover:text-white transition-colors"><X size={16}/></button>
+            </div>
+
+            <div className="flex flex-1 min-h-0 overflow-hidden">
+              {/* 좌측: 유저 목록 */}
+              <div className="w-[45%] shrink-0 border-r border-[#1a2a1a] flex flex-col">
+                <div className="p-3 border-b border-[#1a2a1a]">
+                  <input value={importSearchEmail} onChange={e=>setImportSearchEmail(e.target.value)}
+                    placeholder="이름 또는 이메일 검색..."
+                    className="w-full bg-[#111] border border-[#2a2a2a] text-white text-[11px] rounded-lg px-3 py-2 outline-none focus:border-amber-500/50 placeholder-gray-700" />
+                </div>
+                <div className="flex-1 overflow-y-auto">
+                  {isLoadingImport && !importUser ? (
+                    <div className="flex items-center justify-center h-24 text-gray-600 text-xs animate-pulse">로딩 중...</div>
+                  ) : (
+                    importUserList
+                      .filter(u => !importSearchEmail || (u.realName||'').includes(importSearchEmail) || (u.email||'').includes(importSearchEmail))
+                      .map(u => (
+                        <button key={u.id} onClick={()=>handleSelectImportUser(u)}
+                          className={`w-full flex items-center gap-2 px-4 py-2.5 text-left transition-colors border-b border-[#0f1a0f] ${
+                            importUser?.id===u.id ? 'bg-amber-900/20 text-amber-300' : 'text-gray-400 hover:bg-white/5 hover:text-white'
+                          }`}>
+                          <div className="w-6 h-6 rounded-full bg-[#1a1a1a] flex items-center justify-center shrink-0 text-[10px] font-black text-gray-400">
+                            {(u.realName||u.email||'?')[0]}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="text-[11px] font-bold truncate">{u.realName||'(미등록)'}</div>
+                            <div className="text-[10px] text-gray-600 truncate">{u.email}</div>
+                          </div>
+                        </button>
+                      ))
+                  )}
+                </div>
+              </div>
+
+              {/* 우측: 선택 유저의 개인기사 목록 */}
+              <div className="flex-1 flex flex-col overflow-hidden">
+                {!importUser ? (
+                  <div className="flex flex-col items-center justify-center flex-1 text-gray-600 gap-2">
+                    <Users size={28} className="opacity-20"/>
+                    <div className="text-xs">좌측에서 사용자를 선택하세요</div>
+                  </div>
+                ) : (
+                  <>
+                    <div className="shrink-0 flex items-center justify-between px-4 py-2.5 border-b border-[#1a2a1a] bg-[#0d0d0d]">
+                      <div className="text-[11px] text-white font-bold">
+                        {importUser.realName||importUser.email} · 개인기사 {importDrivers.length}명
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button onClick={()=>setImportSelected(importDrivers.length===importSelected.size ? new Set() : new Set(importDrivers.map(d=>d.id)))}
+                          className="text-[10px] text-gray-500 hover:text-amber-400 transition-colors font-bold">
+                          {importDrivers.length===importSelected.size ? '전체 해제' : '전체 선택'}
+                        </button>
+                      </div>
+                    </div>
+                    <div className="flex-1 overflow-y-auto p-3 space-y-1.5">
+                      {isLoadingImport ? (
+                        <div className="flex items-center justify-center h-24 text-gray-600 text-xs animate-pulse">불러오는 중...</div>
+                      ) : importDrivers.length === 0 ? (
+                        <div className="flex items-center justify-center h-24 text-gray-600 text-xs">개인 기사 없음</div>
+                      ) : (
+                        importDrivers.map(d => (
+                          <button key={d.id} onClick={()=>toggleImportSelect(d.id)}
+                            className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl border text-left transition-all ${
+                              importSelected.has(d.id)
+                                ? 'bg-amber-900/20 border-amber-700/40 text-white'
+                                : 'bg-[#0d0d0d] border-[#1a1a1a] text-gray-400 hover:border-[#2a2a2a] hover:text-gray-200'
+                            }`}>
+                            <div className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 text-[11px] font-black text-white"
+                              style={{background:d.color||'#3b82f6'}}>{(d.name||'?')[0]}</div>
+                            <div className="flex-1 min-w-0">
+                              <div className="text-[12px] font-black truncate">{d.name}</div>
+                              {d.phone && <div className="text-[10px] text-gray-600">{d.phone}</div>}
+                            </div>
+                            <div className="shrink-0 w-4 h-4 rounded border flex items-center justify-center"
+                              style={{background:importSelected.has(d.id)?d.color||'#f59e0b':'transparent', borderColor:importSelected.has(d.id)?d.color||'#f59e0b':'#333'}}>
+                              {importSelected.has(d.id) && <Check size={9} className="text-white"/>}
+                            </div>
+                          </button>
+                        ))
+                      )}
+                    </div>
+                    <div className="shrink-0 p-3 border-t border-[#1a2a1a]">
+                      <button onClick={handleImportSelected} disabled={!importSelected.size || isImporting}
+                        className="w-full flex items-center justify-center gap-2 py-2.5 bg-amber-700 hover:bg-amber-600 text-white text-[12px] font-black rounded-xl disabled:opacity-40 transition-colors">
+                        {isImporting ? <><RefreshCw size={12} className="animate-spin"/>가져오는 중...</>
+                          : <><CheckSquare size={12}/> {importSelected.size}명 {selectedOrg}으로 가져오기</>}
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   , document.body);
 }

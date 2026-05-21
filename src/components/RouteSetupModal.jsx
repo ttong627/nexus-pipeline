@@ -1,7 +1,7 @@
 ﻿import React, { useState, useEffect, useMemo } from 'react';
 import { X, MapPin, Play, ChevronRight, Truck, Building2, ChevronLeft, Plus, Trash2, Phone, Percent, Users, LayoutGrid, Navigation2, Crosshair, Loader2, CheckCircle, RefreshCw, CloudDownload } from 'lucide-react';
 import { db, writeBatch } from '../config/firebase.js';
-import { getDocs, collection, getDoc, doc, setDoc, serverTimestamp } from 'firebase/firestore';
+import { getDocs, collection, getDoc, doc, setDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
 
 const KAKAO_REST_KEY = import.meta.env.VITE_KAKAO_REST_KEY;
 
@@ -43,7 +43,7 @@ const makeDriver = (idx) => ({
 });
 
 // ── 공통 헤더 컴포넌트
-function ModalHeader({ onBack, title, badge, subtitle, onClose }) {
+function ModalHeader({ onBack, title, badge, subtitle, onClose, stepLabel }) {
   return (
     <div className="shrink-0 flex items-center justify-between px-8 py-4 border-b border-[#0f1a2e]/60 bg-[#0a0f0a]">
       <div className="flex items-center gap-3">
@@ -57,9 +57,10 @@ function ModalHeader({ onBack, title, badge, subtitle, onClose }) {
           <Truck size={14} className="text-blue-400" />
         </div>
         <div>
-          <h2 className="text-white font-bold text-sm flex items-center gap-2">
+          <h2 className="text-white font-bold text-sm flex items-center gap-2 flex-wrap">
             {title}
             {badge && <span className="text-[11px] font-black px-2 py-0.5 rounded-lg" style={badge.style}>{badge.text}</span>}
+            {stepLabel && <span className="text-[9px] font-black px-2 py-0.5 rounded-full bg-blue-900/50 text-blue-300 border border-blue-700/30">{stepLabel}</span>}
           </h2>
           {subtitle && <p className="text-gray-500 text-[11px] mt-0.5">{subtitle}</p>}
         </div>
@@ -98,6 +99,7 @@ export default function RouteSetupModal({
   const [isLoading, setIsLoading] = useState(false);
   const [recordRefs, setRecordRefs] = useState([]); // cloud 모드용 [{id, dong, 주소, lat, lng}]
   const [isSavingAssignment, setIsSavingAssignment] = useState(false);
+  const [saveError, setSaveError] = useState(''); // 저장 실패 메시지
   const [isFetchingCoords, setIsFetchingCoords] = useState(false);
   const [coordProgress, setCoordProgress] = useState(null); // { done, total, round }
 
@@ -203,9 +205,16 @@ export default function RouteSetupModal({
     if (effectiveCity) {
       (async () => {
         try {
-          const orgKey = selectedOrgId || 'all';
-          const snap = await getDoc(doc(db, 'driver_assignments', effectiveCity, 'orgs', orgKey));
-          const hasUsefulDrivers = snap.exists() && snap.data().drivers?.some(d => d.name?.trim());
+          let snap;
+          if (selectedOrgId === '__personal__') {
+            const uid = user?.uid;
+            if (!uid) return;
+            snap = await getDoc(doc(db, 'user_driver_presets', uid, 'cities', effectiveCity));
+          } else {
+            const orgKey = selectedOrgId || 'all';
+            snap = await getDoc(doc(db, 'driver_assignments', effectiveCity, 'orgs', orgKey));
+          }
+          const hasUsefulDrivers = snap?.exists() && snap.data().drivers?.some(d => d.name?.trim());
           if (hasUsefulDrivers) {
             const d = snap.data();
             setDrivers(d.drivers);
@@ -241,9 +250,15 @@ export default function RouteSetupModal({
         setDongDriverMap({});
         // 저장된 기사매칭 프리셋 자동로드 (driver_assignments → route_sessions fallback)
         try {
-          const orgKey = selectedOrgId || 'all';
-          const presetSnap = await getDoc(doc(db, 'driver_assignments', effectiveCity, 'orgs', orgKey));
-          const hasUsefulDrivers = presetSnap.exists() && presetSnap.data().drivers?.some(d => d.name?.trim());
+          let presetSnap;
+          if (selectedOrgId === '__personal__') {
+            const uid = user?.uid;
+            if (uid) presetSnap = await getDoc(doc(db, 'user_driver_presets', uid, 'cities', effectiveCity));
+          } else {
+            const orgKey = selectedOrgId || 'all';
+            presetSnap = await getDoc(doc(db, 'driver_assignments', effectiveCity, 'orgs', orgKey));
+          }
+          const hasUsefulDrivers = presetSnap?.exists() && presetSnap.data().drivers?.some(d => d.name?.trim());
 
           if (hasUsefulDrivers) {
             // 정상 경로: driver_assignments 에 이름 있는 기사 데이터 존재
@@ -363,6 +378,15 @@ export default function RouteSetupModal({
     setStep('setup');
   };
 
+  // 개인 기사 선택
+  const handleSelectPersonal = () => {
+    setSelectedOrgId('__personal__');
+    setSelectedOrgDongs(null);
+    setDongDriverMap({});
+    setSavedAssignmentLoaded(false);
+    setStep('setup');
+  };
+
   // ── 좌표 통계 (배정된 동 기준)
   const assignedRecordRefs = useMemo(() => recordRefs.filter(r => assignedDongs.has(r.dong)), [recordRefs, assignedDongs]);
   const coordCount = useMemo(() => assignedRecordRefs.filter(r => r.lat && r.lng).length, [assignedRecordRefs]);
@@ -461,32 +485,55 @@ export default function RouteSetupModal({
     }
   };
 
-  // ── 기사매칭 프리셋 저장 (driver_assignments/{city}/orgs/{orgKey})
+  // ── 기사매칭 프리셋 저장
+  // 개인 모드: user_driver_presets/{uid}/cities/{city} (사용자 소유, 권한 보장)
+  // 소속사 모드: driver_assignments/{city}/orgs/{orgKey} (소속사 관리 경로)
   const saveDriverAssignmentPreset = async () => {
-    if (!effectiveCity || drivers.filter(d => d.name.trim()).length === 0) return;
-    const orgKey = selectedOrgId || 'all';
-    const orgObj = orgs.find(o => o.id === selectedOrgId);
-    await setDoc(doc(db, 'driver_assignments', effectiveCity, 'orgs', orgKey), {
-      city: effectiveCity,
-      orgId: selectedOrgId || null,
-      orgName: orgObj?.name || '전체',
-      drivers,
-      dongDriverMap,
-      baseDailyQty,
-      savedAt: serverTimestamp(),
-    });
+    if (!effectiveCity) return;
+    const namedDrivers = drivers.filter(d => d.name.trim());
+    if (namedDrivers.length === 0) return;
+    if (isPersonalDriverMode) {
+      const uid = user?.uid;
+      if (!uid) return;
+      await setDoc(doc(db, 'user_driver_presets', uid, 'cities', effectiveCity), {
+        city: effectiveCity,
+        drivers,
+        dongDriverMap,
+        baseDailyQty,
+        savedAt: serverTimestamp(),
+      });
+    } else {
+      const orgKey = selectedOrgId || 'all';
+      const orgObj = orgs.find(o => o.id === selectedOrgId);
+      const orgName = orgObj?.name || '전체';
+      await setDoc(doc(db, 'driver_assignments', effectiveCity, 'orgs', orgKey), {
+        city: effectiveCity,
+        orgId: selectedOrgId || null,
+        orgName,
+        drivers,
+        dongDriverMap,
+        baseDailyQty,
+        savedAt: serverTimestamp(),
+      });
+    }
   };
 
   // ── "다음" 버튼 핸들러 — 배정 저장 후 매칭 단계 이동
   const handleNextStep = async () => {
     setIsSavingAssignment(true);
+    setSaveError('');
     try {
       if (mode === 'cloud' && cloudCity && cloudMonthId && assignedDongs.size > 0) {
         await saveDriverAssignment();
       }
-      await saveDriverAssignmentPreset(); // 기사매칭 프리셋 항상 저장
-    } catch (e) { console.error('기사 배정 저장 실패:', e); }
-    finally { setIsSavingAssignment(false); }
+      await saveDriverAssignmentPreset();
+    } catch (e) {
+      console.error('기사 배정 저장 실패:', e);
+      setSaveError(`저장 실패: ${e.code === 'permission-denied' ? '권한 없음 — 관리자에게 문의하세요' : e.message}`);
+      setIsSavingAssignment(false);
+      return; // 저장 실패 시 다음 단계로 넘어가지 않음
+    }
+    setIsSavingAssignment(false);
     setMatchMode(null);
     setStep('match');
   };
@@ -501,25 +548,65 @@ export default function RouteSetupModal({
     onStart({ selectedDongs, drivers: finalDrivers, dongDriverMap: map, baseDailyQty });
   };
 
-  // ── 소속사 기사 마스터에서 불러오기 (orgName 기준, 현재 city 담당 기사만)
+  // ── 기사 마스터에서 불러오기 (소속사 또는 개인기사)
   const handleLoadOrgDrivers = async () => {
+    if (!effectiveCity) return;
+
+    // ── 개인 기사 모드 분기
+    if (isPersonalDriverMode) {
+      const uid = user?.uid;
+      if (!uid) { alert('사용자 정보가 없습니다.'); return; }
+      setIsLoadingOrgDrivers(true);
+      try {
+        const companyCode = user?.companyCode;
+        const colPath = companyCode
+          ? collection(db, 'user_companies', companyCode, 'drivers')
+          : collection(db, 'user_drivers', uid, 'drivers');
+        const snap = await getDocs(colPath);
+        const loaded = snap.docs
+          .map(d => ({ _docId: d.id, ...d.data() }))
+          .filter(d => d.status !== 'inactive')
+          .sort((a, b) => (a.name || '').localeCompare(b.name || '', 'ko'));
+        if (!loaded.length) { alert('등록된 기사가 없습니다.\n메뉴 → 기사 관리에서 기사를 등록하세요.'); return; }
+        const mapped = loaded.map((d, idx) => ({
+          id: d._docId, name: d.name || '', phone: d.phone || '',
+          capacity: d.capacity ?? 100, color: d.color || DRIVER_COLORS[idx % DRIVER_COLORS.length],
+        }));
+        setDrivers(mapped);
+        const newDongMap = {};
+        loaded.forEach(d => {
+          const cityZone = (d.assignedZones || []).find(z => z.city === effectiveCity);
+          if (!cityZone) return;
+          cityZone.dongs.forEach(dong => {
+            if (!newDongMap[dong]) newDongMap[dong] = [];
+            if (!newDongMap[dong].includes(d._docId)) newDongMap[dong].push(d._docId);
+          });
+        });
+        setDongDriverMap(newDongMap);
+        setSavedAssignmentLoaded(Object.keys(newDongMap).length > 0);
+      } catch (e) { alert('기사 불러오기 실패: ' + e.message); }
+      finally { setIsLoadingOrgDrivers(false); }
+      return;
+    }
+
+    // ── 소속사 기사 모드
     const orgObj = orgs.find(o => o.id === selectedOrgId);
     const orgName = orgObj?.name || user?.orgId || '';
-    if (!orgName) { alert('소속사 정보가 없습니다.\n관리자에게 소속사 배정을 요청하세요.'); return; }
-    if (!effectiveCity) return;
+    if (!orgName) {
+      // 소속사 미선택 시: 이전 단계로 안내
+      if (window.confirm('소속사가 선택되지 않았습니다.\n\n← 이전 화면에서 소속사 카드를 선택하면\n등록된 기사 명단을 자동으로 불러올 수 있습니다.\n\n이전 화면으로 돌아가시겠습니까?')) {
+        setStep('org');
+      }
+      return;
+    }
     setIsLoadingOrgDrivers(true);
     try {
       const snap = await getDocs(collection(db, 'org_drivers', orgName, 'drivers'));
       const loaded = snap.docs
         .map(d => ({ _docId: d.id, ...d.data() }))
-        .filter(d => {
-          if (d.status === 'inactive') return false;
-          const zones = d.assignedZones || [];
-          // assignedZones 미설정 기사도 포함 (하위 호환)
-          return zones.length === 0 || zones.some(z => z.city === effectiveCity);
-        })
+        .filter(d => d.status !== 'inactive') // 비활성만 제외, zone 필터 없음
         .sort((a, b) => (a.name || '').localeCompare(b.name || '', 'ko'));
-      if (!loaded.length) { alert('이 지자체에 배정된 기사가 없습니다.\n메뉴 → 소속사 기사 관리에서 기사를 등록하고 지역매칭을 설정하세요.'); return; }
+      if (!loaded.length) { alert('등록된 기사가 없습니다.\n메뉴 → 소속사 기사 관리에서 기사를 등록하세요.'); return; }
       const mapped = loaded.map((d, idx) => ({
         id: d._docId,
         name: d.name || '',
@@ -593,16 +680,18 @@ export default function RouteSetupModal({
   };
 
   const selectedOrg = orgs.find(o => o.id === selectedOrgId);
+  const isPersonalDriverMode = selectedOrgId === '__personal__';
   const activeDriverList = drivers.filter(d => activeDriverIds.has(d.id));
   const assignedDrivers = drivers.filter(d =>
     Object.values(dongDriverMap).some(ids => ids.includes(d.id))
   );
 
   const headerSubtitle = mode === 'cloud' ? `${cloudCity} · ${cloudMonthId}` : '로컬 데이터';
-  const orgBadge = selectedOrg ? {
-    text: selectedOrg.name,
-    style: { background: (ORG_COLOR_MAP[selectedOrg.color] || '#6b7280') + '22', color: ORG_COLOR_MAP[selectedOrg.color] || '#6b7280' },
-  } : null;
+  const orgBadge = isPersonalDriverMode
+    ? { text: '내 기사', style: { background: '#22c55e22', color: '#22c55e' } }
+    : selectedOrg
+      ? { text: selectedOrg.name, style: { background: (ORG_COLOR_MAP[selectedOrg.color] || '#6b7280') + '22', color: ORG_COLOR_MAP[selectedOrg.color] || '#6b7280' } }
+      : null;
 
   // ══════════════════════════════════════
   // Step 1: 소속사 선택
@@ -616,9 +705,12 @@ export default function RouteSetupModal({
               <Truck size={17} className="text-blue-400" />
             </div>
             <div>
-              <h2 className="text-white font-black text-base">배송 구역 배정</h2>
+              <h2 className="text-white font-black text-base flex items-center gap-2">
+                배송 구역 배정
+                <span className="text-[9px] font-black px-2 py-0.5 rounded-full bg-blue-900/50 text-blue-300 border border-blue-700/30">1 / 3 소속사 선택</span>
+              </h2>
               <p className="text-gray-500 text-[11px] mt-0.5">
-                {effectiveCity || headerSubtitle} · 소속사를 선택하거나 전체 진행을 클릭하세요
+                {effectiveCity || headerSubtitle} · 소속사 카드 클릭 → 전체는 &quot;전체 진행&quot; 클릭
               </p>
             </div>
           </div>
@@ -647,6 +739,24 @@ export default function RouteSetupModal({
                     <div className="text-gray-600 text-[10px] mt-0.5">소속사 구분 없이 전체</div>
                   </div>
                 </button>
+
+                {/* 내 기사 (개인 기사 명단) */}
+                {user?.uid && (
+                  <button onClick={handleSelectPersonal}
+                    className="flex flex-col items-start gap-3 p-6 rounded-2xl border-2 transition-all hover:scale-[1.02] text-left min-h-[160px]"
+                    style={{ background: '#22c55e10', borderColor: '#22c55e40' }}>
+                    <div className="w-14 h-14 rounded-2xl flex items-center justify-center shrink-0"
+                      style={{ background: '#22c55e22', border: '1.5px solid #22c55e55' }}>
+                      <Users size={22} style={{ color: '#22c55e' }} />
+                    </div>
+                    <div className="flex-1 min-w-0 w-full">
+                      <div className="text-white font-black text-sm">내 기사</div>
+                      <div className="text-[10px] mt-1" style={{ color: '#22c55e' }}>개인 기사 명단 사용</div>
+                      <div className="text-[9px] text-gray-600 mt-0.5">소속사 없이 루트맵 진행</div>
+                    </div>
+                  </button>
+                )}
+
                 {orgs.map(org => {
                   const hex = ORG_COLOR_MAP[org.color] || '#6b7280';
                   const dongCnt = org.dongs?.length || 0;
@@ -693,8 +803,9 @@ export default function RouteSetupModal({
           onBack={() => setStep('org')}
           title="작업 설정"
           badge={orgBadge}
-          subtitle={`${headerSubtitle} · 기사 선택 → 행정동 클릭으로 배정`}
+          subtitle={`${headerSubtitle} · 기사 카드 클릭(활성화) → 행정동 클릭(배정) → 다음`}
           onClose={onClose}
+          stepLabel="2 / 3 기사·행정동 배정"
         />
 
         <div className="flex-1 flex min-h-0 overflow-hidden">
@@ -709,9 +820,13 @@ export default function RouteSetupModal({
                 )}
               </div>
               <div className="flex items-center gap-1.5">
-                {/* 소속사 기사 불러오기 */}
-                <button onClick={handleLoadOrgDrivers} disabled={isLoadingOrgDrivers || !effectiveCity}
-                  title="소속사 기사 마스터에서 불러오기 (이름 오름차순)"
+                {/* 소속사 기사 불러오기 — 소속사 선택 시 활성화 */}
+                <button
+                  onClick={handleLoadOrgDrivers}
+                  disabled={isLoadingOrgDrivers || !effectiveCity}
+                  title={selectedOrgId || user?.orgId
+                    ? `${orgs.find(o=>o.id===selectedOrgId)?.name || user?.orgId || '소속사'} 기사 명단 불러오기`
+                    : '← 이전에서 소속사를 선택하면 기사 명단이 자동 로드됩니다'}
                   className="flex items-center gap-1.5 px-3 py-1.5 bg-purple-900/30 hover:bg-purple-700/40 text-purple-300 text-[11px] font-bold border border-purple-700/30 rounded-lg transition-colors disabled:opacity-40">
                   {isLoadingOrgDrivers
                     ? <><RefreshCw size={11} className="animate-spin" />불러오는 중...</>
@@ -837,7 +952,7 @@ export default function RouteSetupModal({
                   ))}
                   <span className="text-blue-500/70 ml-2">— 행정동 클릭 배정 (다시 클릭 해제)</span>
                 </span>
-              ) : '← 왼쪽에서 기사 카드를 클릭해 선택하세요 · 여러 명 동시 선택 가능'}
+              ) : '← 기사 카드를 클릭해 활성화 → 오른쪽 행정동 클릭으로 배정 (여러 명 동시 선택 가능)'}
             </div>
 
             <div className="flex items-center justify-between mb-3 shrink-0">
@@ -916,24 +1031,32 @@ export default function RouteSetupModal({
         </div>
 
         {/* 푸터 */}
-        <div className="shrink-0 px-8 py-4 border-t border-[#0f1a2e]/60 flex items-center justify-between gap-4 bg-[#0a0f0a]">
-          <div className="text-[11px] leading-relaxed">
-            {(() => { const n = drivers.filter(d => d.name.trim()).length; return n > 0 ? <span className="text-blue-400/80">기사 {n}명</span> : <span className="text-gray-600">기사 미입력 → 기본 2명</span>; })()}
-            {assignedDongs.size > 0 ? (
-              <span className="ml-3">· 행정동 <span className="text-blue-400/80 font-bold">{assignedDongs.size}개</span> (<span className="text-blue-400/80">{totalSelected.toLocaleString()}</span>건)</span>
-            ) : <span className="ml-3 text-amber-500/80 font-bold animate-pulse">← 기사 선택 후 행정동을 배정해주세요</span>}
+        <div className="shrink-0 border-t border-[#0f1a2e]/60 bg-[#0a0f0a]">
+          {saveError && (
+            <div className="px-8 py-2 flex items-center gap-2 bg-red-950/40 border-b border-red-700/30">
+              <span className="text-red-400 text-xs font-bold">⚠ {saveError}</span>
+              <button onClick={() => setSaveError('')} className="ml-auto text-red-600 hover:text-red-400 text-xs">✕</button>
+            </div>
+          )}
+          <div className="px-8 py-4 flex items-center justify-between gap-4">
+            <div className="text-[11px] leading-relaxed">
+              {(() => { const n = drivers.filter(d => d.name.trim()).length; return n > 0 ? <span className="text-blue-400/80">기사 {n}명</span> : <span className="text-gray-600">기사 미입력 → 기본 2명</span>; })()}
+              {assignedDongs.size > 0 ? (
+                <span className="ml-3">· 행정동 <span className="text-blue-400/80 font-bold">{assignedDongs.size}개</span> (<span className="text-blue-400/80">{totalSelected.toLocaleString()}</span>건)</span>
+              ) : <span className="ml-3 text-amber-500/80 font-bold animate-pulse">← 기사 선택 후 행정동을 배정해주세요</span>}
+            </div>
+            <button onClick={handleNextStep} disabled={assignedDongs.size === 0 || isLoading || isSavingAssignment}
+              className={`flex items-center gap-2 px-6 py-3 rounded-xl font-black text-[13px] transition-all shrink-0 ${
+                assignedDongs.size > 0 && !isLoading && !isSavingAssignment
+                  ? 'bg-blue-700 hover:bg-blue-600 text-white shadow-[0_4px_20px_rgba(59,130,246,0.3)]'
+                  : 'bg-gray-800/60 text-gray-600 cursor-not-allowed'
+              }`}>
+              {isSavingAssignment
+                ? <><span className="animate-spin inline-block w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full" /> 저장 중...</>
+                : <><Play size={14} /> 다음 — 매칭 방식 선택 <ChevronRight size={14} /></>
+              }
+            </button>
           </div>
-          <button onClick={handleNextStep} disabled={assignedDongs.size === 0 || isLoading || isSavingAssignment}
-            className={`flex items-center gap-2 px-6 py-3 rounded-xl font-black text-[13px] transition-all shrink-0 ${
-              assignedDongs.size > 0 && !isLoading && !isSavingAssignment
-                ? 'bg-blue-700 hover:bg-blue-600 text-white shadow-[0_4px_20px_rgba(59,130,246,0.3)]'
-                : 'bg-gray-800/60 text-gray-600 cursor-not-allowed'
-            }`}>
-            {isSavingAssignment
-              ? <><span className="animate-spin inline-block w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full" /> 저장 중...</>
-              : <><Play size={14} /> 다음 — 매칭 방식 선택 <ChevronRight size={14} /></>
-            }
-          </button>
         </div>
       </div>
     );
@@ -975,8 +1098,9 @@ export default function RouteSetupModal({
         onBack={() => setStep('setup')}
         title="매칭 방식 선택"
         badge={orgBadge}
-        subtitle={`${headerSubtitle} · 배송구역 매칭을 어떻게 진행할지 선택하세요`}
+        subtitle={`${headerSubtitle} · 전체·기사별·행정동별 중 원하는 방식으로 루트맵 시작`}
         onClose={onClose}
+        stepLabel="3 / 3 매칭 시작"
       />
 
       <div className="flex-1 overflow-y-auto px-8 py-8">

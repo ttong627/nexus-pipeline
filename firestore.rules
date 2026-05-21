@@ -185,14 +185,25 @@ service cloud.firestore {
       }
     }
 
+    // ── 사용자 개인 기사: 본인만 읽기·쓰기, 관리자 전체 제어 ─────────────────
+    match /user_drivers/{uid} {
+      allow read: if isAuthenticated() && (request.auth.uid == uid || isAdmin());
+      allow write: if isAuthenticated() && (request.auth.uid == uid || isAdmin());
+
+      match /drivers/{driverId} {
+        allow read: if isAuthenticated() && (request.auth.uid == uid || isAdmin());
+        allow write: if isAuthenticated() && (request.auth.uid == uid || isAdmin());
+      }
+    }
+
     // ── 기사 배정 프리셋: 읽기·쓰기는 승인 사용자 (루트맵 셋업 저장용) ───────────
     match /driver_assignments/{cityId} {
-      allow read: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin());
-      allow write: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin());
+      allow read: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin() || isAdminEmail());
+      allow write: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin() || isAdminEmail());
 
       match /orgs/{orgKey} {
-        allow read: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin());
-        allow write: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin());
+        allow read: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin() || isAdminEmail());
+        allow write: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin() || isAdminEmail());
       }
     }
 
@@ -222,9 +233,31 @@ service cloud.firestore {
       allow read, write: if isAuthenticated() && request.auth.uid == userId;
     }
 
-    // ── 배송일정 기사 목록: 본인만 읽기·쓰기 ──────────────────────────────────
-    match /schedule_drivers/{userId} {
-      allow read, write: if isAuthenticated() && request.auth.uid == userId;
+    // ── 배송일정 기사 목록: 본인·관리자 읽기·쓰기 ─────────────────────────────
+    match /schedule_drivers/{uid} {
+      allow read, write: if isAuthenticated() && (request.auth.uid == uid || isAdmin());
+    }
+
+    // ── 개인 기사매칭 프리셋: 본인만 읽기·쓰기 ────────────────────────────────
+    match /user_driver_presets/{uid} {
+      allow read, write: if isAuthenticated() && (request.auth.uid == uid || isAdmin());
+      match /cities/{cityId} {
+        allow read, write: if isAuthenticated() && (request.auth.uid == uid || isAdmin());
+      }
+    }
+
+    // ── 사용자 회사(companyCode 기반): 본인 생성·수정, 관리자 전체 ───────────────
+    match /user_companies/{companyCode} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && request.resource.data.ownerUid == request.auth.uid;
+      allow update: if isAuthenticated() &&
+        (resource.data.ownerUid == request.auth.uid || isAdmin());
+      allow delete: if isAdmin();
+
+      match /drivers/{driverId} {
+        allow read, write: if isAuthenticated() &&
+          (get(/databases/$(database)/documents/user_companies/$(companyCode)).data.ownerUid == request.auth.uid || isAdmin());
+      }
     }
 
     // ── 기본 차단 (Zero Trust) ───────────────────────────────────────────────

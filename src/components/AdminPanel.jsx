@@ -1,22 +1,40 @@
 ﻿import { useState, useEffect, useRef } from 'react';
-import { getDocs, getDoc, updateDoc, setDoc, deleteDoc, doc, collection, db, serverTimestamp, addDoc, query, where, orderBy, writeBatch, onSnapshot, arrayUnion, arrayRemove } from '../config/firebase.js';
-import { X, Users, BarChart2, Clock, ShieldOff, ShieldCheck, AlertTriangle, Crown, MessageSquare, CheckCircle2, MapPin, XCircle, Building2, ShieldAlert, Plus, ChevronDown, TrendingUp, AlertCircle, UserX, Activity, Zap, Trash2 } from 'lucide-react';
+import { createPortal } from 'react-dom';
+import { getDocs, getDoc, updateDoc, setDoc, deleteDoc, doc, collection, db, serverTimestamp, Timestamp, addDoc, query, where, orderBy, limit, writeBatch, onSnapshot, arrayUnion, arrayRemove } from '../config/firebase.js';
+const ttl90 = () => Timestamp.fromMillis(Date.now() + 90 * 24 * 60 * 60 * 1000);
+import { X, Users, BarChart2, Clock, ShieldOff, ShieldCheck, AlertTriangle, Crown, MessageSquare, CheckCircle2, MapPin, XCircle, Building2, ShieldAlert, Plus, ChevronDown, TrendingUp, AlertCircle, UserX, Activity, Zap, Trash2, Truck, Edit2, RefreshCw, UserCheck, ChevronRight } from 'lucide-react';
 import { REGIONS, getSigunguOptions } from '../utils/regions.js';
 
-function OrgSelect({ value, options, onChange }) {
+function OrgSelect({ value, options, onChange, onBulkAssign }) {
   const [open, setOpen] = useState(false);
-  const ref = useRef(null);
+  const btnRef = useRef(null);
+  const dropRef = useRef(null);
+  const [pos, setPos] = useState({ top: 0, left: 0, minWidth: 224 });
 
   useEffect(() => {
-    const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    if (!open) return;
+    const handler = (e) => {
+      if (btnRef.current?.contains(e.target)) return;
+      if (dropRef.current?.contains(e.target)) return;
+      setOpen(false);
+    };
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
-  }, []);
+  }, [open]);
+
+  const handleOpen = () => {
+    if (!open && btnRef.current) {
+      const rect = btnRef.current.getBoundingClientRect();
+      setPos({ top: rect.bottom + 4, left: rect.left, minWidth: Math.max(rect.width, 224) });
+    }
+    setOpen(o => !o);
+  };
 
   return (
-    <div ref={ref} className="relative">
+    <div className="relative">
       <button
-        onClick={() => setOpen(o => !o)}
+        ref={btnRef}
+        onClick={handleOpen}
         className={`w-full flex items-center justify-between gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-bold border transition-colors ${
           value
             ? 'border-purple-600/50 bg-purple-950/40 text-purple-200 hover:border-purple-400/70'
@@ -27,12 +45,16 @@ function OrgSelect({ value, options, onChange }) {
         <ChevronDown size={10} className="shrink-0 opacity-60" />
       </button>
 
-      {open && (
-        <div className="absolute left-0 top-full mt-1 z-[900] w-56 bg-[#111a12] border border-[#3b82f6]/25 rounded-xl shadow-[0_12px_40px_rgba(0,0,0,0.9)] overflow-hidden">
-          <div className="max-h-56 overflow-y-auto scrollbar-thin scrollbar-thumb-[#2d4a35] scrollbar-track-transparent">
+      {open && createPortal(
+        <div
+          ref={dropRef}
+          style={{ position: 'fixed', top: pos.top, left: pos.left, minWidth: pos.minWidth, zIndex: 99999 }}
+          className="bg-[#111a12] border border-[#3b82f6]/25 rounded-xl shadow-[0_20px_50px_rgba(0,0,0,0.95)] overflow-hidden"
+        >
+          <div className="max-h-64 overflow-y-auto scrollbar-thin scrollbar-thumb-[#2d4a35] scrollbar-track-transparent">
             <button
               onClick={() => { onChange(''); setOpen(false); }}
-              className={`w-full text-left px-3 py-2.5 text-[11px] font-bold transition-colors border-b border-[#0f1a2e] ${
+              className={`w-full text-left px-4 py-3 text-[12px] font-bold transition-colors border-b border-[#0f1a2e] ${
                 !value ? 'text-[#3b82f6] bg-[#3b82f6]/10' : 'text-gray-500 hover:bg-white/5 hover:text-gray-300'
               }`}
             >
@@ -42,7 +64,7 @@ function OrgSelect({ value, options, onChange }) {
               <button
                 key={name}
                 onClick={() => { onChange(name); setOpen(false); }}
-                className={`w-full text-left px-3 py-2.5 text-[11px] font-bold transition-colors ${
+                className={`w-full text-left px-4 py-3 text-[12px] font-bold transition-colors ${
                   value === name
                     ? 'text-purple-200 bg-purple-900/40 border-l-2 border-purple-500'
                     : 'text-gray-300 hover:bg-white/5 hover:text-white border-l-2 border-transparent'
@@ -52,7 +74,101 @@ function OrgSelect({ value, options, onChange }) {
               </button>
             ))}
           </div>
-        </div>
+          {onBulkAssign && (
+            <div className="border-t border-[#1a2a1a] p-2">
+              <button
+                onClick={() => { onBulkAssign(value); setOpen(false); }}
+                className="w-full flex items-center justify-center gap-1.5 px-3 py-2.5 text-[11px] font-black text-amber-400 bg-amber-950/30 border border-amber-700/30 rounded-lg hover:bg-amber-900/40 transition-colors"
+              >
+                <Users size={11}/> 소속 없는 사용자 전체 배정
+              </button>
+            </div>
+          )}
+        </div>,
+        document.body
+      )}
+    </div>
+  );
+}
+
+function CompanySelect({ value, companies, onChange }) {
+  const [open, setOpen] = useState(false);
+  const btnRef = useRef(null);
+  const dropRef = useRef(null);
+  const [pos, setPos] = useState({ top: 0, left: 0, minWidth: 220 });
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e) => {
+      if (btnRef.current?.contains(e.target)) return;
+      if (dropRef.current?.contains(e.target)) return;
+      setOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [open]);
+
+  const handleOpen = () => {
+    if (!open && btnRef.current) {
+      const rect = btnRef.current.getBoundingClientRect();
+      setPos({ top: rect.bottom + 4, left: rect.left, minWidth: Math.max(rect.width, 220) });
+    }
+    setOpen(o => !o);
+  };
+
+  const selected = companies.find(c => c.id === value);
+
+  return (
+    <div className="relative">
+      <button
+        ref={btnRef}
+        onClick={handleOpen}
+        className={`w-full flex items-center justify-between gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-bold border transition-colors ${
+          value
+            ? 'border-blue-600/50 bg-blue-950/40 text-blue-200 hover:border-blue-400/70'
+            : 'border-[#333] bg-black/60 text-gray-500 hover:border-[#555]'
+        }`}
+      >
+        <span className="truncate max-w-[130px]">{selected ? selected.name : '회사 없음'}</span>
+        <ChevronDown size={10} className="shrink-0 opacity-60" />
+      </button>
+
+      {open && createPortal(
+        <div
+          ref={dropRef}
+          style={{ position: 'fixed', top: pos.top, left: pos.left, minWidth: pos.minWidth, zIndex: 99999 }}
+          className="bg-[#111a12] border border-blue-600/25 rounded-xl shadow-[0_20px_50px_rgba(0,0,0,0.95)] overflow-hidden"
+        >
+          <div className="max-h-64 overflow-y-auto scrollbar-thin scrollbar-thumb-[#2d4a35]">
+            <button
+              onClick={() => { onChange(''); setOpen(false); }}
+              className={`w-full text-left px-4 py-3 text-[12px] font-bold transition-colors border-b border-[#0f1a2e] ${
+                !value ? 'text-blue-300 bg-blue-900/20' : 'text-gray-500 hover:bg-white/5 hover:text-gray-300'
+              }`}
+            >회사 연결 없음</button>
+            {companies.map(c => (
+              <button
+                key={c.id}
+                onClick={() => { onChange(c.id); setOpen(false); }}
+                className={`w-full text-left px-4 py-2.5 text-[12px] transition-colors hover:bg-white/5 ${
+                  value === c.id ? 'text-blue-200 bg-blue-900/30 font-black' : 'text-gray-300 font-bold'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span>{c.name}</span>
+                  <span className="text-[9px] text-gray-600 font-mono">{c.id}</span>
+                </div>
+                {c.cities?.length > 0 && (
+                  <div className="text-[10px] text-gray-600 mt-0.5">{c.cities.slice(0, 3).join(', ')}{c.cities.length > 3 ? ` +${c.cities.length - 3}` : ''}</div>
+                )}
+              </button>
+            ))}
+            {companies.length === 0 && (
+              <p className="px-4 py-3 text-gray-600 text-[11px]">등록된 회사 없음 — 소속사·회사 관리에서 추가하세요</p>
+            )}
+          </div>
+        </div>,
+        document.body
       )}
     </div>
   );
@@ -108,8 +224,17 @@ export default function AdminPanel({ onClose, user }) {
   const [roleTarget, setRoleTarget] = useState(null);
   const [editingCity, setEditingCity] = useState({});
 
+  // 사용자 기사 관리 모달
+  const [driverManageTarget, setDriverManageTarget] = useState(null); // 선택된 user 객체
+  const [driverManageList, setDriverManageList] = useState([]);
+  const [driverManageLoading, setDriverManageLoading] = useState(false);
+  const [driverManageForm, setDriverManageForm] = useState(null); // null|{id,name,capacity,color,status,memo}
+  const [driverManageSaving, setDriverManageSaving] = useState(false);
+
   // AI Advisor States
   const [aiLogs, setAiLogs] = useState([]);
+  const [aiLogsAll, setAiLogsAll] = useState([]); // applied/rejected 포함 전체
+  const [aiFilter, setAiFilter] = useState('pending'); // 'all' | 'applied' | 'pending'
   const [aiLoading, setAiLoading] = useState(false);
   const [aiRules, setAiRules] = useState(null);
   const [userMappingStats, setUserMappingStats] = useState([]);
@@ -121,8 +246,25 @@ export default function AdminPanel({ onClose, user }) {
 
   // 소속사 글로벌 목록 (nexus_config/orgs)
   const [globalOrgs, setGlobalOrgs] = useState([]);
+  const [orgCities, setOrgCities] = useState({}); // { orgName: string[] }
   const [newOrgInput, setNewOrgInput] = useState('');
   const [showOrgMgr, setShowOrgMgr] = useState(false);
+  const [orgMgrTab, setOrgMgrTab] = useState('org'); // 'org' | 'company'
+
+  // 소속사 지자체 picker (org manager modal)
+  const [orgCityPicker, setOrgCityPicker] = useState(null); // orgName
+  const [orgCityPickerSido, setOrgCityPickerSido] = useState('');
+  const [orgCityPickerSigungu, setOrgCityPickerSigungu] = useState('');
+
+  // 회사 목록 (user_companies)
+  const [userCompanies, setUserCompanies] = useState([]);
+  const [newCompanyName, setNewCompanyName] = useState('');
+  const [companyCityPicker, setCompanyCityPicker] = useState(null); // companyCode
+  const [companyCityPickerSido, setCompanyCityPickerSido] = useState('');
+  const [companyCityPickerSigungu, setCompanyCityPickerSigungu] = useState('');
+
+  // 소속사 열 탭 모드: {uid: 'org'|'company'}
+  const [orgCellMode, setOrgCellMode] = useState({});
 
   // 지자체 직접 추가 picker
   const [cityPickerUid, setCityPickerUid] = useState(null);
@@ -137,7 +279,8 @@ export default function AdminPanel({ onClose, user }) {
   const fetchAuditLogs = async () => {
     setAuditLoading(true);
     try {
-      const snap = await getDocs(query(collection(db, 'audit_logs'), orderBy('createdAt', 'desc')));
+      // 최근 200건만 — audit_logs는 계속 쌓이므로 전체 로드 금지
+      const snap = await getDocs(query(collection(db, 'audit_logs'), orderBy('timestamp', 'desc'), limit(200)));
       setAuditLogs(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     } catch { setAuditLogs([]); }
     finally { setAuditLoading(false); }
@@ -163,7 +306,10 @@ export default function AdminPanel({ onClose, user }) {
   const loadGlobalOrgs = async () => {
     try {
       const snap = await getDoc(doc(db, 'nexus_config', 'orgs'));
-      setGlobalOrgs(snap.exists() ? (snap.data().list || []) : []);
+      if (snap.exists()) {
+        setGlobalOrgs(snap.data().list || []);
+        setOrgCities(snap.data().cities || {});
+      }
     } catch { setGlobalOrgs([]); }
   };
 
@@ -188,10 +334,127 @@ export default function AdminPanel({ onClose, user }) {
   };
 
   const saveUserOrg = async (uid, orgName) => {
+    const cities = orgName ? (orgCities[orgName] || []) : undefined;
     try {
-      await updateDoc(doc(db, 'users', uid), { orgId: orgName || null });
-      setUsers(prev => prev.map(u => u.id === uid ? { ...u, orgId: orgName || null } : u));
+      await updateDoc(doc(db, 'users', uid), {
+        orgId: orgName || null,
+        ...(orgName && cities.length > 0 ? { citiesApproved: cities } : {}),
+      });
+      setUsers(prev => prev.map(u => u.id === uid
+        ? { ...u, orgId: orgName || null, ...(orgName && cities.length > 0 ? { citiesApproved: cities } : {}) }
+        : u));
     } catch (e) { alert('소속사 배정 실패: ' + e.message); }
+  };
+
+  // ── 소속사 지자체 관리 ──────────────────────────────────────────────────
+  const updateOrgCities = async (orgName, cities) => {
+    const newOrgCities = { ...orgCities, [orgName]: cities };
+    try {
+      await setDoc(doc(db, 'nexus_config', 'orgs'), { cities: newOrgCities }, { merge: true });
+      setOrgCities(newOrgCities);
+      const affected = users.filter(u => u.orgId === orgName);
+      if (affected.length > 0) {
+        const batch = writeBatch(db);
+        affected.forEach(u => batch.update(doc(db, 'users', u.id), { citiesApproved: cities }));
+        await batch.commit();
+        setUsers(prev => prev.map(u => u.orgId === orgName ? { ...u, citiesApproved: cities } : u));
+      }
+    } catch (e) { alert('소속사 지자체 업데이트 실패: ' + e.message); }
+  };
+
+  // ── 회사(user_companies) CRUD ──────────────────────────────────────────
+  const loadAllCompanies = async () => {
+    try {
+      const snap = await getDocs(collection(db, 'user_companies'));
+      setUserCompanies(snap.docs.map(d => ({ id: d.id, ...d.data() }))
+        .sort((a, b) => (a.name || '').localeCompare(b.name || '')));
+    } catch (e) { console.error(e); }
+  };
+
+  const addCompany = async () => {
+    const name = newCompanyName.trim();
+    if (!name) return;
+    const ts = Date.now().toString(36).toUpperCase().slice(-5);
+    const rand = Math.random().toString(36).substr(2, 4).toUpperCase();
+    const code = `NX-${ts}${rand}`;
+    try {
+      await setDoc(doc(db, 'user_companies', code), {
+        code, name, cities: [], createdAt: serverTimestamp(), createdBy: user?.email || 'admin',
+      });
+      setUserCompanies(prev => [...prev, { id: code, code, name, cities: [] }]
+        .sort((a, b) => (a.name || '').localeCompare(b.name || '')));
+      setNewCompanyName('');
+    } catch (e) { alert('회사 추가 실패: ' + e.message); }
+  };
+
+  const deleteCompany = async (code) => {
+    const comp = userCompanies.find(c => c.id === code);
+    if (!window.confirm(`'${comp?.name || code}' 회사를 삭제하시겠습니까?\n연결된 사용자의 회사코드는 초기화됩니다.`)) return;
+    try {
+      const affected = users.filter(u => u.companyCode === code);
+      if (affected.length > 0) {
+        const batch = writeBatch(db);
+        affected.forEach(u => batch.update(doc(db, 'users', u.id), { companyCode: null }));
+        await batch.commit();
+        setUsers(prev => prev.map(u => u.companyCode === code ? { ...u, companyCode: null } : u));
+      }
+      await deleteDoc(doc(db, 'user_companies', code));
+      setUserCompanies(prev => prev.filter(c => c.id !== code));
+    } catch (e) { alert('회사 삭제 실패: ' + e.message); }
+  };
+
+  const saveUserCompany = async (uid, code) => {
+    const company = userCompanies.find(c => c.id === code);
+    const cities = company?.cities || [];
+    try {
+      await updateDoc(doc(db, 'users', uid), {
+        companyCode: code || null,
+        ...(code && cities.length > 0 ? { citiesApproved: cities } : {}),
+      });
+      setUsers(prev => prev.map(u => u.id === uid
+        ? { ...u, companyCode: code || null, ...(code && cities.length > 0 ? { citiesApproved: cities } : {}) }
+        : u));
+    } catch (e) { alert('회사 배정 실패: ' + e.message); }
+  };
+
+  const updateCompanyCities = async (code, cities) => {
+    try {
+      await updateDoc(doc(db, 'user_companies', code), { cities });
+      setUserCompanies(prev => prev.map(c => c.id === code ? { ...c, cities } : c));
+      const affected = users.filter(u => u.companyCode === code);
+      if (affected.length > 0) {
+        const batch = writeBatch(db);
+        affected.forEach(u => batch.update(doc(db, 'users', u.id), { citiesApproved: cities }));
+        await batch.commit();
+        setUsers(prev => prev.map(u => u.companyCode === code ? { ...u, citiesApproved: cities } : u));
+      }
+    } catch (e) { alert('회사 지자체 업데이트 실패: ' + e.message); }
+  };
+
+  const addCityToCompany = async (code, cityId) => {
+    const comp = userCompanies.find(c => c.id === code);
+    if (!comp || !cityId) return;
+    const cities = [...new Set([...(comp.cities || []), cityId])];
+    await updateCompanyCities(code, cities);
+    setCompanyCityPickerSido(''); setCompanyCityPickerSigungu(''); setCompanyCityPicker(null);
+  };
+
+  const removeCityFromCompany = async (code, cityId) => {
+    const comp = userCompanies.find(c => c.id === code);
+    if (!comp) return;
+    await updateCompanyCities(code, (comp.cities || []).filter(c => c !== cityId));
+  };
+
+  const handleBulkAssignOrg = async (orgName) => {
+    const targets = users.filter(u => !u.orgId);
+    if (!targets.length) { alert('소속이 없는 사용자가 없습니다.'); return; }
+    if (!window.confirm(`소속 없는 사용자 ${targets.length}명에게\n"${orgName || '소속 없음'}"을 일괄 배정하시겠습니까?`)) return;
+    try {
+      const batch = writeBatch(db);
+      targets.forEach(u => batch.update(doc(db, 'users', u.id), { orgId: orgName || null }));
+      await batch.commit();
+      setUsers(prev => prev.map(u => !u.orgId ? { ...u, orgId: orgName || null } : u));
+    } catch (e) { alert('일괄 배정 실패: ' + e.message); }
   };
 
   const addCityToUser = async (uid, cityId) => {
@@ -251,7 +514,8 @@ export default function AdminPanel({ onClose, user }) {
 
   const fetchUsers = () => {
     setLoading(true);
-    getDocs(query(collection(db, 'users'), orderBy('lastLogin', 'desc'))).then(snap => {
+    // limit(500) — 사용자 수가 늘어도 한 번에 최대 500명만 로드 (페이징 대비)
+    getDocs(query(collection(db, 'users'), orderBy('lastLogin', 'desc'), limit(500))).then(snap => {
       const list = snap.docs
         .map(d => ({ id: d.id, ...d.data() }))
         .filter(u => u.id !== user?.uid);
@@ -269,12 +533,15 @@ export default function AdminPanel({ onClose, user }) {
     setAiLoading(true);
     try {
       const [logsSnap, rulesSnap] = await Promise.all([
-        getDocs(collection(db, 'nexus_ai_logs')),
+        // 최근 1,000건만 — 전체 스캔 방지
+        getDocs(query(collection(db, 'nexus_ai_logs'), orderBy('createdAt', 'desc'), limit(1000))),
         getDocs(collection(db, 'nexus_config'))
       ]);
       const allLogs = logsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
 
-      const logs = allLogs.filter(l => l.status === 'pending' && l.type !== 'user_mapping');
+      const nonMappingLogs = allLogs.filter(l => l.type !== 'user_mapping');
+      setAiLogsAll(nonMappingLogs);
+      const logs = nonMappingLogs.filter(l => l.status === 'pending');
       setAiLogs(logs);
 
       const mappingLogs = allLogs.filter(l => l.type === 'user_mapping' && l.columnName && l.mappedTo);
@@ -310,6 +577,7 @@ export default function AdminPanel({ onClose, user }) {
     fetchInquiries();
     fetchAuditLogs();
     loadGlobalOrgs();
+    loadAllCompanies();
 
     const q = query(collection(db, 'city_requests'), where('status', '==', 'pending'));
     const unsub = onSnapshot(q,
@@ -413,18 +681,29 @@ export default function AdminPanel({ onClose, user }) {
     }
   };
 
-  const aggregatedCols = {};
-  aiLogs.forEach(l => {
-    const colList = Array.isArray(l.cols) ? l.cols : (l.columnName ? [l.columnName] : []);
-    colList.forEach(c => {
-      if (!aggregatedCols[c]) aggregatedCols[c] = { count: 0, files: new Set() };
-      aggregatedCols[c].count++;
-      aggregatedCols[c].files.add(l.fileName);
+  const buildSuggestions = (logs) => {
+    const agg = {};
+    logs.forEach(l => {
+      const colList = Array.isArray(l.cols) ? l.cols : (l.columnName ? [l.columnName] : []);
+      const appliedKey = l.appliedKey || null;
+      colList.forEach(c => {
+        if (!agg[c]) agg[c] = { count: 0, files: new Set(), status: l.status || 'pending', appliedKey };
+        agg[c].count++;
+        agg[c].files.add(l.fileName);
+        if (l.status === 'applied') agg[c].status = 'applied';
+      });
     });
-  });
-  const aiSuggestions = Object.entries(aggregatedCols)
-    .map(([col, data]) => ({ col, count: data.count, files: [...data.files], analysis: analyzeSuggestion(col) }))
-    .sort((a, b) => b.count - a.count);
+    return Object.entries(agg)
+      .map(([col, data]) => ({ col, count: data.count, files: [...data.files], status: data.status, appliedKey: data.appliedKey, analysis: analyzeSuggestion(col) }))
+      .sort((a, b) => b.count - a.count);
+  };
+
+  const filteredAiLogs = aiFilter === 'pending' ? aiLogs
+    : aiFilter === 'applied' ? aiLogsAll.filter(l => l.status === 'applied')
+    : aiLogsAll;
+  const aiSuggestions = buildSuggestions(filteredAiLogs);
+  const pendingCount = buildSuggestions(aiLogs).length;
+  const appliedCount = buildSuggestions(aiLogsAll.filter(l => l.status === 'applied')).length;
 
   const tierCounts = Object.keys(TIERS).reduce((acc, k) => {
     acc[k] = users.filter(u => (u.tier || 'basic') === k).length;
@@ -454,7 +733,7 @@ export default function AdminPanel({ onClose, user }) {
       map[city].sessions++;
       map[city].added += log.addCount || 0;
       map[city].updated += log.updateCount || 0;
-      const sec = log.createdAt?.seconds || 0;
+      const sec = log.timestamp?.seconds || log.createdAt?.seconds || 0;
       if (sec > map[city].lastSec) map[city].lastSec = sec;
     });
     return Object.values(map).sort((a, b) => b.sessions - a.sessions);
@@ -501,6 +780,81 @@ export default function AdminPanel({ onClose, user }) {
     } finally { setProcessing(false); }
   };
 
+  // ── 사용자 기사 관리 ──────────────────────────────────────────────────────
+  const getTargetDriversCol = (u) => {
+    if (!u) return null;
+    if (u.orgId) return collection(db, 'org_drivers', u.orgId, 'drivers');
+    if (u.companyCode) return collection(db, 'user_companies', u.companyCode, 'drivers');
+    return collection(db, 'user_drivers', u.id, 'drivers');
+  };
+  const getTargetDriverPath = (u) => {
+    if (!u) return '';
+    if (u.orgId) return `소속사: ${u.orgId}`;
+    if (u.companyCode) return `회사: ${u.companyCode}`;
+    return '개인';
+  };
+
+  const openDriverManage = async (u) => {
+    setDriverManageTarget(u);
+    setDriverManageList([]);
+    setDriverManageForm(null);
+    setDriverManageLoading(true);
+    try {
+      const col = getTargetDriversCol(u);
+      if (!col) return;
+      const snap = await getDocs(col);
+      setDriverManageList(snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (a.name || '').localeCompare(b.name || '', 'ko')));
+    } catch (e) { alert('기사 목록 로드 실패: ' + e.message); }
+    finally { setDriverManageLoading(false); }
+  };
+
+  const saveTargetDriver = async () => {
+    if (!driverManageTarget || !driverManageForm) return;
+    if (!driverManageForm.name?.trim()) { alert('기사 이름을 입력하세요.'); return; }
+    setDriverManageSaving(true);
+    try {
+      const col = getTargetDriversCol(driverManageTarget);
+      const payload = {
+        name: driverManageForm.name.trim(),
+        capacity: parseInt(driverManageForm.capacity) || 100,
+        color: driverManageForm.color || '#3b82f6',
+        memo: driverManageForm.memo || '',
+        status: driverManageForm.status || 'active',
+        updatedAt: serverTimestamp(),
+      };
+      if (driverManageForm.id === 'new') {
+        payload.createdAt = serverTimestamp();
+        await addDoc(col, payload);
+      } else {
+        await setDoc(doc(db, col.path, driverManageForm.id), payload, { merge: true });
+      }
+      await openDriverManage(driverManageTarget);
+      setDriverManageForm(null);
+    } catch (e) { alert('저장 실패: ' + e.message); }
+    finally { setDriverManageSaving(false); }
+  };
+
+  const deleteTargetDriver = async (driverId) => {
+    if (!driverManageTarget || !window.confirm('이 기사를 삭제하시겠습니까?')) return;
+    try {
+      const col = getTargetDriversCol(driverManageTarget);
+      await deleteDoc(doc(db, col.path, driverId));
+      setDriverManageList(prev => prev.filter(d => d.id !== driverId));
+    } catch (e) { alert('삭제 실패: ' + e.message); }
+  };
+
+  const toggleTargetDriverStatus = async (driver) => {
+    if (!driverManageTarget) return;
+    const newStatus = driver.status === 'active' ? 'inactive' : 'active';
+    try {
+      const col = getTargetDriversCol(driverManageTarget);
+      await setDoc(doc(db, col.path, driver.id), { status: newStatus, updatedAt: serverTimestamp() }, { merge: true });
+      setDriverManageList(prev => prev.map(d => d.id === driver.id ? { ...d, status: newStatus } : d));
+    } catch (e) { alert('상태 변경 실패: ' + e.message); }
+  };
+
+  const DRIVER_COLORS_ADMIN = ['#3b82f6','#10b981','#f59e0b','#ef4444','#8b5cf6','#06b6d4','#f97316','#ec4899','#14b8a6','#a855f7','#84cc16','#f43f5e'];
+
   const handleDeleteUser = async () => {
     if (!deleteTarget) return;
     setProcessing(true);
@@ -513,6 +867,7 @@ export default function AdminPanel({ onClose, user }) {
         targetName: deleteTarget.realName || '',
         timestamp: serverTimestamp(),
         adminEmail: user?.email || 'unknown',
+        expireAt: ttl90(),
       });
       setUsers(prev => prev.filter(u => u.id !== deleteTarget.id));
       setDeleteTarget(null);
@@ -643,7 +998,7 @@ export default function AdminPanel({ onClose, user }) {
                   onClick={() => setShowOrgMgr(true)}
                   className="flex items-center gap-2 px-4 py-2 bg-purple-950/40 border border-purple-700/40 text-purple-300 text-xs font-black rounded-xl hover:bg-purple-900/50 transition-colors shrink-0"
                 >
-                  <Building2 size={14}/> 소속사 목록 관리
+                  <Building2 size={14}/> 소속사·회사 관리
                 </button>
               </div>
             </div>
@@ -669,6 +1024,7 @@ export default function AdminPanel({ onClose, user }) {
                       <th className="px-4 py-3 text-center">등급변경</th>
                       <th className="px-4 py-3 text-center">권한</th>
                       <th className="px-4 py-3 text-center">제재</th>
+                      <th className="px-4 py-3 text-center">기사</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-[#0f1a2e] text-gray-300">
@@ -722,15 +1078,43 @@ export default function AdminPanel({ onClose, user }) {
                             />
                           </td>
 
-                          {/* 소속사 */}
-                          <td className="px-4 py-3 min-w-[150px]">
-                            <OrgSelect
-                              value={u.orgId || ''}
-                              options={u.orgId && !globalOrgs.includes(u.orgId)
-                                ? [...globalOrgs, u.orgId].sort()
-                                : globalOrgs}
-                              onChange={name => saveUserOrg(u.id, name)}
-                            />
+                          {/* 소속사/회사 */}
+                          <td className="px-4 py-3 min-w-[175px]">
+                            {/* 탭 토글 */}
+                            <div className="flex gap-0.5 mb-1.5">
+                              {['org', 'company'].map(mode => {
+                                const isActive = (orgCellMode[u.id] || (u.companyCode && !u.orgId ? 'company' : 'org')) === mode;
+                                return (
+                                  <button
+                                    key={mode}
+                                    onClick={() => setOrgCellMode(prev => ({ ...prev, [u.id]: mode }))}
+                                    className={`px-2 py-0.5 rounded text-[10px] font-black transition-colors border ${
+                                      isActive
+                                        ? mode === 'org'
+                                          ? 'bg-purple-900/60 text-purple-300 border-purple-600/50'
+                                          : 'bg-blue-900/60 text-blue-300 border-blue-600/50'
+                                        : 'bg-black/30 text-gray-600 border-[#1a1a1a] hover:text-gray-400'
+                                    }`}
+                                  >{mode === 'org' ? '소속사' : '회사'}</button>
+                                );
+                              })}
+                            </div>
+                            {(orgCellMode[u.id] || (u.companyCode && !u.orgId ? 'company' : 'org')) === 'org' ? (
+                              <OrgSelect
+                                value={u.orgId || ''}
+                                options={u.orgId && !globalOrgs.includes(u.orgId)
+                                  ? [...globalOrgs, u.orgId].sort()
+                                  : globalOrgs}
+                                onChange={name => saveUserOrg(u.id, name)}
+                                onBulkAssign={handleBulkAssignOrg}
+                              />
+                            ) : (
+                              <CompanySelect
+                                value={u.companyCode || ''}
+                                companies={userCompanies}
+                                onChange={code => saveUserCompany(u.id, code)}
+                              />
+                            )}
                           </td>
 
                           {/* 승인 지자체 */}
@@ -856,11 +1240,22 @@ export default function AdminPanel({ onClose, user }) {
                               <Trash2 size={11}/> 삭제
                             </button>
                           </td>
+
+                          {/* 기사 관리 */}
+                          <td className="px-4 py-3 text-center">
+                            <button
+                              onClick={() => openDriverManage(u)}
+                              className="px-3 py-1 bg-emerald-950/40 border border-emerald-700/50 text-emerald-400 text-[11px] font-black rounded-lg hover:bg-emerald-900/60 hover:border-emerald-500/70 transition-colors flex items-center gap-1 mx-auto"
+                              title="이 사용자의 기사 목록 관리"
+                            >
+                              <Truck size={11}/> 기사
+                            </button>
+                          </td>
                         </tr>
                       );
                     })}
                     {users.length === 0 && (
-                      <tr><td colSpan={13} className="px-6 py-10 text-center text-gray-600">등록된 사용자 없음</td></tr>
+                      <tr><td colSpan={14} className="px-6 py-10 text-center text-gray-600">등록된 사용자 없음</td></tr>
                     )}
                   </tbody>
                 </table>
@@ -870,17 +1265,30 @@ export default function AdminPanel({ onClose, user }) {
         )}
 
         {activeTab === 'ai_advisor' && (
-          <div className="flex-1 p-8 overflow-y-auto scrollbar-thin scrollbar-thumb-[#2d4a35]">
-            <div className="mb-6 border border-[#0f1a2e] bg-[#0a100c] p-6 rounded-2xl flex items-start gap-4 shadow-lg shadow-[#0a100c]/50">
-              <div className="w-12 h-12 bg-[#3b82f6]/10 rounded-full flex items-center justify-center shrink-0 border border-[#3b82f6]/30">
-                <Crown size={24} className="text-[#3b82f6]"/>
+          <div className="flex-1 p-6 overflow-y-auto scrollbar-thin scrollbar-thumb-[#2d4a35]">
+            {/* 헤더 + 탭 */}
+            <div className="flex items-center justify-between mb-5">
+              <div className="flex items-center gap-3">
+                <Crown size={18} className="text-[#3b82f6]"/>
+                <h3 className="text-base font-black text-[#3b82f6]">AI 자가 진화 분석 리포트</h3>
               </div>
-              <div>
-                <h3 className="text-xl font-black text-[#3b82f6] mb-1">AI 자가 진화 분석 리포트</h3>
-                <p className="text-gray-400 text-sm leading-relaxed">
-                  현장에서 업로드된 엑셀 파일 중 시스템이 인식하지 못한 <strong>미분류 컬럼</strong>을 AI가 자동으로 수집하고 분석합니다.<br/>
-                  제안된 항목을 확인하고 <b>[적용]</b>을 누르시면, 이후부터 해당 컬럼 이름도 즉시 데이터 추출 엔진에 인식됩니다.
-                </p>
+              <div className="flex items-center gap-1 bg-black/40 border border-[#1a1a2e] rounded-lg p-0.5">
+                {[
+                  { key: 'pending', label: '미반영', count: pendingCount, color: 'text-red-400' },
+                  { key: 'applied', label: '반영됨', count: appliedCount, color: 'text-green-400' },
+                  { key: 'all',     label: '전체',   count: pendingCount + appliedCount, color: 'text-gray-400' },
+                ].map(t => (
+                  <button
+                    key={t.key}
+                    onClick={() => setAiFilter(t.key)}
+                    className={`px-3 py-1.5 rounded text-xs font-black transition-colors flex items-center gap-1.5 ${
+                      aiFilter === t.key ? 'bg-[#3b82f6] text-black' : 'text-gray-500 hover:text-white'
+                    }`}
+                  >
+                    {t.label}
+                    <span className={`text-[10px] ${aiFilter === t.key ? 'text-black/70' : t.color}`}>{t.count}</span>
+                  </button>
+                ))}
               </div>
             </div>
 
@@ -888,113 +1296,87 @@ export default function AdminPanel({ onClose, user }) {
               <div className="flex items-center justify-center py-20 text-gray-500 text-sm">분석 데이터를 불러오는 중...</div>
             ) : (
               <>
-                {userMappingStats.length > 0 && (
-                  <div className="mb-8">
-                    <div className="flex items-center gap-3 mb-4">
-                      <h4 className="text-[#3b82f6] font-black text-base">사용자 학습 기반 제안</h4>
-                      <span className="text-[10px] bg-[#3b82f6]/20 text-[#3b82f6] border border-[#3b82f6]/30 px-2 py-0.5 rounded-full font-black">
-                        실제 매핑 데이터 {userMappingStats.reduce((s, m) => s + m.total, 0)}건 학습됨
+                {/* 사용자 학습 기반 제안 — 미반영/전체 탭에서만 */}
+                {aiFilter !== 'applied' && userMappingStats.length > 0 && (
+                  <div className="mb-5">
+                    <p className="text-gray-500 text-[11px] font-bold mb-2 flex items-center gap-2">
+                      사용자 학습 기반 제안
+                      <span className="bg-[#3b82f6]/20 text-[#3b82f6] border border-[#3b82f6]/30 px-1.5 py-0.5 rounded text-[10px]">
+                        {userMappingStats.reduce((s, m) => s + m.total, 0)}건 학습됨
                       </span>
-                    </div>
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                    </p>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
                       {userMappingStats.map((m, idx) => (
-                        <div key={idx} className="bg-black/50 border border-[#3b82f6]/20 rounded-xl p-4 hover:border-[#3b82f6]/40 transition-colors">
-                          <div className="flex items-start justify-between mb-3">
-                            <div>
-                              <p className="text-white font-black text-base leading-tight">{m.col}</p>
-                              <p className="text-gray-500 text-[11px] mt-0.5">총 {m.total}회 매핑됨</p>
-                            </div>
-                            <div className={`px-2 py-1 rounded text-[10px] font-black border shrink-0 ${
-                              m.confidence >= 90 ? 'bg-[#3b82f6]/10 text-[#3b82f6] border-[#3b82f6]/30' :
-                              m.confidence >= 70 ? 'bg-amber-500/10 text-amber-400 border-amber-500/30' :
-                              'bg-red-500/10 text-red-400 border-red-500/30'
-                            }`}>
-                              {m.confidence}%
-                            </div>
+                        <div key={idx} className="bg-black/40 border border-[#3b82f6]/15 rounded-lg p-3 flex items-center gap-2 hover:border-[#3b82f6]/35 transition-colors">
+                          <div className="flex-1 min-w-0">
+                            <p className="text-white font-black text-sm truncate">{m.col}</p>
+                            <p className="text-gray-600 text-[10px]">{m.total}회 → <span className="text-gray-400">{m.fieldLabel}</span></p>
                           </div>
-                          <div className="bg-black/60 border border-white/5 rounded-lg p-2.5 mb-3">
-                            <p className="text-[11px] text-gray-400">
-                              사용자들이 <strong className="text-white">{m.topCount}회</strong> 중{' '}
-                              <strong className="text-[#3b82f6]">{m.topCount}회</strong>를{' '}
-                              <strong className="text-white">'{m.fieldLabel}'</strong> 로 매핑했습니다
-                            </p>
-                            {m.confidence < 100 && (
-                              <p className="text-[10px] text-gray-600 mt-1">나머지 {m.total - m.topCount}회는 다른 필드로 매핑됨</p>
-                            )}
-                          </div>
+                          <div className={`text-[10px] font-black px-1.5 py-0.5 rounded shrink-0 ${
+                            m.confidence >= 90 ? 'text-[#3b82f6]' : m.confidence >= 70 ? 'text-amber-400' : 'text-red-400'
+                          }`}>{m.confidence}%</div>
                           <button
                             onClick={() => handleAcceptAiSuggestion(m.col, m.topField)}
                             disabled={processing}
-                            className="w-full py-2 rounded-lg bg-[#3b82f6]/10 text-[#3b82f6] text-xs font-black border border-[#3b82f6]/30 hover:bg-[#3b82f6] hover:text-black transition-all disabled:opacity-30"
-                          >
-                            '{m.fieldLabel}' 규칙으로 등록
-                          </button>
+                            className="px-2 py-1 rounded bg-[#3b82f6]/10 text-[#3b82f6] text-[10px] font-black border border-[#3b82f6]/30 hover:bg-[#3b82f6] hover:text-black transition-all disabled:opacity-30 shrink-0"
+                          >적용</button>
                         </div>
                       ))}
                     </div>
                   </div>
                 )}
 
-                <div>
-                  {userMappingStats.length > 0 && (
-                    <h4 className="text-gray-400 font-black text-base mb-4 flex items-center gap-2">
-                      미인식 컬럼 분석
-                      {aiSuggestions.length > 0 && (
-                        <span className="text-[10px] bg-red-500/20 text-red-400 border border-red-500/30 px-2 py-0.5 rounded-full font-black">{aiSuggestions.length}건 대기</span>
-                      )}
-                    </h4>
-                  )}
-                  {aiSuggestions.length === 0 ? (
-                    <div className="bg-black/40 border border-[#0f1a2e] rounded-2xl p-10 text-center">
-                      <p className="text-gray-500 font-bold">새로 제안된 미인식 컬럼이 없습니다.</p>
-                      <p className="text-gray-600 text-xs mt-2">시스템이 이미 대부분의 컬럼을 완벽하게 인식하고 있습니다.</p>
-                    </div>
-                  ) : (
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      {aiSuggestions.map((s, idx) => (
-                        <div key={idx} className="bg-black/40 border border-[#0f1a2e] rounded-xl p-5 hover:bg-black/60 transition-colors">
-                          <div className="flex items-start justify-between mb-4">
-                            <div>
-                              <h4 className="text-white font-black text-lg mb-1">{s.col}</h4>
-                              <p className="text-gray-500 text-xs flex items-center gap-1">
-                                발생 <strong className="text-[#3b82f6]">{s.count}</strong>회
-                                <span className="text-gray-700">|</span>
-                                발견된 파일: {s.files.length}개
-                              </p>
-                            </div>
-                            <div className={`px-2 py-1 rounded text-[10px] font-black border ${
-                              s.analysis.score >= 80 ? 'bg-[#3b82f6]/10 text-[#3b82f6] border-[#3b82f6]/30' :
-                              s.analysis.score >= 50 ? 'bg-amber-500/10 text-amber-400 border-amber-500/30' :
-                              'bg-red-500/10 text-red-400 border-red-500/30'
-                            }`}>
-                              신뢰도 {Math.max(0, s.analysis.score)}%
-                            </div>
-                          </div>
-                          <div className="bg-black border border-[#0f1a2e] p-3 rounded-lg mb-4 text-xs">
-                            <p className="text-gray-400 mb-1">AI 매핑 제안 대상: <strong className="text-white">{s.analysis.key}</strong></p>
-                            <p className="text-gray-500">사유: {s.analysis.reason}</p>
-                          </div>
-                          <div className="flex gap-2 mt-auto">
+                {/* 미인식 컬럼 분석 */}
+                {aiFilter !== 'applied' && userMappingStats.length > 0 && (
+                  <p className="text-gray-500 text-[11px] font-bold mb-2">미인식 컬럼 분석</p>
+                )}
+                {aiSuggestions.length === 0 ? (
+                  <div className="bg-black/30 border border-[#0f1a2e] rounded-xl p-8 text-center">
+                    <p className="text-gray-500 font-bold text-sm">
+                      {aiFilter === 'applied' ? '반영된 항목이 없습니다.' : '새로 제안된 미인식 컬럼이 없습니다.'}
+                    </p>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
+                    {aiSuggestions.map((s, idx) => (
+                      <div key={idx} className={`border rounded-lg p-3 flex items-center gap-2 transition-colors ${
+                        s.status === 'applied'
+                          ? 'bg-green-950/20 border-green-900/30 hover:border-green-700/40'
+                          : 'bg-black/30 border-[#0f1a2e] hover:bg-black/50'
+                      }`}>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-white font-black text-sm truncate">{s.col}</p>
+                          <p className="text-gray-600 text-[10px]">
+                            {s.count}회
+                            {s.status === 'applied'
+                              ? <span className="text-green-500 ml-1">✓ {s.appliedKey || s.analysis.key} 반영됨</span>
+                              : <span className="text-gray-500 ml-1">→ {s.analysis.key}</span>
+                            }
+                          </p>
+                        </div>
+                        <div className={`text-[10px] font-black shrink-0 ${
+                          s.analysis.score >= 80 ? 'text-[#3b82f6]' : s.analysis.score >= 50 ? 'text-amber-400' : 'text-red-400'
+                        }`}>{Math.max(0, s.analysis.score)}%</div>
+                        {s.status !== 'applied' && (
+                          <div className="flex gap-1 shrink-0">
                             <button
                               onClick={() => handleRejectAiSuggestion(s.col)}
                               disabled={processing}
-                              className="flex-1 py-2 rounded-lg bg-black/50 text-gray-400 text-xs font-bold border border-[#333] hover:text-white hover:bg-red-950/30 hover:border-red-900/50 transition-colors"
-                            >
-                              무시 (오탐)
-                            </button>
+                              className="px-1.5 py-1 rounded bg-black/50 text-gray-500 text-[10px] font-bold border border-[#333] hover:text-red-400 hover:border-red-900/50 transition-colors disabled:opacity-30"
+                              title="무시"
+                            >✕</button>
                             <button
                               onClick={() => handleAcceptAiSuggestion(s.col, s.analysis.key)}
                               disabled={processing || s.analysis.key === '알수없음'}
-                              className="flex-2 py-2 px-6 rounded-lg bg-[#3b82f6]/10 text-[#3b82f6] text-xs font-black border border-[#3b82f6]/30 hover:bg-[#3b82f6] hover:text-black hover:border-[#3b82f6] transition-all disabled:opacity-30 disabled:hover:bg-[#3b82f6]/10 disabled:hover:text-[#3b82f6] disabled:cursor-not-allowed"
-                            >
-                              {s.analysis.key === '알수없음' ? '적용 불가' : `'${s.analysis.key}' 규칙으로 적용`}
-                            </button>
+                              className="px-2 py-1 rounded bg-[#3b82f6]/10 text-[#3b82f6] text-[10px] font-black border border-[#3b82f6]/30 hover:bg-[#3b82f6] hover:text-black transition-all disabled:opacity-30"
+                              title={s.analysis.key === '알수없음' ? '적용 불가' : `'${s.analysis.key}' 규칙으로 적용`}
+                            >{s.analysis.key === '알수없음' ? '—' : '적용'}</button>
                           </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
               </>
             )}
           </div>
@@ -1242,7 +1624,7 @@ export default function AdminPanel({ onClose, user }) {
                     <div className="flex items-center gap-3 text-right">
                       <span className="text-blue-400">+{log.addCount || 0}</span>
                       <span className="text-amber-400">~{log.updateCount || 0}</span>
-                      <span className="text-gray-600 font-mono">{fmt(log.createdAt)}</span>
+                      <span className="text-gray-600 font-mono">{fmt(log.timestamp || log.createdAt)}</span>
                     </div>
                   </div>
                 ))}
@@ -1254,61 +1636,164 @@ export default function AdminPanel({ onClose, user }) {
           </div>
         )}
 
-        {/* ── 소속사 목록 관리 모달 ── */}
+        {/* ── 소속사·회사 관리 모달 ── */}
         {showOrgMgr && (
-          <div className="absolute inset-0 bg-black/80 flex items-center justify-center z-10">
-            <div className="w-full max-w-sm bg-[#0a100c] border border-purple-600/40 rounded-2xl p-6 shadow-[0_0_40px_rgba(168,85,247,0.15)]">
-              <div className="flex items-center justify-between mb-5">
+          <div className="absolute inset-0 bg-black/80 flex items-center justify-center z-10 p-4">
+            <div className="w-full max-w-2xl bg-[#0a100c] border border-purple-600/40 rounded-2xl shadow-[0_0_40px_rgba(168,85,247,0.15)] flex flex-col" style={{maxHeight:'80vh'}}>
+              {/* 헤더 */}
+              <div className="flex items-center justify-between px-6 py-4 border-b border-[#1a1a2e] shrink-0">
                 <div className="flex items-center gap-2">
                   <Building2 size={18} className="text-purple-400"/>
-                  <h3 className="text-white font-black">소속사 목록 관리</h3>
+                  <h3 className="text-white font-black">소속사·회사 관리</h3>
                 </div>
-                <button onClick={() => setShowOrgMgr(false)} className="text-gray-600 hover:text-white transition-colors">
-                  <X size={18}/>
-                </button>
-              </div>
-
-              {/* 추가 입력 */}
-              <div className="flex gap-2 mb-4">
-                <input
-                  value={newOrgInput}
-                  onChange={e => setNewOrgInput(e.target.value)}
-                  onKeyDown={e => e.key === 'Enter' && addGlobalOrg()}
-                  placeholder="소속사 이름 입력"
-                  className="flex-1 bg-black/60 border border-[#333] focus:border-purple-500/60 text-white placeholder-gray-700 px-3 py-2 rounded-xl outline-none text-sm"
-                  autoFocus
-                />
-                <button
-                  onClick={addGlobalOrg}
-                  disabled={!newOrgInput.trim()}
-                  className="px-3 py-2 bg-purple-900/60 border border-purple-600/50 text-purple-300 font-black rounded-xl hover:bg-purple-800/60 transition-colors disabled:opacity-40 flex items-center gap-1"
-                >
-                  <Plus size={14}/> 추가
-                </button>
-              </div>
-
-              {/* 목록 */}
-              <div className="space-y-1.5 max-h-64 overflow-y-auto scrollbar-thin scrollbar-thumb-[#333]">
-                {globalOrgs.length === 0 && (
-                  <p className="text-center text-gray-700 text-sm py-6">등록된 소속사가 없습니다</p>
-                )}
-                {globalOrgs.map(name => (
-                  <div key={name} className="flex items-center justify-between px-3 py-2 bg-black/40 border border-[#222] rounded-lg hover:border-purple-700/40 transition-colors">
-                    <span className="text-gray-300 text-sm font-bold">{name}</span>
+                <div className="flex items-center gap-3">
+                  <div className="flex gap-0.5 bg-black/40 border border-[#333] rounded-lg p-0.5">
                     <button
-                      onClick={() => removeGlobalOrg(name)}
-                      className="text-gray-600 hover:text-red-400 transition-colors"
-                      title="제거"
-                    >
-                      <X size={14}/>
-                    </button>
+                      onClick={() => setOrgMgrTab('org')}
+                      className={`px-3 py-1.5 rounded text-xs font-black transition-colors ${orgMgrTab === 'org' ? 'bg-purple-900/70 text-purple-300' : 'text-gray-500 hover:text-white'}`}
+                    >소속사</button>
+                    <button
+                      onClick={() => { setOrgMgrTab('company'); if (!userCompanies.length) loadAllCompanies(); }}
+                      className={`px-3 py-1.5 rounded text-xs font-black transition-colors ${orgMgrTab === 'company' ? 'bg-blue-900/70 text-blue-300' : 'text-gray-500 hover:text-white'}`}
+                    >회사 <span className="text-[10px] opacity-70">({userCompanies.length})</span></button>
                   </div>
-                ))}
+                  <button onClick={() => setShowOrgMgr(false)} className="text-gray-600 hover:text-white transition-colors"><X size={18}/></button>
+                </div>
               </div>
 
-              <p className="text-gray-700 text-[10px] mt-4 text-center">
-                제거해도 기존 배정된 유저의 소속은 유지됩니다
-              </p>
+              <div className="flex-1 overflow-y-auto scrollbar-thin scrollbar-thumb-[#2d4a35] p-5">
+                {orgMgrTab === 'org' ? (
+                  /* ─── 소속사 탭 ─── */
+                  <div>
+                    <div className="flex gap-2 mb-4">
+                      <input value={newOrgInput} onChange={e => setNewOrgInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && addGlobalOrg()}
+                        placeholder="소속사 이름 입력" autoFocus
+                        className="flex-1 bg-black/60 border border-[#333] focus:border-purple-500/60 text-white placeholder-gray-700 px-3 py-2 rounded-xl outline-none text-sm"
+                      />
+                      <button onClick={addGlobalOrg} disabled={!newOrgInput.trim()}
+                        className="px-3 py-2 bg-purple-900/60 border border-purple-600/50 text-purple-300 font-black rounded-xl hover:bg-purple-800/60 transition-colors disabled:opacity-40 flex items-center gap-1">
+                        <Plus size={14}/> 추가
+                      </button>
+                    </div>
+                    <div className="space-y-2">
+                      {globalOrgs.length === 0 && <p className="text-center text-gray-700 text-sm py-6">등록된 소속사가 없습니다</p>}
+                      {globalOrgs.map(name => (
+                        <div key={name} className="bg-black/40 border border-[#222] rounded-xl p-3 hover:border-purple-700/30 transition-colors">
+                          <div className="flex items-center justify-between mb-2">
+                            <div>
+                              <span className="text-white font-black">{name}</span>
+                              <span className="text-gray-700 text-[10px] ml-2">{users.filter(u => u.orgId === name).length}명 배정</span>
+                            </div>
+                            <button onClick={() => removeGlobalOrg(name)} className="text-gray-600 hover:text-red-400 transition-colors"><X size={14}/></button>
+                          </div>
+                          {/* 소속사 지자체 pills */}
+                          <div className="flex flex-wrap gap-1">
+                            {(orgCities[name] || []).map(city => (
+                              <span key={city} className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] bg-purple-900/30 text-purple-300 border border-purple-700/30">
+                                {city}
+                                <button onClick={() => updateOrgCities(name, (orgCities[name] || []).filter(c => c !== city))} className="ml-0.5 opacity-60 hover:opacity-100 hover:text-red-400">×</button>
+                              </span>
+                            ))}
+                            {/* 지자체 추가 버튼 */}
+                            {orgCityPicker === name ? (
+                              <div className="flex gap-1 items-center flex-wrap">
+                                <select value={orgCityPickerSido} onChange={e => { setOrgCityPickerSido(e.target.value); setOrgCityPickerSigungu(''); }}
+                                  className="bg-black/70 border border-[#444] text-gray-300 text-[10px] px-1 py-0.5 rounded outline-none focus:border-purple-500">
+                                  <option value="">시/도</option>{sidoList.map(s => <option key={s} value={s}>{s}</option>)}
+                                </select>
+                                <select value={orgCityPickerSigungu} onChange={e => setOrgCityPickerSigungu(e.target.value)} disabled={!orgCityPickerSido}
+                                  className="bg-black/70 border border-[#444] text-gray-300 text-[10px] px-1 py-0.5 rounded outline-none focus:border-purple-500 disabled:opacity-40">
+                                  <option value="">시/군/구</option>{orgCityPickerSido && getSigunguOptions(orgCityPickerSido).map(sg => <option key={sg} value={sg}>{sg}</option>)}
+                                </select>
+                                <button onClick={() => {
+                                  if (!orgCityPickerSido || !orgCityPickerSigungu) return;
+                                  const cityId = `${orgCityPickerSido} ${orgCityPickerSigungu}`;
+                                  const cur = orgCities[name] || [];
+                                  if (!cur.includes(cityId)) updateOrgCities(name, [...cur, cityId]);
+                                  setOrgCityPicker(null); setOrgCityPickerSido(''); setOrgCityPickerSigungu('');
+                                }} disabled={!orgCityPickerSido || !orgCityPickerSigungu}
+                                  className="px-2 py-0.5 bg-purple-900/40 text-purple-300 border border-purple-700/40 rounded text-[10px] font-black hover:bg-purple-800/50 disabled:opacity-40">추가</button>
+                                <button onClick={() => { setOrgCityPicker(null); setOrgCityPickerSido(''); setOrgCityPickerSigungu(''); }}
+                                  className="px-1.5 py-0.5 bg-black/40 text-gray-500 border border-[#333] rounded text-[10px]">✕</button>
+                              </div>
+                            ) : (
+                              <button onClick={() => { setOrgCityPicker(name); setOrgCityPickerSido(''); setOrgCityPickerSigungu(''); }}
+                                className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] bg-black/40 text-gray-600 border border-[#222] hover:text-purple-400 hover:border-purple-700/40 transition-colors">
+                                <Plus size={9}/> 지자체
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    <p className="text-gray-700 text-[10px] mt-3 text-center">제거해도 기존 배정된 유저의 소속은 유지됩니다</p>
+                  </div>
+                ) : (
+                  /* ─── 회사 탭 ─── */
+                  <div>
+                    <div className="flex gap-2 mb-4">
+                      <input value={newCompanyName} onChange={e => setNewCompanyName(e.target.value)} onKeyDown={e => e.key === 'Enter' && addCompany()}
+                        placeholder="회사명 입력 (코드 자동 생성)"
+                        className="flex-1 bg-black/60 border border-[#333] focus:border-blue-500/60 text-white placeholder-gray-700 px-3 py-2 rounded-xl outline-none text-sm"
+                      />
+                      <button onClick={addCompany} disabled={!newCompanyName.trim()}
+                        className="px-3 py-2 bg-blue-900/60 border border-blue-600/50 text-blue-300 font-black rounded-xl hover:bg-blue-800/60 transition-colors disabled:opacity-40 flex items-center gap-1">
+                        <Plus size={14}/> 추가
+                      </button>
+                    </div>
+                    <div className="space-y-2">
+                      {userCompanies.length === 0 && <p className="text-center text-gray-700 text-sm py-6">등록된 회사가 없습니다</p>}
+                      {userCompanies.map(c => (
+                        <div key={c.id} className="bg-black/40 border border-[#0f1a2e] rounded-xl p-3 hover:border-blue-700/30 transition-colors">
+                          <div className="flex items-center justify-between mb-2">
+                            <div>
+                              <span className="text-white font-black">{c.name}</span>
+                              <span className="font-mono text-[10px] text-blue-400/70 ml-2 bg-blue-950/30 px-1.5 py-0.5 rounded">{c.id}</span>
+                              <span className="text-gray-700 text-[10px] ml-1">{users.filter(u => u.companyCode === c.id).length}명 배정</span>
+                            </div>
+                            <button onClick={() => deleteCompany(c.id)} className="text-gray-600 hover:text-red-400 transition-colors" title="회사 삭제">
+                              <Trash2 size={13}/>
+                            </button>
+                          </div>
+                          {/* 회사 지자체 pills */}
+                          <div className="flex flex-wrap gap-1">
+                            {(c.cities || []).map(city => (
+                              <span key={city} className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] bg-blue-900/30 text-blue-300 border border-blue-700/30">
+                                {city}
+                                <button onClick={() => removeCityFromCompany(c.id, city)} className="ml-0.5 opacity-60 hover:opacity-100 hover:text-red-400">×</button>
+                              </span>
+                            ))}
+                            {/* 지자체 추가 버튼 */}
+                            {companyCityPicker === c.id ? (
+                              <div className="flex gap-1 items-center flex-wrap">
+                                <select value={companyCityPickerSido} onChange={e => { setCompanyCityPickerSido(e.target.value); setCompanyCityPickerSigungu(''); }}
+                                  className="bg-black/70 border border-[#444] text-gray-300 text-[10px] px-1 py-0.5 rounded outline-none focus:border-blue-500">
+                                  <option value="">시/도</option>{sidoList.map(s => <option key={s} value={s}>{s}</option>)}
+                                </select>
+                                <select value={companyCityPickerSigungu} onChange={e => setCompanyCityPickerSigungu(e.target.value)} disabled={!companyCityPickerSido}
+                                  className="bg-black/70 border border-[#444] text-gray-300 text-[10px] px-1 py-0.5 rounded outline-none focus:border-blue-500 disabled:opacity-40">
+                                  <option value="">시/군/구</option>{companyCityPickerSido && getSigunguOptions(companyCityPickerSido).map(sg => <option key={sg} value={sg}>{sg}</option>)}
+                                </select>
+                                <button onClick={() => addCityToCompany(c.id, `${companyCityPickerSido} ${companyCityPickerSigungu}`)}
+                                  disabled={!companyCityPickerSido || !companyCityPickerSigungu}
+                                  className="px-2 py-0.5 bg-blue-900/40 text-blue-300 border border-blue-700/40 rounded text-[10px] font-black hover:bg-blue-800/50 disabled:opacity-40">추가</button>
+                                <button onClick={() => { setCompanyCityPicker(null); setCompanyCityPickerSido(''); setCompanyCityPickerSigungu(''); }}
+                                  className="px-1.5 py-0.5 bg-black/40 text-gray-500 border border-[#333] rounded text-[10px]">✕</button>
+                              </div>
+                            ) : (
+                              <button onClick={() => { setCompanyCityPicker(c.id); setCompanyCityPickerSido(''); setCompanyCityPickerSigungu(''); }}
+                                className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] bg-black/40 text-gray-600 border border-[#222] hover:text-blue-400 hover:border-blue-700/40 transition-colors">
+                                <Plus size={9}/> 지자체
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    <p className="text-gray-700 text-[10px] mt-3 text-center">회사 지자체 변경 시 배정된 모든 사용자의 승인 지자체가 즉시 동기화됩니다</p>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         )}
@@ -1479,6 +1964,134 @@ export default function AdminPanel({ onClose, user }) {
                 <button onClick={handleBan} disabled={processing} className="flex-1 py-2.5 bg-red-950/60 border border-red-500/60 text-red-400 font-extrabold rounded-xl hover:bg-red-900/60 transition-colors text-sm disabled:opacity-50">
                   {processing ? '처리 중...' : '제재 실행'}
                 </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── 사용자 기사 관리 모달 ──────────────────────────────────────── */}
+        {driverManageTarget && (
+          <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-[200]" onClick={e => { if (e.target === e.currentTarget) { setDriverManageTarget(null); setDriverManageForm(null); } }}>
+            <div className="w-full max-w-xl bg-[#0a0a0a] border border-emerald-700/40 rounded-2xl shadow-[0_0_60px_rgba(16,185,129,0.15)] flex flex-col max-h-[85vh]">
+              {/* 헤더 */}
+              <div className="shrink-0 flex items-center justify-between px-6 py-4 border-b border-[#1a1a1a]">
+                <div className="flex items-center gap-3">
+                  <div className="w-8 h-8 rounded-xl bg-emerald-900/40 border border-emerald-600/30 flex items-center justify-center">
+                    <Truck size={14} className="text-emerald-400"/>
+                  </div>
+                  <div>
+                    <h3 className="text-white font-black text-sm flex items-center gap-2">
+                      {driverManageTarget.realName || driverManageTarget.email}
+                      <span className="text-[10px] bg-emerald-900/40 border border-emerald-700/40 text-emerald-300 px-2 py-0.5 rounded-lg font-black">
+                        {getTargetDriverPath(driverManageTarget)}
+                      </span>
+                    </h3>
+                    <p className="text-gray-500 text-[11px]">{driverManageTarget.email} · 기사 {driverManageList.filter(d => d.status !== 'inactive').length}명 활성</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setDriverManageForm({ id: 'new', name: '', capacity: 100, color: '#3b82f6', memo: '', status: 'active' })}
+                    className="flex items-center gap-1 px-3 py-1.5 bg-emerald-900/40 border border-emerald-600/40 text-emerald-300 text-[11px] font-black rounded-lg hover:bg-emerald-800/50 transition-colors"
+                  ><Plus size={11}/> 기사 추가</button>
+                  <button onClick={() => { setDriverManageTarget(null); setDriverManageForm(null); }} className="w-7 h-7 flex items-center justify-center text-gray-500 hover:text-white rounded-lg hover:bg-white/10 transition-colors">
+                    <X size={14}/>
+                  </button>
+                </div>
+              </div>
+
+              {/* 기사 추가/수정 폼 */}
+              {driverManageForm && (
+                <div className="shrink-0 px-6 py-4 border-b border-[#1a1a1a] bg-emerald-950/20">
+                  <div className="flex items-center gap-2 mb-3">
+                    <Edit2 size={12} className="text-emerald-400"/>
+                    <span className="text-emerald-300 text-[11px] font-black">{driverManageForm.id === 'new' ? '새 기사 추가' : '기사 정보 수정'}</span>
+                  </div>
+                  <div className="flex gap-2 flex-wrap">
+                    <input
+                      placeholder="기사 이름 *"
+                      value={driverManageForm.name}
+                      onChange={e => setDriverManageForm(prev => ({ ...prev, name: e.target.value }))}
+                      className="flex-1 min-w-[120px] bg-black/60 border border-[#333] focus:border-emerald-500/60 text-white px-3 py-1.5 rounded-lg text-xs outline-none"
+                    />
+                    <input
+                      type="number" min={1} max={200} placeholder="업무능력%"
+                      value={driverManageForm.capacity}
+                      onChange={e => setDriverManageForm(prev => ({ ...prev, capacity: e.target.value }))}
+                      className="w-24 bg-black/60 border border-[#333] focus:border-emerald-500/60 text-white px-3 py-1.5 rounded-lg text-xs outline-none"
+                    />
+                    <input
+                      placeholder="메모"
+                      value={driverManageForm.memo}
+                      onChange={e => setDriverManageForm(prev => ({ ...prev, memo: e.target.value }))}
+                      className="flex-1 min-w-[100px] bg-black/60 border border-[#333] focus:border-emerald-500/60 text-white px-3 py-1.5 rounded-lg text-xs outline-none"
+                    />
+                    <div className="flex gap-1 items-center flex-wrap">
+                      {DRIVER_COLORS_ADMIN.map(c => (
+                        <button key={c} onClick={() => setDriverManageForm(prev => ({ ...prev, color: c }))}
+                          className={`w-5 h-5 rounded-full border-2 transition-transform ${driverManageForm.color === c ? 'border-white scale-125' : 'border-transparent hover:scale-110'}`}
+                          style={{ background: c }}/>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="flex gap-2 mt-2 justify-end">
+                    <button onClick={() => setDriverManageForm(null)} className="px-4 py-1.5 bg-black/40 border border-[#333] text-gray-400 text-xs font-black rounded-lg hover:bg-[#1a1a1a] transition-colors">취소</button>
+                    <button onClick={saveTargetDriver} disabled={driverManageSaving || !driverManageForm.name?.trim()}
+                      className="px-4 py-1.5 bg-emerald-700/60 border border-emerald-600/50 text-emerald-200 text-xs font-black rounded-lg hover:bg-emerald-600/70 disabled:opacity-40 flex items-center gap-1 transition-colors">
+                      {driverManageSaving ? <><RefreshCw size={10} className="animate-spin"/>저장 중...</> : '저장'}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* 기사 목록 */}
+              <div className="flex-1 overflow-y-auto px-6 py-4 space-y-2">
+                {driverManageLoading ? (
+                  <div className="flex items-center justify-center h-20 text-gray-500 text-sm gap-2"><RefreshCw size={14} className="animate-spin"/> 불러오는 중...</div>
+                ) : driverManageList.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center h-24 text-gray-600">
+                    <Truck size={28} className="mb-2 opacity-30"/>
+                    <p className="text-sm">등록된 기사 없음</p>
+                    <p className="text-[11px] mt-1">위 [기사 추가] 버튼으로 등록하세요</p>
+                  </div>
+                ) : (
+                  driverManageList.map(driver => {
+                    const isInactive = driver.status === 'inactive';
+                    return (
+                      <div key={driver.id} className={`flex items-center gap-3 p-3 rounded-xl border transition-colors ${isInactive ? 'opacity-50 border-[#1a1a1a] bg-black/20' : 'border-[#1e1e1e] bg-[#0d0d0d] hover:border-[#2a2a2a]'}`}>
+                        <div className="w-8 h-8 rounded-xl flex items-center justify-center font-black text-white text-sm shrink-0" style={{ background: driver.color || '#3b82f6' }}>
+                          {(driver.name || '?')[0]}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="text-white font-black text-sm">{driver.name}</span>
+                            <span className="text-[10px] font-bold" style={{ color: driver.color || '#3b82f6' }}>업무능력 {driver.capacity || 100}%</span>
+                            {isInactive && <span className="text-[10px] text-gray-600 font-bold">비활성</span>}
+                          </div>
+                          {driver.memo && <p className="text-gray-500 text-[11px] truncate">{driver.memo}</p>}
+                          {driver.assignedZones?.length > 0 && (
+                            <p className="text-[10px] text-gray-600 truncate">{driver.assignedZones.flatMap(z => z.dongs || []).slice(0, 5).join(' · ')}{driver.assignedZones.flatMap(z => z.dongs || []).length > 5 ? ' ...' : ''}</p>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <button onClick={() => setDriverManageForm({ ...driver })}
+                            className="w-7 h-7 flex items-center justify-center text-gray-500 hover:text-blue-400 hover:bg-blue-900/30 rounded-lg transition-colors" title="수정">
+                            <Edit2 size={12}/>
+                          </button>
+                          <button onClick={() => toggleTargetDriverStatus(driver)}
+                            className={`w-7 h-7 flex items-center justify-center rounded-lg transition-colors ${isInactive ? 'text-gray-600 hover:text-emerald-400 hover:bg-emerald-900/30' : 'text-emerald-500 hover:text-gray-500 hover:bg-black/40'}`}
+                            title={isInactive ? '활성화' : '비활성화'}>
+                            <UserCheck size={12}/>
+                          </button>
+                          <button onClick={() => deleteTargetDriver(driver.id)}
+                            className="w-7 h-7 flex items-center justify-center text-gray-600 hover:text-red-400 hover:bg-red-900/30 rounded-lg transition-colors" title="삭제">
+                            <Trash2 size={12}/>
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
               </div>
             </div>
           </div>

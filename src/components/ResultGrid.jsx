@@ -1,14 +1,15 @@
-﻿import { useState, useEffect, useRef } from 'react';
-import { ChevronLeft, ChevronRight, AlertTriangle, CheckCircle, Columns, Download, Trash2, Edit3, Database, X, MapPin, Users, UserX, StickyNote, User, Phone } from 'lucide-react';
+﻿import { useState, useEffect, useRef, memo } from 'react';
+import { ChevronLeft, ChevronRight, AlertTriangle, CheckCircle, Columns, Download, Trash2, Edit3, Database, X, MapPin, Users, UserX, StickyNote, User, Phone, BookOpen } from 'lucide-react';
 import { formatPhoneInput } from '../utils/parsers.js';
 
-export default function ResultGrid({
+const ResultGrid = memo(function ResultGrid({
   step, setStep, filter, setFilter, dongList = [], driverList = [], gridData, filteredData, paginatedData,
   currentPage, setCurrentPage, itemsPerPage, colVis, sortConfig, setSortConfig,
   handleCellEdit, handleAddressKeyDown, handleUpdateBaseList, handleBatchSaveBaseList, isSavingBaseList,
   handleSaveMonthlyList, setShowExportSetting, handleExport, handleExportErrors, handleExportDongSummary,
   handleExportByDriver, handleDeleteRows, handleBatchSetNote, onHelp, onOpenRouteMap,
   purifyResult, onClosePurifyResult, onMovePhones, onRepurifyErrors,
+  onFetchBaseNotes, isFetchingNotes,
 }) {
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [batchNoteOpen, setBatchNoteOpen] = useState(false);
@@ -315,6 +316,19 @@ export default function ResultGrid({
                 </button>
               </>
             )}
+            {onFetchBaseNotes && (
+              <>
+                <div className="h-4 w-px bg-[#222] mx-0.5"/>
+                <button
+                  onClick={onFetchBaseNotes}
+                  disabled={isFetchingNotes}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-amber-950/40 hover:bg-amber-900/50 text-amber-400 border border-amber-500/30 transition-colors disabled:opacity-40"
+                  title="기본명단에서 특이사항을 불러와 이식"
+                >
+                  <BookOpen size={12}/> {isFetchingNotes ? '이식 중...' : '특이사항 불러오기'}
+                </button>
+              </>
+            )}
             {onOpenRouteMap && (
               <>
                 <div className="h-4 w-px bg-[#222] mx-0.5"/>
@@ -591,7 +605,9 @@ export default function ResultGrid({
       )}
     </>
   );
-}
+});
+
+export default ResultGrid;
 
 function UpdateBaseListModal({ row, onClose, onConfirm }) {
   const [updates, setUpdates] = useState({

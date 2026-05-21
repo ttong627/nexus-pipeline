@@ -1,6 +1,6 @@
 ﻿import { useState, useEffect } from 'react';
-import { doc, setDoc, db, serverTimestamp } from '../config/firebase.js';
-import { MapPin, User, AlertTriangle, LogOut, X } from 'lucide-react';
+import { doc, setDoc, getDoc, db, serverTimestamp } from '../config/firebase.js';
+import { MapPin, User, AlertTriangle, LogOut, X, Link2 } from 'lucide-react';
 import { getAuth } from 'firebase/auth';
 
 export default function ProfileSetupModal({ user, isNewUser, onClose }) {
@@ -8,6 +8,10 @@ export default function ProfileSetupModal({ user, isNewUser, onClose }) {
   const [realName, setRealName] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  // 회사코드 연결 (사용자 교체 시 기존 기사·루트 데이터 승계)
+  const [inheritCode, setInheritCode] = useState('');
+  const [showInherit, setShowInherit] = useState(false);
+  const isAdmin = user?.role === 'admin';
 
   useEffect(() => {
     if (!isNewUser && user) {
@@ -26,14 +30,31 @@ export default function ProfileSetupModal({ user, isNewUser, onClose }) {
     const n = realName.trim();
     if (!r) { setError('소속 지역을 입력해주세요.'); return; }
     if (!n || n.length < 2) { setError('담당자 성명을 2자 이상 입력해주세요.'); return; }
+
+    // 회사코드 연결 검증
+    const code = inheritCode.trim().toUpperCase();
+    if (showInherit && code) {
+      const snap = await getDoc(doc(db, 'user_companies', code)).catch(() => null);
+      if (!snap || !snap.exists()) {
+        setError(`회사코드 "${code}" 를 찾을 수 없습니다.`);
+        return;
+      }
+    }
+
     setLoading(true);
     try {
-      await setDoc(doc(db, 'users', user.uid), {
-        region: r,
-        realName: n,
+      const payload = {
+        region: r, realName: n,
         profileCompleted: true,
         profileUpdatedAt: serverTimestamp(),
-      }, { merge: true });
+      };
+      // 기존 회사코드 승계
+      if (showInherit && code) {
+        payload.companyCode = code;
+        // 회사 문서에 새 ownerUid 업데이트
+        await setDoc(doc(db, 'user_companies', code), { ownerUid: user.uid }, { merge: true });
+      }
+      await setDoc(doc(db, 'users', user.uid), payload, { merge: true });
       if (onClose) onClose(true, r);
     } catch (e) {
       setError('저장 오류: ' + e.message);
@@ -107,6 +128,48 @@ export default function ProfileSetupModal({ user, isNewUser, onClose }) {
               />
             </div>
           </div>
+
+          {/* 회사코드 연결 — 사용자 교체 시 기존 기사·루트 데이터 승계 */}
+          {!isAdmin && isNewUser && (
+            <div className="mt-4">
+              <button
+                type="button"
+                onClick={() => setShowInherit(v => !v)}
+                className="flex items-center gap-1.5 text-[11px] text-gray-600 hover:text-blue-400 transition-colors font-bold"
+              >
+                <Link2 size={11} />
+                {showInherit ? '▾ 기존 회사코드 연결 닫기' : '▸ 기존 회사코드 연결 (담당자 교체 시)'}
+              </button>
+              {showInherit && (
+                <div className="mt-2 space-y-1.5">
+                  <p className="text-[10px] text-gray-600 leading-relaxed">
+                    이전 담당자가 사용하던 <span className="text-blue-400 font-bold">회사코드</span>를 입력하면<br/>
+                    기사 명단·루트 데이터를 이어받아 사용할 수 있습니다.
+                  </p>
+                  <input
+                    value={inheritCode}
+                    onChange={e => { setInheritCode(e.target.value.toUpperCase()); setError(''); }}
+                    placeholder="예: NX-A1B2C3D4"
+                    className="w-full bg-black/50 border border-blue-900/50 focus:border-blue-500 text-white p-3 rounded-xl outline-none transition-colors text-sm placeholder-gray-700 font-mono"
+                  />
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* 현재 회사코드 표시 (프로필 수정 모드) */}
+          {!isAdmin && !isNewUser && user?.companyCode && (
+            <div className="mt-4 px-3 py-2.5 rounded-xl bg-[#0d0d0d] border border-[#1a1a1a] flex items-center justify-between">
+              <span className="text-gray-600 text-[11px] font-bold">내 회사코드</span>
+              <span
+                className="font-mono text-blue-400 text-xs font-black cursor-pointer hover:text-blue-300 transition-colors"
+                title="클릭하여 복사"
+                onClick={() => { navigator.clipboard?.writeText(user.companyCode); }}
+              >
+                {user.companyCode}
+              </span>
+            </div>
+          )}
 
           {error && <p className="text-red-400 text-xs font-bold mt-3 flex items-center gap-1"><AlertTriangle size={12}/>{error}</p>}
 
