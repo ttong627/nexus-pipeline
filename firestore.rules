@@ -23,13 +23,27 @@ service cloud.firestore {
     // ── 오타 사전: 공동 기여 (모든 인증 사용자) ──────────────────────────────
     match /typo_dict/{docId} {
       allow read: if isAuthenticated();
-      allow write: if isAuthenticated();
+      allow write: if isAdmin() || isAdminEmail();
+    }
+
+    match /typo_suggestions/{docId} {
+      allow create: if isAuthenticated() &&
+        request.resource.data.keys().hasOnly(['wrong', 'correction', 'status', 'createdAt', 'createdBy', 'createdByUid', 'source']) &&
+        request.resource.data.status == 'pending';
+      allow read, update, delete: if isAdmin() || isAdminEmail();
     }
 
     // ── 특수문자 사전: 공동 기여 (모든 인증 사용자) (#6) ─────────────────────
     match /special_chars/{docId} {
       allow read: if isAuthenticated();
-      allow write: if isAuthenticated();
+      allow write: if isAdmin() || isAdminEmail();
+    }
+
+    match /special_char_suggestions/{docId} {
+      allow create: if isAuthenticated() &&
+        request.resource.data.keys().hasOnly(['char', 'status', 'createdAt', 'createdBy', 'createdByUid', 'source']) &&
+        request.resource.data.status == 'pending';
+      allow read, update, delete: if isAdmin() || isAdminEmail();
     }
 
     // ── 문의: 생성은 인증 사용자, 조회·수정·삭제는 관리자 ────────────────────
@@ -140,9 +154,22 @@ service cloud.firestore {
 
     // ── 배송 루트 공유: 생성은 인증 사용자, 읽기는 누구나 (기사 접근) ──────────
     match /route_shares/{shareId} {
-      allow read: if true;
+      allow read: if
+        ('expiresAt' in resource.data && resource.data.expiresAt > request.time) ||
+        (!('expiresAt' in resource.data) && 'createdAt' in resource.data && resource.data.createdAt + duration.value(45, 'd') > request.time);
       allow create: if isAuthenticated();
-      allow update, delete: if isAuthenticated();
+      allow update: if isAuthenticated() ||
+        (
+          (
+            ('expiresAt' in resource.data && resource.data.expiresAt > request.time) ||
+            (!('expiresAt' in resource.data) && 'createdAt' in resource.data && resource.data.createdAt + duration.value(45, 'd') > request.time)
+          ) &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['liveGps', 'driverOrder', 'orderApplyRequests']) &&
+          (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['liveGps']) || request.resource.data.liveGps is map) &&
+          (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['driverOrder']) || request.resource.data.driverOrder is map) &&
+          (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['orderApplyRequests']) || request.resource.data.orderApplyRequests is map)
+        );
+      allow delete: if isAuthenticated();
     }
 
     // ── 배송 세션: 기사구성·구역배정 영구저장 (승인 사용자) ─────────────────────

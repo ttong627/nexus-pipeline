@@ -1080,24 +1080,24 @@ const CONTENT = {
           <div>
             <p className="text-gray-300 text-sm leading-relaxed mb-3">
               각 기사의 <span className="text-[#3b82f6] font-black">거점 위치(핀)</span>를 지도에 설정하면 자동 배분이 해당 핀을 중심으로 구역을 나눕니다.
-              핀이 없으면 K-means 알고리즘이 자동으로 최적 중심점을 찾습니다.
+              핀이 없으면 도로주소 단위 아파트 묶음과 대로/로 좌우 측면을 지킨 채 연속 권역으로 균형 분할합니다.
             </p>
             <PinPlacementDiagram />
             <div className="space-y-2 mb-4">
               <Step num="1" title="기사 카드에서 [핀꽂기] 클릭" desc="왼쪽 패널의 기사 카드에서 📍 핀꽂기 버튼을 클릭합니다." />
               <Step num="2" title="지도에서 거점 위치 클릭" desc="커서가 십자 모양으로 바뀝니다. 해당 기사의 배송 시작/거점 위치를 클릭하여 핀을 꽂습니다." />
-              <Step num="3" title="다른 기사도 반복" desc="모든 기사에게 핀을 꽂으면 자동 N등분 시 핀 중심의 보로노이 분할이 실행됩니다." />
+              <Step num="3" title="다른 기사도 반복" desc="모든 기사에게 핀을 꽂으면 자동 N등분 시 가까운 기사 거점으로 먼저 배정됩니다." />
             </div>
             <div className="bg-black/40 border border-white/5 rounded-xl p-4 mb-3">
               <p className="text-[#3b82f6] font-black text-xs mb-2">핀 있음 vs 핀 없음 차이</p>
               <div className="grid grid-cols-2 gap-3 text-xs">
                 <div>
                   <div className="text-white font-bold mb-1">핀 있음</div>
-                  <div className="text-gray-400 leading-relaxed">핀 위치 고정 + 동적 보로노이 분할 (8회 수렴). 담당자가 구역 경계를 직접 제어할 수 있습니다.</div>
+                  <div className="text-gray-400 leading-relaxed">핀 위치를 거점으로 삼아 가까운 배송지를 우선 배정합니다. 경계는 브러시로 마감할 수 있습니다.</div>
                 </div>
                 <div>
                   <div className="text-white font-bold mb-1">핀 없음</div>
-                  <div className="text-gray-400 leading-relaxed">가중 K-means++ 알고리즘이 30회 반복으로 자동 최적 중심점을 계산합니다.</div>
+                  <div className="text-gray-400 leading-relaxed">도로주소 아파트 단위와 대로/로 홀짝 좌우 측면을 보존하고 지도 장축을 따라 유효부담을 균형 분할합니다.</div>
                 </div>
               </div>
             </div>
@@ -1117,7 +1117,7 @@ const CONTENT = {
               <p className="text-[#3b82f6] font-black text-xs mb-3">알고리즘 실행 순서</p>
               <div className="space-y-1.5">
                 {[
-                  '① 동적 가중 보로노이 K-means++ (포수 비례 유효부담 균등화)',
+                  '① 도로주소 + 대로/로 홀짝 좌우 측면 단위 연속 권역 균형 분할',
                   '② 공간 다수결 스무딩 (고립 핀 흡수, 구역 경계 정리)',
                   '③ 아파트 단지 동일 기사 통일 (R-I)',
                   '④ 동일 주소 동일 기사 통일 (R-E)',

@@ -1,0 +1,19 @@
+{
+  "name": "nexus-address-service",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "engines": {
+    "node": "22"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "import": "node src/import-job.js",
+    "check": "node --check src/server.js && node --check src/import-job.js"
+  },
+  "dependencies": {
+    "@google-cloud/storage": "^7.16.0",
+    "iconv-lite": "^0.6.3",
+    "pg": "^8.16.3"
+  }
+}

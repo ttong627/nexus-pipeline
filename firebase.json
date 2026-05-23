@@ -1,6 +1,10 @@
 {
     "hosting": {
         "public": "dist",
+        "predeploy": [
+            "npm run version:bump",
+            "npm run build"
+        ],
         "ignore": [
             "firebase.json",
             "**/.*",
@@ -30,11 +34,11 @@
                     },
                     {
                         "key": "Permissions-Policy",
-                        "value": "geolocation=(), microphone=(), camera=()"
+                        "value": "geolocation=(self), microphone=(), camera=()"
                     },
                     {
                         "key": "Content-Security-Policy",
-                        "value": "default-src 'self'; script-src 'self' 'unsafe-inline' https://www.gstatic.com https://apis.google.com https://dapi.kakao.com https://developers.kakao.com https://t1.daumcdn.net https://map1.daumcdn.net; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://t1.daumcdn.net https://fonts.googleapis.com; connect-src 'self' https://*.googleapis.com https://*.firebaseio.com https://*.firebaseapp.com wss://*.firebaseio.com https://securetoken.googleapis.com https://accounts.google.com https://firebasestorage.googleapis.com https://business.juso.go.kr https://dapi.kakao.com https://kapi.kakao.com https://cdn.jsdelivr.net https://t1.daumcdn.net https://map1.daumcdn.net https://map2.daumcdn.net; img-src 'self' data: blob: https: https://*.googleusercontent.com; font-src 'self' data: https://cdn.jsdelivr.net https://t1.daumcdn.net https://fonts.gstatic.com; worker-src 'self' blob:; frame-src 'self' https://*.firebaseapp.com https://accounts.google.com; frame-ancestors 'none';"
+                        "value": "default-src 'self'; script-src 'self' 'unsafe-inline' https://www.gstatic.com https://apis.google.com https://dapi.kakao.com https://developers.kakao.com https://t1.daumcdn.net https://map1.daumcdn.net; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://t1.daumcdn.net https://fonts.googleapis.com; connect-src 'self' https://*.googleapis.com https://*.firebaseio.com https://*.firebaseapp.com https://*.run.app wss://*.firebaseio.com https://securetoken.googleapis.com https://accounts.google.com https://firebasestorage.googleapis.com https://business.juso.go.kr https://dapi.kakao.com https://kapi.kakao.com https://apis-navi.kakaomobility.com https://cdn.jsdelivr.net https://t1.daumcdn.net https://map1.daumcdn.net https://map2.daumcdn.net; img-src 'self' data: blob: https: https://*.googleusercontent.com; font-src 'self' data: https://cdn.jsdelivr.net https://t1.daumcdn.net https://fonts.gstatic.com; worker-src 'self' blob:; frame-src 'self' https://*.firebaseapp.com https://accounts.google.com; frame-ancestors 'none';"
                     }
                 ]
             },

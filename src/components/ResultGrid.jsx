@@ -1,6 +1,7 @@
 ﻿import { useState, useEffect, useRef, memo } from 'react';
-import { ChevronLeft, ChevronRight, AlertTriangle, CheckCircle, Columns, Download, Trash2, Edit3, Database, X, MapPin, Users, UserX, StickyNote, User, Phone, BookOpen } from 'lucide-react';
+import { ChevronLeft, ChevronRight, AlertTriangle, CheckCircle, Columns, Download, Trash2, Edit3, Database, X, MapPin, Users, UserX, StickyNote, User, Phone, BookOpen, Sparkles, ArrowLeftRight } from 'lucide-react';
 import { formatPhoneInput } from '../utils/parsers.js';
+import { WORKFLOW_MODES } from '../utils/workflow.js';
 
 const ResultGrid = memo(function ResultGrid({
   step, setStep, filter, setFilter, dongList = [], driverList = [], gridData, filteredData, paginatedData,
@@ -10,6 +11,8 @@ const ResultGrid = memo(function ResultGrid({
   handleExportByDriver, handleDeleteRows, handleBatchSetNote, onHelp, onOpenRouteMap,
   purifyResult, onClosePurifyResult, onMovePhones, onRepurifyErrors,
   onFetchBaseNotes, isFetchingNotes,
+  workflowMode = 'cleaningOnly', onWorkflowModeChange,
+  addressDisplayMode = 'parenBeforeDetail', onToggleAddressDisplayMode,
 }) {
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [batchNoteOpen, setBatchNoteOpen] = useState(false);
@@ -52,11 +55,14 @@ const ResultGrid = memo(function ResultGrid({
     setSortConfig({ key, direction });
   };
 
-  const resetFilters = () => setFilter(f => ({ ...f, text: '', 구분: '', dong: '', driver: '', noDriver: false, hasNote: false }));
-  const hasActiveFilter = filter.text || filter.구분 || filter.dong || filter.driver || filter.noDriver || filter.hasNote;
+  const resetFilters = () => setFilter(f => ({ ...f, text: '', 구분: '', dong: '', driver: '', noDriver: false, hasNote: false, inferredAddress: false }));
+  const hasActiveFilter = filter.text || filter.구분 || filter.dong || filter.driver || filter.noDriver || filter.hasNote || filter.inferredAddress;
 
   const errorCount = gridData.filter(d => d._에러).length;
+  const inferredAddressCount = gridData.filter(d => d._주소추정 || (d._추정사유 || '').trim() || (d.특이사항 || '').includes('[주소추정]')).length;
   const totalPages = Math.ceil(filteredData.length / itemsPerPage) || 1;
+  const modeInfo = WORKFLOW_MODES[workflowMode] || WORKFLOW_MODES.cleaningOnly;
+  const isDetailBeforeParen = addressDisplayMode === 'detailBeforeParen';
 
   return (
     <>
@@ -115,6 +121,24 @@ const ResultGrid = memo(function ResultGrid({
                     <span className="text-white font-black">{purifyResult.shortAddrCount}건</span>
                   </div>
                 )}
+                {purifyResult.outOfMunicipalityCount > 0 && (
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-fuchsia-400 font-bold">• 타지역-지자체 벗어남</span>
+                    <span className="text-white font-black">{purifyResult.outOfMunicipalityCount}건</span>
+                  </div>
+                )}
+                {purifyResult.jibunOnlyCount > 0 && (
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-cyan-400 font-bold">• 지번주소만 확인됨</span>
+                    <span className="text-white font-black">{purifyResult.jibunOnlyCount}건</span>
+                  </div>
+                )}
+                {purifyResult.addressMissingCount > 0 && (
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-red-300 font-bold">• 주소 없음</span>
+                    <span className="text-white font-black">{purifyResult.addressMissingCount}건</span>
+                  </div>
+                )}
                 {purifyResult.otherErrCount > 0 && (
                   <div className="flex items-center justify-between text-xs">
                     <span className="text-gray-400 font-bold">• 기타</span>
@@ -127,6 +151,20 @@ const ResultGrid = memo(function ResultGrid({
               <div className="flex items-center gap-2 bg-[#060c18] border border-[#3b82f6]/20 rounded-xl px-4 py-2.5 mb-4">
                 <span className="text-[#3b82f6] text-sm drop-shadow-[0_0_4px_rgba(59,130,246,0.8)]">👑</span>
                 <span className="text-[#93c5fd] text-xs font-bold">고객 노트 매칭 {purifyResult.importedCount.toLocaleString()}건 이식됨</span>
+              </div>
+            )}
+            {purifyResult.inferredAddressCount > 0 && (
+              <div className="flex items-center justify-between gap-3 bg-amber-950/20 border border-amber-500/25 rounded-xl px-4 py-2.5 mb-4">
+                <div className="flex items-center gap-2">
+                  <Sparkles size={15} className="text-amber-300" />
+                  <span className="text-amber-200 text-xs font-bold">주소 추정 변환 {purifyResult.inferredAddressCount.toLocaleString()}건</span>
+                </div>
+                <button
+                  onClick={() => { setFilter(f => ({ ...f, inferredAddress: true, showErrorsOnly: false, showSuccessOnly: false })); onClosePurifyResult(); }}
+                  className="px-2.5 py-1 bg-amber-500/15 border border-amber-400/35 text-amber-200 rounded-lg text-xs font-black hover:bg-amber-500/25 transition-colors"
+                >
+                  검수 목록
+                </button>
               </div>
             )}
             <div className="flex gap-3">
@@ -175,10 +213,36 @@ const ResultGrid = memo(function ResultGrid({
         {driverList.map(d => <option key={d} value={d} />)}
       </datalist>
 
-      <div className="flex flex-col h-full bg-[#0a0a0a]/90 backdrop-blur-xl rounded-2xl border border-white/10 shadow-[0_8px_32px_rgba(0,0,0,0.6)] overflow-hidden">
+      <div className="flex flex-col h-full bg-[#080b0a]/95 backdrop-blur-xl rounded-2xl border border-[#1a2725] shadow-[0_8px_32px_rgba(0,0,0,0.6)] overflow-hidden">
+
+        {/* 작업 목적 컨트롤 */}
+        <div className="shrink-0 px-5 py-3 border-b border-[#17201f] bg-[#090d0c] flex items-center justify-between gap-4">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-black tracking-[0.16em] text-gray-600">작업 목적</span>
+              <span className="px-2 py-0.5 rounded-md bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 text-[10px] font-black">{modeInfo.title}</span>
+            </div>
+            <p className="mt-1 text-[11px] text-gray-500 truncate">{modeInfo.description}</p>
+          </div>
+          <div className="flex items-center gap-1.5 shrink-0">
+            {Object.values(WORKFLOW_MODES).map(mode => (
+              <button
+                key={mode.id}
+                onClick={() => onWorkflowModeChange?.(mode.id)}
+                className={`px-3 py-1.5 rounded-lg text-[11px] font-black border transition-colors ${
+                  workflowMode === mode.id
+                    ? 'bg-emerald-500/12 border-emerald-400/40 text-emerald-200'
+                    : 'bg-[#0b0f0f] border-[#1a2725] text-gray-500 hover:text-gray-300 hover:border-[#2b3b38]'
+                }`}
+              >
+                {mode.shortTitle}
+              </button>
+            ))}
+          </div>
+        </div>
 
         {/* ══ Row 1: 네비게이션 · 상태 탭 · 주요 CTA ══ */}
-        <div className="flex items-center justify-between px-5 py-2.5 border-b border-[#1e1e1e] bg-[#060606] shrink-0">
+        <div className="flex items-center justify-between px-5 py-2.5 border-b border-[#17201f] bg-[#070908] shrink-0">
           <div className="flex items-center gap-2">
             <button onClick={() => setStep(3)} className="px-3 py-1.5 bg-[#111] border border-[#2a2a2a] text-gray-400 font-bold rounded-lg hover:bg-[#1a1a1a] hover:text-white transition-colors flex items-center gap-1.5 text-xs">
               <ChevronLeft size={14} strokeWidth={3}/> 매핑으로
@@ -186,23 +250,32 @@ const ResultGrid = memo(function ResultGrid({
             <div className="h-5 w-px bg-[#2a2a2a]"/>
             <div className="flex bg-black/50 p-0.5 rounded-lg border border-[#1e1e1e] gap-0.5">
               <button
-                onClick={() => setFilter(f => ({ ...f, showErrorsOnly: false, showSuccessOnly: false }))}
-                className={`px-4 py-1.5 text-xs rounded-md transition-all font-bold ${!filter.showErrorsOnly && !filter.showSuccessOnly ? 'bg-[#1a1a1a] border border-[#3b82f6]/40 text-[#3b82f6]' : 'text-gray-500 hover:text-gray-300'}`}
+                onClick={() => setFilter(f => ({ ...f, showErrorsOnly: false, showSuccessOnly: false, inferredAddress: false }))}
+                className={`px-4 py-1.5 text-xs rounded-md transition-all font-bold ${!filter.showErrorsOnly && !filter.showSuccessOnly && !filter.inferredAddress ? 'bg-[#101816] border border-emerald-500/35 text-emerald-300' : 'text-gray-500 hover:text-gray-300'}`}
               >
                 전체 <span className="font-mono font-black">{gridData.length.toLocaleString()}</span>
               </button>
               <button
-                onClick={() => setFilter(f => ({ ...f, showErrorsOnly: !filter.showErrorsOnly, showSuccessOnly: false }))}
+                onClick={() => setFilter(f => ({ ...f, showErrorsOnly: !filter.showErrorsOnly, showSuccessOnly: false, inferredAddress: false }))}
                 className={`px-4 py-1.5 text-xs rounded-md flex items-center gap-1.5 transition-all font-bold ${filter.showErrorsOnly ? 'bg-red-950/60 border border-red-500/50 text-red-400' : 'text-gray-500 hover:text-gray-300'}`}
               >
                 <AlertTriangle size={12}/> 확인필요 <span className="font-mono font-black">{errorCount.toLocaleString()}</span>
               </button>
               <button
-                onClick={() => setFilter(f => ({ ...f, showSuccessOnly: !filter.showSuccessOnly, showErrorsOnly: false }))}
-                className={`px-4 py-1.5 text-xs rounded-md flex items-center gap-1.5 transition-all font-bold ${filter.showSuccessOnly ? 'bg-blue-950/60 border border-blue-500/50 text-blue-400' : 'text-gray-500 hover:text-gray-300'}`}
+                onClick={() => setFilter(f => ({ ...f, showSuccessOnly: !filter.showSuccessOnly, showErrorsOnly: false, inferredAddress: false }))}
+                className={`px-4 py-1.5 text-xs rounded-md flex items-center gap-1.5 transition-all font-bold ${filter.showSuccessOnly ? 'bg-emerald-950/50 border border-emerald-500/35 text-emerald-300' : 'text-gray-500 hover:text-gray-300'}`}
               >
                 <CheckCircle size={12}/> 정제완료 <span className="font-mono font-black">{gridData.filter(d=>!d._에러).length.toLocaleString()}</span>
               </button>
+              {inferredAddressCount > 0 && (
+                <button
+                  onClick={() => setFilter(f => ({ ...f, inferredAddress: !f.inferredAddress, showErrorsOnly: false, showSuccessOnly: false }))}
+                  title="오타 보정, 도로명 추정, 압축 주소 변환처럼 시스템이 임의 보정한 주소만 모아봅니다."
+                  className={`px-4 py-1.5 text-xs rounded-md flex items-center gap-1.5 transition-all font-bold ${filter.inferredAddress ? 'bg-amber-950/60 border border-amber-400/50 text-amber-200' : 'text-gray-500 hover:text-amber-200'}`}
+                >
+                  <Sparkles size={12}/> 주소 추정 <span className="font-mono font-black">{inferredAddressCount.toLocaleString()}</span>
+                </button>
+              )}
             </div>
             {errorCount > 0 && onRepurifyErrors && (
               <button
@@ -231,6 +304,25 @@ const ResultGrid = memo(function ResultGrid({
             })()}
           </div>
           <div className="flex items-center gap-2 shrink-0">
+            {onToggleAddressDisplayMode && (
+              <button
+                onClick={onToggleAddressDisplayMode}
+                title={isDetailBeforeParen
+                  ? '현재: 도로명주소, 상세주소 (법정동, 건물명). 클릭하면 도로명주소, (법정동, 건물명) 상세주소로 바뀝니다.'
+                  : '현재: 도로명주소, (법정동, 건물명) 상세주소. 클릭하면 도로명주소, 상세주소 (법정동, 건물명)로 바뀝니다.'}
+                className={`px-3 py-1.5 border text-xs font-bold rounded-lg transition-colors flex items-center gap-1.5 ${
+                  isDetailBeforeParen
+                    ? 'bg-cyan-500/10 border-cyan-500/30 text-cyan-300 hover:bg-cyan-500/15'
+                    : 'bg-[#111] border-[#2a2a2a] text-gray-400 hover:bg-[#1a1a1a] hover:text-gray-200'
+                }`}
+              >
+                <ArrowLeftRight size={13}/>
+                주소 형식
+                <span className="text-[10px] font-black opacity-80">
+                  {isDetailBeforeParen ? '상세앞' : '괄호앞'}
+                </span>
+              </button>
+            )}
             <div className="relative" ref={colSettingsRef}>
               <button onClick={() => setShowColSettings(v => !v)} className="px-3 py-1.5 bg-[#111] border border-[#2a2a2a] text-gray-400 font-bold rounded-lg hover:bg-[#1a1a1a] transition-colors flex items-center gap-1.5 text-xs">
                 <Columns size={13}/> 컬럼 설정
@@ -264,14 +356,14 @@ const ResultGrid = memo(function ResultGrid({
               title="결과 화면 도움말"
             >?</button>
             <div className="h-5 w-px bg-[#2a2a2a]"/>
-            <button onClick={handleExport} className="px-5 py-2 bg-[#3b82f6] text-black font-black rounded-lg shadow-[0_0_12px_rgba(59,130,246,0.35)] hover:bg-[#93c5fd] transition-all flex items-center gap-2 text-xs">
+            <button onClick={handleExport} className="px-5 py-2 bg-emerald-400 text-black font-black rounded-lg shadow-[0_0_12px_rgba(52,211,153,0.22)] hover:bg-emerald-300 transition-all flex items-center gap-2 text-xs">
               <Download size={14} strokeWidth={2.5}/> 표준 명단 패키징
             </button>
           </div>
         </div>
 
         {/* ══ Row 2: 저장 · 내보내기 · 배송 배정 + 페이지네이션 ══ */}
-        <div className="flex items-center justify-between px-5 py-2 border-b border-[#161616] bg-[#040404] shrink-0">
+        <div className="flex items-center justify-between px-5 py-2 border-b border-[#141d1b] bg-[#060807] shrink-0">
           <div className="flex items-center gap-1.5">
             <span className="text-xs text-gray-700 font-black tracking-widest">저장</span>
             <button onClick={handleSaveMonthlyList} className="px-3 py-1.5 bg-[#060c18] border border-[#3b82f6]/20 text-[#93c5fd] font-bold rounded-lg hover:bg-[#0f1f13] transition-colors flex items-center gap-1.5 text-xs">
@@ -304,9 +396,11 @@ const ResultGrid = memo(function ResultGrid({
             <button onClick={handleExportDongSummary} className="px-3 py-1.5 bg-[#111] border border-[#252525] text-gray-400 font-bold rounded-lg hover:bg-[#1a1a1a] hover:text-gray-200 transition-colors flex items-center gap-1.5 text-xs">
               <Download size={12}/> 행정동 보고서
             </button>
-            <button onClick={handleExportByDriver} className="px-3 py-1.5 bg-[#111] border border-[#252525] text-gray-400 font-bold rounded-lg hover:bg-[#1a1a1a] hover:text-gray-200 transition-colors flex items-center gap-1.5 text-xs">
-              <Users size={12}/> 기사별 배송표
-            </button>
+            {workflowMode === 'deliveryFull' && (
+              <button onClick={handleExportByDriver} className="px-3 py-1.5 bg-[#111] border border-[#252525] text-gray-400 font-bold rounded-lg hover:bg-[#1a1a1a] hover:text-gray-200 transition-colors flex items-center gap-1.5 text-xs">
+                <Users size={12}/> 기사별 배송표
+              </button>
+            )}
 
             {onMovePhones && (
               <>
@@ -329,7 +423,7 @@ const ResultGrid = memo(function ResultGrid({
                 </button>
               </>
             )}
-            {onOpenRouteMap && (
+            {onOpenRouteMap && workflowMode === 'deliveryFull' && (
               <>
                 <div className="h-4 w-px bg-[#222] mx-0.5"/>
                 <button onClick={onOpenRouteMap} className="px-3 py-1.5 bg-[#050c18] border border-blue-800/30 text-blue-400 font-bold rounded-lg hover:bg-[#0d1f14] transition-colors flex items-center gap-1.5 text-xs">
@@ -337,10 +431,26 @@ const ResultGrid = memo(function ResultGrid({
                 </button>
               </>
             )}
+            {onOpenRouteMap && workflowMode === 'geoOnly' && (
+              <>
+                <div className="h-4 w-px bg-[#222] mx-0.5"/>
+                <button onClick={() => onWorkflowModeChange?.('deliveryFull')} className="px-3 py-1.5 bg-cyan-500/10 border border-cyan-500/25 text-cyan-300 font-bold rounded-lg hover:bg-cyan-500/15 transition-colors flex items-center gap-1.5 text-xs" title="현재 좌표 전용 지도 화면은 배송 배정 화면과 분리 준비 중입니다. 배송 배정 모드로 전환하면 지도 기능을 사용할 수 있습니다.">
+                  <MapPin size={12}/> 배송 지도로 확장
+                </button>
+              </>
+            )}
+            {onOpenRouteMap && workflowMode === 'cleaningOnly' && (
+              <>
+                <div className="h-4 w-px bg-[#222] mx-0.5"/>
+                <button onClick={() => onWorkflowModeChange?.('deliveryFull')} className="px-3 py-1.5 bg-amber-500/10 border border-amber-500/25 text-amber-300 font-bold rounded-lg hover:bg-amber-500/15 transition-colors flex items-center gap-1.5 text-xs">
+                  <MapPin size={12}/> 배송 작업 추가
+                </button>
+              </>
+            )}
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
-            {onOpenRouteMap && (() => {
+            {onOpenRouteMap && workflowMode === 'deliveryFull' && (() => {
               const total = gridData.length;
               const aptCount = gridData.filter(d => d._isApt).length;
               const withCoord = gridData.filter(d => d._lat && d._lng).length;
@@ -447,6 +557,16 @@ const ResultGrid = memo(function ResultGrid({
           >
             <StickyNote size={12}/> 특이사항{filter.hasNote && <span className="font-black ml-0.5">({filteredData.length})</span>}
           </button>
+
+          {inferredAddressCount > 0 && (
+            <button
+              onClick={() => setFilter(f => ({ ...f, inferredAddress: !f.inferredAddress, showErrorsOnly: false, showSuccessOnly: false }))}
+              title="오타 보정·주소 추정 변환이 들어간 행만 담당자가 검수합니다."
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border transition-all ${filter.inferredAddress ? 'bg-amber-950/60 border-amber-400/50 text-amber-200' : 'bg-black/40 border-[#2a2a2a] text-gray-500 hover:text-amber-200'}`}
+            >
+              <Sparkles size={12}/> 주소 추정 변환{filter.inferredAddress && <span className="font-black ml-0.5">({filteredData.length})</span>}
+            </button>
+          )}
 
           {hasActiveFilter && (
             <button onClick={resetFilters} className="text-xs text-gray-500 hover:text-red-400 border border-[#2a2a2a] hover:border-red-700/40 rounded-lg px-2.5 py-1.5 transition-colors">
@@ -568,6 +688,14 @@ const ResultGrid = memo(function ResultGrid({
                     )}
                     <td className={`px-4 py-1.5 text-xs font-bold ${row._에러 ? 'text-red-400' : 'text-gray-600'}`}>
                       <div className="flex items-center gap-2">
+                        {row._주소추정 && (
+                          <span
+                            title={`원주소: ${row._원주소 || row.주소 || ''}\n${row._추정사유 || '주소 추정 변환 또는 오타 보정이 적용되었습니다.'}`}
+                            className="px-1.5 py-0.5 rounded-md bg-amber-500/15 border border-amber-400/35 text-amber-200 text-[10px] font-black"
+                          >
+                            추정
+                          </span>
+                        )}
                         <span>{row._에러 ? row._사유 : '정상'}</span>
                         {row._업데이트필요 && (
                           <button

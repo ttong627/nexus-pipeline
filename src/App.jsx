@@ -1,5 +1,5 @@
 ﻿import { useState, useEffect, useMemo, useRef, lazy, Suspense } from "react";
-import { auth, onAuthStateChanged, signOut, setDoc, getDoc, updateDoc, doc, db, serverTimestamp, Timestamp, addDoc, collection, getDocs, getDocsFromServer, writeBatch, query, where, onSnapshot, GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult } from "./config/firebase.js";
+import { auth, onAuthStateChanged, signOut, setDoc, getDoc, updateDoc, deleteDoc, doc, db, serverTimestamp, Timestamp, increment, addDoc, collection, getDocs, getDocsFromServer, writeBatch, query, where, onSnapshot, GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult } from "./config/firebase.js";
 const ttl90 = () => Timestamp.fromMillis(Date.now() + 90 * 24 * 60 * 60 * 1000);
 import { APP_VERSION } from "./version.js";
 
@@ -17,28 +17,151 @@ import GlobalLoadingBar from "./components/GlobalLoadingBar.jsx";
 import IntroScreen from "./components/IntroScreen.jsx";
 import ShareRouteView from "./components/ShareRouteView.jsx";
 
+const isChunkLoadError = (error) => {
+  const message = String(error?.message || error || '');
+  return /Failed to fetch dynamically imported module|dynamically imported module|Importing a module script failed|Loading chunk|ChunkLoadError/i.test(message);
+};
+
+const recoverFromStaleChunk = async () => {
+  const key = `nexus_chunk_recovery_${APP_VERSION}`;
+  try {
+    if (sessionStorage.getItem(key)) return false;
+    sessionStorage.setItem(key, '1');
+  } catch { /* ignore */ }
+
+  try {
+    if ('serviceWorker' in navigator) {
+      const regs = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(regs.map(reg => reg.unregister()));
+    }
+  } catch { /* ignore */ }
+
+  try {
+    if ('caches' in window) {
+      const keys = await caches.keys();
+      await Promise.all(keys.map(cacheKey => caches.delete(cacheKey)));
+    }
+  } catch { /* ignore */ }
+
+  window.location.reload();
+  return true;
+};
+
+const lazyWithChunkRecovery = (loader) => lazy(() =>
+  loader().catch(async (error) => {
+    if (isChunkLoadError(error)) {
+      await recoverFromStaleChunk();
+      return new Promise(() => {});
+    }
+    throw error;
+  })
+);
+
+const mergeUniqueText = (...parts) => {
+  const tokens = [];
+  for (const part of parts) {
+    const text = String(part || '').trim();
+    if (!text) continue;
+    if (tokens.some(existing => existing === text || existing.includes(text))) continue;
+    tokens.push(text);
+  }
+  return tokens.join(' ').trim();
+};
+
+const ADDRESS_DISPLAY_MODES = {
+  PAREN_BEFORE_DETAIL: 'parenBeforeDetail',
+  DETAIL_BEFORE_PAREN: 'detailBeforeParen',
+};
+
+const findTopLevelSeparator = (value) => {
+  let depth = 0;
+  for (let i = 0; i < value.length; i++) {
+    const ch = value[i];
+    if (ch === '(') depth++;
+    else if (ch === ')') depth = Math.max(0, depth - 1);
+    else if (depth === 0 && (ch === ',' || ch === '/')) return i;
+  }
+  return -1;
+};
+
+const cleanAddressPiece = (value) => String(value || '')
+  .replace(/\s+/g, ' ')
+  .replace(/^[,\s/]+|[,\s/]+$/g, '')
+  .trim();
+
+const parseDisplayedAddress = (address) => {
+  const text = cleanAddressPiece(address);
+  if (!text) return { road: '', detail: '', paren: '' };
+  const sepIdx = findTopLevelSeparator(text);
+  const road = sepIdx >= 0 ? cleanAddressPiece(text.slice(0, sepIdx)) : text;
+  const rest = sepIdx >= 0 ? cleanAddressPiece(text.slice(sepIdx + 1)) : '';
+  const parenMatch = rest.match(/\(([^)]*)\)/);
+  const paren = parenMatch ? cleanAddressPiece(parenMatch[1]) : '';
+  const detail = parenMatch
+    ? cleanAddressPiece(`${rest.slice(0, parenMatch.index)} ${rest.slice(parenMatch.index + parenMatch[0].length)}`)
+    : cleanAddressPiece(rest);
+  return { road, detail, paren };
+};
+
+const roadFromAddressMeta = (row) => {
+  const roadName = cleanAddressPiece(row?._roadName || row?.roadName || '');
+  const mainNo = cleanAddressPiece(row?._buildingMainNo ?? row?.buildingMainNo ?? '');
+  const subNoRaw = cleanAddressPiece(row?._buildingSubNo ?? row?.buildingSubNo ?? '');
+  const subNo = subNoRaw && subNoRaw !== '0' ? `-${subNoRaw}` : '';
+  return roadName && mainNo ? `${roadName} ${mainNo}${subNo}` : '';
+};
+
+const addressPartsFromRow = (row) => {
+  const parsed = parseDisplayedAddress(row?.주소 || '');
+  const legalDong = cleanAddressPiece(row?._legalDong || row?.legalDong || '');
+  const buildingName = cleanAddressPiece(row?._buildingName || row?.buildingName || '');
+  const paren = parsed.paren || [legalDong, buildingName].filter(Boolean).join(', ');
+  return {
+    road: parsed.road || roadFromAddressMeta(row),
+    detail: parsed.detail || cleanAddressPiece(row?._detailAddress || row?.detailAddress || ''),
+    paren,
+  };
+};
+
+const formatAddressForDisplayMode = (row, mode) => {
+  const { road, detail, paren } = addressPartsFromRow(row);
+  if (!road) return row?.주소 || '';
+  const parenStr = paren ? `(${paren})` : '';
+  if (mode === ADDRESS_DISPLAY_MODES.DETAIL_BEFORE_PAREN) {
+    if (detail && parenStr) return `${road}, ${detail} ${parenStr}`;
+    if (detail) return `${road}, ${detail}`;
+    if (parenStr) return `${road}, ${parenStr}`;
+    return road;
+  }
+  if (parenStr && detail) return `${road}, ${parenStr} ${detail}`;
+  if (parenStr) return `${road}, ${parenStr}`;
+  if (detail) return `${road}, ${detail}`;
+  return road;
+};
+
 // ── 지연 로드 (버튼 클릭 시 처음 필요 — 초기 번들에서 제외)
-const AdminPanel            = lazy(() => import("./components/AdminPanel.jsx"));
-const HelpModal             = lazy(() => import("./components/HelpModal.jsx"));
-const UpgradeModal          = lazy(() => import("./components/UpgradeModal.jsx"));
-const UtilsModal            = lazy(() => import("./components/UtilsModal.jsx"));
-const CloudBaseModal        = lazy(() => import("./components/CloudBaseModal.jsx"));
-const DbImportModal         = lazy(() => import("./components/DbImportModal.jsx"));
-const BaseListManager       = lazy(() => import("./components/BaseListManager.jsx"));
-const CloudListManager      = lazy(() => import("./components/CloudListManager.jsx"));
-const ErrorListManager      = lazy(() => import("./components/ErrorListManager.jsx"));
-const DbOverview            = lazy(() => import("./components/DbOverview.jsx"));
-const PrevMonthCompareModal = lazy(() => import("./components/PrevMonthCompareModal.jsx"));
-const RouteMapModal         = lazy(() => import("./components/RouteMapModal.jsx"));
-const RouteSetupModal       = lazy(() => import("./components/RouteSetupModal.jsx"));
-const RouteQuickModal       = lazy(() => import("./components/RouteQuickModal.jsx"));
-const DriverRegistryModal   = lazy(() => import("./components/DriverRegistryModal.jsx"));
-const ScheduleTab           = lazy(() => import("./components/ScheduleTab.jsx"));
+const AdminPanel            = lazyWithChunkRecovery(() => import("./components/AdminPanel.jsx"));
+const HelpModal             = lazyWithChunkRecovery(() => import("./components/HelpModal.jsx"));
+const UpgradeModal          = lazyWithChunkRecovery(() => import("./components/UpgradeModal.jsx"));
+const UtilsModal            = lazyWithChunkRecovery(() => import("./components/UtilsModal.jsx"));
+const CloudBaseModal        = lazyWithChunkRecovery(() => import("./components/CloudBaseModal.jsx"));
+const DbImportModal         = lazyWithChunkRecovery(() => import("./components/DbImportModal.jsx"));
+const BaseListManager       = lazyWithChunkRecovery(() => import("./components/BaseListManager.jsx"));
+const CloudListManager      = lazyWithChunkRecovery(() => import("./components/CloudListManager.jsx"));
+const ErrorListManager      = lazyWithChunkRecovery(() => import("./components/ErrorListManager.jsx"));
+const DbOverview            = lazyWithChunkRecovery(() => import("./components/DbOverview.jsx"));
+const PrevMonthCompareModal = lazyWithChunkRecovery(() => import("./components/PrevMonthCompareModal.jsx"));
+const RouteMapModal         = lazyWithChunkRecovery(() => import("./components/RouteMapModal.jsx"));
+const RouteSetupModal       = lazyWithChunkRecovery(() => import("./components/RouteSetupModal.jsx"));
+const RouteQuickModal       = lazyWithChunkRecovery(() => import("./components/RouteQuickModal.jsx"));
+const DriverRegistryModal   = lazyWithChunkRecovery(() => import("./components/DriverRegistryModal.jsx"));
+const ScheduleTab           = lazyWithChunkRecovery(() => import("./components/ScheduleTab.jsx"));
 
 import { processAddress, asyncPool, addTypoRecord, loadTypoDict } from "./engine/addressEngine.js";
 import { parsePhoneNumbers, parseSMS, parseBirthDate, normalizeBirth, extractPhoneNote, formatPhone } from "./utils/parsers.js";
 import { canUseRouteMap, canUseDbOverview, canUseDriverRegistry, getMonthlyLimit } from "./utils/tierUtils.js";
-import { LogOut, ShieldCheck, CheckCircle, Database, Crown, Layers, UserCircle, Undo2, Menu, BarChart3, MapPin, Truck, CalendarDays } from "lucide-react";
+import { buildStepStatus, getVisibleWorkflowSteps, getWorkflowMeta, getWorkflowMode, WORKFLOW_STEP_LABELS } from "./utils/workflow.js";
+import { LogOut, ShieldCheck, CheckCircle, Database, Crown, Layers, UserCircle, Undo2, BarChart3, MapPin, Truck, CalendarDays, FileSpreadsheet, Home, ChevronLeft, ChevronRight, BookOpen } from "lucide-react";
 
 export default function App() {
   const [user, setUser] = useState(null);
@@ -52,6 +175,11 @@ export default function App() {
   const [aiRules, setAiRules] = useState(null);
   const [mapDefs, setMapDefs] = useState({});
   const [gridData, setGridData] = useState([]);
+  const [addressDisplayMode, setAddressDisplayMode] = useState(ADDRESS_DISPLAY_MODES.PAREN_BEFORE_DETAIL);
+  const [workflowMode, setWorkflowMode] = useState(() => {
+    try { return localStorage.getItem('nexus_workflow_mode_v1') || 'cleaningOnly'; }
+    catch { return 'cleaningOnly'; }
+  });
   const [sortConfig, setSortConfig] = useState({ key: '', direction: 'asc' });
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 500;
@@ -59,7 +187,7 @@ export default function App() {
   const isBaseUploading = false;
   const [engineProgress, setEngineProgress] = useState({ current: 0, total: 0, percent: 0 });
   const [progressLogs, setProgressLogs] = useState([]);
-  const [filter, _setFilter] = useState({ text: "", showErrorsOnly: false, showSuccessOnly: false, 구분: '', dong: '', driver: '', noDriver: false, hasNote: false });
+  const [filter, _setFilter] = useState({ text: "", showErrorsOnly: false, showSuccessOnly: false, 구분: '', dong: '', driver: '', noDriver: false, hasNote: false, inferredAddress: false });
   // setFilter는 항상 페이지를 1로 리셋 (React 18 자동 배칭으로 단일 렌더)
   const setFilter = (v) => { _setFilter(v); setCurrentPage(1); };
   const [purifyResult, setPurifyResult] = useState(null);
@@ -79,6 +207,8 @@ export default function App() {
   // ── 전역 로딩 게이지 ─────────────────────────────────────────────
   const [gLoad, setGLoad] = useState({ show: false });
   const gLoadTimerRef = useRef(null);
+  const bgSaveCoordCancelRef = useRef(false);
+  const [bgSaveCoordState, setBgSaveCoordState] = useState(null);
   const gStart = (msg, sub = '', pct = null) => setGLoad({ show: true, msg, sub, pct, done: false });
   const gUpdate = (pct, sub) => setGLoad(p => ({ ...p, pct, ...(sub !== undefined ? { sub } : {}) }));
   const gDone = (msg = '완료!') => {
@@ -141,7 +271,7 @@ export default function App() {
     const r = p.get('r');
     return r ? { shareId: r, driverId: p.get('d') || null } : null;
   });
-  const [showHeaderMenu, setShowHeaderMenu] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [showDriverRegistry, setShowDriverRegistry] = useState(false);
   const [profileModal, setProfileModal] = useState({ open: false, isNew: false });
   const [pendingInquiriesCount, setPendingInquiriesCount] = useState(0);
@@ -155,6 +285,29 @@ export default function App() {
       return next;
     });
     setGridData(newData);
+  };
+
+  const workflow = getWorkflowMode(workflowMode);
+  const stepStatus = useMemo(
+    () => buildStepStatus({ step, gridData, fileInfo, worksheets }),
+    [step, gridData, fileInfo, worksheets]
+  );
+  const workflowSteps = useMemo(() => getVisibleWorkflowSteps(workflowMode), [workflowMode]);
+  const workflowMeta = useMemo(() => getWorkflowMeta(workflowMode, stepStatus), [workflowMode, stepStatus]);
+  const changeWorkflowMode = (mode) => {
+    const next = getWorkflowMode(mode).id;
+    setWorkflowMode(next);
+    try { localStorage.setItem('nexus_workflow_mode_v1', next); } catch { /* ignore */ }
+  };
+  const openRouteFlow = () => {
+    if (!canUseRouteMap(user)) {
+      setUpgradeReason('routeMap');
+      setShowUpgrade(true);
+      return;
+    }
+    if (workflowMode !== 'deliveryFull') changeWorkflowMode('deliveryFull');
+    setCloudRouteConfig(null);
+    setShowRouteSetup(true);
   };
   
   const handleUndo = () => {
@@ -206,10 +359,11 @@ export default function App() {
         const isAdminEmail = ADMIN_EMAILS.includes(u.email);
 
         // 1. 최고 관리자 계정이 일반 유저로 꼬여있다면 복구 (Root Cause Fix)
-        if (isAdminEmail && (userData.role !== 'admin' || userData.tier !== 'vvip')) {
-          await setDoc(doc(db, "users", u.uid), { role: "admin", tier: "vvip" }, { merge: true });
+        if (isAdminEmail && (userData.role !== 'admin' || userData.tier !== 'vvip' || (userData.maxCities ?? 0) < 999)) {
+          await setDoc(doc(db, "users", u.uid), { role: "admin", tier: "vvip", maxCities: 999 }, { merge: true });
           userData.role = 'admin';
           userData.tier = 'vvip';
+          userData.maxCities = 999;
         }
 
         // 2. 관리자가 아닌데 이전 찌꺼기 코드 탓에 관리자가 된 일반 유저 강등 (보안)
@@ -359,6 +513,7 @@ export default function App() {
     if (filter.driver) res = res.filter(r => (r.기사 || '') === filter.driver);
     if (filter.noDriver) res = res.filter(r => !(r.기사 || '').trim());
     if (filter.hasNote) res = res.filter(r => (r.특이사항 || '').trim());
+    if (filter.inferredAddress) res = res.filter(r => r._주소추정 || (r._추정사유 || '').trim() || (r.특이사항 || '').includes('[주소추정]'));
     if (filter.text) {
       const txt = filter.text.toLowerCase();
       res = res.filter(r => Object.values(r).some(v => String(v).toLowerCase().includes(txt)));
@@ -639,7 +794,7 @@ export default function App() {
           let addr = getVal(row, 'address');
           let name = getVal(row, 'name');
           let adminDong = getVal(row, 'admin') || "";
-          const processedRow = await processAddress(addr, name, adminDong, fileInfo?.city || "", getVal(row, 'note'));
+          const processedRow = await processAddress(addr, name, adminDong, fileInfo?.city || "", getVal(row, 'note'), { includeCoords: false });
           count++;
           if (Date.now() - lastProgressTime > 200) {
             setEngineProgress({ current: count, total, percent: Math.round((count/total)*100) });
@@ -666,6 +821,21 @@ export default function App() {
             if (!baseEntry && dld.length >= 9) baseEntry = baseMap[`ld_${name}_${dld}`] || null;
           }
 
+          const importedNote = baseEntry && (importFields === null || importFields?.includes('note')) && baseEntry.note
+            ? `◆${baseEntry.note.replace(/^\[기본\]\s*/g, '')}`
+            : '';
+          const importedDriver = baseEntry && (importFields === null || importFields?.includes('driver'))
+            ? (baseEntry.driver || baseEntry.기사 || '')
+            : '';
+          const importedSeqNo = baseEntry && (importFields === null || importFields?.includes('seqNo'))
+            ? (baseEntry.seqNo || baseEntry.배송순번 || '')
+            : '';
+          const importedSms = baseEntry && (importFields === null || importFields?.includes('sms'))
+            ? (baseEntry.sms || baseEntry.문자수신 || '')
+            : '';
+          const smsValue = parseSMS(getVal(row, 'sms') || importedSms);
+          const hasImportedBase = Boolean(importedNote || importedDriver || importedSeqNo || importedSms);
+
           return {
             id: window.crypto.randomUUID(),
             구분: sheet.type === '혼합'
@@ -685,21 +855,39 @@ export default function App() {
             휴대폰: phones.mobile,
             유선전화: phones.landline,
             주소: processedRow.주소,
-            문자수신: parseSMS(getVal(row, 'sms')),
+            문자수신: smsValue,
             특이사항: [
               processedRow.특이사항,
               phoneNotes,
               getVal(row, 'note'),
-              baseEntry && (importFields === null || importFields?.includes('note')) && baseEntry.note
-                ? `◆${baseEntry.note.replace(/^\[기본\]\s*/g, '')}` : '',
+              importedNote,
             ].filter(Boolean).join(' ').trim() || "",
-            기사: getVal(row, 'driver') || "",
-            배송순번: getVal(row, 'seqNo') || "",
+            기사: getVal(row, 'driver') || importedDriver || "",
+            배송순번: getVal(row, 'seqNo') || importedSeqNo || "",
             _에러: processedRow.확인필요,
             _사유: processedRow.확인사유,
+            _이식됨: hasImportedBase,
             _lat: processedRow.lat || baseEntry?.lat || null,
             _lng: processedRow.lng || baseEntry?.lng || null,
-            _isApt: processedRow.isApt !== undefined ? processedRow.isApt : (baseEntry?.isApt || false)
+            _isApt: processedRow.isApt !== undefined ? processedRow.isApt : (baseEntry?.isApt || false),
+            _addressMgtNo: processedRow.addressMgtNo || '',
+            _buildingMgtNo: processedRow.buildingMgtNo || '',
+            _standardRoadAddress: processedRow.standardRoadAddress || '',
+            _roadName: processedRow.roadName || '',
+            _buildingMainNo: processedRow.buildingMainNo ?? '',
+            _buildingSubNo: processedRow.buildingSubNo ?? '',
+            _buildingName: processedRow.buildingName || '',
+            _legalDong: processedRow.legalDong || '',
+            _matchedSido: processedRow.matchedSido || '',
+            _matchedSigungu: processedRow.matchedSigungu || '',
+            _detailAddress: processedRow.detailAddress || '',
+            _addressMatchSource: processedRow.matchSource || '',
+            _addressMatchConfidence: processedRow.matchConfidence ?? null,
+            _routeHints: processedRow.routeHints || null,
+            _주소추정: processedRow.주소추정 || false,
+            _추정사유: processedRow.추정사유 || '',
+            _원주소: processedRow.원주소 || getVal(row, 'address') || '',
+            _addressDisplayMode: addressDisplayMode,
           };
         });
         results.push(...chunkResults);
@@ -708,6 +896,10 @@ export default function App() {
     
     setEngineProgress({ current: total, total, percent: 100 });
     unifyParenContent(results); // 같은 도로명 주소 () 내용 통일
+    results.forEach(r => {
+      r.주소 = formatAddressForDisplayMode(r, addressDisplayMode);
+      r._addressDisplayMode = addressDisplayMode;
+    });
     pushHistory(results);
 
     // 정제 결과 요약
@@ -715,7 +907,12 @@ export default function App() {
     const apiFailCount = errList.filter(r => (r._사유 || '').includes('API') || (r._사유 || '').includes('응답')).length;
     const emptyAddrCount = errList.filter(r => (r._사유 || '').includes('공란') || (r._사유 || '').includes('비어')).length;
     const shortAddrCount = errList.filter(r => (r._사유 || '').includes('3자') || (r._사유 || '').includes('짧')).length;
-    const otherErrCount = errList.length - apiFailCount - emptyAddrCount - shortAddrCount;
+    const outOfMunicipalityCount = errList.filter(r => (r._사유 || '').includes('타지역-지자체')).length;
+    const outOfAdminDongCount = 0;
+    const jibunOnlyCount = errList.filter(r => (r._사유 || '').includes('지번주소만 확인')).length;
+    const addressMissingCount = errList.filter(r => (r._사유 || '').includes('주소 없음')).length;
+    const otherErrCount = errList.length - apiFailCount - emptyAddrCount - shortAddrCount
+      - outOfMunicipalityCount - outOfAdminDongCount - jibunOnlyCount - addressMissingCount;
     setPurifyResult({
       totalCount: results.length,
       successCount: results.length - errList.length,
@@ -723,9 +920,29 @@ export default function App() {
       apiFailCount,
       emptyAddrCount,
       shortAddrCount,
+      outOfMunicipalityCount,
+      outOfAdminDongCount,
+      jibunOnlyCount,
+      addressMissingCount,
       otherErrCount,
       importedCount: results.filter(r => r._이식됨).length,
+      inferredAddressCount: results.filter(r => r._주소추정 || (r._추정사유 || '').trim()).length,
     });
+
+    // 정제 누적 통계: 대시보드/관리자 화면에서 공통으로 읽는 users 문서 필드
+    // 실패해도 정제 결과 자체는 유지되어야 하므로 통계 업데이트 오류는 차단하지 않는다.
+    if (user?.uid && results.length > 0) {
+      setDoc(doc(db, 'users', user.uid), {
+        totalRowsProcessed: increment(results.length),
+        totalFilesProcessed: increment(1),
+        lastProcessedAt: serverTimestamp(),
+        lastProcessedCity: fileInfo?.city || '',
+        lastProcessedMonth: fileInfo?.month || '',
+        lastProcessedRows: results.length,
+        lastProcessedValidRows: results.length - errList.length,
+        lastProcessedErrorRows: errList.length,
+      }, { merge: true }).catch(e => console.warn('[정제 누적 통계 업데이트 실패]', e));
+    }
 
     setStep(5);
 
@@ -800,18 +1017,51 @@ export default function App() {
     setGridData(prev => prev.map(r => r.id === id ? { ...r, [field]: value } : r));
   };
 
+  const handleToggleAddressDisplayMode = () => {
+    const nextMode = addressDisplayMode === ADDRESS_DISPLAY_MODES.PAREN_BEFORE_DETAIL
+      ? ADDRESS_DISPLAY_MODES.DETAIL_BEFORE_PAREN
+      : ADDRESS_DISPLAY_MODES.PAREN_BEFORE_DETAIL;
+    const newData = gridData.map(row => ({
+      ...row,
+      주소: formatAddressForDisplayMode(row, nextMode),
+      _addressDisplayMode: nextMode,
+    }));
+    setAddressDisplayMode(nextMode);
+    pushHistory(newData);
+  };
+
   const handleAddressKeyDown = async (e, row) => {
     if (e.key === "Enter") {
-      const res = await processAddress(row.주소, row.이름, row.행정동 || "", fileInfo?.city || "", row.특이사항 || "");
+      const res = await processAddress(row.주소, row.이름, row.행정동 || "", fileInfo?.city || "", row.특이사항 || "", { includeCoords: false });
       const updatedRow = {
         ...row,
         주소: res.주소,
+        특이사항: mergeUniqueText(row.특이사항, res.특이사항),
         _에러: res.확인필요 || false,
         _사유: res.확인사유 || '',
         _lat: res.lat || null,
         _lng: res.lng || null,
         _isApt: res.isApt !== undefined ? res.isApt : row._isApt,
+        _addressMgtNo: res.addressMgtNo || '',
+        _buildingMgtNo: res.buildingMgtNo || '',
+        _standardRoadAddress: res.standardRoadAddress || '',
+        _roadName: res.roadName || '',
+        _buildingMainNo: res.buildingMainNo ?? '',
+        _buildingSubNo: res.buildingSubNo ?? '',
+        _buildingName: res.buildingName || '',
+        _legalDong: res.legalDong || '',
+        _matchedSido: res.matchedSido || '',
+        _matchedSigungu: res.matchedSigungu || '',
+        _detailAddress: res.detailAddress || '',
+        _addressMatchSource: res.matchSource || '',
+        _addressMatchConfidence: res.matchConfidence ?? null,
+        _routeHints: res.routeHints || null,
+        _주소추정: res.주소추정 || false,
+        _추정사유: res.추정사유 || '',
+        _원주소: res.원주소 || row.주소 || '',
+        _addressDisplayMode: addressDisplayMode,
       };
+      updatedRow.주소 = formatAddressForDisplayMode(updatedRow, addressDisplayMode);
       const newData = gridData.map(r => r.id === row.id ? updatedRow : r);
       pushHistory(newData);
       if (res.주소 !== row.주소 && row.주소) {
@@ -829,18 +1079,39 @@ export default function App() {
     let done = 0;
 
     const repurified = await asyncPool(10, errorRows, async (row) => {
-      const res = await processAddress(row.주소, row.이름, row.행정동 || '', fileInfo?.city || '', row.특이사항 || '');
+      const res = await processAddress(row.주소, row.이름, row.행정동 || '', fileInfo?.city || '', row.특이사항 || '', { includeCoords: false });
       done++;
       gUpdate(Math.round(done / errorRows.length * 100), `${done} / ${errorRows.length}건`);
-      return {
+      const updatedRow = {
         ...row,
         주소: res.주소,
+        특이사항: mergeUniqueText(row.특이사항, res.특이사항),
         _에러: res.확인필요 || false,
         _사유: res.확인사유 || '',
         _lat: res.lat || null,
         _lng: res.lng || null,
         _isApt: res.isApt !== undefined ? res.isApt : row._isApt,
+        _addressMgtNo: res.addressMgtNo || '',
+        _buildingMgtNo: res.buildingMgtNo || '',
+        _standardRoadAddress: res.standardRoadAddress || '',
+        _roadName: res.roadName || '',
+        _buildingMainNo: res.buildingMainNo ?? '',
+        _buildingSubNo: res.buildingSubNo ?? '',
+        _buildingName: res.buildingName || '',
+        _legalDong: res.legalDong || '',
+        _matchedSido: res.matchedSido || '',
+        _matchedSigungu: res.matchedSigungu || '',
+        _detailAddress: res.detailAddress || '',
+        _addressMatchSource: res.matchSource || '',
+        _addressMatchConfidence: res.matchConfidence ?? null,
+        _routeHints: res.routeHints || null,
+        _주소추정: res.주소추정 || false,
+        _추정사유: res.추정사유 || '',
+        _원주소: res.원주소 || row.주소 || '',
+        _addressDisplayMode: addressDisplayMode,
       };
+      updatedRow.주소 = formatAddressForDisplayMode(updatedRow, addressDisplayMode);
+      return updatedRow;
     });
 
     const resultMap = new Map(repurified.map(r => [r.id, r]));
@@ -892,6 +1163,96 @@ export default function App() {
     }
   };
 
+  const runSavedListBackgroundCoords = async ({ city, monthId, records: savedRecords }) => {
+    const targets = (savedRecords || []).filter(r => r.id && r.주소 && !r.lat && !r.lng);
+    if (!city || !monthId || !targets.length) return;
+
+    bgSaveCoordCancelRef.current = false;
+    setBgSaveCoordState({ city, monthId, done: 0, total: targets.length, success: 0, isDone: false });
+
+    const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+    const patches = [];
+    const gridPatches = {};
+    let done = 0;
+    let success = 0;
+    let lastUiAt = 0;
+
+    const flushPatches = async () => {
+      if (!patches.length) return;
+      const items = patches.splice(0, patches.length);
+      for (let i = 0; i < items.length; i += 240) {
+        const batch = writeBatch(db);
+        items.slice(i, i + 240).forEach(({ record, patch }) => {
+          batch.update(doc(db, 'cloud_lists', city, 'months', monthId, 'records', record.id), patch);
+          if (!record.확인필요) {
+            batch.set(doc(db, 'delivery_history', city, 'months', monthId, 'records', record.id), {
+              name: record.이름 || '',
+              birthKey: record.생년월일 || '',
+              dong: record.행정동 || '',
+              address: record.주소 || '',
+              lat: patch.lat,
+              lng: patch.lng,
+              mobile: record.휴대폰 || '',
+              landline: record.유선전화 || '',
+              gubun: record.구분 || '',
+            }, { merge: true });
+          }
+        });
+        await batch.commit();
+      }
+    };
+
+    try {
+      for (const record of targets) {
+        if (bgSaveCoordCancelRef.current) break;
+        await sleep(650);
+
+        const result = await processAddress(
+          record.주소,
+          record.이름 || '',
+          record.행정동 || '',
+          city,
+          record.특이사항 || '',
+          { includeCoords: true }
+        );
+
+        if (result.lat && result.lng) {
+          success++;
+          const patch = {
+            lat: result.lat,
+            lng: result.lng,
+            좌표상태: '좌표확인',
+            배송상태: record.확인필요 ? '확인후배정가능' : '배송준비',
+            좌표출처: result.matchSource || 'background',
+            좌표수정일시: serverTimestamp(),
+            좌표수정자: user?.email || 'background',
+          };
+          patches.push({ record, patch });
+          gridPatches[record.id] = { _lat: result.lat, _lng: result.lng };
+        }
+
+        done++;
+        const now = Date.now();
+        if (patches.length >= 40) await flushPatches();
+        if (now - lastUiAt > 500 || done === targets.length) {
+          setBgSaveCoordState(prev => prev ? { ...prev, done, success } : prev);
+          lastUiAt = now;
+        }
+      }
+
+      await flushPatches();
+      if (Object.keys(gridPatches).length) {
+        setGridData(prev => prev.map(r => gridPatches[r.id] ? { ...r, ...gridPatches[r.id] } : r));
+      }
+      setBgSaveCoordState(prev => prev ? { ...prev, done, success, isDone: true, canceled: bgSaveCoordCancelRef.current } : prev);
+      setTimeout(() => setBgSaveCoordState(null), 9000);
+    } catch (e) {
+      console.warn('[저장 후 백그라운드 좌표 매칭 실패]', e);
+      setBgSaveCoordState(prev => prev ? { ...prev, done, success, isDone: true, failed: true } : prev);
+      setTimeout(() => setBgSaveCoordState(null), 9000);
+    }
+  };
+
   const handleSaveMonthlyList = async () => {
     const city = fileInfo?.city;
     if (!city) return alert('지자체 정보를 감지하지 못했습니다. 파일을 다시 확인해주세요.');
@@ -911,7 +1272,7 @@ export default function App() {
     if (mMatch) initMonth = `${now.getFullYear()}-${String(mMatch[1]).padStart(2, '0')}`;
 
     const monthStr = window.prompt(
-      `[${city}] 저장할 년월을 입력하세요 (예: ${initMonth})\n\n전체 ${allData.length}건 (정상 ${validData.length}건 + 오류 ${errorData.length}건) 저장됩니다.`,
+      `[${city}] 저장할 년월을 입력하세요 (예: ${initMonth})\n\n전체 ${allData.length}건을 저장합니다.\n정상 ${validData.length}건 / 확인필요 ${errorData.length}건`,
       initMonth
     );
     if (!monthStr) return;
@@ -938,18 +1299,20 @@ export default function App() {
         } catch (e) { throw new Error(`[2단계 기존명단 삭제 권한 오류] ${e.message}\n계정: ${user?.email}`); }
       }
 
-      const 수급자Count = validData.filter(r => r.구분 === '기초수급자').length;
-      const 차상위Count = validData.filter(r => r.구분 === '차상위').length;
-      const totalQty   = validData.reduce((s, r) => s + (parseInt(r.포수) || 1), 0);
-      const 수급자Qty  = validData.filter(r => r.구분 === '기초수급자').reduce((s, r) => s + (parseInt(r.포수) || 1), 0);
-      const 차상위Qty  = validData.filter(r => r.구분 === '차상위').reduce((s, r) => s + (parseInt(r.포수) || 1), 0);
+      const 수급자Count = allData.filter(r => r.구분 === '기초수급자').length;
+      const 차상위Count = allData.filter(r => r.구분 === '차상위').length;
+      const totalQty   = allData.reduce((s, r) => s + (parseInt(r.포수) || 1), 0);
+      const 수급자Qty  = allData.filter(r => r.구분 === '기초수급자').reduce((s, r) => s + (parseInt(r.포수) || 1), 0);
+      const 차상위Qty  = allData.filter(r => r.구분 === '차상위').reduce((s, r) => s + (parseInt(r.포수) || 1), 0);
 
       // [3단계] 도시 상위 문서
       try {
         await setDoc(doc(db, 'cloud_lists', city), {
           city, lastMonthId: monthStr, lastUpdatedAt: serverTimestamp(),
-          latestTotalCount: allData.length, latest수급자Count: 수급자Count, latest차상위Count: 차상위Count,
+          latestTotalCount: allData.length, latestValidCount: validData.length, latestErrorCount: errorData.length,
+          latestNeedCheckCount: errorData.length, latest수급자Count: 수급자Count, latest차상위Count: 차상위Count,
           latestTotalQty: totalQty, latest수급자Qty: 수급자Qty, latest차상위Qty: 차상위Qty,
+          latestWorkflowMeta: workflowMeta,
         }, { merge: true });
       } catch (e) { throw new Error(`[3단계 도시문서 저장 권한 오류] ${e.message}\n계정: ${user?.email}`); }
 
@@ -958,22 +1321,37 @@ export default function App() {
         const metaRef = doc(db, 'cloud_lists', city, 'months', monthStr);
         await setDoc(metaRef, {
           city, monthId: monthStr,
-          totalCount: allData.length, validCount: validData.length, errorCount: errorData.length,
+          totalCount: allData.length, validCount: validData.length, errorCount: errorData.length, needCheckCount: errorData.length,
           수급자Count, 차상위Count,
           totalQty, 수급자Qty, 차상위Qty,
           uploadedAt: serverTimestamp(), uploadedBy: user?.email || 'unknown',
+          workflowMeta,
           hasOriginal: false,
         });
       } catch (e) { throw new Error(`[4단계 월별메타 저장 권한 오류] ${e.message}\n계정: ${user?.email}`); }
 
-      // [5단계] 레코드 499건씩 배치 저장 (정상 + 오류 모두)
-      setGLoad({ show: true, msg: '클라우드 저장 중...', sub: `${city} ${monthStr} · ${allData.length.toLocaleString()}건`, pct: 0, done: false, blocking: true });
+      // [5단계] 레코드 499건씩 배치 저장 (규칙 C-5: 원본 명단 전건 보존)
+      setGLoad({ show: true, msg: '클라우드 저장 중...', sub: `${city} ${monthStr} · 전체 ${allData.length.toLocaleString()}건`, pct: 0, done: false, blocking: true });
+      const savedRecordsForBgCoords = [];
       try {
         for (let i = 0; i < allData.length; i += 499) {
           const batch = writeBatch(db);
           allData.slice(i, i + 499).forEach((r, j) => {
-            const ref = doc(collection(db, 'cloud_lists', city, 'months', monthStr, 'records'));
-            batch.set(ref, {
+            const recordId = r.id || window.crypto.randomUUID();
+            const ref = doc(db, 'cloud_lists', city, 'months', monthStr, 'records', recordId);
+            const hasCoord = Boolean(r._lat && r._lng);
+            const needCheck = Boolean(r._에러);
+            const reason = r._사유 || '';
+            const workStatus = needCheck
+              ? (reason.includes('타지역-지자체') ? '타지역의심'
+                : reason.includes('지번주소만 확인') ? '지번만확인'
+                : reason.includes('주소 없음') ? '주소없음'
+                : '주소확인필요')
+              : '정상';
+            const deliveryStatus = needCheck
+              ? (hasCoord ? '확인후배정가능' : '주소확인필요')
+              : (hasCoord ? '배송준비' : '좌표없음');
+            const payload = {
               구분: r.구분 || '',
               이름: r.이름 || '',
               생년월일: r.생년월일 || '',
@@ -988,12 +1366,32 @@ export default function App() {
               lat: r._lat || null,
               lng: r._lng || null,
               isApt: r._isApt || false,
+              addressMgtNo: r._addressMgtNo || '',
+              buildingMgtNo: r._buildingMgtNo || '',
+              standardRoadAddress: r._standardRoadAddress || '',
+              roadName: r._roadName || '',
+              buildingMainNo: r._buildingMainNo ?? '',
+              buildingSubNo: r._buildingSubNo ?? '',
+              buildingName: r._buildingName || '',
+              legalDong: r._legalDong || '',
+              matchedSido: r._matchedSido || '',
+              matchedSigungu: r._matchedSigungu || '',
+              detailAddress: r._detailAddress || '',
+              addressMatchSource: r._addressMatchSource || '',
+              addressMatchConfidence: r._addressMatchConfidence ?? null,
+              routeHints: r._routeHints || null,
               기사: r.기사 || '',
               배송순번: r.배송순번 || '',
-              확인필요: r._에러 || false,
-              확인사유: r._사유 || '',
+              확인필요: needCheck,
+              확인사유: reason,
+              작업상태: workStatus,
+              배송상태: deliveryStatus,
+              좌표상태: hasCoord ? '좌표확인' : '좌표없음',
+              workflowMode: workflowMode,
               _idx: i + j,
-            });
+            };
+            batch.set(ref, payload);
+            savedRecordsForBgCoords.push({ id: recordId, ...payload });
           });
           await batch.commit();
           gUpdate(Math.round(Math.min(i + 499, allData.length) / allData.length * 100));
@@ -1003,6 +1401,7 @@ export default function App() {
       await addDoc(collection(db, 'audit_logs'), {
         action: 'SAVE_MONTHLY_LIST', city, monthId: monthStr,
         count: allData.length, validCount: validData.length, errorCount: errorData.length,
+        workflowMeta,
         timestamp: serverTimestamp(),
         adminEmail: user?.email || 'unknown',
         expireAt: ttl90(),
@@ -1024,7 +1423,8 @@ export default function App() {
         for (let i = 0; i < validData.length; i += 499) {
           const b = writeBatch(db);
           validData.slice(i, i + 499).forEach(r => {
-            const ref = doc(collection(db, 'delivery_history', city, 'months', monthStr, 'records'));
+            const recordId = r.id || window.crypto.randomUUID();
+            const ref = doc(db, 'delivery_history', city, 'months', monthStr, 'records', recordId);
             b.set(ref, {
               name: r.이름 || '',
               birthKey: r.생년월일 || '',
@@ -1101,8 +1501,11 @@ export default function App() {
         if (oldMonths.length > 0) console.log(`[구월 자동 정리] ${city}: ${oldMonths.map(d => d.id).join(', ')} 삭제 완료`);
       } catch (e) { console.warn('[구월 자동 정리 실패 — 저장은 정상]', e.message); }
 
-      gDone(`${city} ${monthStr} · ${validData.length.toLocaleString()}건 저장 완료`);
-      alert(`✅ ${city} ${monthStr} 월별 명단 ${validData.length}건이 클라우드에 저장되었습니다.`);
+      gDone(`${city} ${monthStr} · 전체 ${allData.length.toLocaleString()}건 저장 완료`);
+      setTimeout(() => {
+        runSavedListBackgroundCoords({ city, monthId: monthStr, records: savedRecordsForBgCoords });
+      }, 300);
+      alert(`✅ ${city} ${monthStr} 월별 명단 전체 ${allData.length}건이 클라우드에 저장되었습니다.\n정상 ${validData.length}건 / 확인필요 ${errorData.length}건`);
     } catch (e) {
       setGLoad({ show: false });
       console.error(e);
@@ -1170,15 +1573,12 @@ export default function App() {
         // 생년월일·휴대폰·유선전화 모두 없으면 제외
         if (!birthKey && mKey.length < 9 && lKey.length < 9) return;
 
-        // 특이사항 정제: ◆이식 내용 제거 → 무시 단어(공제/계좌/현금) 삭제 → 공백 정리
+        // 특이사항 정제: 기본명단에서 다시 가져온 이식 표시만 제거한다.
+        // 원본 명단의 문구는 임의 삭제하지 않는다.
         const note = (row.특이사항 || '')
           .replace(/\s*◆[^◆]*/g, '')
-          .replace(/공제|계좌|현금/g, '')
           .replace(/\s+/g, ' ')
           .trim();
-
-        // 특이사항 없는 데이터는 저장 제외
-        if (!note) return;
 
         const payload = {
           name, birthKey,
@@ -1186,7 +1586,27 @@ export default function App() {
           address: row.주소   || '',
           mobile,  landline,
           note,
+          driver:  row.기사 || '',
+          seqNo:   row.배송순번 || '',
           sms:     row.문자수신 || '',
+          qty:     parseInt(row.포수 || '1') || 1,
+          lat:     row._lat || null,
+          lng:     row._lng || null,
+          isApt:   row._isApt || false,
+          addressMgtNo: row._addressMgtNo || '',
+          buildingMgtNo: row._buildingMgtNo || '',
+          standardRoadAddress: row._standardRoadAddress || '',
+          roadName: row._roadName || '',
+          buildingMainNo: row._buildingMainNo ?? '',
+          buildingSubNo: row._buildingSubNo ?? '',
+          buildingName: row._buildingName || '',
+          legalDong: row._legalDong || '',
+          matchedSido: row._matchedSido || '',
+          matchedSigungu: row._matchedSigungu || '',
+          detailAddress: row._detailAddress || '',
+          addressMatchSource: row._addressMatchSource || '',
+          addressMatchConfidence: row._addressMatchConfidence ?? null,
+          routeHints: row._routeHints || null,
           updatedAt: serverTimestamp(),
         };
 
@@ -1339,7 +1759,7 @@ export default function App() {
     setFileInfo({ city, month: monthId });
     setPurifyResult(null);
     setPrevMonthCompare(null);
-    setFilter({ text: '', showErrorsOnly: false, showSuccessOnly: false, 구분: '', dong: '', driver: '', noDriver: false, hasNote: false });
+    setFilter({ text: '', showErrorsOnly: false, showSuccessOnly: false, 구분: '', dong: '', driver: '', noDriver: false, hasNote: false, inferredAddress: false });
     setCurrentPage(1);
     setSortConfig({ key: '', direction: 'asc' });
     pushHistory(mapped);
@@ -1362,16 +1782,18 @@ export default function App() {
       const baseRecs = baseSnap.docs.map(d => ({ id: d.id, ...d.data() }));
 
       const HEADER_NAME_RE = /^(이름|성명|대상자|수령자명)$/;
-      const byBirth = {}, byPhone = {};
+      const byBirth = {}, byPhone = {}, byLandline = {};
       baseRecs.forEach(r => {
         const name = (r.name || r.이름 || '').trim();
         const birth = r.birthKey || normalizeBirth(String(r.생년월일 || ''));
         const mobile = normPhone(r.mobile || r.휴대폰 || '');
+        const landline = normPhone(r.landline || r.유선전화 || '');
         const note = (r.note || r.특이사항 || '').trim();
         if (!name || !note) return;
         if (HEADER_NAME_RE.test(name)) return; // 헤더 키워드 이름 매칭 차단
         if (birth) byBirth[`${name}__${birth}`] = note;
-        if (mobile.length >= 9) byPhone[`${name}__${mobile}`] = note;
+        else if (mobile.length >= 9) byPhone[`${name}__${mobile}`] = note;
+        else if (landline.length >= 9) byLandline[`${name}__${landline}`] = note;
       });
 
       let count = 0;
@@ -1379,13 +1801,19 @@ export default function App() {
         const name = (r.이름 || '').trim();
         const birth = normalizeBirth(String(r.생년월일 || ''));
         const mobile = normPhone(r.휴대폰 || '');
+        const landline = normPhone(r.유선전화 || '');
         let note = '';
         if (birth) note = byBirth[`${name}__${birth}`] || '';
         if (!note && mobile.length >= 9) note = byPhone[`${name}__${mobile}`] || '';
+        if (!note && landline.length >= 9) note = byLandline[`${name}__${landline}`] || '';
         if (!note) return r; // 기본명단에 특이사항 없음
-        if (note === (r.특이사항 || '').trim()) return r; // 이미 동일
+        const currentNote = (r.특이사항 || '').trim();
+        if (currentNote.includes(note)) return r; // 이미 동일 내용 포함
+        const preservedNote = currentNote.replace(/\s*◆[^◆]*/g, '').trim();
+        const nextNote = [preservedNote, `◆${note}`].filter(Boolean).join(' ').trim();
+        if (nextNote === currentNote) return r;
         count++;
-        return { ...r, 특이사항: note };
+        return { ...r, 특이사항: nextNote };
       });
 
       if (!count) { alert('업데이트할 특이사항이 없습니다.\n(기본명단에 특이사항이 없거나 이미 모두 동일)'); return; }
@@ -1555,179 +1983,235 @@ export default function App() {
   // Lazy 컴포넌트용 fallback — 투명하게 처리 (로딩 스피너 없음)
   const LazyFallback = null;
 
+  // ── V5.0 사이드바 헬퍼 컴포넌트 ──────────────────────────────────────────────
+  const SidebarSection = ({ label }) => sidebarCollapsed ? (
+    <div className="my-1 mx-1.5 border-t border-[#0d1520]" />
+  ) : (
+    <div className="px-3 pt-3 pb-0.5">
+      <span className="text-[8.5px] font-black tracking-[0.15em] text-gray-700 uppercase">{label}</span>
+    </div>
+  );
+
+  const SidebarItem = ({ icon: Icon, label, active, onClick, badge, locked, recommended }) => (
+    <button
+      onClick={locked ? undefined : onClick}
+      title={sidebarCollapsed ? label : undefined}
+      className={`relative flex items-center rounded-xl transition-all group text-left w-full
+        ${sidebarCollapsed ? 'justify-center h-9 w-9 mx-auto px-0' : 'gap-2.5 px-3 py-2.5'}
+        ${active
+          ? 'bg-[#3b82f6]/15 text-[#3b82f6] border border-[#3b82f6]/25 shadow-[0_0_12px_rgba(59,130,246,0.08)]'
+          : locked
+          ? 'text-gray-700 cursor-default border border-transparent'
+          : recommended
+          ? 'text-[#60a5fa] bg-[#3b82f6]/8 border border-[#3b82f6]/15 hover:bg-[#3b82f6]/12 animate-pulse-subtle'
+          : 'text-gray-500 hover:bg-white/5 hover:text-gray-200 border border-transparent'}
+      `}
+    >
+      <Icon size={15} className="shrink-0" />
+      {!sidebarCollapsed && (
+        <>
+          <span className="text-[11.5px] font-bold flex-1 truncate leading-none">{label}</span>
+          {badge && <span className={`text-[9px] min-w-[16px] px-1 py-0.5 rounded-full font-black text-center ${badge.type === 'error' ? 'bg-red-500 text-white' : 'bg-[#3b82f6]/30 text-[#3b82f6]'}`}>{badge.count}</span>}
+          {locked && <span className="text-[8px] bg-purple-900/30 text-purple-500 border border-purple-800/30 px-1 py-0.5 rounded font-black">PRO</span>}
+          {recommended && <span className="text-[8px] bg-[#3b82f6]/20 text-[#3b82f6] border border-[#3b82f6]/25 px-1 py-0.5 rounded font-black">추천</span>}
+        </>
+      )}
+      {sidebarCollapsed && badge && badge.count > 0 && (
+        <span className="absolute top-0.5 right-0.5 w-2 h-2 bg-red-500 rounded-full" />
+      )}
+    </button>
+  );
+
   return (
     <ErrorBoundary>
     <Suspense fallback={LazyFallback}>
-      <div className="w-full h-screen bg-[#050505] text-white flex flex-col font-sans overflow-hidden">
+      <div className="w-full h-screen bg-[#070807] text-white flex flex-col font-sans overflow-hidden">
 
         {showIntro && <IntroScreen user={user} reason={introReason} meta={introMeta} onComplete={() => setShowIntro(false)} />}
 
-        {/* HEADER RESTORED */}
-        <header className="h-16 shrink-0 bg-[#0a0a0a] border-b border-[#222] flex items-center justify-between px-6 z-50">
-          <button 
-            onClick={() => setStep(0)} 
-            className="flex items-center gap-3 hover:opacity-80 transition-opacity cursor-pointer outline-none"
-            title="초기 화면으로 이동"
-          >
-            <img src="/ttlogo1.png" alt="NEXUS PIPELINE Logo" className="h-10 object-contain" />
+        {/* ── V5.0 HEADER ── */}
+        <header className="h-14 shrink-0 bg-[#080b0c] border-b border-[#17201f] flex items-center gap-4 px-4 z-50 shadow-[0_1px_0_rgba(45,212,191,0.05)]">
+          {/* 로고 */}
+          <button onClick={() => setStep(0)} className="shrink-0 hover:opacity-80 transition-opacity outline-none" title="홈으로">
+            <img src="/ttlogo1.png" alt="NEXUS PIPELINE" className="h-9 object-contain" />
           </button>
-          
-          <div className="flex flex-1 items-center justify-center px-10">
-            {step >= 1 && step <= 5 && (
-              <div className="flex items-center gap-2">
-                {[1, 2, 3, 4, 5].map(s => (
-                  <div key={s} className="flex items-center">
-                    <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm transition-all ${step === s ? "bg-[#3b82f6] text-black shadow-[0_0_10px_rgba(59,130,246,0.5)]" : step > s ? "bg-[#1e3a8a] text-white" : "bg-[#222] text-gray-500"}`}>
-                      {step > s ? <CheckCircle size={16} /> : s}
-                    </div>
-                    {s < 5 && <div className={`w-10 h-0.5 mx-1 ${step > s ? "bg-[#1e3a8a]" : "bg-[#222]"}`} />}
-                  </div>
-                ))}
+
+          {/* 가운데: 현재 작업 파일 정보 */}
+          <div className="flex-1 flex items-center justify-center">
+            {step >= 1 && step <= 5 && fileInfo && (
+              <div className="flex items-center gap-2 text-xs bg-[#0d1413]/90 px-3 py-1.5 rounded-lg border border-[#1c2b29]">
+                <span className="text-emerald-300 font-black">{workflow.shortTitle}</span>
+                <span className="text-[#253534]">·</span>
+                <span className="text-white font-black">{fileInfo.city || '지자체 미상'}</span>
+                {fileInfo.month && (
+                  <>
+                    <span className="text-[#1a2a3a]">·</span>
+                    <span className="text-gray-400 font-bold">{fileInfo.month}</span>
+                  </>
+                )}
+                {step === 5 && gridData.length > 0 && (
+                  <>
+                    <span className="text-[#1a2a3a]">·</span>
+                    <span className="text-cyan-300 font-black">{gridData.length.toLocaleString()}건</span>
+                    {gridData.filter(r => r._에러).length > 0 && (
+                      <span className="text-red-400 font-bold">· 오류 {gridData.filter(r => r._에러).length}건</span>
+                    )}
+                  </>
+                )}
               </div>
             )}
           </div>
-          
-          <div className="flex items-center gap-2">
-            <button onClick={() => setStep(0)} className="px-4 py-2 bg-[#111] hover:bg-[#222] border border-[#333] text-gray-300 font-bold rounded-lg text-xs transition-all flex items-center gap-2">
-              대시보드
-            </button>
-            <button onClick={handleUndo} disabled={history.length === 0} className="px-4 py-2 bg-[#222] hover:bg-[#333] disabled:opacity-50 text-white text-xs font-bold rounded-lg transition-all flex items-center gap-2">
-              <Undo2 size={16} /> 실행취소
-            </button>
 
-            {/* 메뉴 드롭다운 */}
-            <div className="relative">
-              <button
-                onClick={() => setShowHeaderMenu(v => !v)}
-                className="px-4 py-2 bg-[#111] hover:bg-[#1a1a1a] border border-[#333] hover:border-[#3b82f6]/50 text-gray-300 font-bold rounded-lg text-xs transition-all flex items-center gap-2"
-              >
-                <Menu size={16} /> 메뉴
-              </button>
-              {showHeaderMenu && (
-                <>
-                  <div className="fixed inset-0 z-40" onClick={() => setShowHeaderMenu(false)} />
-                  <div className="absolute right-0 top-full mt-2 w-52 bg-[#060c18] border border-[#3b82f6]/20 rounded-xl shadow-[0_8px_32px_rgba(0,0,0,0.6)] z-50 overflow-hidden">
-                    <div className="p-1.5 space-y-0.5">
-                      <button
-                        onClick={() => { setStep(11); setShowHeaderMenu(false); }}
-                        className="w-full px-4 py-2.5 flex items-center gap-3 text-sky-300 hover:bg-sky-900/30 rounded-lg text-xs font-bold transition-colors text-left"
-                      >
-                        <CalendarDays size={15} /> 배송일정
-                      </button>
-                      <div className="my-0.5 border-t border-[#1a1a1a]" />
-                      <button
-                        onClick={() => {
-                          if (!canUseDbOverview(user)) {
-                            setUpgradeReason('dbOverview'); setShowUpgrade(true); setShowHeaderMenu(false);
-                          } else {
-                            setStep(9); setDbNavCity(''); setShowHeaderMenu(false);
-                          }
-                        }}
-                        className="w-full px-4 py-2.5 flex items-center gap-3 text-violet-300 hover:bg-violet-900/30 rounded-lg text-xs font-bold transition-colors text-left"
-                      >
-                        <BarChart3 size={15} /> DB 현황 조회
-                        {!canUseDbOverview(user) && <span className="ml-auto text-[9px] bg-purple-900/40 text-purple-400 border border-purple-700/40 px-1.5 py-0.5 rounded font-black">VVIP+</span>}
-                      </button>
-                      <button
-                        onClick={() => { setShowDriverRegistry(true); setShowHeaderMenu(false); }}
-                        className="w-full px-4 py-2.5 flex items-center gap-3 text-emerald-300 hover:bg-emerald-900/30 rounded-lg text-xs font-bold transition-colors text-left"
-                      >
-                        <Truck size={15} /> {user?.orgId || canUseDriverRegistry(user) ? '소속사 기사 관리' : '기사설정'}
-                      </button>
-                      <button
-                        onClick={() => { setStep(11); setShowHeaderMenu(false); }}
-                        className="w-full px-4 py-2.5 flex items-center gap-3 text-sky-300 hover:bg-sky-900/30 rounded-lg text-xs font-bold transition-colors text-left"
-                      >
-                        <CalendarDays size={15} /> 배송일정 관리
-                      </button>
-                      <div className="my-0.5 border-t border-[#1a1a1a]" />
-                      <button
-                        onClick={() => { setStep(8); setDbNavCity(''); setShowHeaderMenu(false); }}
-                        className="w-full px-4 py-2.5 flex items-center gap-3 text-blue-300 hover:bg-blue-900/30 rounded-lg text-xs font-bold transition-colors text-left"
-                      >
-                        <Database size={15} /> 이번달 배송명단
-                      </button>
-                      <button
-                        onClick={() => {
-                          if (!canUseRouteMap(user)) {
-                            setUpgradeReason('routeMap'); setShowUpgrade(true); setShowHeaderMenu(false);
-                          } else {
-                            setShowRouteQuick(true); setShowHeaderMenu(false);
-                          }
-                        }}
-                        className="w-full px-4 py-2.5 flex items-center gap-3 text-[#3b82f6] hover:bg-[#3b82f6]/10 rounded-lg text-xs font-bold transition-colors text-left"
-                      >
-                        <MapPin size={15} /> 기사 배정 / 루트맵
-                        {!canUseRouteMap(user) && <span className="ml-auto text-[9px] bg-blue-900/40 text-blue-400 border border-blue-700/40 px-1.5 py-0.5 rounded font-black">VIP+</span>}
-                      </button>
-                      <button
-                        onClick={() => { setStep(6); setDbNavCity(''); setShowHeaderMenu(false); }}
-                        className="w-full px-4 py-2.5 flex items-center gap-3 text-cyan-300 hover:bg-cyan-900/30 rounded-lg text-xs font-bold transition-colors text-left"
-                      >
-                        <Database size={15} /> 기본명단 관리
-                      </button>
-                      <button
-                        onClick={() => { setShowUtils(true); setShowHeaderMenu(false); }}
-                        className="w-full px-4 py-2.5 flex items-center gap-3 text-yellow-300 hover:bg-yellow-900/30 rounded-lg text-xs font-bold transition-colors text-left"
-                      >
-                        <Layers size={15} /> 부가서비스
-                      </button>
-                      <button
-                        onClick={() => { setUpgradeReason('city_limit'); setShowUpgrade(true); setShowHeaderMenu(false); }}
-                        className="w-full px-4 py-2.5 flex items-center gap-3 text-indigo-300 hover:bg-indigo-900/30 rounded-lg text-xs font-bold transition-colors text-left"
-                      >
-                        <Crown size={15} /> 회원등급 관리
-                      </button>
-                      <button
-                        onClick={() => { setProfileModal({ open: true, isNew: false }); setShowHeaderMenu(false); }}
-                        className="w-full px-4 py-2.5 flex items-center gap-3 text-gray-300 hover:bg-gray-800/60 rounded-lg text-xs font-bold transition-colors text-left"
-                      >
-                        <UserCircle size={15} /> 내 프로필
-                      </button>
-                    </div>
-                  </div>
-                </>
-              )}
-            </div>
-
-            {canUseRouteMap(user) ? (
-              <button
-                onClick={() => { setShowRouteQuick(true); }}
-                className="px-4 py-2 bg-[#050c18] border border-[#3b82f6]/40 text-[#3b82f6] font-bold rounded-lg text-xs transition-all flex items-center gap-2 hover:bg-[#0a1a30]"
-              >
-                <MapPin size={16} /> 기사배정/루트맵
-              </button>
-            ) : null}
+          {/* 오른쪽: 액션 버튼 */}
+          <div className="flex items-center gap-2 shrink-0">
             {gridData.some(r => r._에러) && (
-              <button
-                onClick={() => setStep(10)}
-                className="px-4 py-2 bg-red-950/40 text-red-400 border border-red-500/40 hover:bg-red-900/50 font-bold rounded-lg text-xs transition-all flex items-center gap-2"
-              >
-                <span className="inline-flex items-center justify-center w-4 h-4 bg-red-500 text-white text-[9px] font-black rounded-full">
-                  {gridData.filter(r => r._에러).length}
-                </span>
-                오류 명단
+              <button onClick={() => setStep(10)} className="px-3 py-1.5 bg-red-950/40 text-red-400 border border-red-500/40 hover:bg-red-900/50 font-bold rounded-lg text-xs flex items-center gap-1.5 transition-colors">
+                <span className="inline-flex items-center justify-center w-4 h-4 bg-red-500 text-white text-[9px] font-black rounded-full">{gridData.filter(r => r._에러).length}</span>
+                오류
               </button>
             )}
-            {user?.role === "admin" && (
-              <button onClick={() => setStep(7)} className="relative px-4 py-2 bg-purple-900/40 text-purple-300 border border-purple-500/50 hover:bg-purple-900/60 font-bold rounded-lg text-xs transition-all flex items-center gap-2">
-                <ShieldCheck size={16} /> 관리자 패널
-                {pendingInquiriesCount > 0 && (
-                  <span className="absolute -top-1.5 -right-1.5 bg-red-500 text-white text-[10px] font-black w-5 h-5 flex items-center justify-center rounded-full shadow-[0_0_10px_rgba(239,68,68,0.8)] animate-pulse">
-                    {pendingInquiriesCount}
-                  </span>
-                )}
-              </button>
-            )}
-            <button onClick={onLogout} className="px-4 py-2 bg-red-950/40 text-red-400 border border-red-500/50 hover:bg-red-900/60 font-bold rounded-lg text-xs transition-all flex items-center gap-2">
-              <LogOut size={16} /> 로그아웃
+            <button onClick={handleUndo} disabled={history.length === 0} className="px-3 py-1.5 bg-[#0d1520] hover:bg-[#111c2d] disabled:opacity-30 text-gray-400 hover:text-white text-xs font-bold rounded-lg transition-all flex items-center gap-1.5 border border-[#1a2a3a]">
+              <Undo2 size={13} /> 실행취소
             </button>
+            <div className="w-px h-5 bg-[#1a2a3a]" />
+            <span className="text-gray-600 text-xs truncate max-w-[130px] hidden xl:block">{user?.realName || user?.email?.split('@')[0]}</span>
           </div>
         </header>
 
+        {/* ── V5.0 BODY: 사이드바 + 메인 콘텐츠 ─────────────────────────── */}
+        <div className="flex flex-1 overflow-hidden">
+
+          {/* ── 좌측 사이드바 ── */}
+          <aside className={`shrink-0 flex flex-col bg-gradient-to-b from-[#08100f] via-[#070b0b] to-[#050706] border-r border-[#17201f] transition-all duration-300 overflow-hidden z-30 ${sidebarCollapsed ? 'w-[52px]' : 'w-[210px]'}`}>
+
+            {/* 토글 버튼 */}
+            <div className={`flex py-2 px-1.5 ${sidebarCollapsed ? 'justify-center' : 'justify-end'}`}>
+              <button
+                onClick={() => setSidebarCollapsed(v => !v)}
+                title={sidebarCollapsed ? '메뉴 펼치기' : '메뉴 접기'}
+                className="p-1.5 rounded-lg text-gray-700 hover:text-gray-400 hover:bg-white/5 transition-colors"
+              >
+                {sidebarCollapsed ? <ChevronRight size={13} /> : <ChevronLeft size={13} />}
+              </button>
+            </div>
+
+            <nav className="flex-1 overflow-y-auto overflow-x-hidden px-1.5 pb-2 space-y-0.5 scrollbar-none">
+
+              {/* 홈 */}
+              <SidebarItem icon={Home} label="홈 / 대시보드" active={step === 0} onClick={() => setStep(0)} />
+
+              {/* ── 파이프라인 ── */}
+              <SidebarSection label="파이프라인" />
+              {step >= 1 && step <= 5 && !sidebarCollapsed ? (
+                <div className="px-1 py-1 space-y-0.5">
+                  {[
+                    { key: 'upload', n: 1 },
+                    { key: 'cleaning', n: 4 },
+                    { key: 'issues', n: 5 },
+                    ...workflowSteps.filter(k => !['upload', 'cleaning', 'issues'].includes(k)).map(key => ({ key, n: 5 })),
+                  ].map(({ key, n }) => {
+                    const status = stepStatus[key];
+                    const done = status === 'done';
+                    const active = (key === 'upload' && step >= 1 && step <= 3) || (key === 'cleaning' && step === 4) || (key === 'issues' && step === 5);
+                    const attention = status === 'attention';
+                    return (
+                      <div key={key} className={`flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-[10.5px] font-bold transition-colors cursor-default
+                        ${active ? 'bg-cyan-500/12 text-cyan-300 border border-cyan-500/20' : attention ? 'bg-amber-500/10 text-amber-300 border border-amber-500/20' : done ? 'text-emerald-500/80' : 'text-gray-700'}`
+                      }>
+                        <div className={`w-4 h-4 rounded-full flex items-center justify-center text-[8px] shrink-0 font-black
+                          ${done ? 'bg-emerald-500 text-black' : attention ? 'border border-amber-400 text-amber-300' : active ? 'border border-cyan-400 text-cyan-300' : 'border border-[#2a2a2a] text-gray-700'}`
+                        }>{done ? '✓' : attention ? '!' : n}</div>
+                        {WORKFLOW_STEP_LABELS[key] || key}
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <SidebarItem
+                  icon={FileSpreadsheet}
+                  label="새 명단 처리"
+                  active={step >= 1 && step <= 5}
+                  onClick={() => setStep(step >= 1 && step <= 5 ? step : 1)}
+                  recommended={step === 0 && gridData.length === 0}
+                />
+              )}
+
+              {/* ── 배송 관리 ── */}
+              <SidebarSection label="배송 관리" />
+              <SidebarItem icon={Database} label="이번달 배송명단" active={step === 8} onClick={() => { setDbNavCity(''); setStep(8); }} />
+              {(workflowMode === 'deliveryFull' || gridData.length === 0) ? (
+                <SidebarItem
+                  icon={MapPin}
+                  label="기사 배정 · 루트맵"
+                  active={showRouteQuick || showRouteSetup || showRouteMap}
+                  onClick={() => { if (!canUseRouteMap(user)) { setUpgradeReason('routeMap'); setShowUpgrade(true); } else setShowRouteQuick(true); }}
+                  locked={!canUseRouteMap(user)}
+                  recommended={step === 5 && gridData.length > 0 && !gridData.some(r => r.기사)}
+                />
+              ) : (
+                <SidebarItem
+                  icon={MapPin}
+                  label="배송 배정 추가"
+                  active={false}
+                  onClick={openRouteFlow}
+                  locked={!canUseRouteMap(user)}
+                />
+              )}
+              <SidebarItem icon={CalendarDays} label="배송일정" active={step === 11} onClick={() => setStep(11)} />
+
+              {/* ── 데이터 관리 ── */}
+              <SidebarSection label="데이터 관리" />
+              <SidebarItem icon={BookOpen} label="기본명단 관리" active={step === 6} onClick={() => { setDbNavCity(''); setStep(6); }} />
+              <SidebarItem
+                icon={BarChart3}
+                label="DB 현황 조회"
+                active={step === 9}
+                onClick={() => { if (!canUseDbOverview(user)) { setUpgradeReason('dbOverview'); setShowUpgrade(true); } else { setStep(9); setDbNavCity(''); } }}
+                locked={!canUseDbOverview(user)}
+              />
+              <SidebarItem icon={Truck} label="기사 관리" active={showDriverRegistry} onClick={() => setShowDriverRegistry(true)} />
+
+              {/* ── 설정 ── */}
+              <SidebarSection label="설정" />
+              <SidebarItem icon={Layers} label="부가서비스" active={showUtils} onClick={() => setShowUtils(true)} />
+              <SidebarItem icon={Crown} label="회원등급" active={false} onClick={() => { setUpgradeReason('city_limit'); setShowUpgrade(true); }} />
+              <SidebarItem icon={UserCircle} label="내 프로필" active={profileModal.open} onClick={() => setProfileModal({ open: true, isNew: false })} />
+
+              {/* ── 관리자 ── */}
+              {user?.role === 'admin' && (
+                <>
+                  <SidebarSection label="관리자" />
+                  <SidebarItem
+                    icon={ShieldCheck}
+                    label="관리자 패널"
+                    active={step === 7}
+                    onClick={() => setStep(7)}
+                    badge={pendingInquiriesCount > 0 ? { count: pendingInquiriesCount, type: 'error' } : null}
+                  />
+                </>
+              )}
+            </nav>
+
+            {/* 로그아웃 */}
+            <div className="shrink-0 p-2 border-t border-[#0d1520]">
+              <button
+                onClick={onLogout}
+                title="로그아웃"
+                className={`flex items-center gap-2.5 py-2 rounded-xl text-red-500/70 hover:text-red-400 hover:bg-red-950/20 border border-transparent transition-all w-full ${sidebarCollapsed ? 'justify-center px-1' : 'px-3'}`}
+              >
+                <LogOut size={14} />
+                {!sidebarCollapsed && <span className="text-[11.5px] font-bold">로그아웃</span>}
+              </button>
+            </div>
+          </aside>
+
+          {/* ── 메인 콘텐츠 영역 ── */}
+          <div className="flex-1 flex flex-col overflow-hidden min-w-0">
+
         {/* ── 단계 2~5 공통 요약바 ─────────────────────────────────────── */}
         {step >= 2 && step <= 5 && fileInfo && (
-          <div className="shrink-0 bg-black/70 border-b border-[#1e1e1e] px-5 py-2 flex items-center gap-2.5 text-xs flex-wrap">
+          <div className="shrink-0 bg-[#070908]/92 border-b border-[#17201f] px-5 py-2 flex items-center gap-2.5 text-xs flex-wrap">
+            <span className="px-2 py-0.5 rounded-md bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 font-black">{workflow.title}</span>
             <span className="text-white font-black tracking-wide">{fileInfo.city || '지자체 미상'}</span>
             <span className="text-gray-700">|</span>
             <span className="text-gray-300 font-bold">{fileInfo.month || '-'}</span>
@@ -1771,50 +2255,13 @@ export default function App() {
           </div>
         )}
 
-        {/* ── 단계 진행 표시기 (step 1~5) ─────────────────────────────── */}
-        {step >= 1 && step <= 5 && (
-          <div className="shrink-0 bg-[#040404] border-b border-[#151515] px-6 py-2.5 flex items-center justify-center gap-0">
-            {[
-              { n: 1, label: '업로드' },
-              { n: 2, label: '시트분류' },
-              { n: 3, label: '컬럼매핑' },
-              { n: 4, label: '주소정제' },
-              { n: 5, label: '결과확인' },
-            ].map(({ n, label }, i) => {
-              const done = step > n;
-              const active = step === n;
-              return (
-                <div key={n} className="flex items-center">
-                  <div className="flex items-center gap-1.5">
-                    <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-black transition-all ${
-                      done    ? 'bg-[#3b82f6] text-black' :
-                      active  ? 'bg-[#3b82f6]/20 border border-[#3b82f6] text-[#3b82f6]' :
-                               'bg-[#111] border border-[#333] text-gray-600'
-                    }`}>
-                      {done ? '✓' : n}
-                    </div>
-                    <span className={`text-xs font-bold transition-all ${
-                      done   ? 'text-[#3b82f6]/60' :
-                      active ? 'text-[#3b82f6]' :
-                               'text-gray-600'
-                    }`}>{label}</span>
-                  </div>
-                  {i < 4 && (
-                    <div className={`w-8 h-px mx-2 transition-all ${step > n ? 'bg-[#3b82f6]/40' : 'bg-[#222]'}`} />
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        )}
-
-        <main className="flex-1 relative overflow-hidden bg-[#050505] flex flex-col">
-          {step === 0 && <Dashboard user={user} onLogout={onLogout} onStart={(s) => setStep(typeof s === 'number' ? s : 1)} onHelp={onHelp} setFileInfo={setFileInfo} setWorksheets={setWorksheets} setBaseCount={setBaseCount} gridData={gridData} setGridData={setGridData} onCloudCard={(city) => { setDbNavCity(city); setStep(8); }} onBaseCard={(city) => { setDbNavCity(city); setStep(6); }} />}
+        <main className="flex-1 relative overflow-hidden bg-[#070807] flex flex-col">
+          {step === 0 && <Dashboard user={user} onLogout={onLogout} onStart={(s) => setStep(typeof s === 'number' ? s : 1)} onHelp={onHelp} setFileInfo={setFileInfo} setWorksheets={setWorksheets} setBaseCount={setBaseCount} gridData={gridData} setGridData={setGridData} fileInfo={fileInfo} onCloudCard={(city) => { setDbNavCity(city); setStep(8); }} onBaseCard={(city) => { setDbNavCity(city); setStep(6); }} onOpenRouteMap={() => { if (!canUseRouteMap(user)) { setUpgradeReason('routeMap'); setShowUpgrade(true); } else setShowRouteQuick(true); }} workflowMode={workflowMode} onWorkflowModeChange={changeWorkflowMode} stepStatus={stepStatus} />}
           {step === 1 && <Step1_Upload handleDragOver={handleDragOver} handleDrop={handleDrop} handleFileUpload={handleFileUpload} handleUnifiedDrop={handleUnifiedDrop} isBaseUploading={isBaseUploading} step={step} onHelp={onHelp} onCloudFetch={() => setShowCloudBase(true)} />}
           {step === 2 && <Step2_SheetSelect step={step} setStep={setStep} fileInfo={fileInfo} setFileInfo={setFileInfo} worksheets={worksheets} setWorksheets={setWorksheets} setSelectedSheets={setSelectedSheets} onHelp={onHelp} handleSecondFileUpload={handleSecondFileUpload} />}
           {step === 3 && <Step3_Mapping step={step} setStep={setStep} selectedSheets={selectedSheets} worksheets={worksheets} mapDefs={mapDefs} setMapDefs={setMapDefs} startProcessing={handleAnalyzeAll} onHelp={onHelp} isBasePurifyMode={isBasePurifyMode} setIsBasePurifyMode={setIsBasePurifyMode} onOpenDbImport={() => setShowDbImport(true)} dbImportReady={dbImportReady} onUserMapping={handleUserMapping} />}
           {step === 4 && <LoadingScreen progress={engineProgress} logs={progressLogs} />}
-          {step === 5 && <ResultGrid step={step} setStep={setStep} fileInfo={fileInfo} filter={filter} setFilter={setFilter} dongList={gridDongList} driverList={gridDriverList} gridData={gridData} filteredData={filteredData} paginatedData={paginatedData} currentPage={currentPage} setCurrentPage={setCurrentPage} itemsPerPage={itemsPerPage} colVis={colVis} sortConfig={sortConfig} setSortConfig={setSortConfig} handleCellEdit={handleCellEdit} handleAddressKeyDown={handleAddressKeyDown} handleUpdateBaseList={handleUpdateBaseList} handleBatchSaveBaseList={handleBatchSaveBaseList} isSavingBaseList={isSavingBaseList} handleSaveMonthlyList={handleSaveMonthlyList} setShowExportSetting={setShowExportSetting} handleExport={handleExport} handleExportErrors={handleExportErrors} handleExportDongSummary={handleExportDongSummary} handleExportByDriver={handleExportByDriver} handleDeleteRows={handleDeleteRows} handleBatchSetNote={handleBatchSetNote} onHelp={onHelp} purifyResult={purifyResult} onClosePurifyResult={() => setPurifyResult(null)} onMovePhones={handleMovePhones} onRepurifyErrors={handleRepurifyErrors} onOpenRouteMap={() => { if (!canUseRouteMap(user)) { setUpgradeReason('routeMap'); setShowUpgrade(true); } else { setCloudRouteConfig(null); setShowRouteSetup(true); } }} onFetchBaseNotes={handleFetchBaseNotes} isFetchingNotes={isFetchingNotes} />}
+          {step === 5 && <ResultGrid step={step} setStep={setStep} fileInfo={fileInfo} filter={filter} setFilter={setFilter} dongList={gridDongList} driverList={gridDriverList} gridData={gridData} filteredData={filteredData} paginatedData={paginatedData} currentPage={currentPage} setCurrentPage={setCurrentPage} itemsPerPage={itemsPerPage} colVis={colVis} sortConfig={sortConfig} setSortConfig={setSortConfig} handleCellEdit={handleCellEdit} handleAddressKeyDown={handleAddressKeyDown} handleUpdateBaseList={handleUpdateBaseList} handleBatchSaveBaseList={handleBatchSaveBaseList} isSavingBaseList={isSavingBaseList} handleSaveMonthlyList={handleSaveMonthlyList} setShowExportSetting={setShowExportSetting} handleExport={handleExport} handleExportErrors={handleExportErrors} handleExportDongSummary={handleExportDongSummary} handleExportByDriver={handleExportByDriver} handleDeleteRows={handleDeleteRows} handleBatchSetNote={handleBatchSetNote} onHelp={onHelp} purifyResult={purifyResult} onClosePurifyResult={() => setPurifyResult(null)} onMovePhones={handleMovePhones} onRepurifyErrors={handleRepurifyErrors} onOpenRouteMap={openRouteFlow} onFetchBaseNotes={handleFetchBaseNotes} isFetchingNotes={isFetchingNotes} workflowMode={workflowMode} onWorkflowModeChange={changeWorkflowMode} stepStatus={stepStatus} addressDisplayMode={addressDisplayMode} onToggleAddressDisplayMode={handleToggleAddressDisplayMode} />}
           {step === 10 && <ErrorListManager gridData={gridData} onBack={() => setStep(gridData.length ? 5 : 0)} handleCellEdit={handleCellEdit} handleAddressKeyDown={handleAddressKeyDown} handleExportErrors={handleExportErrors} onRepurifyErrors={handleRepurifyErrors} />}
           {step === 11 && <ScheduleTab user={user} onBack={() => setStep(0)} />}
           {step === 6 && <BaseListManager user={user} initialCity={dbNavCity} onBack={() => { setStep(0); setDbNavCity(''); }} />}
@@ -1829,7 +2276,11 @@ export default function App() {
           )}
           {step === 11 && <ScheduleTab user={user} onBack={() => setStep(0)} />}
         </main>
-        
+
+          </div>{/* end 메인 콘텐츠 영역 */}
+
+        </div>{/* end V5.0 BODY */}
+
         {/* RESTORED MODAL RENDERS */}
         {showHelp && <HelpModal onClose={() => setShowHelp(false)} />}
         {showUtils && <UtilsModal user={user} onClose={() => setShowUtils(false)} />}
@@ -1844,6 +2295,12 @@ export default function App() {
               setCloudRouteConfig({ city, monthId, orgDongs: null });
               setShowRouteQuick(false);
               setShowRouteSetup(true);
+            }}
+            onOpenSession={(city, monthId, drivers) => {
+              setCloudRouteConfig({ city, monthId, orgDongs: null });
+              setRouteSetupResult({ drivers: drivers || null, selectedDongs: null, baseDailyQty: 40 });
+              setShowRouteQuick(false);
+              setShowRouteMap(true);
             }}
           />
         )}
@@ -1890,6 +2347,54 @@ export default function App() {
             data={prevMonthCompare}
             onClose={() => setShowPrevCompare(false)}
           />
+        )}
+        {bgSaveCoordState && (
+          <div className="fixed bottom-5 right-5 z-[250] min-w-[280px] max-w-sm rounded-2xl border border-[#243044] bg-[#0d1117] px-4 py-3 shadow-2xl text-xs">
+            {bgSaveCoordState.isDone ? (
+              <div className="flex items-center gap-3">
+                <span className={`h-3.5 w-3.5 rounded-full ${bgSaveCoordState.failed ? 'bg-red-400' : bgSaveCoordState.canceled ? 'bg-amber-400' : 'bg-emerald-400'}`} />
+                <div className="min-w-0 flex-1">
+                  <div className="font-black text-white">
+                    {bgSaveCoordState.failed ? '좌표 백그라운드 처리 확인 필요' : bgSaveCoordState.canceled ? '좌표 백그라운드 중단됨' : '좌표 백그라운드 매칭 완료'}
+                  </div>
+                  <div className="mt-0.5 text-[11px] text-gray-400">
+                    성공 {bgSaveCoordState.success.toLocaleString()} / 대상 {bgSaveCoordState.total.toLocaleString()}건
+                  </div>
+                </div>
+                <button onClick={() => setBgSaveCoordState(null)} className="text-gray-500 hover:text-white">
+                  ×
+                </button>
+              </div>
+            ) : (
+              <>
+                <div className="mb-2 flex items-center gap-3">
+                  <span className="h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-blue-400 border-t-transparent" />
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate font-black text-white">저장 후 좌표를 천천히 받는 중</div>
+                    <div className="mt-0.5 text-[11px] text-gray-500">
+                      {bgSaveCoordState.city} {bgSaveCoordState.monthId}
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => { bgSaveCoordCancelRef.current = true; }}
+                    className="rounded-lg border border-red-500/20 px-2 py-1 text-[10px] font-bold text-red-400 hover:bg-red-950/30"
+                  >
+                    중단
+                  </button>
+                </div>
+                <div className="mb-1 flex items-center justify-between text-[11px] font-bold">
+                  <span className="text-gray-500">진행 {bgSaveCoordState.done.toLocaleString()} / {bgSaveCoordState.total.toLocaleString()}</span>
+                  <span className="text-blue-300">성공 {bgSaveCoordState.success.toLocaleString()}</span>
+                </div>
+                <div className="h-1.5 overflow-hidden rounded-full bg-white/10">
+                  <div
+                    className="h-full rounded-full bg-blue-500 transition-all duration-500"
+                    style={{ width: `${bgSaveCoordState.total ? Math.round(bgSaveCoordState.done / bgSaveCoordState.total * 100) : 0}%` }}
+                  />
+                </div>
+              </>
+            )}
+          </div>
         )}
         <GlobalLoadingBar state={gLoad} />
       </div>

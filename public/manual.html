@@ -794,8 +794,8 @@
       <div class="card">
         <div class="card-title">🗺 기사 자동 배분</div>
         <div class="card-body" style="font-size:12px;">
-          동적 가중 보로노이 K-means++ 알고리즘으로 기사 구역을 자동 분할합니다.
-          capacity 비례 포수 배분과 지리적 구역 분리를 보장합니다.
+          도로주소 단위 아파트 묶음과 대로/로 홀짝 좌우 측면을 먼저 지키고 연속 권역으로 기사 구역을 자동 분할합니다.
+          capacity 비례 유효부담과 수동 경계 보정을 함께 반영합니다.
         </div>
       </div>
     </div>
@@ -1081,9 +1081,9 @@
         <div class="step-num">7</div>
         <div class="step-card">
           <div class="step-card-title">🗺 루트맵 — 기사 자동 배분</div>
-          <div class="step-card-desc">저장된 명단의 좌표를 기반으로 기사 구역을 자동 배분합니다. K-means++ 알고리즘과 수동 조정 도구를 함께 제공합니다.</div>
+          <div class="step-card-desc">저장된 명단의 좌표를 기반으로 도로주소 단위 권역을 자동 배분하고 수동 조정 도구로 경계를 마감합니다.</div>
           <div style="margin-top:8px;">
-            <span class="step-badge badge-purple">보로노이 K-means++</span>
+            <span class="step-badge badge-purple">연속 권역 분할</span>
             <span class="step-badge badge-blue">페인트 브러시</span>
             <span class="step-badge badge-green">공유 링크</span>
           </div>
@@ -1497,7 +1497,7 @@
             <div class="step-num" style="width:32px;height:32px;font-size:11px;">3</div>
             <div class="step-card">
               <div class="step-card-title">자동 N등분 실행</div>
-              <div class="step-card-desc">동적 가중 보로노이 K-means++가 capacity 비례로 구역을 자동 분할합니다.</div>
+              <div class="step-card-desc">도로주소 단위 아파트 묶음과 대로/로 홀짝 좌우 측면을 지키며 capacity 비례 유효부담으로 연속 권역을 나눕니다.</div>
             </div>
           </div>
           <div class="pipeline-step">
@@ -1524,7 +1524,7 @@
             <tr><th>도구</th><th>사용법</th></tr>
             <tr><td><span class="btn-mock btn-primary">📍 핀 꽂기</span></td><td>기사 카드 클릭 → 지도 클릭으로 거점 배치</td></tr>
             <tr><td><span class="btn-mock btn-purple">🖌 브러시</span></td><td>클릭 후 드래그 → 반경 내 레코드 일괄 재배정</td></tr>
-            <tr><td><span class="btn-mock btn-yellow">⚡ 자동 N등분</span></td><td>K-means++ 자동 구역 분할 (핀 있으면 고정 중심)</td></tr>
+            <tr><td><span class="btn-mock btn-yellow">⚡ 자동 N등분</span></td><td>도로주소 + 대로/로 홀짝 좌우 측면 연속 권역 분할 (핀 있으면 가까운 거점 우선)</td></tr>
             <tr><td><span class="btn-mock btn-gray">↩ 이전달</span></td><td>동일 기사명이면 이전달 구역 자동 승계</td></tr>
             <tr><td><span class="btn-mock btn-success">🔗 공유</span></td><td>기사별 배송 목록 공유 링크 생성</td></tr>
           </table>

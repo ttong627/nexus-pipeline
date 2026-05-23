@@ -1,5 +1,5 @@
-import { collection, getDocs, setDoc, doc } from 'firebase/firestore';
-import { db } from '../config/firebase.js';
+import { collection, getDocs, setDoc, doc, addDoc, serverTimestamp } from 'firebase/firestore';
+import { db, auth } from '../config/firebase.js';
 import { getLocalCache, setLocalCache } from './dbCache.js';
 
 // ══════════════════════════════════════════════════════════════════
@@ -14,8 +14,184 @@ const JUSO_API_KEYS = [
   import.meta.env.VITE_JUSO_API_KEY_3,
 ].filter(Boolean);
 const KAKAO_REST_KEY = import.meta.env.VITE_KAKAO_REST_KEY;
+const ADDRESS_MATCH_API_URL = String(import.meta.env.VITE_ADDRESS_MATCH_API_URL || '').replace(/\/+$/, '');
+const ADDRESS_MATCH_TIMEOUT_MS = 1200;
+const COORD_SERVICE_TIMEOUT_MS = 700;
+const JUSO_TIMEOUT_MS = 1800;
+let addressMatchCircuitOpenUntil = 0;
+let addressMatchFailCount = 0;
+let coordServiceCircuitOpenUntil = 0;
+let coordServiceFailCount = 0;
+
+const fetchWithTimeout = async (url, options = {}, timeoutMs = 1200) => {
+  const ctrl = new AbortController();
+  const tid = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: ctrl.signal });
+  } finally {
+    clearTimeout(tid);
+  }
+};
+
+const markCircuitFailure = (kind) => {
+  const now = Date.now();
+  if (kind === 'coord') {
+    coordServiceFailCount += 1;
+    if (coordServiceFailCount >= 3) coordServiceCircuitOpenUntil = now + 120000;
+    return;
+  }
+  addressMatchFailCount += 1;
+  if (addressMatchFailCount >= 3) addressMatchCircuitOpenUntil = now + 120000;
+};
+
+const markCircuitSuccess = (kind) => {
+  if (kind === 'coord') {
+    coordServiceFailCount = 0;
+    coordServiceCircuitOpenUntil = 0;
+    return;
+  }
+  addressMatchFailCount = 0;
+  addressMatchCircuitOpenUntil = 0;
+};
+
+const normalizePlaceKey = (value) => String(value || '').replace(/\s+/g, '').trim();
+const ROAD_DETAIL_SEPARATOR = ', ';
+const ADDRESS_EXTRA_SEPARATOR = ' / ';
+
+const HANGUL = '\\uAC00-\\uD7A3';
+const BRANCH_SUFFIX =
+  '(?:\\uBC88\\uAE38|\\uBC88\\uAC00\\uAE38|\\uAC00\\uAE38|\\uB098\\uAE38|\\uB2E4\\uAE38|\\uB77C\\uAE38|\\uB9C8\\uAE38|\\uBC14\\uAE38|\\uC0AC\\uAE38|\\uC544\\uAE38|\\uC790\\uAE38|\\uCC28\\uAE38|\\uCE74\\uAE38|\\uD0C0\\uAE38|\\uD30C\\uAE38|\\uD558\\uAE38|\\uAE38)';
+const ROAD_NAME_SOURCE =
+  `(?:[${HANGUL}A-Za-z0-9]+(?:\\uB300\\uB85C|\\uB85C)\\s*\\d+[${HANGUL}0-9]*${BRANCH_SUFFIX}|[${HANGUL}A-Za-z0-9]+(?:\\uB300\\uB85C|\\uB85C|\\uAE38))`;
+const ROAD_ADDRESS_RE = new RegExp(`(^|[\\s,/\\(])(${ROAD_NAME_SOURCE})\\s*(\\uC9C0\\uD558\\s*)?(\\d{1,5})(?:\\s*-\\s*(\\d{1,5}))?`, 'u');
+const ROAD_BRANCH_SPACE_RE = new RegExp(`([${HANGUL}A-Za-z]+(?:\\uB300\\uB85C|\\uB85C))\\s+(\\d+[${HANGUL}0-9]*${BRANCH_SUFFIX})`, 'gu');
+const ROAD_NUMBER_SPACE_RE = new RegExp(`([${HANGUL}A-Za-z0-9]+(?:\\uB300\\uB85C|\\uB85C|\\uAE38))\\s{2,}(\\d{1,5})(?![${HANGUL}A-Za-z0-9])`, 'gu');
+const DETAIL_START_RE = new RegExp(`^(?:\\uC9C0\\uD558|\\uC9C0\\uCE35|\\uC625\\uD0D1|\\d+\\s*(?:\\uB3D9|\\uCE35|\\uD638)|[A-Za-z]?\\d+\\s*\\uD638)`, 'u');
+const DETAIL_MARKER_RE = new RegExp(`__P\\d+__|\\uC9C0\\uD558|\\uC9C0\\uCE35|\\uC625\\uD0D1|\\d+\\s*(?:\\uB3D9|\\uCE35|\\uD638)|[A-Za-z]?\\d+\\s*\\uD638`, 'u');
+
+const normalizeRoadAddressSpacing = (value) =>
+  String(value || '')
+    .replace(ROAD_BRANCH_SPACE_RE, '$1$2')
+    .replace(ROAD_NUMBER_SPACE_RE, '$1 $2')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+const stripAddressDelimiters = (value) => String(value || '').replace(/^[\s,;:：；ㆍ·/\\|]+|[\s,;:：；ㆍ·/\\|]+$/g, '').trim();
+const stripLeadingAddressJunk = (value) => String(value || '').replace(/^[\s,;:：；ㆍ·/\\|]+/g, '').trimStart();
+const normalizeAddressDetail = (value) =>
+  stripAddressDelimiters(String(value || '')
+    .replace(/\(\s*\)/g, ' ')
+    .replace(/\s*\/\s*/g, ' ')
+    .replace(/\s+/g, ' '));
+
+const appendUniqueNote = (base, note) => {
+  const cleanNote = String(note || '').trim();
+  if (!cleanNote) return base || '';
+  const cleanBase = String(base || '').trim();
+  if (cleanBase.includes(cleanNote)) return cleanBase;
+  return [cleanBase, cleanNote].filter(Boolean).join(' ').trim();
+};
+
+const splitInlineBuildingTail = (tail) => {
+  const cleanTail = stripAddressDelimiters(tail);
+  if (!cleanTail) return { inlineBuildingName: '', detail: '' };
+  if (DETAIL_START_RE.test(cleanTail) || cleanTail.startsWith('__P')) {
+    return { inlineBuildingName: '', detail: normalizeAddressDetail(cleanTail) };
+  }
+
+  const marker = cleanTail.search(DETAIL_MARKER_RE);
+  const comma = cleanTail.indexOf(',');
+  const slash = cleanTail.indexOf('/');
+  const stops = [marker, comma, slash].filter(v => v >= 0);
+  const cut = stops.length ? Math.min(...stops) : -1;
+  const inlineBuildingName = stripAddressDelimiters(cut >= 0 ? cleanTail.slice(0, cut) : cleanTail);
+  const detail = normalizeAddressDetail(cut >= 0 ? cleanTail.slice(cut) : '');
+  return { inlineBuildingName, detail };
+};
+
+const parseOfficialRoadAddressText = (value) => {
+  const normalized = normalizeRoadAddressSpacing(stripLeadingAddressJunk(value));
+  const match = ROAD_ADDRESS_RE.exec(normalized);
+  if (!match) return null;
+
+  const leading = match[1] || '';
+  const start = match.index + leading.length;
+  const end = match.index + match[0].length;
+  const roadName = normalizeRoadAddressSpacing(match[2] || '').replace(/\s+/g, '');
+  const underground = match[3] ? '\uC9C0\uD558 ' : '';
+  const mainNo = match[4] || '';
+  let subNoValue = match[5] || '';
+  let compactRoomDetail = '';
+  let inferenceReason = '';
+  let tail = normalized.slice(end);
+  if (subNoValue.length >= 3 && /^\s*\uD638(?:\s|$|[),/])/.test(tail)) {
+    compactRoomDetail = `${subNoValue.slice(1)}\uD638`;
+    inferenceReason = `주소 추정 변환(부번+호수 압축, 40층 이상 호수 가능성 낮음): ${roadName} ${mainNo}-${subNoValue}호 → ${roadName} ${mainNo}-${subNoValue.slice(0, 1)}, ${compactRoomDetail}`;
+    subNoValue = subNoValue.slice(0, 1);
+    tail = tail.replace(/^\s*\uD638/, ' ');
+  }
+  const subNo = subNoValue ? `-${subNoValue}` : '';
+  const searchAddress = `${roadName} ${underground}${mainNo}${subNo}`.trim();
+  const prefix = stripAddressDelimiters(normalized.slice(0, start));
+  const splitTail = splitInlineBuildingTail(tail);
+  const detail = normalizeAddressDetail([prefix, compactRoomDetail, splitTail.detail].filter(Boolean).join(' '));
+
+  return {
+    searchAddress,
+    detail,
+    inlineBuildingName: splitTail.inlineBuildingName,
+    roadName,
+    mainNo,
+    subNo: subNoValue,
+    inferenceReason,
+  };
+};
+
+const appendCheckReason = (result, reason) => {
+  if (!reason) return;
+  result.확인필요 = true;
+  result.확인사유 = result.확인사유 ? `${result.확인사유} / ${reason}` : reason;
+};
 
 // ── A-13: 캐시 레이어 ─────────────────────────────────────────────
+const getMunicipalityMatch = (cityLabel, matchedSido, matchedSigungu) => {
+  const cityParts = String(cityLabel || '').trim().split(/\s+/).filter(Boolean);
+  const selectedSido = cityParts[0] || '';
+  const selectedSigungu = cityParts.slice(1).join(' ');
+  if (!selectedSido || !selectedSigungu || !matchedSido || !matchedSigungu) {
+    return { comparable: false, ok: true, selectedSido, selectedSigungu };
+  }
+
+  const selectedSidoKey = normalizePlaceKey(selectedSido);
+  const selectedSigunguKey = normalizePlaceKey(selectedSigungu);
+  const matchedSidoKey = normalizePlaceKey(matchedSido);
+  const matchedSigunguKey = normalizePlaceKey(matchedSigungu);
+  const sidoOk = selectedSidoKey === matchedSidoKey;
+  const sigunguOk = selectedSigunguKey === matchedSigunguKey
+    || selectedSigunguKey.includes(matchedSigunguKey)
+    || matchedSigunguKey.includes(selectedSigunguKey);
+
+  return { comparable: true, ok: sidoOk && sigunguOk, selectedSido, selectedSigungu };
+};
+
+const getAreaIssue = (cityLabel, inputAdminDong, matchedSido, matchedSigungu, matchedDong) => {
+  const match = getMunicipalityMatch(cityLabel, matchedSido, matchedSigungu);
+
+  if (match.comparable && !match.ok) {
+    return `타지역-지자체 벗어남: 선택 ${match.selectedSido} ${match.selectedSigungu}, 확인 ${matchedSido} ${matchedSigungu}`;
+  }
+
+  return null;
+};
+
+const getCandidateSido = (candidate) => candidate?.matchedSido || candidate?.siNm || candidate?.sido || '';
+const getCandidateSigungu = (candidate) => candidate?.matchedSigungu || candidate?.sggNm || candidate?.sigungu || '';
+const isCandidateInSelectedMunicipality = (candidate, cityLabel) => {
+  if (!candidate) return false;
+  const match = getMunicipalityMatch(cityLabel, getCandidateSido(candidate), getCandidateSigungu(candidate));
+  return !match.comparable || match.ok;
+};
+
 const MAX_API_CACHE   = 1000;
 const apiCache        = new Map(); // 메모리 (최대 1000건)
 const pendingRequests = new Map(); // JUSO 중복 요청 dedup
@@ -41,6 +217,27 @@ const _buildTypoRegex = () => {
   _typoRegex = new RegExp(esc.join('|'), 'g');
 };
 
+const dictDocId = (value) =>
+  encodeURIComponent(String(value || '').trim()).replace(/\./g, '%2E').slice(0, 1400);
+
+const saveDictOrSuggestion = async ({ dictName, suggestionName, docId, dictPayload, suggestionPayload }) => {
+  try {
+    await setDoc(doc(db, dictName, docId), dictPayload, { merge: true });
+    return 'applied';
+  } catch (e) {
+    if (e?.code !== 'permission-denied') throw e;
+    await addDoc(collection(db, suggestionName), {
+      ...suggestionPayload,
+      status: 'pending',
+      createdAt: serverTimestamp(),
+      createdBy: auth.currentUser?.email || '',
+      createdByUid: auth.currentUser?.uid || '',
+      source: 'address-cleaning',
+    });
+    return 'suggested';
+  }
+};
+
 // ── A-9: 특수문자 구분자 사전 ─────────────────────────────────────
 let specialChars      = new Set(['**', '/', '☆', '★', '*', '｜', '|', '~', '#', '§', '※', '=>', '->']);
 let _specialCharRegex = null;
@@ -57,7 +254,13 @@ export const addSpecialChar = async (ch) => {
   specialChars.add(ch);
   _buildSpecialCharRegex();
   try {
-    await setDoc(doc(db, 'special_chars', ch), { addedAt: new Date().toISOString() });
+    await saveDictOrSuggestion({
+      dictName: 'special_chars',
+      suggestionName: 'special_char_suggestions',
+      docId: dictDocId(ch),
+      dictPayload: { char: ch, addedAt: new Date().toISOString() },
+      suggestionPayload: { char: ch },
+    });
   } catch (e) { console.error('[A-9] 특수문자 저장 오류:', e); }
 };
 
@@ -70,8 +273,12 @@ export const loadTypoDict = async () => {
         getDocs(collection(db, 'typo_dict')),
         getDocs(collection(db, 'special_chars')),
       ]);
-      typoSnap.forEach(d => { typoDict[d.id] = d.data().correction; });
-      spSnap.forEach(d => { specialChars.add(d.id); });
+      typoSnap.forEach(d => {
+        const data = d.data();
+        const wrong = data.wrong || d.id;
+        if (wrong && data.correction) typoDict[wrong] = data.correction;
+      });
+      spSnap.forEach(d => { specialChars.add(d.data().char || d.id); });
       _buildTypoRegex();
       _buildSpecialCharRegex();
     } catch (e) { console.error('[A-2] 사전 로드 오류:', e); }
@@ -85,7 +292,13 @@ export const addTypoRecord = async (wrongAddr, correctAddr) => {
   typoDict[w] = c;
   _buildTypoRegex();
   try {
-    await setDoc(doc(db, 'typo_dict', w), { correction: c });
+    await saveDictOrSuggestion({
+      dictName: 'typo_dict',
+      suggestionName: 'typo_suggestions',
+      docId: dictDocId(w),
+      dictPayload: { wrong: w, correction: c, updatedAt: new Date().toISOString() },
+      suggestionPayload: { wrong: w, correction: c },
+    });
   } catch (e) { console.error('[A-2] 오타 저장 오류:', e); }
 };
 
@@ -107,14 +320,45 @@ export const asyncPool = async (poolLimit, array, iteratorFn) => {
 
 // ── Kakao: 좌표 취득 (도로명 → WGS84) ────────────────────────────
 // cityPrefix: 시군구/시 등 지자체 토큰 — 도로명 단독 검색 시 타 지역 오매칭 방지
-const fetchKakaoCoord = async (roadAddr, cityPrefix = '') => {
-  if (!KAKAO_REST_KEY || !roadAddr) return null;
+const fetchAddressServiceCoord = async (roadAddr, buildingMgtNo = '') => {
+  if (!ADDRESS_MATCH_API_URL || !roadAddr) return null;
+  if (Date.now() < coordServiceCircuitOpenUntil) return null;
+  try {
+    const res = await fetchWithTimeout(`${ADDRESS_MATCH_API_URL}/v1/address/geocode`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ standardRoadAddress: roadAddr, buildingMgtNo }),
+    }, COORD_SERVICE_TIMEOUT_MS);
+    if (!res.ok) {
+      markCircuitFailure('coord');
+      return null;
+    }
+    const coord = (await res.json())?.data;
+    markCircuitSuccess('coord');
+    return coord?.lat && coord?.lng ? { lat: Number(coord.lat), lng: Number(coord.lng) } : null;
+  } catch {
+    markCircuitFailure('coord');
+    return null;
+  }
+};
+
+const fetchKakaoCoord = async (roadAddr, cityPrefix = '', buildingMgtNo = '') => {
+  if (!roadAddr) return null;
   // JUSO roadAddr은 이미 전체 주소(도시명 포함) → 접두어 중복 추가 불필요
   // 도시명이 없는 짧은 주소(result.주소 fallback)에만 cityPrefix 붙임
   const hasCity = /특별시|광역시|특별자치시|도$|시$/.test(roadAddr.slice(0, 10));
   const queryAddr = (!hasCity && cityPrefix) ? `${cityPrefix} ${roadAddr}` : roadAddr;
   const key = `coord_${queryAddr}`;
   if (coordCache.has(key)) return coordCache.get(key);
+  const serviceCoord = await fetchAddressServiceCoord(queryAddr, buildingMgtNo);
+  if (serviceCoord) {
+    coordCache.set(key, serviceCoord);
+    return serviceCoord;
+  }
+  if (!KAKAO_REST_KEY) {
+    coordCache.set(key, null);
+    return null;
+  }
   try {
     const res = await fetch(
       `https://dapi.kakao.com/v2/local/search/address.json?query=${encodeURIComponent(queryAddr)}&size=1`,
@@ -166,11 +410,32 @@ const kakaoDocToApiResult = (d) => {
 // ── A-13: JUSO API (3개 키 로테이션) ──────────────────────────────
 let currentApiIdx = 0;
 
+const fetchAddressMatchAPI = async (keyword, cityLabel = '') => {
+  if (!ADDRESS_MATCH_API_URL || !keyword) return null;
+  if (Date.now() < addressMatchCircuitOpenUntil) return null;
+  try {
+    const res = await fetchWithTimeout(`${ADDRESS_MATCH_API_URL}/v1/address/match`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: keyword, cityLabel, allowJusoFallback: false }),
+    }, ADDRESS_MATCH_TIMEOUT_MS);
+    if (!res.ok) {
+      markCircuitFailure('address');
+      return null;
+    }
+    markCircuitSuccess('address');
+    return (await res.json())?.data || null;
+  } catch {
+    markCircuitFailure('address');
+    return null;
+  }
+};
+
 const fetchJusoAPI = async (keyword, retryCount = 0) => {
   if (retryCount >= JUSO_API_KEYS.length || !JUSO_API_KEYS[currentApiIdx]) return null;
   const url = `https://business.juso.go.kr/addrlink/addrLinkApi.do?confmKey=${JUSO_API_KEYS[currentApiIdx]}&currentPage=1&countPerPage=1&keyword=${encodeURIComponent(keyword)}&resultType=json`;
   try {
-    const res = await fetch(url);
+    const res = await fetchWithTimeout(url, {}, JUSO_TIMEOUT_MS);
     if (!res.ok) throw new Error('HTTP_ERROR');
     const data = await res.json();
     const code = data.results?.common?.errorCode;
@@ -184,21 +449,40 @@ const fetchJusoAPI = async (keyword, retryCount = 0) => {
 };
 
 // A-13: 메모리 → IndexedDB → API 순서로 조회
-const lookupAddr = async (keyword) => {
+const lookupAddr = async (keyword, cityLabel = '') => {
   if (!keyword?.trim() || keyword.trim().length < 2) return null;
-  const key = keyword.trim();
-  const mem = apiCache.get(key);
-  if (mem) return mem;
-  const local = await getLocalCache(key);
-  if (local) { _setApiCache(key, local); return local; }
+  const key = `${cityLabel.trim()}::${keyword.trim()}`;
+  if (apiCache.has(key)) return apiCache.get(key);
+  const localByCity = await getLocalCache(key);
+  if (localByCity && isCandidateInSelectedMunicipality(localByCity, cityLabel)) {
+    _setApiCache(key, localByCity);
+    return localByCity;
+  }
+  const localGeneric = await getLocalCache(keyword.trim());
+  if (localGeneric && isCandidateInSelectedMunicipality(localGeneric, cityLabel)) {
+    _setApiCache(key, localGeneric);
+    return localGeneric;
+  }
+  const online = await fetchAddressMatchAPI(keyword.trim(), cityLabel);
+  if (online && isCandidateInSelectedMunicipality(online, cityLabel)) {
+    _setApiCache(key, online);
+    await setLocalCache(key, online);
+    await setLocalCache(keyword.trim(), online);
+    return online;
+  }
   if (!pendingRequests.has(key)) {
-    const p = fetchJusoAPI(key).finally(() => pendingRequests.delete(key));
+    const p = fetchJusoAPI(keyword.trim())
+      .then(r => isCandidateInSelectedMunicipality(r, cityLabel) ? r : null)
+      .finally(() => pendingRequests.delete(key));
     pendingRequests.set(key, p);
   }
   let r = null;
   try { r = await pendingRequests.get(key); } catch { r = null; }
   _setApiCache(key, r);
-  if (r) await setLocalCache(key, r);
+  if (r) {
+    await setLocalCache(key, r);
+    await setLocalCache(keyword.trim(), r);
+  }
   return r;
 };
 
@@ -251,7 +535,8 @@ const generateCenterKeyword = (rawText, adminDong, cityLabel) => {
 // ══════════════════════════════════════════════════════════════════
 //  processAddress — 메인 정제 함수
 // ══════════════════════════════════════════════════════════════════
-export const processAddress = async (inputAddr, inputName = '', adminDong = '', cityLabel = '', inputNote = '') => {
+export const processAddress = async (inputAddr, inputName = '', adminDong = '', cityLabel = '', inputNote = '', options = {}) => {
+  const includeCoords = options.includeCoords !== false;
   const result = {
     정제된이름: inputName,
     주소: '',
@@ -259,6 +544,9 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
     확인필요: false,
     확인사유: '',
     도: '',
+    주소추정: false,
+    추정사유: '',
+    원주소: inputAddr || '',
   };
 
   // ── A-1: 이름 5자 초과 → 5자 자르기 + 특이사항에 본명 추가 ──────
@@ -278,8 +566,28 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
 
   // ── A-2: 오타 사전 적용 ───────────────────────────────────────────
   let text = inputAddr;
-  for (const [w, c] of Object.entries(BASE_TYPO_FIXES)) text = text.replaceAll(w, c);
-  if (_typoRegex) text = text.replace(_typoRegex, m => typoDict[m]);
+  const correctionLogs = [];
+  const addCorrectionLog = (from, to, reason = '오타 보정') => {
+    if (!from || !to || from === to) return;
+    const log = `${reason}: ${from} → ${to}`;
+    if (!correctionLogs.includes(log)) correctionLogs.push(log);
+  };
+  for (const [w, c] of Object.entries(BASE_TYPO_FIXES)) {
+    if (w && c && text.includes(w)) {
+      text = text.replaceAll(w, c);
+      addCorrectionLog(w, c);
+    }
+  }
+  if (_typoRegex) {
+    text = text.replace(_typoRegex, m => {
+      const fixed = typoDict[m] || m;
+      addCorrectionLog(m, fixed, '학습 오타 보정');
+      return fixed;
+    });
+  }
+  const beforeCommonRoadTypo = text;
+  text = text.replace(/\uC7AC\uAE30\uB85C(?=\d*\uAE38|\s*\d)/g, '\uC81C\uAE30\uB85C');
+  if (beforeCommonRoadTypo !== text) addCorrectionLog('재기로', '제기로', '도로명 오타 보정');
 
   // ── A-3: 유니코드 정규화 ──────────────────────────────────────────
   text = text
@@ -289,6 +597,7 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
     .replace(/["""'''＂＇]/g, '')                        // 따옴표 전각·반각 모두 제거
     .replace(/\s{2,}/g, ' ')                            // 연속 공백 → 단일
     .trim();
+  text = stripLeadingAddressJunk(text);
 
   // ── A-4: 미닫힌 괄호 제거 ─────────────────────────────────────────
   text = text.replace(/\([^)]*$/, '').trim();
@@ -300,6 +609,7 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
   // 예: "테헤란로 123. 456호" → "테헤란로 123, 456호"
   text = text.replace(/(\d)\.\s+(?=\S)/g, '$1, ');
   text = text.replace(/[,\s]+$/, '').replace(/,(?=\S)/g, ', ');
+  text = stripLeadingAddressJunk(text);
 
   // ── A-16: 번지 표기 제거 ──────────────────────────────────────────
   // 예: "테헤란로 123번지" → "테헤란로 123" / "신남리 123-5번지" → "신남리 123-5"
@@ -360,27 +670,32 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
 
   // ── 괄호 내부 보호 (쉼표 분리 전) ────────────────────────────────
   const parens = [];
-  text = text.replace(/\(.*?\)/g, m => { parens.push(m); return `__P${parens.length - 1}__`; });
+  text = text.replace(/\(.*?\)/g, m => {
+    if (!m.replace(/[()]/g, '').trim()) return ' ';
+    parens.push(m);
+    return `__P${parens.length - 1}__`;
+  });
   // A-28: 짝 없는 닫는 괄호 제거 — 중첩 괄호(삼화에코빌(6차)) 입력 시 non-greedy 추출 후
   // 바깥 ')' 가 text에 잔류하여 "103- 501호 ) (장안동)" 형태로 출력되는 버그 방지
   text = text.replace(/\)/g, '');
 
   // ── 본주소 / 상세주소 분리 ────────────────────────────────────────
   let mainAddr = '', detailAddr = '';
-  const ci = text.indexOf(',');
-  if (ci !== -1) {
-    const before = text.slice(0, ci).replace(/\s+/g, ' ').trim();
-    const after  = text.slice(ci + 1).replace(/\s+/g, ' ').trim();
-    const afterHasRoad = /(로|길|대로)\s*\d/.test(after) || /\d+(로|길|대로)/.test(after);
-    mainAddr   = afterHasRoad ? after  : before;
-    detailAddr = afterHasRoad ? before : after;
+  const officialRoadParts = parseOfficialRoadAddressText(text);
+  if (officialRoadParts) {
+    mainAddr = officialRoadParts.searchAddress;
+    detailAddr = officialRoadParts.detail;
+    if (officialRoadParts.inferenceReason) {
+      result.주소추정 = true;
+      result.추정사유 = appendUniqueNote(result.추정사유, officialRoadParts.inferenceReason);
+    }
   } else {
     mainAddr = text.replace(/\s+/g, ' ').trim();
   }
 
   // 도로명–번호 사이 공백 누락 보정 ("테헤란로123" → "테헤란로 123")
   // ※ 숫자 바로 뒤에 한글이 오면 번길·가길 계열 → 공백 추가 제외
-  mainAddr = mainAddr
+  mainAddr = normalizeRoadAddressSpacing(mainAddr)
     .replace(/([가-힣]+(대로|로|길|번길|번가길|가길|나길|다길))(\d+)(?![가-힣])/g, '$1 $3')
     .replace(/([가-힣]+(대로|로|길|번길|번가길|가길|나길|다길))\s{2,}(\d+)(?![가-힣])/g, '$1 $3')
     // 로/대로/길 뒤 공백+숫자+길 계열 → 붙여쓰기
@@ -400,32 +715,59 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
     }
   }
 
+  // 도로명+건물번호 뒤에 건물명이 붙은 경우 API 검색어에서는 건물명을 분리한다.
+  // 예: "황물로 71 마이룸고시텔" → 검색 "황물로 71", 표시 괄호 건물명 "마이룸고시텔"
+  let inlineBuildingName = officialRoadParts?.inlineBuildingName || '';
+  const inlineRoadMatch = mainAddr
+    .replace(/__P\d+__/g, '')
+    .trim()
+    .match(/^(.+?(?:대로|로|길)[가-힣\d]*\s*\d+(?:-\d+)?)(?:\s+(.+))?$/);
+  const inlineRoadOnly = inlineRoadMatch?.[1]?.trim() || '';
+  const inlineTail = inlineRoadMatch?.[2]?.trim() || '';
+  if (inlineRoadOnly && inlineTail && !CENTER_RE.test(inlineTail) && !/^\d+\s*(동|호|층)$/.test(inlineTail)) {
+    inlineBuildingName = inlineTail.replace(/__P\d+__/g, '').trim();
+  }
+
   // ── A-13: API 조회 — 시/구 컨텍스트 포함으로 오지역 매칭 방지 ──────
   // "왕산로 72" 같은 도로명이 전국 여러 곳에 존재할 때 틀린 지역 반환 방지
   // cityLabel에서 가장 하위 시·군·구 토큰을 추출해 검색 앞에 붙임
   // 예: "동대문구 왕산로 72" → 서울 동대문구 결과만 반환
   const baseSearch   = mainAddr.replace(/__P\d+__/g, '').trim();
+  const searchBases  = [inlineRoadOnly || '', baseSearch].filter((v, i, arr) => v && arr.indexOf(v) === i);
   const districtTok  = cityLabel
     ? (cityLabel.trim().split(/\s+/).filter(t => /(시|군|구)$/.test(t)).pop() || '')
     : '';
-  const searchKeyword = districtTok ? `${districtTok} ${baseSearch}` : baseSearch;
-  let apiResult = await lookupAddr(searchKeyword);
-  if (!apiResult && districtTok) apiResult = await lookupAddr(baseSearch); // districtTok 포함 실패 시 원문 재시도
+  let apiResult = null;
+  for (const s of searchBases) {
+    const searchKeyword = districtTok ? `${districtTok} ${s}` : s;
+    apiResult = await lookupAddr(searchKeyword, cityLabel);
+    if (!apiResult && districtTok) apiResult = await lookupAddr(s, cityLabel); // districtTok 포함 실패 시 원문 재시도
+    if (apiResult) break;
+  }
 
   // ── Fallback A: 주민센터·행정복지센터·읍·면·동사무소 ───────────────
   if (!apiResult && CENTER_RE.test(text)) {
     const smartKw = generateCenterKeyword(text, adminDong, cityLabel);
-    apiResult = await lookupAddr(smartKw);
+    const centerPrimaryQueries = [
+      cityLabel ? `${cityLabel.trim()} ${smartKw}` : '',
+      cityLabel && adminDong ? `${cityLabel.trim()} ${adminDong.trim()} 주민센터` : '',
+      cityLabel && adminDong ? `${cityLabel.trim()} ${adminDong.trim()} 행정복지센터` : '',
+      smartKw,
+    ].filter((q, i, arr) => q && arr.indexOf(q) === i);
+    for (const q of centerPrimaryQueries) {
+      apiResult = await lookupAddr(q, cityLabel);
+      if (apiResult) break;
+    }
 
     if (!apiResult) {
       for (const kw of CENTER_KWDS) {
         const v = smartKw.replace(/주민센터|행정복지센터|동사무소|읍사무소|면사무소|복지센터/, kw);
-        if (v !== smartKw) { apiResult = await lookupAddr(v); if (apiResult) break; }
+        if (v !== smartKw) { apiResult = await lookupAddr(v, cityLabel); if (apiResult) break; }
       }
     }
     if (!apiResult && adminDong && !smartKw.startsWith(adminDong.trim())) {
       for (const kw of CENTER_KWDS) {
-        apiResult = await lookupAddr(`${adminDong.trim()} ${kw}`);
+        apiResult = await lookupAddr(`${adminDong.trim()} ${kw}`, cityLabel);
         if (apiResult) break;
       }
     }
@@ -436,7 +778,7 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
       const dongName    = dongMatch?.[1] || adminDong?.trim();
       if (localSuffix && dongName) {
         for (const kw of CENTER_KWDS) {
-          apiResult = await lookupAddr(`${localSuffix} ${dongName} ${kw}`);
+          apiResult = await lookupAddr(`${localSuffix} ${dongName} ${kw}`, cityLabel);
           if (apiResult) break;
         }
       }
@@ -451,7 +793,7 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
       for (const q of queries) {
         const kd = await searchKakaoFull(q);
         if (kd?.road_address_name) {
-          apiResult = await lookupAddr(kd.road_address_name) || kakaoDocToApiResult(kd);
+          apiResult = await lookupAddr(kd.road_address_name, cityLabel) || kakaoDocToApiResult(kd);
           if (apiResult) break;
         }
       }
@@ -463,7 +805,21 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
     const hasRoadOrJibun = /(로|길|대로)\s*\d/.test(text) || /[가-힣\d]+(동|읍|면|리)\s*\d+/.test(text);
     if (!hasRoadOrJibun && BLDG_TYPE_RE.test(text)) {
       const bldName = text.replace(/\d+\s*(동|층|호).*$/g, '').replace(/__P\d+__/g, '').trim();
-      if (bldName.length >= 2) apiResult = await lookupAddr(`${adminDong} ${bldName}`);
+      if (bldName.length >= 2) {
+        const districtTokForBld = cityLabel
+          ? (cityLabel.trim().split(/\s+/).filter(t => /(시|군|구)$/.test(t)).pop() || '')
+          : '';
+        const buildingQueries = [
+          cityLabel ? `${cityLabel.trim()} ${adminDong.trim()} ${bldName}` : '',
+          districtTokForBld ? `${districtTokForBld} ${adminDong.trim()} ${bldName}` : '',
+          `${adminDong.trim()} ${bldName}`,
+          cityLabel ? `${cityLabel.trim()} ${bldName}` : '',
+        ].filter((q, i, arr) => q && arr.indexOf(q) === i);
+        for (const q of buildingQueries) {
+          apiResult = await lookupAddr(q, cityLabel);
+          if (apiResult) break;
+        }
+      }
     }
   }
 
@@ -509,7 +865,7 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
     // 예: 답십리2동 → 답십리동, 청량리3동 → 청량리동, 신설1동 → 신설동
     if (dongPart) dongPart = dongPart.replace(/^([가-힣]+)\d+(동)$/, '$1$2');
 
-    buildingName = apiResult.bdNm || '';
+    buildingName = apiResult.bdNm || inlineBuildingName || '';
     // 괄호 분류: 긴 문장(3단어↑ or 10자↑+공백) → 특이사항, 동명 토큰 → 제거, 나머지 → buildingName
     parens.forEach(p => {
       const inner = p.replace(/^\(|\)$/g, '').trim();
@@ -575,6 +931,10 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
         finalRoadAddr = roadMatchNA[1];
       }
     }
+    if (!buildingName && inlineBuildingName) {
+      buildingName = inlineBuildingName;
+      if (inlineRoadOnly) finalRoadAddr = inlineRoadOnly;
+    }
     finalRoadAddr = finalRoadAddr.replace(/\s+/g, ' ').trim();
     detailAddr    = detailAddr.replace(/\s+/g, ' ').trim();
   }
@@ -625,25 +985,29 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
     }
   }
 
-  finalDetail = finalDetail.replace(/^[,\s]+|[,\s]+$/g, '');
+  finalDetail = normalizeAddressDetail(finalDetail);
+
+  if (correctionLogs.length) {
+    result.주소추정 = true;
+    result.추정사유 = appendUniqueNote(result.추정사유, correctionLogs.join(' / '));
+  }
+  if (result.추정사유) {
+    result.특이사항 = appendUniqueNote(result.특이사항, `[주소추정] ${result.추정사유}`);
+  }
 
   // ── A-11: 최종 주소 형식 조합 ─────────────────────────────────────
-  // 동호수(숫자+호 포함) → () 앞 유지: "도로명, 동호수 (동명, 건물명)"
-  // 동호수 아닌 설명문   → () 뒤로:   "도로명, (동명, 건물명) 기타설명"
-  // 동호수 없음          → 도로명 뒤 바로 ','+"도로명, (동명, 건물명)"
-  // () 내부 동명·건물명은 ',' 로 구분, trailing 쉼표/공백 제거
-  const isUnitDetail = finalDetail ? /\d+호/.test(finalDetail) : false;
-  const preDetail    = isUnitDetail ? finalDetail : '';
-  const postDetail   = isUnitDetail ? '' : finalDetail;
-
+  // 표준: "도로명주소(건물번호까지), (법정동, 건물명) 상세주소"
+  // 도로명주소 바로 뒤 첫 구분자는 ","를 유지한다.
+  // 이후 추가 구분이 필요하면 "/"를 쓰고, 괄호 내부의 법정동·건물명 구분 콤마는 예외로 유지한다.
+  // 명단에 적힌 상세/부가 내용은 삭제하지 않고 finalDetail 또는 특이사항으로 보존한다.
   const parenParts  = [dongPart, buildingName].filter(Boolean);
   const parenInner  = parenParts.join(', ').replace(/,\s*$/, '').trim();
   const parenStr    = parenInner ? `(${parenInner})` : '';
 
-  result.주소 = finalRoadAddr
-    + (preDetail  ? ', ' + preDetail  : '')
-    + (parenStr   ? (preDetail ? ' ' : ', ') + parenStr : '')
-    + (postDetail ? (parenStr ? ' ' : ', ') + postDetail : '');
+  result.주소 = [finalRoadAddr, parenStr].filter(Boolean).join(ROAD_DETAIL_SEPARATOR);
+  if (finalDetail) {
+    result.주소 += `${result.주소 ? ' ' : ''}${finalDetail}`;
+  }
 
   // ── A-12 ③: 변환 후 주소 3자 미만 플래그 ────────────────────────
   if (result.주소.length < 3) {
@@ -651,23 +1015,26 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
     result.확인사유 = '변환 후 주소 비정상';
   }
 
-  // ── A-22: 특이사항에 주민센터 → 주민센터 주소를 result.주소 앞에 붙이기 ──
+  // ── A-22: 특이사항에 주민센터류 표현이 있으면 맨 뒤에 참고주소 붙이기 ──
   // 단, 주소 자체가 이미 주민센터 주소인 경우(CENTER_RE) 중복 방지
-  if (normalizedInputNote && /주민\s*센터/.test(normalizedInputNote) && result.주소 && !CENTER_RE.test(text)) {
-    const ckw = generateCenterKeyword(normalizedInputNote, adminDong, cityLabel);
-    let cres = await lookupAddr(ckw);
+  if (normalizedInputNote && CENTER_RE.test(normalizedInputNote) && result.주소 && !CENTER_RE.test(text)) {
+    const referenceDong = (adminDong || dongPart || '').trim();
+    const ckw = referenceDong ? `${referenceDong} 주민센터` : generateCenterKeyword(normalizedInputNote, adminDong, cityLabel);
+    let cres = await lookupAddr(ckw, cityLabel);
     // JUSO 실패 시 Kakao POI 검색으로 주민센터 도로명 취득 후 재조회
     if (!cres) {
       const localPfx = cityLabel ? cityLabel.trim().split(/\s+/).pop() + ' ' : '';
       const queries = [
         ckw,
+        referenceDong ? `${localPfx}${referenceDong} 주민센터` : null,
+        referenceDong ? `${localPfx}${referenceDong} 행정복지센터` : null,
         adminDong?.trim() ? `${localPfx}${adminDong.trim()} 주민센터` : null,
         dongPart          ? `${localPfx}${dongPart} 주민센터`          : null,
       ].filter((q, i, arr) => q && arr.indexOf(q) === i);
       for (const q of queries) {
         const kd = await searchKakaoFull(q);
         if (kd?.road_address_name) {
-          cres = await lookupAddr(kd.road_address_name) || kakaoDocToApiResult(kd);
+          cres = await lookupAddr(kd.road_address_name, cityLabel) || kakaoDocToApiResult(kd);
           if (cres) break;
         }
       }
@@ -687,9 +1054,11 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
         const cParenStr   = [cDong, cres.bdNm].filter(Boolean).length
           ? ` (${[cDong, cres.bdNm].filter(Boolean).join(', ')})` : '';
         const centerAddr  = cRoadShort + cParenStr;
-        // 이미 앞에 같은 주민센터 주소가 있으면 중복 추가 금지
-        if (centerAddr && cRoadShort.length >= 5 && !result.주소.startsWith(cRoadShort.slice(0, 8))) {
-          result.주소 = `${centerAddr}, ${result.주소}`;
+        const centerLabel = `${referenceDong || cDong || '해당행정동'} 주민센터`;
+        const centerSuffix = `[참고: ${centerLabel} ${centerAddr}]`;
+        // 이미 같은 주민센터 주소가 있으면 중복 추가 금지
+        if (centerAddr && cRoadShort.length >= 5 && !result.주소.includes(centerAddr)) {
+          result.주소 = `${result.주소}${ADDRESS_EXTRA_SEPARATOR}${centerSuffix}`;
         }
       }
     }
@@ -697,15 +1066,35 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
 
   // ── 좌표 취득 (Kakao Geocoding) ──────────────────────────────────
   result.isApt = apiResult?.bdKdcd === '1';
+  result.standardRoadAddress = apiResult?.standardRoadAddress || apiResult?.roadAddr || '';
+  result.roadName = apiResult?.roadName || apiResult?.rn || '';
+  result.buildingMainNo = apiResult?.buildingMainNo ?? apiResult?.buldMnnm ?? '';
+  result.buildingSubNo = apiResult?.buildingSubNo ?? apiResult?.buldSlno ?? '';
+  result.buildingName = apiResult?.buildingName || apiResult?.bdNm || '';
+  result.legalDong = apiResult?.legalDong || apiResult?.emdNm || '';
+  result.matchedSido = apiResult?.matchedSido || apiResult?.siNm || '';
+  result.matchedSigungu = apiResult?.matchedSigungu || apiResult?.sggNm || '';
+  result.detailAddress = finalDetail || '';
+  result.addressMgtNo = apiResult?._addressMgtNo || '';
+  result.buildingMgtNo = apiResult?.bdMgtSn || '';
+  result.matchSource = apiResult?._matchSource || (apiResult ? 'juso_fallback' : '');
+  result.matchConfidence = apiResult?._matchConfidence || null;
+  result.routeHints = apiResult?._routeHints || null;
+  appendCheckReason(result, getAreaIssue(cityLabel, adminDong, result.matchedSido, result.matchedSigungu, result.legalDong));
+  if (apiResult?.jibunAddr && !result.standardRoadAddress) {
+    appendCheckReason(result, `지번주소만 확인됨: ${apiResult.jibunAddr}`);
+  } else if (!apiResult && text && !result.확인필요) {
+    appendCheckReason(result, '주소 없음: 전국 주소DB/JUSO에서 확인되지 않음');
+  }
   result.lat   = null;
   result.lng   = null;
-  if (result.주소) {
+  if (includeCoords && result.주소) {
     // JUSO roadAddr이 있으면 도시명 포함 전체 주소 → cityPrefix 불필요
     // 없으면 result.주소(도시명 없음)에 cityLabel에서 추출한 시군구 접두어 추가
     const cityPrefix = !apiResult?.roadAddr && cityLabel
       ? (cityLabel.trim().split(/\s+/).filter(t => /(시|군|구)$/.test(t)).pop() || '')
       : '';
-    const coord = await fetchKakaoCoord(apiResult?.roadAddr || result.주소, cityPrefix);
+    const coord = await fetchKakaoCoord(apiResult?.roadAddr || result.주소, cityPrefix, result.buildingMgtNo);
     if (coord) { result.lat = coord.lat; result.lng = coord.lng; }
   }
 

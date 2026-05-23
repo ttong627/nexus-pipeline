@@ -111,7 +111,6 @@ export default function OrgPresetModal({ city, records, monthId, onClose }) {
     const nextColor = PRESET_COLORS.find(c => !usedColors.has(c.id))?.id || PRESET_COLORS[0].id;
     setOrgs(prev => [...prev, { id, name, color: nextColor, dongs: [] }]);
     setExpandedOrg(id);
-    setAddPickerOpen(false);
   };
 
   // 이미 추가된 소속사 이름 목록

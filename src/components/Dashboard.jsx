@@ -1,11 +1,12 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
-import { FileSpreadsheet, CheckCircle, Database, ChevronRight, Truck, BookOpen, Loader2, RefreshCw, Calendar } from 'lucide-react';
+import { FileSpreadsheet, CheckCircle, Database, ChevronRight, Truck, BookOpen, Loader2, RefreshCw, Calendar, MapPin, Zap, ArrowRight, AlertTriangle, Package } from 'lucide-react';
 import { APP_VERSION } from '../version.js';
 import { db } from '../config/firebase.js';
 import {
   collection, getDocs, getDoc, doc, query, orderBy, limit, getCountFromServer
 } from 'firebase/firestore';
 import { documentId } from 'firebase/firestore';
+import { WORKFLOW_MODES } from '../utils/workflow.js';
 
 // ─── Cache (sessionStorage, 3분 TTL) ─────────────────────────────────────────
 const CACHE_KEY = 'nexus_dash_v3';
@@ -27,7 +28,6 @@ function bustCache(uid) {
   try { sessionStorage.removeItem(`${CACHE_KEY}_${uid}`); } catch {}
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
 function parseSido(city) {
   const sido = city.split(' ')[0] || city;
   const sigungu = city.slice(sido.length).trim() || city;
@@ -40,7 +40,14 @@ function fmtDate(ts) {
   return `${d.getMonth() + 1}/${d.getDate()}`;
 }
 
-// 최신 month 1건만 fetch (limit+orderBy on documentId for speed)
+function getProcessedRows(user) {
+  return Number(user?.totalRowsProcessed || user?.processedRows || user?.totalProcessedRows || 0);
+}
+
+function getProcessedFiles(user) {
+  return Number(user?.totalFilesProcessed || user?.processedFiles || user?.totalProcessedFiles || 0);
+}
+
 async function fetchLatestMonth(city) {
   try {
     const q = query(
@@ -52,14 +59,12 @@ async function fetchLatestMonth(city) {
     if (snap.empty) return null;
     return { id: snap.docs[0].id, ...snap.docs[0].data() };
   } catch {
-    // index 없는 환경 fallback
     const snap = await getDocs(collection(db, 'cloud_lists', city, 'months'));
     if (snap.empty) return null;
     return snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => b.id.localeCompare(a.id))[0] || null;
   }
 }
 
-// base 존재 여부만 확인 (count 집계 — 레코드 다운로드 없음)
 async function checkBaseExists(city) {
   try {
     const snap = await getCountFromServer(collection(db, 'base_lists', city, 'records'));
@@ -67,11 +72,212 @@ async function checkBaseExists(city) {
   } catch { return false; }
 }
 
+// ─── 워크플로우 가이드 (빈 상태용) ──────────────────────────────────────────
+function WorkflowGuide({ onStart, workflowMode, onWorkflowModeChange }) {
+  const steps = [
+    { icon: FileSpreadsheet, color: 'text-blue-400', bg: 'bg-blue-900/20 border-blue-800/30', label: '파일 업로드', desc: '엑셀 명단 파일을 불러옵니다' },
+    { icon: CheckCircle, color: 'text-green-400', bg: 'bg-green-900/20 border-green-800/30', label: '주소 정제', desc: '도로명 주소로 자동 변환합니다' },
+    { icon: Truck, color: 'text-amber-400', bg: 'bg-amber-900/20 border-amber-800/30', label: '기사 배정', desc: '기사별 구역을 자동 배분합니다' },
+    { icon: MapPin, color: 'text-purple-400', bg: 'bg-purple-900/20 border-purple-800/30', label: '루트맵', desc: '지도에서 배송순번을 최적화합니다' },
+    { icon: Database, color: 'text-cyan-400', bg: 'bg-cyan-900/20 border-cyan-800/30', label: '저장/내보내기', desc: '클라우드 저장 및 엑셀 출력합니다' },
+  ];
+
+  const purposeCards = [
+    { mode: 'cleaningOnly', accent: 'emerald', icon: CheckCircle },
+    { mode: 'geoOnly', accent: 'cyan', icon: MapPin },
+    { mode: 'deliveryFull', accent: 'amber', icon: Truck },
+  ];
+
+  return (
+    <div className="rounded-2xl border border-[#1a2725] bg-[#080d0c] p-6 shadow-[0_18px_60px_rgba(0,0,0,0.24)]">
+      <div className="flex items-center gap-3 mb-5">
+        <div className="w-8 h-8 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center">
+          <Zap size={15} className="text-emerald-300" />
+        </div>
+        <div>
+          <h2 className="text-sm font-black text-white">이번 명단으로 어떤 작업을 진행할까요?</h2>
+          <p className="text-[11px] text-gray-500">목적을 먼저 고르면 필요한 메뉴만 열립니다. 나중에 더 깊은 작업으로 확장할 수 있습니다.</p>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 mb-5">
+        {purposeCards.map(({ mode, accent, icon: Icon }) => {
+          const item = WORKFLOW_MODES[mode];
+          const active = workflowMode === mode;
+          const tone = {
+            emerald: active ? 'border-emerald-400/60 bg-emerald-500/10 text-emerald-200' : 'border-emerald-500/15 bg-[#0a1110] text-emerald-400/80 hover:border-emerald-400/35',
+            cyan: active ? 'border-cyan-400/60 bg-cyan-500/10 text-cyan-200' : 'border-cyan-500/15 bg-[#091011] text-cyan-400/80 hover:border-cyan-400/35',
+            amber: active ? 'border-amber-400/60 bg-amber-500/10 text-amber-200' : 'border-amber-500/15 bg-[#11100a] text-amber-400/80 hover:border-amber-400/35',
+          }[accent];
+          return (
+            <button
+              key={mode}
+              onClick={() => onWorkflowModeChange?.(mode)}
+              className={`text-left rounded-xl border p-4 transition-all ${tone}`}
+            >
+              <div className="flex items-center gap-2 mb-2">
+                <div className="w-8 h-8 rounded-lg bg-black/25 border border-white/10 flex items-center justify-center">
+                  <Icon size={15} />
+                </div>
+                <span className="text-sm font-black text-white">{item.title}</span>
+                {active && <span className="ml-auto text-[9px] font-black px-1.5 py-0.5 rounded bg-white/10 border border-white/10">선택됨</span>}
+              </div>
+              <p className="text-[11px] leading-relaxed text-gray-400">{item.description}</p>
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="flex items-start gap-2 overflow-x-auto pb-2">
+        {steps.map((s, i) => (
+          <div key={i} className="flex items-center gap-2 shrink-0">
+            <div className={`flex flex-col items-center gap-2 p-3 rounded-xl border ${s.bg} min-w-[110px]`}>
+              <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${s.bg}`}>
+                <s.icon size={16} className={s.color} />
+              </div>
+              <span className={`text-[11px] font-black ${s.color}`}>{s.label}</span>
+              <span className="text-[10px] text-gray-600 text-center leading-relaxed">{s.desc}</span>
+            </div>
+            {i < steps.length - 1 && (
+              <ArrowRight size={14} className="text-gray-700 shrink-0 mt-4" />
+            )}
+          </div>
+        ))}
+      </div>
+
+      <div className="mt-5 flex items-center gap-3">
+        <button
+          onClick={() => onStart(1)}
+          className="flex items-center gap-2.5 px-5 py-2.5 bg-emerald-400 text-black font-extrabold rounded-xl text-sm hover:bg-emerald-300 transition-all shadow-[0_0_20px_rgba(52,211,153,0.16)]"
+        >
+          <FileSpreadsheet size={15} />
+          선택한 목적대로 시작
+          <ChevronRight size={14} />
+        </button>
+        <span className="text-gray-600 text-xs">현재 선택: {WORKFLOW_MODES[workflowMode]?.title || WORKFLOW_MODES.cleaningOnly.title}</span>
+      </div>
+    </div>
+  );
+}
+
+// ─── 진행 중인 작업 카드 ──────────────────────────────────────────────────────
+function ActiveWorkCard({ fileInfo, gridData, onStart, onOpenRouteMap, workflowMode, onWorkflowModeChange }) {
+  const errorCount = gridData.filter(r => r._에러).length;
+  const driverCount = new Set(gridData.filter(r => r.기사).map(r => r.기사)).size;
+  const totalQty = gridData.reduce((s, r) => s + (parseInt(r.포수) || 1), 0);
+  const hasDriver = gridData.some(r => r.기사);
+
+  return (
+    <div className="rounded-2xl border border-[#1a2725] bg-[#080d0c] p-5 shadow-[0_18px_60px_rgba(0,0,0,0.22)]">
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex items-center gap-3">
+          <div className="w-9 h-9 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center shrink-0">
+            <Zap size={16} className="text-emerald-300" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] text-emerald-300 font-black tracking-wide uppercase">진행 중인 작업</span>
+              <span className="text-[10px] text-gray-500 border border-[#22312f] bg-[#0d1413] rounded px-1.5 py-0.5">{WORKFLOW_MODES[workflowMode]?.shortTitle || '정제 명단'}</span>
+            </div>
+            <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+              {fileInfo?.city && (
+                <span className="text-white font-black text-sm">{fileInfo.city}</span>
+              )}
+              {fileInfo?.month && (
+                <span className="text-gray-500 text-xs">{fileInfo.month}</span>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* 통계 */}
+        <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">
+          <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-[#0d1520] border border-[#1a2a3a]">
+            <Package size={11} className="text-[#3b82f6]" />
+            <span className="text-[#3b82f6] text-[11px] font-black">{totalQty.toLocaleString()}</span>
+            <span className="text-gray-600 text-[9px]">포</span>
+          </div>
+          {errorCount > 0 && (
+            <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-red-950/30 border border-red-800/30">
+              <AlertTriangle size={11} className="text-red-400" />
+              <span className="text-red-400 text-[11px] font-black">{errorCount}</span>
+              <span className="text-gray-600 text-[9px]">오류</span>
+            </div>
+          )}
+          {hasDriver && (
+            <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-green-950/30 border border-green-800/30">
+              <Truck size={11} className="text-green-400" />
+              <span className="text-green-400 text-[11px] font-black">{driverCount}</span>
+              <span className="text-gray-600 text-[9px]">기사</span>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* 액션 버튼 */}
+      <div className="mt-4 flex items-center gap-2 flex-wrap">
+        <div className="flex items-center gap-1.5 mr-1">
+          {Object.values(WORKFLOW_MODES).map(mode => (
+            <button
+              key={mode.id}
+              onClick={() => onWorkflowModeChange?.(mode.id)}
+              className={`px-2.5 py-1.5 rounded-lg text-[10px] font-black border transition-colors ${
+                workflowMode === mode.id
+                  ? 'bg-emerald-500/12 border-emerald-400/40 text-emerald-200'
+                  : 'bg-[#0b0f0f] border-[#1a2725] text-gray-500 hover:text-gray-300 hover:border-[#2b3b38]'
+              }`}
+            >
+              {mode.shortTitle}
+            </button>
+          ))}
+        </div>
+        <button
+          onClick={() => onStart(5)}
+          className="flex items-center gap-2 px-4 py-2 bg-emerald-400 text-black font-extrabold rounded-xl text-xs hover:bg-emerald-300 transition-all"
+        >
+          <CheckCircle size={13} /> 결과 확인 · 편집
+        </button>
+        {workflowMode !== 'cleaningOnly' && !hasDriver && (
+          <button
+            onClick={onOpenRouteMap}
+            className="flex items-center gap-2 px-4 py-2 bg-cyan-500/10 text-cyan-300 border border-cyan-500/25 font-bold rounded-xl text-xs hover:bg-cyan-500/15 transition-all"
+          >
+            <MapPin size={13} /> 기사 배정 · 루트맵
+          </button>
+        )}
+        {hasDriver && (
+          <button
+            onClick={onOpenRouteMap}
+            className="flex items-center gap-2 px-4 py-2 bg-green-950/40 text-green-400 border border-green-800/30 font-bold rounded-xl text-xs hover:bg-green-900/40 transition-all"
+          >
+            <MapPin size={13} /> 루트맵 확인
+          </button>
+        )}
+        <button
+          onClick={() => onStart(1)}
+          className="flex items-center gap-2 px-4 py-2 bg-[#111] text-gray-400 border border-[#222] font-bold rounded-xl text-xs hover:bg-[#1a1a1a] hover:text-white transition-all"
+        >
+          <FileSpreadsheet size={13} /> 새 파일 처리
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ─── CityCard ─────────────────────────────────────────────────────────────────
 function CityCard({ item, onCloudCard, onBaseCard }) {
   const { city, sigungu, cloud, base } = item;
   const hasCloud = !!cloud;
   const hasBase = !!base;
+  const themeSeed = [...city].reduce((sum, ch) => sum + ch.charCodeAt(0), 0) % 4;
+  const themes = [
+    { band: 'from-emerald-500/24 via-cyan-400/10 to-transparent', dot: 'bg-emerald-300', line: 'border-emerald-400/25', text: 'text-emerald-300' },
+    { band: 'from-cyan-500/24 via-sky-400/10 to-transparent', dot: 'bg-cyan-300', line: 'border-cyan-400/25', text: 'text-cyan-300' },
+    { band: 'from-amber-400/24 via-lime-300/10 to-transparent', dot: 'bg-amber-300', line: 'border-amber-400/25', text: 'text-amber-300' },
+    { band: 'from-rose-400/20 via-orange-300/10 to-transparent', dot: 'bg-rose-300', line: 'border-rose-400/25', text: 'text-rose-300' },
+  ];
+  const theme = themes[themeSeed];
+  const status = hasCloud ? '배송명단' : hasBase ? '기본명단' : '준비 필요';
 
   const handleMain = () => {
     if (hasCloud) onCloudCard?.(city, cloud.monthId);
@@ -80,54 +286,72 @@ function CityCard({ item, onCloudCard, onBaseCard }) {
 
   return (
     <div
-      className="group flex flex-col rounded-xl border border-[#111] bg-[#060b14] hover:border-[#3b82f6]/30 hover:-translate-y-0.5 hover:shadow-[0_4px_16px_rgba(59,130,246,0.08)] transition-all cursor-pointer overflow-hidden"
+      className={`group relative flex min-h-[138px] flex-col rounded-xl border bg-[#090d0c] ${theme.line} hover:border-white/20 hover:-translate-y-0.5 hover:shadow-[0_14px_32px_rgba(0,0,0,0.25)] transition-all cursor-pointer overflow-hidden`}
       onClick={handleMain}
     >
-      {/* 상단: 도시명 */}
-      <div className="flex items-center justify-between px-3 pt-3 pb-1.5">
-        <span className="text-white font-black text-[13px] group-hover:text-[#93c5fd] transition-colors truncate leading-tight">
-          {sigungu}
-        </span>
-        <ChevronRight size={11} className="text-gray-700 group-hover:text-[#3b82f6] transition-colors shrink-0 ml-1" />
+      <div className={`relative h-12 bg-gradient-to-r ${theme.band} border-b border-white/5 overflow-hidden`}>
+        <div className="absolute inset-0 opacity-[0.22]" style={{
+          backgroundImage: 'linear-gradient(135deg, rgba(255,255,255,.16) 1px, transparent 1px), linear-gradient(45deg, rgba(255,255,255,.10) 1px, transparent 1px)',
+          backgroundSize: '18px 18px, 28px 28px',
+        }} />
+        <div className="absolute right-3 top-2.5 flex h-7 w-7 items-center justify-center rounded-lg border border-white/10 bg-black/25">
+          {hasCloud ? <Truck size={13} className={theme.text} /> : hasBase ? <BookOpen size={13} className={theme.text} /> : <Database size={13} className="text-gray-500" />}
+        </div>
+        <div className="absolute left-3 top-3 flex items-center gap-1.5">
+          <span className={`h-1.5 w-1.5 rounded-full ${hasCloud || hasBase ? theme.dot : 'bg-gray-600'}`} />
+          <span className={`text-[9px] font-black tracking-widest ${hasCloud || hasBase ? theme.text : 'text-gray-600'}`}>{status}</span>
+        </div>
       </div>
 
-      {/* 중단: 클라우드 명단 정보 */}
+      <div className="flex items-start justify-between gap-2 px-3 pt-3 pb-1.5">
+        <div className="min-w-0">
+          <span className="block text-white font-black text-[14px] group-hover:text-white transition-colors truncate leading-tight">
+            {sigungu}
+          </span>
+          <span className="mt-1 block text-[9px] text-gray-600 truncate">{city}</span>
+        </div>
+        <ChevronRight size={12} className="mt-1 text-gray-700 group-hover:text-gray-300 transition-colors shrink-0" />
+      </div>
+
       {hasCloud ? (
-        <div className="px-3 pb-2 space-y-1">
-          <div className="flex items-center gap-1">
-            <Calendar size={9} className="text-gray-600 shrink-0" />
-            <span className="text-[10px] text-gray-500 font-bold">{cloud.monthId}</span>
+        <div className="px-3 pb-3 space-y-2">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-1">
+              <Calendar size={9} className="text-gray-600 shrink-0" />
+              <span className="text-[10px] text-gray-500 font-bold">{cloud.monthId}</span>
+            </div>
+            <span className={`text-[11px] font-black ${theme.text} tabular-nums shrink-0 pl-1`}>
+              {cloud.totalCount.toLocaleString()}포
+            </span>
           </div>
           <div className="flex items-center justify-between">
             <div className="flex flex-wrap gap-1">
               {cloud.suCount > 0 && (
-                <span className="text-[8px] px-1 py-0.5 rounded bg-blue-900/25 text-blue-400 border border-blue-800/20 font-bold">
+                <span className="text-[8px] px-1.5 py-0.5 rounded-md bg-cyan-500/10 text-cyan-300 border border-cyan-500/15 font-bold">
                   수급 {cloud.suCount.toLocaleString()}
                 </span>
               )}
               {cloud.chaCount > 0 && (
-                <span className="text-[8px] px-1 py-0.5 rounded bg-purple-900/25 text-purple-400 border border-purple-800/20 font-bold">
+                <span className="text-[8px] px-1.5 py-0.5 rounded-md bg-amber-500/10 text-amber-300 border border-amber-500/15 font-bold">
                   차상위 {cloud.chaCount.toLocaleString()}
                 </span>
               )}
             </div>
-            <span className="text-[11px] font-black text-[#3b82f6]/70 tabular-nums shrink-0 pl-1">
-              {cloud.totalCount.toLocaleString()}포
-            </span>
           </div>
         </div>
       ) : (
-        <div className="px-3 pb-2">
-          <span className="text-[10px] text-gray-700">배송명단 없음</span>
+        <div className="px-3 pb-3 mt-auto">
+          <span className={`inline-flex items-center rounded-md px-2 py-1 text-[10px] font-bold ${hasBase ? 'bg-violet-500/10 text-violet-300 border border-violet-500/15' : 'bg-white/5 text-gray-600 border border-white/5'}`}>
+            {hasBase ? '기본명단 바로가기' : '배송명단 없음'}
+          </span>
         </div>
       )}
 
-      {/* 하단: 액션 배지 */}
       <div className="mt-auto px-2 pb-2.5 flex items-center gap-1 flex-wrap">
         {hasCloud && (
           <button
             onClick={e => { e.stopPropagation(); onCloudCard?.(city, cloud.monthId); }}
-            className="text-[8px] px-1.5 py-0.5 rounded-md bg-[#3b82f6]/10 text-[#3b82f6] border border-[#3b82f6]/20 font-bold hover:bg-[#3b82f6]/20 transition-colors"
+            className={`text-[8px] px-1.5 py-0.5 rounded-md bg-white/5 ${theme.text} border ${theme.line} font-bold hover:bg-white/10 transition-colors`}
           >
             배송명단
           </button>
@@ -135,7 +359,7 @@ function CityCard({ item, onCloudCard, onBaseCard }) {
         {hasBase && (
           <button
             onClick={e => { e.stopPropagation(); onBaseCard?.(city); }}
-            className="text-[8px] px-1.5 py-0.5 rounded-md bg-purple-900/20 text-purple-400 border border-purple-800/20 font-bold hover:bg-purple-900/30 transition-colors"
+            className="text-[8px] px-1.5 py-0.5 rounded-md bg-violet-500/10 text-violet-300 border border-violet-500/15 font-bold hover:bg-violet-500/15 transition-colors"
           >
             기본명단
           </button>
@@ -148,16 +372,14 @@ function CityCard({ item, onCloudCard, onBaseCard }) {
   );
 }
 
-
 // ─── Dashboard ────────────────────────────────────────────────────────────────
-export default function Dashboard({ user, onStart, onHelp, onCloudCard, onBaseCard }) {
-  const totalRows = user?.totalRowsProcessed || 0;
-  const totalFiles = user?.totalFilesProcessed || 0;
+export default function Dashboard({ user, onStart, onHelp, onCloudCard, onBaseCard, gridData = [], fileInfo = null, onOpenRouteMap, workflowMode = 'cleaningOnly', onWorkflowModeChange, stepStatus }) {
+  const totalRows = getProcessedRows(user);
+  const totalFiles = getProcessedFiles(user);
   const isAdmin = user?.role === 'admin';
   const approvedCities = user?.citiesApproved || [];
   const uid = user?.uid || 'guest';
 
-  // cityItems: [{ city, sido, sigungu, cloud: {monthId,totalCount,suCount,chaCount}|null, base: {updatedAt}|null }]
   const [cityItems, setCityItems] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -173,7 +395,6 @@ export default function Dashboard({ user, onStart, onHelp, onCloudCard, onBaseCa
     }
 
     try {
-      // ── 1. 도시 목록 수집 ──────────────────────────────────────────────────
       let cities = [];
       if (isAdmin) {
         const [cloudSnap, baseSnap] = await Promise.all([
@@ -189,7 +410,6 @@ export default function Dashboard({ user, onStart, onHelp, onCloudCard, onBaseCa
         cities = [...approvedCities].sort((a, b) => a.localeCompare(b, 'ko'));
       }
 
-      // ── 2. 병렬로 각 도시 데이터 조회 (최적화) ──────────────────────────────
       const results = await Promise.all(
         cities.map(async city => {
           const { sido, sigungu } = parseSido(city);
@@ -205,9 +425,7 @@ export default function Dashboard({ user, onStart, onHelp, onCloudCard, onBaseCa
             chaCount: latestMonth['차상위Count'] || latestMonth.chaCount || 0,
           } : null;
 
-          const base = baseExists ? {
-            updatedAt: null,
-          } : null;
+          const base = baseExists ? { updatedAt: null } : null;
 
           if (!cloud && !base) return null;
           return { city, sido, sigungu, cloud, base };
@@ -231,7 +449,6 @@ export default function Dashboard({ user, onStart, onHelp, onCloudCard, onBaseCa
     loadData(true);
   };
 
-  // 시/도별 그룹핑
   const grouped = useMemo(() => {
     const map = {};
     cityItems.forEach(item => {
@@ -243,49 +460,46 @@ export default function Dashboard({ user, onStart, onHelp, onCloudCard, onBaseCa
 
   const cloudCount = cityItems.filter(c => c.cloud).length;
   const baseCount = cityItems.filter(c => c.base).length;
+  const hasActiveWork = gridData.length > 0;
 
   return (
-    <div className="flex-1 w-full h-full flex flex-col overflow-hidden bg-transparent">
+    <div className="flex-1 w-full h-full flex flex-col overflow-hidden bg-[#070807]">
 
       {/* ── 헤더 ── */}
-      <div className="shrink-0 flex items-center justify-between px-8 py-5 border-b border-[#0f1a2e]">
+      <div className="shrink-0 flex items-center justify-between px-6 py-4 border-b border-[#17201f] bg-[#080b0a]">
         <div className="flex items-center gap-3">
-          <h1 className="text-xl font-black text-white flex items-center gap-2.5">
-            NEXUS <span className="text-[#3b82f6]">PIPELINE</span>
-            <span className="bg-[#3b82f6]/15 text-[#3b82f6] px-2 py-0.5 rounded text-[11px] tracking-widest border border-[#3b82f6]/30">{APP_VERSION}</span>
+          <h1 className="text-lg font-black text-white flex items-center gap-2.5">
+            NEXUS <span className="text-emerald-300">PIPELINE</span>
+            <span className="bg-emerald-500/10 text-emerald-300 px-2 py-0.5 rounded text-[10px] tracking-widest border border-emerald-500/20">{APP_VERSION}</span>
           </h1>
         </div>
         <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2">
-            <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-[#060c18] border border-[#0f1a2e]">
-              <Database size={12} className="text-[#3b82f6]" />
-              <span className="text-gray-400 text-[11px] font-bold">누적</span>
-              <span className="text-white text-[12px] font-black">{totalRows.toLocaleString()}</span>
-              <span className="text-gray-600 text-[10px]">건</span>
+          {/* 통계 */}
+          <div className="hidden lg:flex items-center gap-2">
+            <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-[#060c18] border border-[#0d1520]">
+              <Database size={11} className="text-[#3b82f6]" />
+              <span className="text-gray-500 text-[10px] font-bold">정제 누적</span>
+              <span className="text-white text-[11px] font-black">{totalRows.toLocaleString()}</span>
+              <span className="text-gray-600 text-[9px]">건</span>
             </div>
-            <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-[#060c18] border border-[#0f1a2e]">
-              <FileSpreadsheet size={12} className="text-[#3b82f6]" />
-              <span className="text-gray-400 text-[11px] font-bold">파일</span>
-              <span className="text-white text-[12px] font-black">{totalFiles.toLocaleString()}</span>
-              <span className="text-gray-600 text-[10px]">개</span>
-            </div>
-            <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-[#060c18] border border-[#0f1a2e]">
-              <CheckCircle size={12} className="text-[#3b82f6]" />
-              <span className="text-gray-400 text-[11px] font-bold">정확도</span>
-              <span className="text-[#3b82f6] text-[12px] font-black">{totalRows > 0 ? '99%+' : '-'}</span>
+            <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-[#060c18] border border-[#0d1520]">
+              <FileSpreadsheet size={11} className="text-[#3b82f6]" />
+              <span className="text-gray-500 text-[10px] font-bold">정제 파일</span>
+              <span className="text-white text-[11px] font-black">{totalFiles.toLocaleString()}</span>
+              <span className="text-gray-600 text-[9px]">개</span>
             </div>
           </div>
           <button
-            onClick={() => onStart()}
-            className="flex items-center gap-2 px-5 py-2 bg-[#3b82f6] text-black font-extrabold rounded-xl text-sm hover:bg-[#60a5fa] transition-all shadow-[0_0_20px_rgba(59,130,246,0.3)] hover:shadow-[0_0_30px_rgba(59,130,246,0.5)]"
+            onClick={() => onStart(1)}
+            className="flex items-center gap-2 px-4 py-2 bg-emerald-400 text-black font-extrabold rounded-xl text-sm hover:bg-emerald-300 transition-all shadow-[0_0_20px_rgba(52,211,153,0.14)]"
           >
-            <FileSpreadsheet size={15} />
-            파이프라인 가동
-            <ChevronRight size={14} />
+            <FileSpreadsheet size={14} />
+            새 명단 처리
+            <ChevronRight size={13} />
           </button>
           <button
             onClick={() => window.open('/manual.html', '_blank')}
-            className="w-9 h-9 rounded-full bg-[#060c18] border border-[#3b82f6]/50 text-[#3b82f6] font-black text-base hover:bg-[#3b82f6]/20 transition-all flex items-center justify-center"
+            className="w-8 h-8 rounded-full bg-[#060c18] border border-[#3b82f6]/50 text-[#3b82f6] font-black text-sm hover:bg-[#3b82f6]/20 transition-all flex items-center justify-center"
             title="사용설명서"
           >
             ?
@@ -294,31 +508,42 @@ export default function Dashboard({ user, onStart, onHelp, onCloudCard, onBaseCa
       </div>
 
       {/* ── 본문 ── */}
-      <div className="flex-1 overflow-y-auto px-8 py-6">
+      <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
 
-        {loading ? (
-          <div className="flex flex-col items-center justify-center h-64 gap-3 text-gray-500">
-            <Loader2 size={24} className="animate-spin text-[#3b82f6]" />
-            <span className="text-sm">지자체 현황 불러오는 중...</span>
-          </div>
-        ) : cityItems.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-64 gap-4 text-gray-600">
-            <Database size={32} className="opacity-20" />
-            <p className="text-sm">등록된 데이터가 없습니다</p>
-            <p className="text-xs opacity-60">파이프라인에서 처리 후 클라우드 저장하면 나타납니다</p>
-          </div>
+        {/* 진행 중인 작업 카드 또는 워크플로우 가이드 */}
+        {hasActiveWork ? (
+          <ActiveWorkCard
+            fileInfo={fileInfo}
+            gridData={gridData}
+            onStart={onStart}
+            onOpenRouteMap={onOpenRouteMap}
+            workflowMode={workflowMode}
+            onWorkflowModeChange={onWorkflowModeChange}
+            stepStatus={stepStatus}
+          />
         ) : (
-          <div className="space-y-6">
-            {/* 요약 헤더 */}
-            <div className="flex items-center justify-between">
+          <WorkflowGuide onStart={onStart} workflowMode={workflowMode} onWorkflowModeChange={onWorkflowModeChange} />
+        )}
+
+        {/* 지자체 현황 */}
+        {loading ? (
+          <div className="flex flex-col items-center justify-center h-48 gap-3 text-gray-500">
+            <Loader2 size={22} className="animate-spin text-[#3b82f6]" />
+            <span className="text-xs">지자체 현황 불러오는 중...</span>
+          </div>
+        ) : cityItems.length > 0 ? (
+          <div>
+            {/* 요약 + 새로고침 */}
+            <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-4 text-xs text-gray-600">
+                <h2 className="text-sm font-black text-gray-300">지자체 현황</h2>
                 <span className="flex items-center gap-1.5">
                   <Truck size={11} className="text-[#3b82f6]" />
-                  배송명단 <span className="text-white font-bold">{cloudCount}</span>개 지자체
+                  배송명단 <span className="text-white font-bold">{cloudCount}</span>개
                 </span>
                 <span className="flex items-center gap-1.5">
                   <BookOpen size={11} className="text-purple-400" />
-                  기본명단 <span className="text-white font-bold">{baseCount}</span>개 지자체
+                  기본명단 <span className="text-white font-bold">{baseCount}</span>개
                 </span>
               </div>
               <button
@@ -329,17 +554,13 @@ export default function Dashboard({ user, onStart, onHelp, onCloudCard, onBaseCa
               </button>
             </div>
 
-            {/* 시/도별 그룹 */}
             {grouped.map(([sido, items]) => (
-              <div key={sido}>
-                {/* 광역시/도 구분선 */}
-                <div className="flex items-center gap-3 mb-3">
-                  <div className="h-px flex-1 bg-[#0f1a2e]" />
-                  <span className="text-[9px] font-black text-gray-600 tracking-widest px-2">{sido}</span>
-                  <div className="h-px flex-1 bg-[#0f1a2e]" />
+              <div key={sido} className="mb-5">
+                <div className="flex items-center gap-3 mb-2.5">
+                  <div className="h-px flex-1 bg-[#0d1520]" />
+                  <span className="text-[9px] font-black text-gray-700 tracking-widest px-2">{sido}</span>
+                  <div className="h-px flex-1 bg-[#0d1520]" />
                 </div>
-
-                {/* 도시 카드 그리드 — 압축형 다열 */}
                 <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-7 2xl:grid-cols-8 gap-2">
                   {items.map(item => (
                     <CityCard
@@ -353,7 +574,7 @@ export default function Dashboard({ user, onStart, onHelp, onCloudCard, onBaseCa
               </div>
             ))}
           </div>
-        )}
+        ) : null}
       </div>
     </div>
   );

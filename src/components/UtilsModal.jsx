@@ -1,5 +1,5 @@
 ﻿import { useState, useEffect, useRef } from 'react';
-import { X, Layers, Download, Upload, Clock, Send, History, GitMerge, CheckSquare, Square, Trash2, Sparkles, FileX, SplitSquareHorizontal, RefreshCw, SlidersHorizontal, ArrowRight, ArrowUp, ArrowDown, Eye, Combine, Shuffle, ChevronRight, AlertCircle, Palette, Wand2, Building2 } from 'lucide-react';
+import { X, Layers, Download, Upload, Clock, Send, History, GitMerge, CheckSquare, Square, Trash2, Sparkles, FileX, SplitSquareHorizontal, RefreshCw, SlidersHorizontal, ArrowRight, ArrowUp, ArrowDown, Eye, Combine, Shuffle, ChevronRight, AlertCircle, Palette, Wand2, Building2, Truck } from 'lucide-react';
 import { db, collection, query, orderBy, limit, getDocs, addDoc, serverTimestamp, doc, getDoc } from '../config/firebase.js';
 import * as XLSX from 'xlsx';
 
@@ -101,6 +101,67 @@ const extractMetroStr = (addr) => {
 const extractSigunguStr = (addr) => {
   const m = String(addr||'').match(/(?:서울특별시|부산광역시|대구광역시|인천광역시|광주광역시|대전광역시|울산광역시|세종특별자치시|경기도|강원도|충청북도|충청남도|전라북도|전라남도|경상북도|경상남도|제주특별자치도)\s+([^\s]+(?:시|군|구))/);
   return m ? m[1] : '';
+};
+
+const getQtyForReport = (r) => parseInt(r?.포수 || r?.['수량(포수)'] || 1, 10) || 1;
+const isChasForReport = (r) => String(r?.구분 || '').includes('차상위');
+const normalizeDriverName = (v) => String(v || '').trim() || '미배정';
+const normalizeDongName = (v) => String(v || '').trim() || '미분류';
+const safeSheetName = (name, used = new Set()) => {
+  const base = String(name || '시트')
+    .replace(/[\\/?*[\]:]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 28) || '시트';
+  let sheetName = base;
+  let seq = 2;
+  while (used.has(sheetName)) {
+    const suffix = `_${seq++}`;
+    sheetName = `${base.slice(0, 31 - suffix.length)}${suffix}`;
+  }
+  used.add(sheetName);
+  return sheetName;
+};
+
+const makeDeliveryListSheet = (records, includeDriver = true) => {
+  const headers = includeDriver
+    ? ['NO', '기사', '행정동', '배송순번', '구분', '성명', '생년월일', '포수', '주소', '휴대폰', '유선전화', '문자수신', '품명', '특이사항']
+    : ['NO', '행정동', '배송순번', '구분', '성명', '생년월일', '포수', '주소', '휴대폰', '유선전화', '문자수신', '품명', '특이사항'];
+  const sorted = [...records].sort((a, b) => {
+    const driverCmp = normalizeDriverName(a.기사).localeCompare(normalizeDriverName(b.기사), 'ko', { numeric: true });
+    if (includeDriver && driverCmp) return driverCmp;
+    const dongCmp = normalizeDongName(a.행정동).localeCompare(normalizeDongName(b.행정동), 'ko', { numeric: true });
+    if (dongCmp) return dongCmp;
+    const seqA = parseInt(a.배송순번 || '999999', 10) || 999999;
+    const seqB = parseInt(b.배송순번 || '999999', 10) || 999999;
+    if (seqA !== seqB) return seqA - seqB;
+    return String(a.이름 || '').localeCompare(String(b.이름 || ''), 'ko', { numeric: true });
+  });
+  const rows = [headers];
+  sorted.forEach((r, i) => {
+    const common = [
+      i + 1,
+      normalizeDongName(r.행정동),
+      r.배송순번 || '',
+      r.구분 || '',
+      r.이름 || '',
+      r.생년월일 || '',
+      getQtyForReport(r),
+      r.주소 || '',
+      r.휴대폰 || '',
+      r.유선전화 || '',
+      r.문자수신 || '',
+      r.품명 || '',
+      r.특이사항 || '',
+    ];
+    rows.push(includeDriver ? [common[0], normalizeDriverName(r.기사), ...common.slice(1)] : common);
+  });
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  ws['!cols'] = includeDriver
+    ? [{ wch: 5 }, { wch: 10 }, { wch: 12 }, { wch: 8 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 6 }, { wch: 42 }, { wch: 14 }, { wch: 14 }, { wch: 8 }, { wch: 12 }, { wch: 34 }]
+    : [{ wch: 5 }, { wch: 12 }, { wch: 8 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 6 }, { wch: 42 }, { wch: 14 }, { wch: 14 }, { wch: 8 }, { wch: 12 }, { wch: 34 }];
+  ws['!autofilter'] = { ref: XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: Math.max(rows.length - 1, 0), c: headers.length - 1 } }) };
+  return ws;
 };
 
 export default function UtilsModal({ onClose, user }) {
@@ -208,6 +269,15 @@ export default function UtilsModal({ onClose, user }) {
   const [orgRptLatestMonth, setOrgRptLatestMonth] = useState(null); // { id, totalCount }
   const [orgRptLoadingMonth, setOrgRptLoadingMonth] = useState(false);
   const [orgRptExporting, setOrgRptExporting] = useState(false);
+
+  // ── 기사별 명단 다운로드 ─────────────────────────────────────────────
+  const [driverRptCity, setDriverRptCity] = useState('');
+  const [driverRptCities, setDriverRptCities] = useState([]);
+  const [driverRptMonths, setDriverRptMonths] = useState([]);
+  const [driverRptMonth, setDriverRptMonth] = useState('');
+  const [driverRptLoadingCities, setDriverRptLoadingCities] = useState(false);
+  const [driverRptLoadingMonths, setDriverRptLoadingMonths] = useState(false);
+  const [driverRptExporting, setDriverRptExporting] = useState(false);
 
   // ── Remap computed values ─────────────────────────────────────────────
   const remapActiveSheet = remapResult?.sheets?.find(s => s.name === remapBaseSheet);
@@ -1151,6 +1221,179 @@ export default function UtilsModal({ onClose, user }) {
     }
   };
 
+  const loadDriverRptCities = async () => {
+    setDriverRptLoadingCities(true);
+    try {
+      if (isAdmin) {
+        const snap = await getDocs(collection(db, 'cloud_lists'));
+        const cities = snap.docs
+          .map(d => ({ id: d.id, lastMonthId: d.data().lastMonthId, totalQty: d.data().latestTotalQty || d.data().latestTotalCount || 0 }))
+          .filter(c => c.id)
+          .sort((a, b) => a.id.localeCompare(b.id, 'ko'));
+        setDriverRptCities(cities);
+      } else {
+        setDriverRptCities((user?.citiesApproved || []).map(id => ({ id })));
+      }
+    } catch (e) {
+      console.error('[기사별 명단 지자체 로드 실패]', e);
+      setDriverRptCities([]);
+    } finally {
+      setDriverRptLoadingCities(false);
+    }
+  };
+
+  const handleDriverRptCityChange = async (cityId) => {
+    setDriverRptCity(cityId);
+    setDriverRptMonth('');
+    setDriverRptMonths([]);
+    if (!cityId) return;
+    setDriverRptLoadingMonths(true);
+    try {
+      const monthSnap = await getDocs(collection(db, 'cloud_lists', cityId, 'months'));
+      const months = monthSnap.docs
+        .map(d => ({
+          id: d.id,
+          totalCount: d.data().totalCount || 0,
+          totalQty: d.data().totalQty || d.data().totalCount || 0,
+          수급자Qty: d.data().수급자Qty || d.data().수급자Count || 0,
+          차상위Qty: d.data().차상위Qty || d.data().차상위Count || 0,
+        }))
+        .sort((a, b) => b.id.localeCompare(a.id));
+      setDriverRptMonths(months);
+      const currentMonth = new Date();
+      const currentMonthId = `${currentMonth.getFullYear()}-${String(currentMonth.getMonth() + 1).padStart(2, '0')}`;
+      setDriverRptMonth((months.find(m => m.id === currentMonthId) || months[0])?.id || '');
+    } catch (e) {
+      console.error('[기사별 명단 월 로드 실패]', e);
+      setDriverRptMonths([]);
+    } finally {
+      setDriverRptLoadingMonths(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'driverReport' && driverRptCities.length === 0 && !driverRptLoadingCities) {
+      loadDriverRptCities();
+    }
+  }, [activeTab]);
+
+  const loadRegisteredDriversForReport = async () => {
+    const sources = [];
+    if (user?.orgId) sources.push(['org_drivers', user.orgId]);
+    if (user?.companyCode) sources.push(['user_companies', user.companyCode]);
+    if (user?.uid) sources.push(['user_drivers', user.uid]);
+
+    const byName = new Map();
+    for (const [base, key] of sources) {
+      try {
+        const snap = await getDocs(collection(db, base, key, 'drivers'));
+        snap.docs.forEach(d => {
+          const data = { id: d.id, ...d.data() };
+          const name = normalizeDriverName(data.name || data.driverName || data.기사);
+          if (!name || name === '미배정' || byName.has(name)) return;
+          byName.set(name, data);
+        });
+      } catch {
+        // 권한이 없는 기사 저장소는 건너뛴다. 명단의 기사명은 별도로 포함된다.
+      }
+    }
+    return [...byName.values()].sort((a, b) => normalizeDriverName(a.name).localeCompare(normalizeDriverName(b.name), 'ko', { numeric: true }));
+  };
+
+  const handleDriverRptExport = async () => {
+    if (!driverRptCity || !driverRptMonth) return alert('지자체와 월을 선택하세요.');
+    setDriverRptExporting(true);
+    try {
+      const [recSnap, registeredDrivers] = await Promise.all([
+        getDocs(collection(db, 'cloud_lists', driverRptCity, 'months', driverRptMonth, 'records')),
+        loadRegisteredDriversForReport(),
+      ]);
+      const allRecs = recSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+      if (!allRecs.length) return alert('선택한 월에 저장된 명단이 없습니다.');
+
+      const wb = XLSX.utils.book_new();
+      const usedSheetNames = new Set();
+      const registeredByName = new Map();
+      registeredDrivers.forEach(d => registeredByName.set(normalizeDriverName(d.name || d.driverName || d.기사), d));
+
+      const driverDongMap = new Map();
+      const ensureStat = (driver, dong) => {
+        const key = `${driver}__${dong}`;
+        if (!driverDongMap.has(key)) driverDongMap.set(key, {
+          driver,
+          dong,
+          bas: 0,
+          supp: 0,
+          total: 0,
+          count: 0,
+          records: [],
+          registered: Boolean(registeredByName.has(driver)),
+        });
+        return driverDongMap.get(key);
+      };
+
+      registeredDrivers.forEach(driver => {
+        const driverName = normalizeDriverName(driver.name || driver.driverName || driver.기사);
+        const zone = (driver.assignedZones || []).find(z => z.city === driverRptCity);
+        const dongs = zone?.dongs?.length ? zone.dongs : ['배정행정동 없음'];
+        dongs.forEach(dong => ensureStat(driverName, normalizeDongName(dong)).registered = true);
+      });
+
+      allRecs.forEach(record => {
+        const driver = normalizeDriverName(record.기사 || record.driver);
+        const dong = normalizeDongName(record.배정행정동 || record.행정동 || record.dong);
+        const qty = getQtyForReport(record);
+        const stat = ensureStat(driver, dong);
+        stat.count += 1;
+        stat.total += qty;
+        if (isChasForReport(record)) stat.supp += qty;
+        else stat.bas += qty;
+        stat.records.push(record);
+      });
+
+      const summaryStats = [...driverDongMap.values()].sort((a, b) => {
+        if (a.driver === '미배정') return 1;
+        if (b.driver === '미배정') return -1;
+        const driverCmp = a.driver.localeCompare(b.driver, 'ko', { numeric: true });
+        if (driverCmp) return driverCmp;
+        return a.dong.localeCompare(b.dong, 'ko', { numeric: true });
+      });
+
+      let grandBas = 0, grandSupp = 0, grandTotal = 0;
+      const summaryRows = [['기사', '행정동', '수급자 포', '차상위 포', '합계', '건수']];
+      summaryStats.forEach(stat => {
+        summaryRows.push([stat.driver, stat.dong, stat.bas, stat.supp, stat.total, stat.count]);
+        grandBas += stat.bas;
+        grandSupp += stat.supp;
+        grandTotal += stat.total;
+      });
+      summaryRows.push(['전체 합계', '', grandBas, grandSupp, grandTotal, allRecs.length]);
+      const summaryWs = XLSX.utils.aoa_to_sheet(summaryRows);
+      summaryWs['!cols'] = [{ wch: 14 }, { wch: 16 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 8 }];
+      summaryWs['!autofilter'] = { ref: XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: Math.max(summaryRows.length - 2, 0), c: 5 } }) };
+      XLSX.utils.book_append_sheet(wb, summaryWs, safeSheetName('요약표', usedSheetNames));
+
+      XLSX.utils.book_append_sheet(wb, makeDeliveryListSheet(allRecs, true), safeSheetName('전체명단', usedSheetNames));
+
+      summaryStats
+        .filter(stat => stat.records.length > 0)
+        .forEach(stat => {
+          const sheetName = safeSheetName(`${stat.driver}-${stat.dong}`, usedSheetNames);
+          XLSX.utils.book_append_sheet(wb, makeDeliveryListSheet(stat.records, false), sheetName);
+        });
+
+      const ts = new Date().toLocaleString('ko-KR', {
+        month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
+      }).replace(/[.\s:]/g, '');
+      XLSX.writeFile(wb, `${driverRptCity}_${driverRptMonth}_기사별명단_${ts}.xlsx`);
+    } catch (e) {
+      alert('기사별 명단 다운로드 실패: ' + e.message);
+      console.error(e);
+    } finally {
+      setDriverRptExporting(false);
+    }
+  };
+
   const TABS = [
     { id: 'merger', label: '시트 병합',    icon: <GitMerge size={14} /> },
     { id: 'dedup',  label: '중복 정리',    icon: <Trash2 size={14} /> },
@@ -1160,6 +1403,7 @@ export default function UtilsModal({ onClose, user }) {
     { id: 'filemerge', label: '파일 합치기',  icon: <Combine size={14} /> },
     { id: 'match',     label: 'DATA 매칭',    icon: <Shuffle size={14} /> },
     { id: 'format',    label: '스타일 서식',  icon: <Palette size={14} /> },
+    { id: 'driverReport', label: '기사명단',  icon: <Truck size={14} /> },
     { id: 'orgReport', label: '소속사전용',   icon: <Building2 size={14} /> },
     { id: 'audit',     label: '이력 관리',    icon: <History size={14} /> },
   ];
@@ -1169,11 +1413,11 @@ export default function UtilsModal({ onClose, user }) {
     dedupResult.weakGroups.length > 0 ||
     (dedupResult.noNoteRows?.length ?? 0) > 0
   );
-  const contentH = (activeTab === 'dedup' && dedupResult) || (activeTab === 'dong' && dongResult) || (activeTab === 'remap' && remapStep >= 2) || (activeTab === 'filemerge' && mergeStep >= 2) || (activeTab === 'match' && matchStep >= 2) || activeTab === 'format' ? 'h-[640px]' : 'h-[520px]';
+  const contentH = (activeTab === 'dedup' && dedupResult) || (activeTab === 'dong' && dongResult) || (activeTab === 'remap' && remapStep >= 2) || (activeTab === 'filemerge' && mergeStep >= 2) || (activeTab === 'match' && matchStep >= 2) || activeTab === 'format' || activeTab === 'driverReport' || activeTab === 'orgReport' ? 'h-[76vh] max-h-[820px] min-h-[640px]' : 'h-[620px]';
 
   return (
     <div className="absolute inset-0 z-[150] bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-200">
-      <div className="bg-[#111] border border-gray-700 rounded-3xl w-full max-w-4xl flex flex-col overflow-hidden shadow-2xl">
+      <div className="bg-[#111] border border-gray-700 rounded-3xl w-full max-w-7xl flex flex-col overflow-hidden shadow-2xl">
 
         {/* Header */}
         <div className="px-7 py-5 border-b border-gray-800 flex justify-between items-center bg-gray-900/50">
@@ -2607,6 +2851,120 @@ export default function UtilsModal({ onClose, user }) {
                         }
                       </button>
                       {!formatFile && <p className="text-center text-xs text-gray-600">파일을 먼저 업로드하세요</p>}
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* ── 기사별 명단 ── */}
+            {activeTab === 'driverReport' && (() => {
+              const selectedMonthMeta = driverRptMonths.find(m => m.id === driverRptMonth);
+
+              return (
+                <div className="flex flex-col h-full animate-in slide-in-from-right-4 duration-300">
+                  <div className="mb-1">
+                    <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                      <Truck size={18} className="text-emerald-400" /> 기사별 명단 다운로드
+                    </h3>
+                    <p className="text-sm text-gray-400 mt-1">
+                      클라우드에 등록된 월별 명단을 선택해 기사별 전용 명단을 생성합니다. 같은 행정동을 여러 기사가 나눠 맡은 경우도 기사-행정동 시트로 분리됩니다.
+                    </p>
+                  </div>
+
+                  <div className="mt-5 grid grid-cols-[1.05fr_0.95fr] gap-5">
+                    <div className="space-y-4">
+                      <div>
+                        <label className="block text-xs font-bold text-gray-400 mb-2">등록된 명단 지자체</label>
+                        {driverRptLoadingCities ? (
+                          <div className="text-sm text-gray-500 flex items-center gap-2 h-12 px-4 rounded-xl border border-gray-800 bg-black/30">
+                            <RefreshCw size={14} className="animate-spin" /> 지자체 목록 확인 중...
+                          </div>
+                        ) : (
+                          <select
+                            value={driverRptCity}
+                            onChange={e => handleDriverRptCityChange(e.target.value)}
+                            className="w-full bg-[#1a1a1a] border border-gray-700 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-emerald-500">
+                            <option value="">-- 지자체 선택 --</option>
+                            {driverRptCities.map(c => (
+                              <option key={c.id} value={c.id}>
+                                {c.id}{c.lastMonthId ? ` · 최신 ${c.lastMonthId}` : ''}
+                              </option>
+                            ))}
+                          </select>
+                        )}
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-gray-400 mb-2">등록된 월별 명단</label>
+                        {driverRptLoadingMonths ? (
+                          <div className="text-sm text-gray-500 flex items-center gap-2 h-12 px-4 rounded-xl border border-gray-800 bg-black/30">
+                            <RefreshCw size={14} className="animate-spin" /> 월별 명단 확인 중...
+                          </div>
+                        ) : (
+                          <select
+                            value={driverRptMonth}
+                            onChange={e => setDriverRptMonth(e.target.value)}
+                            disabled={!driverRptCity || driverRptMonths.length === 0}
+                            className="w-full bg-[#1a1a1a] border border-gray-700 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-emerald-500 disabled:opacity-50">
+                            <option value="">-- 월 선택 --</option>
+                            {driverRptMonths.map(m => (
+                              <option key={m.id} value={m.id}>
+                                {m.id} · {Number(m.totalQty || 0).toLocaleString()}포 / {Number(m.totalCount || 0).toLocaleString()}건
+                              </option>
+                            ))}
+                          </select>
+                        )}
+                      </div>
+
+                      {selectedMonthMeta && (
+                        <div className="grid grid-cols-4 gap-2">
+                          {[
+                            { label: '전체', value: `${Number(selectedMonthMeta.totalQty || 0).toLocaleString()}포`, color: 'text-white' },
+                            { label: '수급자', value: `${Number(selectedMonthMeta.수급자Qty || 0).toLocaleString()}포`, color: 'text-amber-300' },
+                            { label: '차상위', value: `${Number(selectedMonthMeta.차상위Qty || 0).toLocaleString()}포`, color: 'text-blue-300' },
+                            { label: '건수', value: `${Number(selectedMonthMeta.totalCount || 0).toLocaleString()}건`, color: 'text-emerald-300' },
+                          ].map(item => (
+                            <div key={item.label} className="bg-black/35 border border-gray-800 rounded-xl p-3">
+                              <div className={`text-sm font-black ${item.color}`}>{item.value}</div>
+                              <div className="text-[10px] text-gray-600 mt-1">{item.label}</div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="bg-[#07110f] border border-emerald-900/40 rounded-2xl p-4 flex flex-col justify-between">
+                      <div>
+                        <p className="text-xs font-black text-emerald-300 mb-3">생성되는 엑셀 구성</p>
+                        <div className="space-y-2 text-xs text-gray-400">
+                          <div className="flex gap-2">
+                            <span className="mt-1 w-2 h-2 rounded-full bg-emerald-400 shrink-0" />
+                            <span><b className="text-white">요약표</b> — 기사, 행정동, 수급자 포, 차상위 포, 합계, 건수와 전체 합계</span>
+                          </div>
+                          <div className="flex gap-2">
+                            <span className="mt-1 w-2 h-2 rounded-full bg-blue-400 shrink-0" />
+                            <span><b className="text-white">전체명단</b> — 기사명 순으로 정렬된 전체 배송 명단</span>
+                          </div>
+                          <div className="flex gap-2">
+                            <span className="mt-1 w-2 h-2 rounded-full bg-amber-400 shrink-0" />
+                            <span><b className="text-white">기사-행정동 시트</b> — 기사별로 실제 배정된 행정동 단위 명단 분리</span>
+                          </div>
+                        </div>
+                        <p className="text-[10px] text-gray-600 mt-4 leading-relaxed">
+                          등록 기사 목록의 배정 행정동도 요약표에 반영합니다. 명단에만 존재하는 기사명도 누락하지 않고 포함합니다.
+                        </p>
+                      </div>
+
+                      <button
+                        onClick={handleDriverRptExport}
+                        disabled={!driverRptCity || !driverRptMonth || driverRptExporting}
+                        className="mt-5 w-full py-4 bg-emerald-600 hover:bg-emerald-500 disabled:bg-gray-700 disabled:text-gray-500 text-white font-black text-sm rounded-xl flex items-center justify-center gap-2 transition-all active:scale-[0.99]">
+                        {driverRptExporting
+                          ? <><RefreshCw size={16} className="animate-spin" /> 기사별 명단 생성 중...</>
+                          : <><Download size={16} /> 기사별 명단 다운로드</>
+                        }
+                      </button>
                     </div>
                   </div>
                 </div>

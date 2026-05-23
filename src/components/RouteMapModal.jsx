@@ -1,11 +1,14 @@
 ﻿import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { X, MapPin, Navigation2, Plus, Minus, RefreshCw, Save, AlertTriangle, Map as MapIcon, List, Building2, Clock, FileSpreadsheet, Download, HardDrive, Maximize2, Minimize2, Columns, AlertCircle, Search, Crosshair, Share2, Link } from 'lucide-react';
+import { X, MapPin, Navigation2, Plus, Minus, RefreshCw, Save, AlertTriangle, Map as MapIcon, List, Building2, Clock, FileSpreadsheet, Download, HardDrive, Maximize2, Minimize2, Columns, AlertCircle, Search, Crosshair, Share2, Link, Eraser, ArrowLeftRight } from 'lucide-react';
 import { db, auth } from '../config/firebase.js';
-import { collection, serverTimestamp, getDocs, getDoc, setDoc, doc, writeBatch } from 'firebase/firestore';
+import { collection, serverTimestamp, Timestamp, getDocs, getDoc, setDoc, updateDoc, doc, writeBatch, query, where, limit } from 'firebase/firestore';
 import * as XLSX from 'xlsx';
+import CoordBrushModal from './CoordBrushModal.jsx';
 
 const KAKAO_JS_KEY = import.meta.env.VITE_KAKAO_JS_KEY;
 const KAKAO_REST_KEY = import.meta.env.VITE_KAKAO_REST_KEY;
+const ADMIN_EMAILS = ['ttong627@gmail.com', 'admin@logis-op.com', 'jsh6270@gmail.com'];
+const SHARE_LINK_TTL_DAYS = 45;
 
 const DRIVER_COLORS = [
   '#3b82f6', '#10b981', '#f59e0b', '#ef4444',
@@ -21,7 +24,11 @@ const haversine = (lat1, lng1, lat2, lng2) => {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 };
 
-const parseAptDong = (addr) => { const m = addr?.match(/(\d+)\s*동/); return m ? parseInt(m[1]) : null; };
+const parseAptDong = (addr) => {
+  const text = String(addr || '');
+  const m = text.match(/(?:^|[\s,(])(\d{1,4})\s*동(?:[\s,)]|$)/) || text.match(/(?:^|[\s,(])(\d{3,4})\s*[-]\s*\d{1,4}\s*호?/);
+  return m ? parseInt(m[1], 10) : null;
+};
 const parseFloorHo = (addr) => {
   const floor = addr?.match(/(\d+)\s*층/)?.[1] || '0';
   const ho = addr?.match(/(\d+)\s*호/)?.[1] || '0';
@@ -47,7 +54,64 @@ const extractRoadAddress = (addr) => {
   if (parenEnd > -1) return addr.slice(0, parenEnd + 1).trim();
   return addr.trim();
 };
-const KAKAO_COLOR_MAP = { '#3b82f6':'blue','#3b82f6':'green','#f59e0b':'yellow','#ef4444':'red','#8b5cf6':'violet','#06b6d4':'blue','#f97316':'orange','#ec4899':'red','#14b8a6':'green','#a855f7':'violet','#84cc16':'green','#f43f5e':'red','#0ea5e9':'blue','#d97706':'yellow','#10b981':'green','#6366f1':'violet','#e11d48':'red','#0891b2':'blue','#65a30d':'green','#7c3aed':'violet' };
+
+const normalizeRegionKey = (value) => String(value || '').replace(/\s+/g, '').trim();
+
+const getRouteDong = (record) =>
+  String(record?.배정행정동 || record?.routeDong || record?.행정동 || '').trim();
+
+const getKakaoAreaMeta = (raw) => {
+  const road = raw?.road_address || {};
+  const addr = raw?.address || {};
+  const sido = road.region_1depth_name || addr.region_1depth_name || '';
+  const sigungu = road.region_2depth_name || addr.region_2depth_name || '';
+  const dong = road.region_3depth_h_name || road.region_3depth_name || addr.region_3depth_h_name || addr.region_3depth_name || '';
+  return { sido, sigungu, dong };
+};
+
+const isCoordAssignable = (record) => record?.좌표검증상태 !== '지자체벗어남';
+
+const assessKakaoAreaMatch = (record, raw, cityLabel = '') => {
+  const { sido, sigungu, dong } = getKakaoAreaMeta(raw);
+  const parts = String(cityLabel || '').trim().split(/\s+/).filter(Boolean);
+  const selectedSido = parts[0] || '';
+  const selectedSigungu = parts.slice(1).join(' ');
+  const selectedSidoKey = normalizeRegionKey(selectedSido);
+  const selectedSigunguKey = normalizeRegionKey(selectedSigungu);
+  const matchedSidoKey = normalizeRegionKey(sido);
+  const matchedSigunguKey = normalizeRegionKey(sigungu);
+  const inputDong = String(record?.행정동 || '').trim();
+
+  const cityOk = !selectedSidoKey || !selectedSigunguKey || !matchedSidoKey || !matchedSigunguKey
+    ? true
+    : selectedSidoKey === matchedSidoKey && (
+      selectedSigunguKey === matchedSigunguKey ||
+      selectedSigunguKey.includes(matchedSigunguKey) ||
+      matchedSigunguKey.includes(selectedSigunguKey)
+    );
+
+  if (!cityOk) {
+    return {
+      status: '지자체벗어남',
+      transferNeeded: false,
+      matchedSido: sido,
+      matchedSigungu: sigungu,
+      matchedDong: dong,
+      routeDong: inputDong,
+      reason: `좌표 지자체 벗어남: 선택 ${selectedSido} ${selectedSigungu}, 확인 ${sido} ${sigungu}`,
+    };
+  }
+  return {
+    status: '정상',
+    transferNeeded: false,
+    matchedSido: sido,
+    matchedSigungu: sigungu,
+    matchedDong: dong,
+    routeDong: inputDong,
+    reason: '',
+  };
+};
+const KAKAO_COLOR_MAP = { '#3b82f6':'blue','#f59e0b':'yellow','#ef4444':'red','#8b5cf6':'violet','#06b6d4':'blue','#f97316':'orange','#ec4899':'red','#14b8a6':'green','#a855f7':'violet','#84cc16':'green','#f43f5e':'red','#0ea5e9':'blue','#d97706':'yellow','#10b981':'green','#6366f1':'violet','#e11d48':'red','#0891b2':'blue','#65a30d':'green','#7c3aed':'violet' };
 
 // ── 유효부담 자동 감지 상수 ──────────────────────────────────────────────────
 const RENTAL_KEYWORDS = ['LH', 'SH', '임대', '행복주택', '국민임대', '영구임대', '공공임대', '보금자리', '매입임대'];
@@ -59,7 +123,16 @@ const getEffectiveLoad = (record) => {
   const qty  = parseInt(record.포수 || record['수량(포수)']) || 1;
   const addr = record.주소 || '';
   const note = record.특이사항 || '';
-  const full = addr + ' ' + note;
+  const full = [
+    addr,
+    note,
+    record._buildingName,
+    record.buildingName,
+    record._standardRoadAddress,
+    record.standardRoadAddress,
+    record?._routeHints?.apartmentGroupKey,
+    record?.routeHints?.apartmentGroupKey,
+  ].filter(Boolean).join(' ');
   if (qty >= 20 && RENTAL_KEYWORDS.some(k => full.includes(k))) return qty * 0.3;
   if (STAIRS_KEYWORDS.some(k => addr.includes(k))) {
     const fl = parseInt(addr.match(/(\d+)\s*층/)?.[1] || '2');
@@ -70,135 +143,531 @@ const getEffectiveLoad = (record) => {
   return qty;
 };
 
-// 주소에서 아파트명 추출 (ex: "삼성래미안 101동 201호" → "삼성래미안")
-const extractAptName = (addr) => {
-  if (!addr) return null;
-  const m = addr.match(/^(.+?)\s*\d+\s*동\s*\d+\s*호/);
-  if (m) return m[1].trim();
-  const m2 = addr.match(/^(.+?(?:아파트|아파|APT|apt))/i);
-  if (m2) return m2[1].trim();
+const normalizeAptGroupPart = (value) =>
+  String(value || '')
+    .normalize('NFC')
+    .replace(/\s+/g, ' ')
+    .replace(/[()]/g, '')
+    .trim();
+
+const APT_LIKE_RE = /아파트|APT|Apartment|주공|휴먼시아|휴먼시아|뜨란채|마을|단지|타운|빌리지|하이츠|아이파크|자이|래미안|푸르지오|힐스테이트|롯데캐슬|더샵|e편한세상|이편한세상|센트럴|리버|파크|LH|SH|임대|행복주택|국민임대|영구임대|공공임대|매입임대/i;
+const RENTAL_LIKE_RE = /LH|SH|임대|행복주택|국민임대|영구임대|공공임대|보금자리|매입임대|주공|휴먼시아|뜨란채/i;
+
+const getRecordSearchText = (record) => [
+  record?.주소,
+  record?.특이사항,
+  record?._buildingName,
+  record?.buildingName,
+  record?._standardRoadAddress,
+  record?.standardRoadAddress,
+  record?._routeHints?.apartmentGroupKey,
+  record?.routeHints?.apartmentGroupKey,
+].filter(Boolean).join(' ');
+
+const isApartmentLike = (record) => {
+  if (!record) return false;
+  if (record._isApt || record.isApt) return true;
+  if (record?._routeHints?.apartmentGroupKey || record?.routeHints?.apartmentGroupKey) return true;
+  return APT_LIKE_RE.test(getRecordSearchText(record));
+};
+
+const isRentalLike = (record) => RENTAL_LIKE_RE.test(getRecordSearchText(record));
+
+const extractBuildingName = (addr) => {
+  const parenMatches = [...String(addr || '').matchAll(/\(([^()]*)\)/g)];
+  for (let i = parenMatches.length - 1; i >= 0; i--) {
+    const parts = parenMatches[i][1].split(',').map(normalizeAptGroupPart).filter(Boolean);
+    const building = parts.find(part => !/(동|읍|면|리)$/.test(part));
+    if (building) return building;
+  }
+  return '';
+};
+
+// JUSO 정제 결과의 도로명주소를 아파트 단지 키로 우선 사용한다.
+// 건물명은 표시/임대 판별 보조이며, 도로명주소를 못 읽을 때만 그룹 키 폴백으로 쓴다.
+const getAptGroupMeta = (record) => {
+  if (!isApartmentLike(record)) return null;
+  const hintedKey = normalizeAptGroupPart(record?._routeHints?.apartmentGroupKey || record?.routeHints?.apartmentGroupKey || '');
+  const hintedBuilding = normalizeAptGroupPart(record?._buildingName || record?.buildingName || '');
+  const hintedRoad = normalizeAptGroupPart(record?._standardRoadAddress || record?.standardRoadAddress || '');
+  if (hintedKey) {
+    return {
+      key: `db:${hintedKey}`,
+      road: hintedRoad,
+      building: hintedBuilding,
+      label: hintedBuilding || hintedRoad || hintedKey,
+    };
+  }
+  const road = normalizeAptGroupPart(extractRoadAddress(record.주소 || ''));
+  const building = normalizeAptGroupPart(extractBuildingName(record.주소 || ''));
+  if (road.length >= 4) return { key: `road:${road}`, road, building, label: building || road };
+  if (building) return { key: `building:${building}`, road: '', building, label: building };
   return null;
 };
 
-// ── 2단계 동적 가중 보로노이 클러스터링 ──────────────────────────────────────
-// Phase 1 (30회): 순수 지리 K-means++ → loadFactor 없이 centroid 안정 수렴
-// Phase 2 (10회): 용량 보정 → 좁은 범위(0.6~1.4) + EMA 댐핑으로 진동 없이 균등화
-//
-// [진동 방지 이유]
-// loadFactor = clamp(0.2~2.5)으로 매 이터레이션 갱신하면 centroid가 수렴 못하고
-// 0.2↔2.5 사이를 진동 → 멀리 떨어진 점이 "가장 약한 경쟁자"에게 배정되는 침범 발생.
-// Phase 1에서 지리적 centroid를 먼저 확정한 후 Phase 2에서 소폭 보정하면 구역 유지.
-const kMeansCluster = (points, drivers, iterations = 30, pinCentroids = null) => {
-  const k = drivers.length;
-  if (!points.length || k === 0) return {};
-  if (k === 1) return Object.fromEntries(points.map(p => [p.id, drivers[0].id]));
-
-  const caps = drivers.map(d => parseFloat(d.capacity) || 100);
-  const totalCap = caps.reduce((s, c) => s + c, 0);
-  const totalEffLoad = points.reduce((s, p) => s + (p._effectiveLoad || 1), 0);
-  const targetLoads = caps.map(c => totalEffLoad * c / totalCap);
-
-  // Phase 1용: 순수 지리 영향력 (loadFactor 없음)
-  const bestGeo = (p, centroids) => {
-    let maxInf = -Infinity, bestI = 0;
-    centroids.forEach((c, i) => {
-      if (!c) return;
-      const d = haversine(p._lat, p._lng, c.lat, c.lng) || 1;
-      const inf = caps[i] / (d * d);
-      if (inf > maxInf) { maxInf = inf; bestI = i; }
-    });
-    return bestI;
-  };
-
-  // Phase 2용: 용량 보정 영향력 (EMA 댐핑 loadFactor)
-  const bestBalanced = (p, centroids, loadFactors) => {
-    let maxInf = -Infinity, bestI = 0;
-    centroids.forEach((c, i) => {
-      if (!c) return;
-      const d = haversine(p._lat, p._lng, c.lat, c.lng) || 1;
-      const inf = caps[i] * loadFactors[i] / (d * d);
-      if (inf > maxInf) { maxInf = inf; bestI = i; }
-    });
-    return bestI;
-  };
-
-  // EMA 댐핑: 이전값 60% + 신규값 40%, 범위 0.6~1.4 (진동 방지)
-  const updateLoadFactors = (clusters, prev) =>
-    clusters.map((pts, i) => {
-      const cur = pts.reduce((s, p) => s + (p._effectiveLoad || 1), 0);
-      const raw = cur > 0 ? Math.max(0.6, Math.min(1.4, targetLoads[i] / cur)) : 1.0;
-      return prev[i] * 0.6 + raw * 0.4;
-    });
-
-  if (pinCentroids && pinCentroids.length === k && pinCentroids.every(c => c)) {
-    // ── 핀 있음: Phase 1(4회 순수지리) → Phase 2(6회 용량보정)
-    let loadFactors = new Array(k).fill(1.0);
-    const clusterMap = {};
-    for (let pass = 0; pass < 10; pass++) {
-      const clusters = Array.from({ length: k }, () => []);
-      points.forEach(p => {
-        const i = pass < 4 ? bestGeo(p, pinCentroids) : bestBalanced(p, pinCentroids, loadFactors);
-        clusters[i].push(p);
-        clusterMap[p.id] = drivers[i].id;
-      });
-      if (pass >= 3) loadFactors = updateLoadFactors(clusters, loadFactors);
-    }
-    return clusterMap;
+const getRouteUnitKey = (record) => {
+  if (!record) return '';
+  const aptMeta = getAptGroupMeta(record);
+  if (aptMeta) {
+    const splitDong = (record.대형단지분할 || record.largeComplexSplit)
+      ? parseAptDong([record._detailAddress, record.detailAddress, record.주소, record.특이사항].filter(Boolean).join(' '))
+      : null;
+    return splitDong ? `apt-split:${aptMeta.key}:dong:${splitDong}` : `apt:${aptMeta.key}`;
   }
-
-  // ── 핀 없음: K-means++ 초기화
-  const centroids = [{ lat: points[0]._lat, lng: points[0]._lng }];
-  while (centroids.length < k) {
-    const dists = points.map(p => Math.min(...centroids.map(c => haversine(p._lat, p._lng, c.lat, c.lng))));
-    const sum = dists.reduce((a, b) => a + b * b, 0);
-    let r = Math.random() * sum, pushed = false;
-    for (let i = 0; i < points.length; i++) {
-      r -= dists[i] * dists[i];
-      if (r <= 0) { centroids.push({ lat: points[i]._lat, lng: points[i]._lng }); pushed = true; break; }
-    }
-    if (!pushed) centroids.push({ lat: points[points.length - 1]._lat, lng: points[points.length - 1]._lng });
-  }
-
-  // ── Phase 1: 순수 지리 K-means++ (centroid 안정 수렴)
-  for (let iter = 0; iter < iterations; iter++) {
-    const clusters = Array.from({ length: k }, () => []);
-    points.forEach(p => { clusters[bestGeo(p, centroids)].push(p); });
-    centroids.forEach((c, i) => {
-      if (!clusters[i].length) return;
-      c.lat = clusters[i].reduce((s, p) => s + p._lat, 0) / clusters[i].length;
-      c.lng = clusters[i].reduce((s, p) => s + p._lng, 0) / clusters[i].length;
-    });
-  }
-
-  // ── Phase 2: 용량 보정 (안정된 centroid 기준, 소폭 drift 허용)
-  let loadFactors = new Array(k).fill(1.0);
-  for (let iter = 0; iter < 10; iter++) {
-    const clusters = Array.from({ length: k }, () => []);
-    points.forEach(p => { clusters[bestBalanced(p, centroids, loadFactors)].push(p); });
-    loadFactors = updateLoadFactors(clusters, loadFactors);
-    // centroid 소폭 보정 (30% drift만 허용 → 구역 경계 유지하면서 균등화)
-    centroids.forEach((c, i) => {
-      if (!clusters[i].length) return;
-      const newLat = clusters[i].reduce((s, p) => s + p._lat, 0) / clusters[i].length;
-      const newLng = clusters[i].reduce((s, p) => s + p._lng, 0) / clusters[i].length;
-      c.lat = c.lat * 0.7 + newLat * 0.3;
-      c.lng = c.lng * 0.7 + newLng * 0.3;
-    });
-  }
-
-  const result = {};
-  points.forEach(p => { result[p.id] = drivers[bestBalanced(p, centroids, loadFactors)].id; });
-  return result;
+  const addr = normalizeAptGroupPart(record._addressKey || record.주소 || '');
+  if (addr) return `addr:${addr}`;
+  if (record._lat && record._lng) return `coord:${Number(record._lat).toFixed(5)},${Number(record._lng).toFixed(5)}`;
+  return `record:${record.id}`;
 };
 
+const buildAssignedRouteUnits = (records, drivers) => {
+  const activeDriverIds = new Set(drivers.filter(d => !d.isExternal).map(d => d.id));
+  const buckets = new Map();
+  records.forEach(record => {
+    if (!record?._lat || !record?._lng || !record?._driverId || !activeDriverIds.has(record._driverId)) return;
+    const key = getRouteUnitKey(record);
+    if (!buckets.has(key)) buckets.set(key, []);
+    buckets.get(key).push(record);
+  });
+
+  return [...buckets.entries()].map(([key, recs]) => {
+    const load = recs.reduce((s, r) => s + getEffectiveLoad(r), 0) || recs.length || 1;
+    const driverVotes = {};
+    recs.forEach(r => { driverVotes[r._driverId] = (driverVotes[r._driverId] || 0) + 1; });
+    const driverIds = Object.keys(driverVotes);
+    const driverId = driverIds.sort((a, b) => driverVotes[b] - driverVotes[a])[0] || '';
+    return {
+      key,
+      ids: recs.map(r => r.id),
+      records: recs,
+      driverId,
+      driverIds,
+      lat: recs.reduce((s, r) => s + Number(r._lat) * getEffectiveLoad(r), 0) / load,
+      lng: recs.reduce((s, r) => s + Number(r._lng) * getEffectiveLoad(r), 0) / load,
+      load,
+    };
+  });
+};
+
+const getMajorityDriverId = (records) => {
+  const votes = {};
+  records.forEach(record => {
+    if (!record._driverId) return;
+    votes[record._driverId] = (votes[record._driverId] || 0) + 1;
+  });
+  return Object.entries(votes).sort((a, b) => b[1] - a[1])[0]?.[0] || '';
+};
+
+const getMixedRouteUnitIssues = (units) => {
+  const issues = new Map();
+  units.forEach(unit => {
+    if (unit.driverIds.length <= 1) return;
+    const targetDriverId = getMajorityDriverId(unit.records) || unit.driverId;
+    if (!targetDriverId) return;
+    if (unit.records.some(record => record._driverId !== targetDriverId)) {
+      issues.set(unit.key, { type: 'split-unit', targetDriverId });
+    }
+  });
+  units.forEach(unit => {
+    if (issues.has(unit.key)) return;
+    let sameLoad = 0;
+    let otherLoad = 0;
+    let otherCount = 0;
+    const votes = {};
+    units.forEach(neighbor => {
+      if (neighbor.key === unit.key) return;
+      const dist = haversine(unit.lat, unit.lng, neighbor.lat, neighbor.lng);
+      if (dist <= 180) {
+        if (neighbor.driverId === unit.driverId) sameLoad += neighbor.load || 1;
+        else {
+          otherLoad += neighbor.load || 1;
+          otherCount++;
+        }
+      }
+      if (dist <= 450 && neighbor.driverId && neighbor.driverId !== unit.driverId) {
+        votes[neighbor.driverId] = (votes[neighbor.driverId] || 0) + (neighbor.load || 1);
+      }
+    });
+    if (otherCount < 3 || otherLoad <= Math.max(3, sameLoad * 1.6)) return;
+    const targetDriverId = Object.entries(votes).sort((a, b) => b[1] - a[1])[0]?.[0] || '';
+    if (targetDriverId && targetDriverId !== unit.driverId) {
+      issues.set(unit.key, { type: 'isolated-unit', targetDriverId });
+    }
+  });
+  return issues;
+};
+
+const getMixedRouteUnitKeys = (units) => {
+  return new Set(getMixedRouteUnitIssues(units).keys());
+};
+
+const getRecordQty = (record) => parseInt(record?.포수 || record?.['수량(포수)']) || 1;
+
+const getSideLabel = (side) => {
+  if (side === 'left') return '좌측(홀수)';
+  if (side === 'right') return '우측(짝수)';
+  return '양측/골목';
+};
+
+const buildMapInsights = ({ records, drivers, largeAptComplexes = [] }) => {
+  const activeDriverIds = new Set(drivers.filter(d => !d.isExternal).map(d => d.id));
+  const assignedUnits = buildAssignedRouteUnits(records, drivers);
+  const mixedKeys = getMixedRouteUnitKeys(assignedUnits);
+  const mixedRecords = assignedUnits
+    .filter(unit => mixedKeys.has(unit.key))
+    .flatMap(unit => unit.records);
+
+  const roadBuckets = new Map();
+  records.forEach(record => {
+    if (!record?._lat || !record?._lng || !record?._driverId || !activeDriverIds.has(record._driverId)) return;
+    const roadInfo = parseRoadInfo(record._standardRoadAddress || record.standardRoadAddress || record.주소 || '');
+    if (!roadInfo.road) return;
+    const sideLabel = getSideLabel(roadInfo.side);
+    const key = `${roadInfo.road}:${roadInfo.side || 'both'}`;
+    if (!roadBuckets.has(key)) {
+      roadBuckets.set(key, {
+        key,
+        road: roadInfo.road,
+        side: roadInfo.side || '',
+        label: `${roadInfo.road} ${sideLabel}`,
+        count: 0,
+        qty: 0,
+        load: 0,
+        driverIds: new Set(),
+        recordIds: [],
+      });
+    }
+    const bucket = roadBuckets.get(key);
+    bucket.count += 1;
+    bucket.qty += getRecordQty(record);
+    bucket.load += getEffectiveLoad(record);
+    bucket.driverIds.add(record._driverId);
+    bucket.recordIds.push(record.id);
+  });
+
+  const roadStats = [...roadBuckets.values()]
+    .map(bucket => ({
+      ...bucket,
+      load: Math.round(bucket.load * 10) / 10,
+      driverCount: bucket.driverIds.size,
+      driverIds: [...bucket.driverIds],
+    }))
+    .sort((a, b) => {
+      if (b.driverCount !== a.driverCount) return b.driverCount - a.driverCount;
+      return b.load - a.load;
+    });
+
+  const mixedRoads = roadStats.filter(road => road.driverCount > 1 && road.count >= 2);
+  const driverLoadStats = drivers.filter(d => !d.isExternal).map(driver => {
+    const assigned = records.filter(r => r._driverId === driver.id);
+    const qty = assigned.reduce((sum, record) => sum + getRecordQty(record), 0);
+    const load = assigned.reduce((sum, record) => sum + getEffectiveLoad(record), 0);
+    return {
+      driverId: driver.id,
+      driverName: driver.name,
+      color: driver.color,
+      count: assigned.length,
+      qty,
+      load: Math.round(load * 10) / 10,
+    };
+  });
+  const avgLoad = driverLoadStats.length
+    ? driverLoadStats.reduce((sum, stat) => sum + stat.load, 0) / driverLoadStats.length
+    : 0;
+  const loadWarnings = driverLoadStats
+    .map(stat => ({
+      ...stat,
+      diffPct: avgLoad ? Math.round(((stat.load - avgLoad) / avgLoad) * 100) : 0,
+    }))
+    .filter(stat => Math.abs(stat.diffPct) >= 25)
+    .sort((a, b) => Math.abs(b.diffPct) - Math.abs(a.diffPct));
+
+  const isolatedUnits = assignedUnits
+    .map(unit => {
+      let sameCount = 0;
+      let nearestSame = Infinity;
+      assignedUnits.forEach(other => {
+        if (other.key === unit.key || other.driverId !== unit.driverId) return;
+        const dist = haversine(unit.lat, unit.lng, other.lat, other.lng);
+        if (dist <= 300) sameCount += 1;
+        nearestSame = Math.min(nearestSame, dist);
+      });
+      return { ...unit, sameCount, nearestSame };
+    })
+    .filter(unit => unit.driverId && (unit.sameCount < 2 || unit.nearestSame > 450))
+    .sort((a, b) => (b.load || 0) - (a.load || 0))
+    .slice(0, 8);
+
+  const coordIssues = {
+    noCoord: records.filter(r => !r._lat || !r._lng).length,
+    outCity: records.filter(r => r.좌표검증상태 === '지자체벗어남').length,
+    outDong: 0,
+  };
+
+  const actions = [];
+  if (mixedRecords.length) actions.push(`혼재 의심 ${mixedRecords.length}건은 묶음 보정으로 먼저 정리하세요.`);
+  if (mixedRoads.length) actions.push(`주요 도로 ${mixedRoads.length}개가 여러 기사에게 나뉘었습니다. 홀짝 좌우 기준 경계를 확인하세요.`);
+  if (isolatedUnits.length) actions.push(`외곽 고립 묶음 ${isolatedUnits.length}개는 같은 방향 권역 기사에게 붙이는 편이 좋습니다.`);
+  if (largeAptComplexes.length) actions.push(`50포 이상 대형단지 ${largeAptComplexes.length}개는 동 단위 분할 여부를 확인하세요.`);
+  if (coordIssues.outCity) actions.push(`지자체 이탈 좌표 ${coordIssues.outCity}건은 배정 전 재검증이 필요합니다.`);
+  if (!actions.length) actions.push('현재 지도 기준으로 큰 혼재 신호는 없습니다. 자동 순번 전 기사별 포수와 동선을 마지막 확인하세요.');
+
+  return {
+    mixedRecords,
+    mixedCount: mixedRecords.length,
+    roadStats,
+    mixedRoads,
+    isolatedUnits,
+    coordIssues,
+    driverLoadStats,
+    loadWarnings,
+    actions,
+  };
+};
 
 // ── 도로명 파싱 헬퍼 ─────────────────────────────────────────────────────
 const parseRoadInfo = (addr) => {
-  if (!addr) return { road: '', num: 9999, sub: 0 };
+  if (!addr) return { road: '', side: '', num: 9999, sub: 0 };
   // 도로명 + 건물번호 추출 (예: "강남대로 127-3")
   const m = addr.match(/([가-힣\w]+(?:대로|로|길|가))\s*(\d+)(?:-(\d+))?/);
-  if (m) return { road: m[1], num: parseInt(m[2]) || 9999, sub: parseInt(m[3]) || 0 };
-  return { road: '', num: 9999, sub: 0 };
+  if (m) {
+    const num = parseInt(m[2]) || 9999;
+    const side = /(?:대로|로)$/.test(m[1]) && num !== 9999
+      ? (num % 2 ? 'left' : 'right')
+      : '';
+    return { road: m[1], side, num, sub: parseInt(m[3]) || 0 };
+  }
+  return { road: '', side: '', num: 9999, sub: 0 };
+};
+
+const getSequenceAddress = (record) =>
+  record?._standardRoadAddress ||
+  record?.standardRoadAddress ||
+  record?._addressKey ||
+  extractRoadAddress(record?.주소 || '') ||
+  record?.주소 ||
+  '';
+
+const getSequenceUnitMeta = (record) => {
+  const aptMeta = getAptGroupMeta(record);
+  if (aptMeta) {
+    const dong = parseAptDong([record._detailAddress, record.detailAddress, record.주소, record.특이사항].filter(Boolean).join(' ')) || 0;
+    return {
+      key: `apt:${aptMeta.key}:${dong || 'all'}`,
+      type: 'apt',
+      label: dong ? `${aptMeta.label} ${dong}동` : aptMeta.label,
+      sortNo: dong || 9999,
+    };
+  }
+  const roadInfo = parseRoadInfo(getSequenceAddress(record));
+  if (roadInfo.road) {
+    return {
+      key: `road:${roadInfo.road}:${roadInfo.side || 'both'}`,
+      type: 'road',
+      label: `${roadInfo.road} ${getSideLabel(roadInfo.side)}`,
+      roadInfo,
+      sortNo: roadInfo.num,
+    };
+  }
+  if (record._lat && record._lng) {
+    return {
+      key: `near:${Number(record._lat).toFixed(4)},${Number(record._lng).toFixed(4)}`,
+      type: 'near',
+      label: '좌표기반',
+      sortNo: 9999,
+    };
+  }
+  return { key: `no-coord:${record.id}`, type: 'no_coord', label: '좌표없음', sortNo: 9999 };
+};
+
+const sortSequenceUnitRecords = (records) => {
+  return [...records].sort((a, b) => {
+    const aptA = getAptGroupMeta(a);
+    const aptB = getAptGroupMeta(b);
+    if (aptA || aptB) {
+      const dongA = parseAptDong([a._detailAddress, a.detailAddress, a.주소, a.특이사항].filter(Boolean).join(' ')) || 9999;
+      const dongB = parseAptDong([b._detailAddress, b.detailAddress, b.주소, b.특이사항].filter(Boolean).join(' ')) || 9999;
+      if (dongA !== dongB) return dongA - dongB;
+      const floorA = parseFloorHo([a._detailAddress, a.detailAddress, a.주소].filter(Boolean).join(' '));
+      const floorB = parseFloorHo([b._detailAddress, b.detailAddress, b.주소].filter(Boolean).join(' '));
+      if (floorA.ho !== floorB.ho) return floorA.ho - floorB.ho;
+      return floorA.floor - floorB.floor;
+    }
+    const rA = parseRoadInfo(getSequenceAddress(a));
+    const rB = parseRoadInfo(getSequenceAddress(b));
+    if (rA.road !== rB.road) return rA.road.localeCompare(rB.road, 'ko', { numeric: true });
+    if (rA.side !== rB.side) return String(rA.side).localeCompare(String(rB.side));
+    if (rA.num !== rB.num) return rA.num - rB.num;
+    if (rA.sub !== rB.sub) return rA.sub - rB.sub;
+    return String(a.이름 || '').localeCompare(String(b.이름 || ''), 'ko');
+  });
+};
+
+const buildSequenceUnits = (records) => {
+  const buckets = new Map();
+  records.forEach(record => {
+    const meta = getSequenceUnitMeta(record);
+    if (!buckets.has(meta.key)) buckets.set(meta.key, { ...meta, records: [] });
+    buckets.get(meta.key).records.push(record);
+  });
+  return [...buckets.values()]
+    .map(unit => {
+      const sorted = sortSequenceUnitRecords(unit.records);
+      const withCoord = sorted.filter(r => r._lat && r._lng);
+      const first = withCoord[0] || sorted[0];
+      const last = withCoord[withCoord.length - 1] || sorted[sorted.length - 1];
+      const load = sorted.reduce((s, r) => s + getEffectiveLoad(r), 0) || sorted.length || 1;
+      return {
+        ...unit,
+        records: sorted,
+        lat: withCoord.length ? withCoord.reduce((s, r) => s + Number(r._lat) * getEffectiveLoad(r), 0) / load : null,
+        lng: withCoord.length ? withCoord.reduce((s, r) => s + Number(r._lng) * getEffectiveLoad(r), 0) / load : null,
+        sLat: first?._lat || null,
+        sLng: first?._lng || null,
+        eLat: last?._lat || null,
+        eLng: last?._lng || null,
+        hasCoord: withCoord.length > 0,
+        noCoordCount: sorted.length - withCoord.length,
+      };
+    });
+};
+
+const getUnitStraightDistance = (from, to) => {
+  if (!from?.lat || !from?.lng || !to?.lat || !to?.lng) return Infinity;
+  return haversine(from.lat, from.lng, to.lat, to.lng);
+};
+
+const getUnitEdgeKey = (from, to) => [
+  Number(from?.lat || 0).toFixed(5),
+  Number(from?.lng || 0).toFixed(5),
+  Number(to?.lat || 0).toFixed(5),
+  Number(to?.lng || 0).toFixed(5),
+].join(',');
+
+const getLocalRouteEdge = (from, to) => {
+  const straight = getUnitStraightDistance(from, to);
+  const fromRoad = from?.roadInfo || parseRoadInfo(from?.records?.[0] ? getSequenceAddress(from.records[0]) : '');
+  const toRoad = to?.roadInfo || parseRoadInfo(to?.records?.[0] ? getSequenceAddress(to.records[0]) : '');
+  const sameRoad = fromRoad.road && fromRoad.road === toRoad.road;
+  const sameSide = sameRoad && fromRoad.side === toRoad.side;
+  const sameApt = from?.type === 'apt' && to?.type === 'apt' && from.key.split(':').slice(0, 3).join(':') === to.key.split(':').slice(0, 3).join(':');
+  const crossSide = sameRoad && fromRoad.side && toRoad.side && fromRoad.side !== toRoad.side;
+  const roadPenalty = crossSide ? 1.85 : sameSide ? 1.05 : sameRoad ? 1.2 : 1.35;
+  const aptPenalty = sameApt ? 0.65 : 1;
+  const carDistance = Math.round(straight * roadPenalty * aptPenalty);
+  const duration = Math.round(carDistance / 7.5 + (crossSide ? 45 : 0) + (sameApt ? -20 : 0));
+  const walkCandidate = straight <= 120 && (sameApt || crossSide || carDistance > straight * 2.4);
+  return {
+    source: 'local',
+    straight,
+    carDistance,
+    duration: Math.max(20, duration),
+    walkCandidate,
+  };
+};
+
+const fetchKakaoDirectionsEdge = async (from, to, signal) => {
+  if (!KAKAO_REST_KEY || !from?.lng || !from?.lat || !to?.lng || !to?.lat) return null;
+  const url = `https://apis-navi.kakaomobility.com/v1/directions?origin=${from.lng},${from.lat}&destination=${to.lng},${to.lat}&priority=RECOMMEND&summary=true`;
+  const res = await fetch(url, {
+    headers: { Authorization: `KakaoAK ${KAKAO_REST_KEY}` },
+    signal,
+  });
+  if (!res.ok) return null;
+  const data = await res.json();
+  const summary = data?.routes?.[0]?.summary;
+  if (!summary?.distance) return null;
+  const straight = getUnitStraightDistance(from, to);
+  const carDistance = Number(summary.distance) || straight;
+  const duration = Number(summary.duration) || Math.round(carDistance / 7);
+  return {
+    source: 'kakao',
+    straight,
+    carDistance,
+    duration,
+    walkCandidate: straight <= 120 && carDistance > straight * 3.2,
+  };
+};
+
+const getAdvancedEdgeCost = async (from, to, cache, useApi = false) => {
+  const key = getUnitEdgeKey(from, to);
+  if (cache?.has(key)) return cache.get(key);
+  let edge = null;
+  if (useApi) {
+    const ctrl = new AbortController();
+    const tid = setTimeout(() => ctrl.abort(), 1200);
+    try {
+      edge = await fetchKakaoDirectionsEdge(from, to, ctrl.signal);
+    } catch {
+      edge = null;
+    } finally {
+      clearTimeout(tid);
+    }
+  }
+  if (!edge) edge = getLocalRouteEdge(from, to);
+  cache?.set(key, edge);
+  return edge;
+};
+
+const scoreAdvancedEdge = (from, to, edge) => {
+  const fromRoad = from?.roadInfo || parseRoadInfo(from?.records?.[0] ? getSequenceAddress(from.records[0]) : '');
+  const toRoad = to?.roadInfo || parseRoadInfo(to?.records?.[0] ? getSequenceAddress(to.records[0]) : '');
+  const sameRoad = fromRoad.road && fromRoad.road === toRoad.road;
+  const sameSide = sameRoad && fromRoad.side === toRoad.side;
+  const crossSide = sameRoad && fromRoad.side && toRoad.side && fromRoad.side !== toRoad.side;
+  const sameApt = from?.type === 'apt' && to?.type === 'apt' && from.key.split(':').slice(0, 3).join(':') === to.key.split(':').slice(0, 3).join(':');
+  let score = edge.duration || edge.carDistance || edge.straight || 999999;
+  if (sameApt) score -= 90;
+  if (sameSide) score -= 55;
+  else if (sameRoad) score -= 20;
+  if (crossSide) score += 80;
+  if (edge.walkCandidate) score -= 45;
+  return score;
+};
+
+const advancedRoadSequence = async (points, options = {}) => {
+  if (!points.length) return [];
+  const cache = options.edgeCache || new Map();
+  const units = buildSequenceUnits(points);
+  const noCoordUnits = units.filter(unit => !unit.hasCoord);
+  const rem = units.filter(unit => unit.hasCoord);
+  if (!rem.length) return noCoordUnits.flatMap(unit => unit.records);
+
+  const startIdx = rem.reduce((mi, unit, i) => unit.lat > rem[mi].lat ? i : mi, 0);
+  const ordered = [rem.splice(startIdx, 1)[0]];
+  const usedEdges = [];
+
+  while (rem.length) {
+    const last = ordered[ordered.length - 1];
+    const candidates = rem
+      .map((unit, index) => ({ unit, index, straight: getUnitStraightDistance(last, unit) }))
+      .sort((a, b) => a.straight - b.straight)
+      .slice(0, options.candidateLimit || 6);
+
+    let best = null;
+    for (const candidate of candidates) {
+      const edge = await getAdvancedEdgeCost(last, candidate.unit, cache, options.useApi);
+      const score = scoreAdvancedEdge(last, candidate.unit, edge);
+      if (!best || score < best.score) best = { ...candidate, edge, score };
+    }
+    if (!best) break;
+    ordered.push(rem.splice(best.index, 1)[0]);
+    usedEdges.push(best.edge);
+  }
+
+  const result = [];
+  let prevLat = ordered[0].lat;
+  let prevLng = ordered[0].lng;
+  ordered.forEach(unit => {
+    const fwdD = unit.sLat && unit.sLng ? haversine(prevLat, prevLng, unit.sLat, unit.sLng) : 0;
+    const revD = unit.eLat && unit.eLng ? haversine(prevLat, prevLng, unit.eLat, unit.eLng) : fwdD;
+    const group = revD < fwdD ? [...unit.records].reverse() : unit.records;
+    result.push(...group);
+    const last = group[group.length - 1];
+    prevLat = last?._lat || unit.lat;
+    prevLng = last?._lng || unit.lng;
+  });
+  return [...result, ...noCoordUnits.flatMap(unit => unit.records)];
 };
 
 // ── 2-opt 교차 제거 (도로 그룹 배열 in-place 최적화) ────────────────────────
@@ -236,34 +705,16 @@ const roadAwareTSP = (points) => {
   const noCoord   = points.filter(p => !p._lat || !p._lng);
   if (!withCoord.length) return [...noCoord];
 
-  // ① 도로명으로 그룹화
-  const roadMap = new Map();
-  withCoord.forEach(p => {
-    const { road } = parseRoadInfo(p.주소 || '');
-    const key = road || '_none';
-    if (!roadMap.has(key)) roadMap.set(key, []);
-    roadMap.get(key).push(p);
-  });
-
-  // ② 그룹 내 건물번호 오름차순 정렬
-  roadMap.forEach(group => {
-    group.sort((a, b) => {
-      const rA = parseRoadInfo(a.주소 || ''), rB = parseRoadInfo(b.주소 || '');
-      return rA.num !== rB.num ? rA.num - rB.num : rA.sub - rB.sub;
-    });
-  });
-
-  // 도로 그룹 → centroid + 양 끝 좌표(진입 방향 최적화용)
-  const roads = [...roadMap.values()].map(group => ({
-    group,
-    lat:  group.reduce((s, p) => s + p._lat, 0) / group.length,
-    lng:  group.reduce((s, p) => s + p._lng, 0) / group.length,
-    sLat: group[0]._lat,                        sLng: group[0]._lng,
-    eLat: group[group.length - 1]._lat,         eLng: group[group.length - 1]._lng,
-  }));
+  const unitNoCoord = buildSequenceUnits(points).filter(unit => !unit.hasCoord).flatMap(unit => unit.records);
+  const roads = buildSequenceUnits(withCoord)
+    .filter(unit => unit.hasCoord)
+    .map(unit => ({
+      ...unit,
+      group: unit.records,
+    }));
 
   if (roads.length === 1) {
-    return [...roads[0].group, ...noCoord];
+    return [...roads[0].group, ...noCoord, ...unitNoCoord.filter(r => !noCoord.some(n => n.id === r.id))];
   }
 
   // ③ 최근접 이웃 초기 순서 (가장 북쪽 도로부터)
@@ -295,7 +746,94 @@ const roadAwareTSP = (points) => {
     prevLat = last._lat; prevLng = last._lng;
   });
 
-  return [...result, ...noCoord];
+  return [...result, ...noCoord, ...unitNoCoord.filter(r => !noCoord.some(n => n.id === r.id))];
+};
+
+const analyzeSequenceQuality = (records, drivers) => {
+  const driverStats = drivers
+    .filter(driver => records.some(record => record._driverId === driver.id))
+    .map(driver => {
+      const ordered = records
+        .filter(record => record._driverId === driver.id)
+        .sort((a, b) => (parseInt(a.배송순번) || 99999) - (parseInt(b.배송순번) || 99999));
+      const noCoord = ordered.filter(record => !record._lat || !record._lng);
+      const noRoad = ordered.filter(record => !parseRoadInfo(getSequenceAddress(record)).road && !isApartmentLike(record));
+      const jumps = [];
+      const walkCandidates = [];
+      const revisitRoads = new Set();
+      const closedRoads = new Set();
+      let lastRoad = '';
+      let totalDist = 0;
+      let maxDist = 0;
+
+      for (let i = 1; i < ordered.length; i++) {
+        const prev = ordered[i - 1];
+        const cur = ordered[i];
+        if (!prev._lat || !prev._lng || !cur._lat || !cur._lng) continue;
+        const dist = Math.round(haversine(prev._lat, prev._lng, cur._lat, cur._lng));
+        totalDist += dist;
+        maxDist = Math.max(maxDist, dist);
+        const prevRoad = parseRoadInfo(getSequenceAddress(prev));
+        const curRoad = parseRoadInfo(getSequenceAddress(cur));
+        const sameApt = Boolean(getAptGroupMeta(prev)?.key && getAptGroupMeta(prev)?.key === getAptGroupMeta(cur)?.key);
+        const sameRoad = prevRoad.road && prevRoad.road === curRoad.road && prevRoad.side === curRoad.side;
+        if (dist >= 300 && !sameApt && !sameRoad) {
+          jumps.push({ fromId: prev.id, toId: cur.id, distance: dist, fromSeq: prev.배송순번, toSeq: cur.배송순번 });
+        }
+        if (dist <= 120 && (!sameRoad || sameApt)) {
+          walkCandidates.push({ fromId: prev.id, toId: cur.id, distance: dist, fromSeq: prev.배송순번, toSeq: cur.배송순번 });
+        }
+      }
+
+      ordered.forEach(record => {
+        const road = parseRoadInfo(getSequenceAddress(record)).road;
+        if (!road) return;
+        if (lastRoad && road !== lastRoad) closedRoads.add(lastRoad);
+        if (road !== lastRoad && closedRoads.has(road)) revisitRoads.add(road);
+        lastRoad = road;
+      });
+
+      const denominator = Math.max(1, ordered.filter(record => record._lat && record._lng).length - 1);
+      const avgDist = Math.round(totalDist / denominator);
+      let accuracy = 86;
+      accuracy -= Math.min(18, jumps.length * 3);
+      accuracy -= Math.min(10, noCoord.length * 2);
+      accuracy -= Math.min(8, noRoad.length);
+      accuracy -= Math.min(8, revisitRoads.size * 2);
+      accuracy += Math.min(6, walkCandidates.length);
+      accuracy = Math.max(55, Math.min(96, accuracy));
+
+      return {
+        driverId: driver.id,
+        driverName: driver.name,
+        color: driver.color,
+        count: ordered.length,
+        avgDist,
+        maxDist,
+        noCoordCount: noCoord.length,
+        noRoadCount: noRoad.length,
+        jumpCount: jumps.length,
+        walkCount: walkCandidates.length,
+        revisitRoadCount: revisitRoads.size,
+        accuracy,
+        jumpIds: jumps.flatMap(item => [item.fromId, item.toId]),
+        walkIds: walkCandidates.flatMap(item => [item.fromId, item.toId]),
+        noCoordIds: noCoord.map(record => record.id),
+        noRoadIds: noRoad.map(record => record.id),
+      };
+    });
+
+  const issueCount = driverStats.reduce((sum, stat) =>
+    sum + stat.jumpCount + stat.noCoordCount + stat.noRoadCount + stat.revisitRoadCount, 0);
+  const avgAccuracy = driverStats.length
+    ? Math.round(driverStats.reduce((sum, stat) => sum + stat.accuracy, 0) / driverStats.length)
+    : 0;
+  return {
+    driverStats,
+    issueCount,
+    avgAccuracy,
+    hasSequence: records.some(record => record.배송순번),
+  };
 };
 
 // ── 좌표 기반 TSP + 2-opt 교차 제거 (도로 정보 없을 때 폴백) ────────────────
@@ -362,6 +900,8 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
   // layoutMode: 'split' | 'map' | 'list' | 'mapfull' | 'listfull'
   const [layoutMode, setLayoutMode] = useState('split');
   const [isSplitting, setIsSplitting] = useState(false);
+  const [routeAnalysis, setRouteAnalysis] = useState(null);
+  const [showMapAnalysis, setShowMapAnalysis] = useState(false);
   const [selectedDriverFilter, setSelectedDriverFilter] = useState('all');
   const [aptListExpanded, setAptListExpanded] = useState(true);
   const [aptMultiModal, setAptMultiModal] = useState(null); // { aptName, dongs: [{dong, records, assignedDriverId}] }
@@ -370,7 +910,9 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
   const [hasRunGeocoding, setHasRunGeocoding] = useState(false);
   const [coordProgress, setCoordProgress] = useState(null);
   const [selectedRecordId, setSelectedRecordId] = useState(null);
-  // 기사 핀 (거점 위치 → K-means 초기 중심)
+  const [selectionPulseId, setSelectionPulseId] = useState(null);
+  const selectionPulseTimerRef = useRef(null);
+  // 기사 핀 (모든 기사 핀이 있으면 가까운 거점 배정에 사용)
   const [driverPins, setDriverPins] = useState({});       // { driverId: { lat, lng } }
   const [placingPinForDriver, setPlacingPinForDriver] = useState(null); // 핀 배치 모드 중인 driverId
   const [showErrorPanel, setShowErrorPanel] = useState(false);
@@ -408,6 +950,9 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
   // ── 공유 링크
   const [shareModal, setShareModal] = useState(null); // { links: [{driverId,name,color,url}] }
   const [isCreatingShare, setIsCreatingShare] = useState(false);
+  const [orderRequestModal, setOrderRequestModal] = useState(null); // { requests: [...] }
+  const [isLoadingOrderRequests, setIsLoadingOrderRequests] = useState(false);
+  const [isApplyingOrderRequest, setIsApplyingOrderRequest] = useState(false);
 
   // ── 기사 배치 잠금 (브러시 보정 후 실수로 초기화 방지)
   const [isAssignmentLocked, setIsAssignmentLocked] = useState(false);
@@ -415,10 +960,23 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
   // ── 같은 좌표 팝업
   const [samePointPopup, setSamePointPopup] = useState(null); // { recs, x, y }
 
+  // ── 좌표 삭제 브러시 모달
+  const [showCoordBrush, setShowCoordBrush] = useState(false);
+
+  // ── 소속사 기사 추가 피커
+  const [showCompanyPicker, setShowCompanyPicker] = useState(false);
+  const [showDriverSwapModal, setShowDriverSwapModal] = useState(false);
+  const [swapFromDriverId, setSwapFromDriverId] = useState('');
+  const [swapToDriverId, setSwapToDriverId] = useState('');
+  const [swapScope, setSwapScope] = useState('all'); // all | dong
+
   // ── 클릭 순번 배정 모드 (지도/목록 클릭 순서대로 1→2→3 순번 부여)
   const [isSeqClickMode, setIsSeqClickMode] = useState(false);
   const [seqClickNext, setSeqClickNext] = useState(1);
   const [isSeqDragMode, setIsSeqDragMode] = useState(false);
+  const [showSequenceAnalysis, setShowSequenceAnalysis] = useState(false);
+  const [sequenceAnalysis, setSequenceAnalysis] = useState(null);
+  const [isAdvancedSequencing, setIsAdvancedSequencing] = useState(false);
   const [dragOverId, setDragOverId] = useState(null);
   const dragSrcIdRef = useRef(null);
 
@@ -431,7 +989,8 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
   const pendingPaintRef = useRef(new Map()); // id → newDriverId (드래그 중 누적, mouseup 시 commit)
   const recordsRef = useRef([]);             // stale-closure 방지용 최신 records 미러
   const autoSaveDataRef = useRef({ records: [], drivers: [] }); // 자동저장용 최신값 (setInterval deps 제거용)
-  const routeWorkerRef = useRef(null);       // K-means Web Worker
+  const routeWorkerRef = useRef(null);       // 기사 배정 Web Worker
+  const sequenceEdgeCacheRef = useRef(new Map()); // 관리자 3차 순번: 후보 구간 차량거리 캐시
 
   const mapRef = useRef(null);
   const kakaoMapRef = useRef(null);
@@ -443,10 +1002,15 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
   const initialBoundsRef = useRef(null);
   // true 일 때만 setBounds 호출 — 초기 로드/명단 불러오기/세션 로드 후 한 번만 실행
   const shouldFitBoundsRef = useRef(true);
+  const isAdminUser = ADMIN_EMAILS.includes(String(auth.currentUser?.email || '').toLowerCase());
+
+  useEffect(() => () => {
+    if (selectionPulseTimerRef.current) clearTimeout(selectionPulseTimerRef.current);
+  }, []);
 
   const baseForFilter = isCloudMode ? records : gridData;
-  const dongList = ['전체', ...[...new Set(baseForFilter.map(r => r.행정동).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'ko'))];
-  const filteredRecords = selectedDong === '전체' ? records : records.filter(r => r.행정동 === selectedDong);
+  const dongList = ['전체', ...[...new Set(baseForFilter.map(r => getRouteDong(r)).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'ko'))];
+  const filteredRecords = selectedDong === '전체' ? records : records.filter(r => getRouteDong(r) === selectedDong);
   const [listFilterGubun, setListFilterGubun] = useState('');
   const displayRecords = (() => {
     let base = selectedDriverFilter === 'all' ? filteredRecords
@@ -467,7 +1031,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
     : displayRecords;
 
   const mapRecords = displayRecords.filter(r => r._lat && r._lng);
-  const aptRecords = filteredRecords.filter(r => r._isApt);
+  const aptRecords = filteredRecords.filter(r => isApartmentLike(r));
   const withCoordCount = records.filter(r => !r._isApt && r._lat && r._lng).length;
   const aptCount = records.filter(r => r._isApt).length;
   const aptWithCoord = records.filter(r => r._isApt && r._lat && r._lng).length;
@@ -508,18 +1072,72 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
   const aptComplexGroups = useMemo(() => {
     const groups = {};
     aptRecords.forEach(r => {
-      const aptName = extractAptName(r.주소 || '') || '기타아파트';
-      if (!groups[aptName]) groups[aptName] = [];
-      groups[aptName].push(r);
+      const aptMeta = getAptGroupMeta(r);
+      if (!aptMeta) return;
+      if (!groups[aptMeta.key]) groups[aptMeta.key] = { ...aptMeta, records: [] };
+      groups[aptMeta.key].records.push(r);
     });
     return groups;
   }, [aptRecords]);
 
-  const openAptMultiModal = useCallback((aptName) => {
-    const members = aptComplexGroups[aptName] || [];
+  // ── 현재 행정동의 주기사 (가장 많은 레코드를 가진 기사 ID)
+  const dongPrimaryDriverId = useMemo(() => {
+    if (selectedDong === '전체') return null;
+    const votes = {};
+    records.filter(r => getRouteDong(r) === selectedDong && r._driverId)
+      .forEach(r => { votes[r._driverId] = (votes[r._driverId] || 0) + 1; });
+    return Object.entries(votes).sort((a, b) => b[1] - a[1])[0]?.[0] || null;
+  }, [records, selectedDong]);
+
+  // ── "+추가" 피커에 표시할 소속사 기사 목록 (세션에 없는 기사 + 현재 dong 주기사 제외)
+  const availableCompanyDrivers = useMemo(() => {
+    if (!initialDriversProp?.length) return [];
+    const activeNames = new Set(drivers.filter(d => !d.isExternal).map(d => (d.name || '').trim()));
+    const primaryName = drivers.find(d => d.id === dongPrimaryDriverId)?.name?.trim();
+    return initialDriversProp.filter(d => {
+      if (d.isExternal) return false;
+      const name = (d.name || '').trim();
+      if (activeNames.has(name)) return false;         // 이미 세션에 있음
+      if (primaryName && name === primaryName) return false; // 현재 dong 주기사
+      return true;
+    });
+  }, [initialDriversProp, drivers, dongPrimaryDriverId]);
+
+  // ── 50포↑ 임대 대형 단지 목록 (좌측 패널 패널에 표시)
+  const largeAptComplexes = useMemo(() => {
+    return Object.values(aptComplexGroups)
+      .filter(({ label, road, building, records: recs }) => {
+        const qty = recs.reduce((s, r) => s + (parseInt(r.포수 || r['수량(포수)']) || 1), 0);
+        const rentalText = [label, road, building, ...recs.map(r => r.주소 || '')].join(' ');
+        const rentalDetected = RENTAL_LIKE_RE.test(rentalText) || recs.some(isRentalLike);
+        // 50포 이상 아파트는 누락되면 배송 배정 리스크가 크므로 모두 노출하고,
+        // 임대 키워드가 없으면 "대형단지"로 표시해 담당자가 직접 판단하게 한다.
+        return qty >= 50 && (rentalDetected || recs.some(isApartmentLike));
+      })
+      .map(({ key, label, road, records: recs }) => ({
+        aptKey: key,
+        aptName: label,
+        road,
+        rentalDetected: recs.some(isRentalLike) || RENTAL_LIKE_RE.test([label, road, ...recs.map(r => r.주소 || '')].join(' ')),
+        buildingCount: [...new Set(recs.map(r => parseAptDong([r._detailAddress, r.주소].filter(Boolean).join(' ')) ?? 0))].filter(Boolean).length,
+        totalQty: recs.reduce((s, r) => s + (parseInt(r.포수 || r['수량(포수)']) || 1), 0),
+      }))
+      .sort((a, b) => b.totalQty - a.totalQty);
+  }, [aptComplexGroups]);
+
+  const mapInsights = useMemo(() => buildMapInsights({
+    records: filteredRecords,
+    drivers,
+    largeAptComplexes,
+  }), [filteredRecords, drivers, largeAptComplexes]);
+
+  const openAptMultiModal = useCallback((aptKey) => {
+    const aptGroup = aptComplexGroups[aptKey];
+    const members = aptGroup?.records || [];
+    if (!members.length) return;
     const dongMap = {};
     members.forEach(r => {
-      const dong = parseAptDong(r.주소) ?? 0;
+      const dong = parseAptDong([r._detailAddress, r.detailAddress, r.주소, r.특이사항].filter(Boolean).join(' ')) ?? 0;
       if (!dongMap[dong]) dongMap[dong] = [];
       dongMap[dong].push(r);
     });
@@ -533,23 +1151,108 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
       });
     // 자동 균등 분할 제안: 절반 기준 2기사
     const half = Math.ceil(dongsArr.length / 2);
+    const currentDriverIds = [...new Set(members.map(r => r._driverId).filter(Boolean))];
+    const firstDriverId = currentDriverIds[0] || drivers[0]?.id || null;
+    const secondDriverId = drivers.find(d => d.id !== firstDriverId)?.id || drivers[1]?.id || firstDriverId;
     const suggested = dongsArr.map((d, i) => ({
       ...d,
-      assignedDriverId: i < half ? (drivers[0]?.id || null) : (drivers[1]?.id || null),
+      assignedDriverId: d.dong === 0
+        ? (d.assignedDriverId || firstDriverId)
+        : (i < half ? firstDriverId : secondDriverId),
     }));
-    setAptMultiModal({ aptName, totalQty, dongs: suggested });
+    setAptMultiModal({ aptName: aptGroup.label, road: aptGroup.road, totalQty, dongs: suggested });
   }, [aptComplexGroups, drivers]);
 
-  const applyAptMultiAssignment = useCallback(() => {
+  const applyAptMultiAssignment = useCallback(async () => {
     if (!aptMultiModal) return;
     const updates = {};
     aptMultiModal.dongs.forEach(d => {
       d.records.forEach(r => { updates[r.id] = d.assignedDriverId; });
     });
-    setRecords(prev => prev.map(r => r.id in updates ? { ...r, _driverId: updates[r.id] } : r));
+    setRecords(prev => prev.map(r => r.id in updates
+      ? { ...r, _driverId: updates[r.id], 대형단지분할: Boolean(updates[r.id]), 배송상태: updates[r.id] ? '대형단지분할배정' : r.배송상태 }
+      : r
+    ));
+    if (isCloudMode && cloudCity && cloudMonthId) {
+      const cloudItems = aptMultiModal.dongs.flatMap(d =>
+        d.records
+          .filter(r => r._cloudDocId)
+          .map(r => ({ docId: r._cloudDocId, driverId: d.assignedDriverId || '' }))
+      );
+      for (let i = 0; i < cloudItems.length; i += 499) {
+        const batch = writeBatch(db);
+        cloudItems.slice(i, i + 499).forEach(item => {
+          const driverName = drivers.find(dr => dr.id === item.driverId)?.name || '';
+          batch.set(
+            doc(db, 'cloud_lists', cloudCity, 'months', cloudMonthId, 'records', item.docId),
+            {
+              기사: driverName,
+              배송순번: '',
+              배송상태: driverName ? '대형단지분할배정' : '확인후배정가능',
+              대형단지분할: Boolean(driverName),
+              대형단지분할일시: serverTimestamp(),
+              대형단지분할자: auth.currentUser?.email || '',
+            },
+            { merge: true }
+          );
+        });
+        await batch.commit();
+      }
+    }
     setAptMultiModal(null);
     showToast('success', `${aptMultiModal.aptName} — ${aptMultiModal.dongs.length}개 동 배정 완료`);
-  }, [aptMultiModal, showToast]);
+  }, [aptMultiModal, isCloudMode, cloudCity, cloudMonthId, drivers, showToast]);
+
+  // ── 좌표 삭제 브러시 적용 ─────────────────────────────────────────────
+  const handleCoordBrushApply = useCallback(async (deletedIds, keepModalOpen = false) => {
+    setRecords(prev => prev.map(r => deletedIds.has(r.id) ? {
+      ...r,
+      이전좌표: r._lat && r._lng ? { lat: r._lat, lng: r._lng, source: r.좌표출처 || '' } : r.이전좌표,
+      _lat: null,
+      _lng: null,
+      _driverId: null,
+      배송순번: '',
+      좌표상태: '좌표없음',
+      좌표검증상태: '',
+      좌표확인지자체: '',
+      좌표확인행정동: '',
+      좌표오류지정: true,
+      배정행정동: '',
+      이관필요: false,
+      배송상태: '주소확인필요',
+    } : r));
+    if (!keepModalOpen) setShowCoordBrush(false);
+    if (isCloudMode && cloudCity && cloudMonthId && deletedIds.size) {
+      const cloudItems = [];
+      records.forEach(r => { if (deletedIds.has(r.id) && r._cloudDocId) cloudItems.push(r); });
+      for (let i = 0; i < cloudItems.length; i += 499) {
+        const batch = writeBatch(db);
+        cloudItems.slice(i, i + 499).forEach(r => {
+          batch.update(doc(db, 'cloud_lists', cloudCity, 'months', cloudMonthId, 'records', r._cloudDocId), {
+            lat: null,
+            lng: null,
+            기사: '',
+            배송순번: '',
+            좌표상태: '좌표없음',
+            좌표검증상태: '',
+            좌표확인지자체: '',
+            좌표확인행정동: '',
+            좌표오류지정: true,
+            좌표오류지정일시: serverTimestamp(),
+            좌표오류지정자: auth.currentUser?.email || '',
+            배정행정동: '',
+            이관필요: false,
+            배송상태: '주소확인필요',
+            좌표수정일시: serverTimestamp(),
+            좌표수정자: auth.currentUser?.email || '',
+            ...(r._lat && r._lng ? { 이전좌표: { lat: r._lat, lng: r._lng, source: r.좌표출처 || '' } } : {}),
+          });
+        });
+        await batch.commit();
+      }
+    }
+    showToast('success', `좌표 ${deletedIds.size}건 삭제 완료`);
+  }, [records, isCloudMode, cloudCity, cloudMonthId, showToast]);
 
   // ── Route Worker 초기화 / 정리 ──────────────────────────────────────────
   useEffect(() => {
@@ -584,11 +1287,11 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
           }));
           // 조직 필터
           if (orgDongs) {
-            loaded = loaded.filter(r => orgDongs.has((r.행정동 || '').trim()));
+            loaded = loaded.filter(r => orgDongs.has(getRouteDong(r)));
           }
           // 설정 화면에서 선택한 행정동만 로드
           if (selectedDongsProp) {
-            loaded = loaded.filter(r => selectedDongsProp.has((r.행정동 || '').trim()));
+            loaded = loaded.filter(r => selectedDongsProp.has(getRouteDong(r)));
           }
           setRecords(loaded);
           setIsCloudMode(true);
@@ -737,6 +1440,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
             status: 'draft',
             totalRecords: r.length,
             assignedCount: r.filter(rec => rec._driverId).length,
+            selectedDongs: selectedDongsProp ? [...selectedDongsProp] : (orgDongs ? [...orgDongs] : null),
           },
           { merge: true }
         );
@@ -778,12 +1482,13 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
       const color = r._에러 ? '#ef4444' : (driver?.color || '#6b7280');
       const seq = r.배송순번 || '';
       const name = escHtml((r.이름 || '').slice(0, 5));
+      const dong = escHtml((r.행정동 || '').replace(/동$/, '').slice(0, 5));
       const qtyNum = parseInt(r.포수 || r['수량(포수)']) || 1;
 
       const coordKey = `${r._lat.toFixed(5)},${r._lng.toFixed(5)}`;
       const sameCount = coordCountMap.get(coordKey) || 1;
       const samePointBadgeHtml = sameCount > 1
-        ? `<div style="position:absolute;top:-9px;left:-8px;background:#7c3aed;color:#fff;font-size:8px;font-weight:900;padding:1px 4px;border-radius:8px;border:2px solid #000;line-height:1.5;white-space:nowrap;z-index:2;">${sameCount}명</div>`
+        ? `<div style="position:absolute;bottom:-7px;left:50%;transform:translateX(-50%);background:#1e293b;color:#f97316;font-size:8px;font-weight:900;padding:1px 5px;border-radius:6px;border:1.5px solid #f97316;line-height:1.5;white-space:nowrap;z-index:2;">×${sameCount}</div>`
         : '';
 
       // 포수 강조 레벨 (0=1포, 1=2포, 2=3-4포, 3=5-9포, 4=10포+)
@@ -813,7 +1518,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
       const pinEl = document.createElement('div');
       pinEl.setAttribute('data-record-id', r.id);
       pinEl.style.cssText = 'display:flex;flex-direction:column;align-items:center;cursor:pointer;user-select:none;';
-      pinEl.innerHTML = `<div style="width:${pinSize}px;height:${pinSize}px;border-radius:50%;background:${color};display:flex;align-items:center;justify-content:center;border:3px solid rgba(255,255,255,0.9);box-shadow:${glowStyle};flex-shrink:0;position:relative;">${seq ? `<span style="font-size:${pinSize >= 40 ? 9 : 10}px;font-weight:900;color:white;line-height:1;">${seq}</span>` : `<div style="width:${dotPx}px;height:${dotPx}px;border-radius:50%;background:rgba(255,255,255,0.35);"></div>`}${qtyBadgeHtml}${samePointBadgeHtml}</div><div style="width:0;height:0;border-left:${arrowPx}px solid transparent;border-right:${arrowPx}px solid transparent;border-top:${arrowPx * 2}px solid ${color};margin-top:-1px;flex-shrink:0;"></div><div style="background:${qtyNum >= 5 ? 'rgba(20,10,5,0.95)' : 'rgba(8,8,8,0.88)'};color:white;font-size:11px;font-weight:800;padding:2px 6px;border-radius:4px;margin-top:2px;white-space:nowrap;max-width:92px;overflow:hidden;text-overflow:ellipsis;border:1px solid ${color}${qtyNum >= 5 ? '88' : '45'};">${name}·<span style="color:${qtyColor};font-weight:900;">${qtyNum}포</span></div>`;
+      pinEl.innerHTML = `<div style="width:${pinSize}px;height:${pinSize}px;border-radius:50%;background:${color};display:flex;align-items:center;justify-content:center;border:3px solid rgba(255,255,255,0.9);box-shadow:${glowStyle};flex-shrink:0;position:relative;">${seq ? `<span style="font-size:${pinSize >= 40 ? 9 : 10}px;font-weight:900;color:white;line-height:1;">${seq}</span>` : `<div style="width:${dotPx}px;height:${dotPx}px;border-radius:50%;background:rgba(255,255,255,0.35);"></div>`}${qtyBadgeHtml}${samePointBadgeHtml}</div><div style="width:0;height:0;border-left:${arrowPx}px solid transparent;border-right:${arrowPx}px solid transparent;border-top:${arrowPx * 2}px solid ${color};margin-top:-1px;flex-shrink:0;"></div><div style="background:${qtyNum >= 5 ? 'rgba(20,10,5,0.95)' : 'rgba(8,8,8,0.88)'};color:white;font-size:11px;font-weight:800;padding:2px 6px;border-radius:4px;margin-top:2px;white-space:nowrap;max-width:92px;overflow:hidden;text-overflow:ellipsis;border:1px solid ${color}${qtyNum >= 5 ? '88' : '45'};">${name}·<span style="color:${qtyColor};font-weight:900;">${qtyNum}포</span></div>${dong ? `<div style="background:rgba(0,0,0,0.72);color:#94a3b8;font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;margin-top:1px;white-space:nowrap;max-width:80px;overflow:hidden;text-overflow:ellipsis;">${dong}</div>` : ''}`;
       pinEl.addEventListener('click', (e) => {
         e.stopPropagation();
         if (sameCount > 1) {
@@ -874,23 +1579,21 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
       shouldFitBoundsRef.current = false; // 이후 업데이트에서는 줌 고정
     }
 
-    // 외부 기사 레코드는 겹침 감지 제외 (의도적 타구역 배송)
-    const overlapDrivers = drivers.filter(d => !d.isExternal);
-    const groups = overlapDrivers.map(d => mapRecords.filter(r => r._driverId === d.id));
-    let cnt = 0;
-    for (let i = 0; i < groups.length; i++)
-      for (let j = i + 1; j < groups.length; j++)
-        groups[i].forEach(r1 => groups[j].forEach(r2 => {
-          if (haversine(r1._lat, r1._lng, r2._lat, r2._lng) < 150) cnt++;
-        }));
+    // 경계에 가까운 정상 인접지는 혼재가 아니다.
+    // 같은 아파트/동일주소 단위가 갈라졌거나, 주변이 타 기사 권역으로 압도되는 "섬"만 혼재로 센다.
+    const routeUnits = buildAssignedRouteUnits(filteredRecords, drivers);
+    const mixedKeys = getMixedRouteUnitKeys(routeUnits);
+    const cnt = routeUnits
+      .filter(unit => mixedKeys.has(unit.key))
+      .reduce((sum, unit) => sum + unit.records.length, 0);
     setOverlapCount(cnt);
   }, [mapPinSignature, drivers]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── K-means 지리적 클러스터 자동 배정 ─────────────────────────────────
+  // ── 도로주소 단위 연속 권역 자동 배정 ────────────────────────────────
   const handleAutoSplit = useCallback(() => {
     if (isAssignmentLocked) { showToast('error', '🔒 기사 배치가 잠겨 있습니다. 잠금을 해제하세요.'); return; }
     const activeDrivers = drivers.slice(0, Math.min(driverCount, drivers.length)).filter(d => !d.isExternal);
-    const target = filteredRecords.filter(r => r._lat && r._lng);
+    const target = filteredRecords.filter(r => r._lat && r._lng && isCoordAssignable(r));
     if (!target.length || !activeDrivers.length) return;
     setIsSplitting(true);
 
@@ -901,33 +1604,47 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
       return;
     }
 
-    const noCoordRecs = filteredRecords.filter(r => !r._lat || !r._lng);
-    const allWithLoad = filteredRecords.map(r => ({ ...r, _effectiveLoad: undefined }));
+    // 기존 미처리 리스너 제거 (이전 클릭이 완료 전에 다시 클릭한 경우 방지)
+    if (worker._pendingAutoSplit) {
+      worker.removeEventListener('message', worker._pendingAutoSplit);
+      worker._pendingAutoSplit = null;
+    }
 
+    const noCoordRecs = filteredRecords.filter(r => !r._lat || !r._lng || !isCoordAssignable(r));
     const onMessage = (e) => {
+      if (e.data.type !== 'autoSplitResult' && e.data.type !== 'autoSplitError') return;
       worker.removeEventListener('message', onMessage);
+      worker._pendingAutoSplit = null;
       if (e.data.type === 'autoSplitError') {
         console.error('자동 배정 오류:', e.data.message);
         showToast('error', '자동 배정 중 오류가 발생했습니다.');
         setIsSplitting(false);
         return;
       }
-      if (e.data.type === 'autoSplitResult') {
-        const { clusterMap } = e.data;
-        setRecords(prev => prev.map(r => clusterMap[r.id] ? { ...r, _driverId: clusterMap[r.id] } : r));
-        setTimeout(() => {
-          showToast('success', '자동 배정 완료 — 겹침이 남아있으면 상단 노란색 버튼을 클릭하세요.', 4000);
-        }, 500);
-        setIsSplitting(false);
-      }
+      const { clusterMap, diagnostics } = e.data;
+      setRouteAnalysis(diagnostics || null);
+      setShowMapAnalysis(true);
+      // 행정동 필터 밖의 수동 배정은 자동 배정이 덮어쓰지 않는다.
+      const affectedIds = new Set(filteredRecords.map(r => r.id));
+      setRecords(prev => prev.map(r => affectedIds.has(r.id)
+        ? { ...r, _driverId: clusterMap[r.id] || null }
+        : r
+      ));
+      setTimeout(() => {
+        const balanceMsg = diagnostics?.load?.maxAbsDiffPct !== undefined
+          ? `최대 편차 ${diagnostics.load.maxAbsDiffPct}%`
+          : '분석 완료';
+        showToast('success', `자동 배정 완료 — ${balanceMsg}. 분석 안내를 확인하세요.`, 5000);
+      }, 500);
+      setIsSplitting(false);
     };
+    worker._pendingAutoSplit = onMessage;
     worker.addEventListener('message', onMessage);
     worker.postMessage({
       type: 'autoSplit',
       target,
       noCoordRecs,
-      allWithLoad,
-      filteredRecords,
+      allRecords: filteredRecords, // R-I, R-E 후처리도 현재 자동 배정 범위만 적용
       activeDrivers,
       driverPins,
     });
@@ -988,6 +1705,9 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
   // 핀/행 선택 → 지도 panTo + 선택 핀 DOM 하이라이트 + 목록 스크롤
   const handleSelectRecord = useCallback((r) => {
     setSelectedRecordId(r.id);
+    setSelectionPulseId(r.id);
+    if (selectionPulseTimerRef.current) clearTimeout(selectionPulseTimerRef.current);
+    selectionPulseTimerRef.current = setTimeout(() => setSelectionPulseId(null), 1800);
     // 지도 이동
     if (r._lat && r._lng && kakaoMapRef.current) {
       const pos = new window.kakao.maps.LatLng(r._lat, r._lng);
@@ -1001,6 +1721,44 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
       document.getElementById(`rec-${r.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }, 150);
   }, []);
+
+  const focusAnalysisRecords = useCallback((recordIds, label = '분석 후보') => {
+    const ids = new Set(recordIds || []);
+    const first = records.find(r => ids.has(r.id));
+    if (!first) {
+      showToast('info', `${label} 항목이 없습니다.`);
+      return;
+    }
+    setSelectedDriverFilter('all');
+    setLayoutMode(prev => (prev === 'map' || prev === 'mapfull') ? 'split' : prev);
+    handleSelectRecord(first);
+    showToast('info', `${label} ${ids.size.toLocaleString()}건을 목록과 지도에서 확인하세요.`);
+  }, [records, handleSelectRecord, showToast]);
+
+  const handleRunSequenceAnalysis = useCallback(() => {
+    const analysis = analyzeSequenceQuality(records, drivers);
+    setSequenceAnalysis(analysis);
+    setShowSequenceAnalysis(true);
+    showToast(
+      analysis.issueCount > 0 ? 'info' : 'success',
+      analysis.hasSequence
+        ? `순번 분석 완료 — 예상 정확도 ${analysis.avgAccuracy || 0}% · 확인 ${analysis.issueCount.toLocaleString()}건`
+        : '배송순번이 없습니다. 먼저 [순번]을 실행하세요.',
+      5000
+    );
+  }, [records, drivers, showToast]);
+
+  const handleRunMapAnalysis = useCallback(() => {
+    setShowMapAnalysis(true);
+    const issueCount = mapInsights.mixedCount
+      + mapInsights.mixedRoads.length
+      + mapInsights.isolatedUnits.length
+      + mapInsights.coordIssues.outCity
+      + mapInsights.coordIssues.outDong;
+    showToast(issueCount > 0 ? 'info' : 'success', issueCount > 0
+      ? `지도 분석 완료 — 확인 후보 ${issueCount.toLocaleString()}개가 있습니다.`
+      : '지도 분석 완료 — 큰 혼재 신호는 없습니다.');
+  }, [mapInsights, showToast]);
 
   // 선택된 핀 DOM 하이라이트 (scale + glow ring)
   useEffect(() => {
@@ -1029,6 +1787,72 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
     showToast('success', '배정 전체 초기화 완료');
   }, [showToast, isAssignmentLocked]);
 
+  const openDriverSwapModal = useCallback(() => {
+    if (isAssignmentLocked) {
+      showToast('error', '🔒 기사 배치가 잠겨 있습니다. 잠금을 해제하세요.');
+      return;
+    }
+    const defaultScope = selectedDong === '전체' ? 'all' : 'dong';
+    const scopeRecords = defaultScope === 'dong'
+      ? records.filter(r => getRouteDong(r) === selectedDong)
+      : records;
+    const assignedDrivers = drivers.filter(d => scopeRecords.some(r => r._driverId === d.id));
+    if (assignedDrivers.length < 2) {
+      showToast('error', '맞교환하려면 배정된 기사가 2명 이상 필요합니다.');
+      return;
+    }
+    const first = selectedDriverFilter !== 'all' && selectedDriverFilter !== 'none'
+      && assignedDrivers.some(d => d.id === selectedDriverFilter)
+      ? selectedDriverFilter
+      : assignedDrivers[0].id;
+    const second = assignedDrivers.find(d => d.id !== first)?.id || assignedDrivers[1]?.id || '';
+    setSwapScope(defaultScope);
+    setSwapFromDriverId(first);
+    setSwapToDriverId(second);
+    setShowDriverSwapModal(true);
+  }, [drivers, records, selectedDong, selectedDriverFilter, showToast, isAssignmentLocked]);
+
+  const handleSwapDriverAssignments = useCallback(() => {
+    if (isAssignmentLocked) {
+      showToast('error', '🔒 기사 배치가 잠겨 있습니다. 잠금을 해제하세요.');
+      return;
+    }
+    if (!swapFromDriverId || !swapToDriverId || swapFromDriverId === swapToDriverId) {
+      showToast('error', '서로 다른 기사 2명을 선택하세요.');
+      return;
+    }
+    const fromDriver = drivers.find(d => d.id === swapFromDriverId);
+    const toDriver = drivers.find(d => d.id === swapToDriverId);
+    if (!fromDriver || !toDriver) {
+      showToast('error', '선택한 기사 정보를 찾을 수 없습니다.');
+      return;
+    }
+    const useDongScope = swapScope === 'dong' && selectedDong !== '전체';
+    const isInScope = (record) => !useDongScope || getRouteDong(record) === selectedDong;
+    const scopedRecords = records.filter(isInScope);
+    const fromCount = scopedRecords.filter(r => r._driverId === swapFromDriverId).length;
+    const toCount = scopedRecords.filter(r => r._driverId === swapToDriverId).length;
+    if (fromCount + toCount === 0) {
+      showToast('error', '선택 범위에 교체할 배정 내역이 없습니다.');
+      return;
+    }
+
+    const pendingPaint = new Map(pendingPaintRef.current);
+    pendingPaintRef.current.clear();
+    setRecords(prev => prev.map(record => {
+      const paintedDriverId = pendingPaint.has(record.id) ? pendingPaint.get(record.id) : record._driverId;
+      const baseRecord = paintedDriverId !== record._driverId ? { ...record, _driverId: paintedDriverId } : record;
+      if (!isInScope(baseRecord)) return baseRecord;
+      if (baseRecord._driverId === swapFromDriverId) return { ...baseRecord, _driverId: swapToDriverId };
+      if (baseRecord._driverId === swapToDriverId) return { ...baseRecord, _driverId: swapFromDriverId };
+      return baseRecord;
+    }));
+    setShowDriverSwapModal(false);
+    setSelectedDriverFilter('all');
+    const scopeLabel = useDongScope ? selectedDong : '전체';
+    showToast('success', `${scopeLabel} 배정 교체 완료 — ${fromDriver.name} ${fromCount}건 ↔ ${toDriver.name} ${toCount}건`);
+  }, [drivers, records, selectedDong, swapFromDriverId, swapToDriverId, swapScope, showToast, isAssignmentLocked]);
+
 
   // ── 배송순번 자동 정렬 (도로명 기반 — 도로 그룹 → 건물번호 → 뱀 패턴) ───
   // ── 드래그 순번 재배정 ────────────────────────────────────────────────
@@ -1056,6 +1880,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
     // pendingPaintRef 잔류분을 먼저 state에 반영 (브러시 보정 직후 클릭 시 배치 유실 방지)
     const snapshot = new Map(pendingPaintRef.current); // updater 실행 전 복사
     pendingPaintRef.current.clear();
+    let nextAnalysis = null;
     setRecords(prev => {
       const withPaint = snapshot.size > 0
         ? prev.map(r => snapshot.has(r.id) ? { ...r, _driverId: snapshot.get(r.id) } : r)
@@ -1066,17 +1891,88 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
         const driverRecs = updated.filter(r => r._driverId === driver.id);
         if (!driverRecs.length) return;
         // 도로명 정보 있는 경우 roadAwareTSP, 전부 좌표 없으면 nearestNeighborTSP 폴백
-        const hasAnyAddr = driverRecs.some(r => r.주소 && parseRoadInfo(r.주소).road);
+        const hasAnyAddr = driverRecs.some(r => parseRoadInfo(getSequenceAddress(r)).road || isApartmentLike(r));
         const ordered = hasAnyAddr ? roadAwareTSP(driverRecs) : nearestNeighborTSP(driverRecs.filter(r => r._lat && r._lng));
         ordered.forEach((r, i) => {
           const idx = updated.findIndex(u => u.id === r.id);
           if (idx !== -1) updated[idx] = { ...updated[idx], 배송순번: String(i + 1) };
         });
       });
+      nextAnalysis = analyzeSequenceQuality(updated, drivers);
       return updated;
     });
-    showToast('success', '최단 동선 순번 적용 완료 (2-opt 교차 제거)');
+    setTimeout(() => {
+      if (nextAnalysis) {
+        setSequenceAnalysis(nextAnalysis);
+        setShowSequenceAnalysis(true);
+        showToast(
+          nextAnalysis.issueCount > 0 ? 'info' : 'success',
+          `도로망 순번 완료 — 예상 정확도 ${nextAnalysis.avgAccuracy || 0}% · 확인 ${nextAnalysis.issueCount.toLocaleString()}건`,
+          5000
+        );
+      } else {
+        showToast('success', '도로망 순번 적용 완료');
+      }
+    }, 0);
   }, [drivers, showToast]);
+
+  const handleAdvancedAutoSequence = useCallback(async () => {
+    if (!isAdminUser) {
+      showToast('error', '관리자 전용 기능입니다.');
+      return;
+    }
+    if (isAdvancedSequencing) return;
+    const assignedCount = records.filter(r => r._driverId).length;
+    if (!assignedCount) {
+      showToast('error', '기사 배정 후 AI 순번을 실행하세요.');
+      return;
+    }
+    const hasManualSeq = records.some(r => r.배송순번);
+    if (hasManualSeq && !window.confirm('기존 배송순번이 있습니다.\n관리자용 AI 순번으로 다시 계산하면 현재 순번이 덮어쓰기 됩니다.\n계속할까요?')) return;
+
+    setIsAdvancedSequencing(true);
+    try {
+      const pendingPaint = new Map(pendingPaintRef.current);
+      pendingPaintRef.current.clear();
+      const base = pendingPaint.size > 0
+        ? records.map(r => pendingPaint.has(r.id) ? { ...r, _driverId: pendingPaint.get(r.id) } : r)
+        : records;
+      const updated = [...base];
+      const useApi = Boolean(KAKAO_REST_KEY);
+
+      for (const driver of drivers) {
+        const driverRecs = updated.filter(r => r._driverId === driver.id);
+        if (!driverRecs.length) continue;
+        const ordered = await advancedRoadSequence(driverRecs, {
+          useApi,
+          edgeCache: sequenceEdgeCacheRef.current,
+          candidateLimit: 6,
+        });
+        ordered.forEach((record, index) => {
+          const idx = updated.findIndex(r => r.id === record.id);
+          if (idx !== -1) updated[idx] = { ...updated[idx], 배송순번: String(index + 1) };
+        });
+      }
+
+      const analysis = analyzeSequenceQuality(updated, drivers);
+      setRecords(updated);
+      setSequenceAnalysis(analysis);
+      setShowSequenceAnalysis(true);
+      const cachedEdges = [...sequenceEdgeCacheRef.current.values()];
+      const kakaoCount = cachedEdges.filter(edge => edge.source === 'kakao').length;
+      const localCount = cachedEdges.filter(edge => edge.source === 'local').length;
+      showToast(
+        analysis.issueCount > 0 ? 'info' : 'success',
+        `관리자 AI 순번 완료 — 예상 정확도 ${analysis.avgAccuracy || 0}% · 확인 ${analysis.issueCount.toLocaleString()}건 · 경로 ${kakaoCount}/${kakaoCount + localCount}`,
+        6000
+      );
+    } catch (error) {
+      console.error('관리자 AI 순번 실패:', error);
+      showToast('error', `AI 순번 실패: ${error.message || error}`);
+    } finally {
+      setIsAdvancedSequencing(false);
+    }
+  }, [drivers, records, showToast, isAdminUser, isAdvancedSequencing]);
 
   // ── 지난달 배정 불러오기 ─────────────────────────────────────────────
   const handleLoadLastMonth = useCallback(() => {
@@ -1102,12 +1998,15 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
       if (isFinal) alert('클라우드 명단 로드 후 저장 가능합니다.');
       return;
     }
-    // R-0: 최종 저장 시 겹침 경고 (차단 → confirm으로 완화)
+    const unassignedCount = records.filter(r => !r._driverId).length;
+    if (isFinal && unassignedCount > 0) {
+      showToast('error', `미배정 ${unassignedCount}건이 남아 최종 저장할 수 없습니다.`);
+      return;
+    }
+    // R-0: 최종 저장 시 기사 구역 혼재 차단
     if (isFinal && overlapCount > 0) {
-      const ok = window.confirm(
-        `⚠️ 기사 구역 겹침 ${overlapCount}건이 남아있습니다.\n\n[동선 겹침 자동 해소] 버튼을 반복 클릭하면 대부분 해소됩니다.\n\n겹침을 무시하고 강제 저장하시겠습니까?`
-      );
-      if (!ok) return;
+      showToast('error', `기사 구역 혼재 ${overlapCount}건이 남아 최종 저장할 수 없습니다.`);
+      return;
     }
     setIsSavingSession(true);
     try {
@@ -1122,6 +2021,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
           status: isFinal ? 'final' : 'draft',
           totalRecords: records.length,
           assignedCount: records.filter(r => r._driverId).length,
+          selectedDongs: selectedDongsProp ? [...selectedDongsProp] : (orgDongs ? [...orgDongs] : null),
         },
         { merge: true }
       );
@@ -1146,9 +2046,10 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
       try {
         const dongDriverMap = {};
         records.forEach(r => {
-          if (!r._driverId || !r.행정동) return;
-          if (!dongDriverMap[r.행정동]) dongDriverMap[r.행정동] = [];
-          if (!dongDriverMap[r.행정동].includes(r._driverId)) dongDriverMap[r.행정동].push(r._driverId);
+          const routeDong = getRouteDong(r);
+          if (!r._driverId || !routeDong) return;
+          if (!dongDriverMap[routeDong]) dongDriverMap[routeDong] = [];
+          if (!dongDriverMap[routeDong].includes(r._driverId)) dongDriverMap[routeDong].push(r._driverId);
         });
         await setDoc(
           doc(db, 'driver_assignments', cloudCity, 'orgs', 'all'),
@@ -1176,7 +2077,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
             if (!driverRecs.length) return;
             const totalQty = driverRecs.reduce((s, r) => s + (parseInt(r.포수 || r['수량(포수)']) || 1), 0);
             const effectiveLoad = driverRecs.reduce((s, r) => s + getEffectiveLoad(r), 0);
-            const dongs = [...new Set(driverRecs.map(r => r.행정동).filter(Boolean))];
+            const dongs = [...new Set(driverRecs.map(r => getRouteDong(r)).filter(Boolean))];
             const ref = doc(db, 'delivery_history', cloudCity, 'months', cloudMonthId, 'drivers', driver.id);
             histBatch.set(ref, {
               driverName: driver.name,
@@ -1469,6 +2370,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
           status: 'draft',
           totalRecords: records.length,
           assignedCount: records.filter(r => r._driverId).length,
+          selectedDongs: selectedDongsProp ? [...selectedDongsProp] : (orgDongs ? [...orgDongs] : null),
         },
         { merge: true }
       );
@@ -1510,10 +2412,13 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
           휴대폰: r.휴대폰 || '',
         }));
       const shareId = `sr_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+      const expiresAtDate = new Date(Date.now() + SHARE_LINK_TTL_DAYS * 24 * 60 * 60 * 1000);
       await setDoc(doc(db, 'route_shares', shareId), {
         city: cloudCity || fileInfo?.city || '',
         monthId: cloudMonthId || '',
         createdAt: serverTimestamp(),
+        expiresAt: Timestamp.fromDate(expiresAtDate),
+        ttlDays: SHARE_LINK_TTL_DAYS,
         createdBy: auth.currentUser?.email || '',
         drivers: assignedDrivers.map(d => ({ id: d.id, name: d.name, color: d.color })),
         records: shareRecords,
@@ -1521,6 +2426,13 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
       const base = window.location.origin;
       setShareModal({
         shareId,
+        expiresAtLabel: expiresAtDate.toLocaleString('ko-KR', {
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit',
+        }),
         links: assignedDrivers.map(d => ({
           driverId: d.id, name: d.name, color: d.color,
           url: `${base}/?r=${shareId}&d=${d.id}`,
@@ -1534,54 +2446,160 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
     }
   }, [records, drivers, cloudCity, cloudMonthId, fileInfo, showToast]);
 
-  // ── 겹침 해소 (로컬 밀도 투표 — 최대 30회 반복, 수렴 시 조기 종료) ───────
+  // ── 기사 순번 반영 요청: 담당자 유선 확인 후 공식 명단에 승인 반영 ─────
+  const handleLoadOrderApplyRequests = useCallback(async () => {
+    if (!cloudCity || !cloudMonthId) {
+      showToast('error', '클라우드 명단을 먼저 불러오세요.');
+      return;
+    }
+    setIsLoadingOrderRequests(true);
+    try {
+      const snap = await getDocs(query(
+        collection(db, 'route_shares'),
+        where('city', '==', cloudCity),
+        where('monthId', '==', cloudMonthId),
+        limit(30)
+      ));
+      const requests = [];
+      snap.forEach(docSnap => {
+        const data = docSnap.data();
+        Object.entries(data.orderApplyRequests || {}).forEach(([driverId, req]) => {
+          if (req?.status !== 'requested') return;
+          const driver = (data.drivers || []).find(d => d.id === driverId);
+          const orderIds = Array.isArray(req.orderIds)
+            ? req.orderIds
+            : (Array.isArray(data.driverOrder?.[driverId]) ? data.driverOrder[driverId] : []);
+          requests.push({
+            shareId: docSnap.id,
+            driverId,
+            driverName: driver?.name || driverId,
+            driverColor: driver?.color || '#3b82f6',
+            orderIds,
+            count: req.count || orderIds.length,
+            requestedAt: req.requestedAt || '',
+            createdAt: data.createdAt,
+          });
+        });
+      });
+      requests.sort((a, b) => {
+        const at = Date.parse(a.requestedAt || '') || a.createdAt?.toDate?.()?.getTime?.() || 0;
+        const bt = Date.parse(b.requestedAt || '') || b.createdAt?.toDate?.()?.getTime?.() || 0;
+        return bt - at;
+      });
+      setOrderRequestModal({ requests });
+      showToast(requests.length ? 'info' : 'success', requests.length ? `순번 반영 요청 ${requests.length}건 확인` : '대기 중인 순번 반영 요청이 없습니다.');
+    } catch (e) {
+      showToast('error', `순번 요청 조회 실패: ${e.message}`);
+    } finally {
+      setIsLoadingOrderRequests(false);
+    }
+  }, [cloudCity, cloudMonthId, showToast]);
+
+  const handleApproveOrderRequest = useCallback(async (requestItem) => {
+    if (!cloudCity || !cloudMonthId) {
+      showToast('error', '클라우드 명단을 먼저 불러오세요.');
+      return;
+    }
+    if (!requestItem?.orderIds?.length) {
+      showToast('error', '반영할 순번 데이터가 없습니다.');
+      return;
+    }
+    const ok = window.confirm(
+      `${requestItem.driverName} 기사와 유선 확인이 끝났습니까?\n\n확인하면 이 기사에게 배정된 명단의 배송순번을 요청 순서로 공식 반영합니다.`
+    );
+    if (!ok) return;
+
+    setIsApplyingOrderRequest(true);
+    try {
+      const driverRecords = records.filter(r => r._driverId === requestItem.driverId);
+      const recordLookup = new Map();
+      driverRecords.forEach((r, index) => {
+        if (r.id) recordLookup.set(String(r.id), r);
+        if (r._cloudDocId) recordLookup.set(String(r._cloudDocId), r);
+        recordLookup.set(`${r.이름 || ''}_${r.배송순번 || index}`, r);
+      });
+
+      const seqByRecord = new Map();
+      const usedRecords = new Set();
+      requestItem.orderIds.forEach((uid, index) => {
+        const target = recordLookup.get(String(uid));
+        if (!target || usedRecords.has(target)) return;
+        usedRecords.add(target);
+        seqByRecord.set(target, String(index + 1));
+      });
+
+      if (!seqByRecord.size) {
+        showToast('error', '요청 순번과 현재 명단을 매칭하지 못했습니다. 공유 링크를 다시 생성한 뒤 요청을 받아주세요.');
+        return;
+      }
+
+      const nextRecords = records.map(r => seqByRecord.has(r)
+        ? { ...r, 배송순번: seqByRecord.get(r) }
+        : r
+      );
+      setRecords(nextRecords);
+      setHasUnsaved(true);
+
+      const changedRecords = nextRecords.filter((r, index) =>
+        records[index]?._driverId === requestItem.driverId &&
+        records[index]?.배송순번 !== r.배송순번 &&
+        r._cloudDocId
+      );
+      const CHUNK = 499;
+      for (let i = 0; i < changedRecords.length; i += CHUNK) {
+        const batch = writeBatch(db);
+        changedRecords.slice(i, i + CHUNK).forEach(r => {
+          batch.set(
+            doc(db, 'cloud_lists', cloudCity, 'months', cloudMonthId, 'records', r._cloudDocId),
+            { 배송순번: String(r.배송순번 || '') },
+            { merge: true }
+          );
+        });
+        await batch.commit();
+      }
+
+      await updateDoc(doc(db, 'route_shares', requestItem.shareId), {
+        [`orderApplyRequests.${requestItem.driverId}.status`]: 'applied',
+        [`orderApplyRequests.${requestItem.driverId}.appliedAt`]: new Date().toISOString(),
+        [`orderApplyRequests.${requestItem.driverId}.appliedBy`]: auth.currentUser?.email || '',
+        [`orderApplyRequests.${requestItem.driverId}.matchedCount`]: seqByRecord.size,
+      });
+
+      setOrderRequestModal(prev => prev
+        ? { requests: prev.requests.filter(r => !(r.shareId === requestItem.shareId && r.driverId === requestItem.driverId)) }
+        : prev
+      );
+      showToast('success', `${requestItem.driverName} 순번 ${seqByRecord.size}건 공식 반영 완료`);
+    } catch (e) {
+      showToast('error', `순번 승인 반영 실패: ${e.message}`);
+    } finally {
+      setIsApplyingOrderRequest(false);
+    }
+  }, [cloudCity, cloudMonthId, records, showToast]);
+
+  // ── 겹침 해소 (아파트/동일주소 단위 보존 — 권역 안의 섬만 보정) ───────
   const handleResolveOverlap = useCallback(() => {
-    const MAX_PASS = 30;
-    const OVERLAP_DIST = 150;   // 겹침 판정 거리 (m)
-    const VOTE_RADIUS  = 450;   // 이웃 투표 반경 (m)
+    if (isAssignmentLocked) { showToast('error', '🔒 기사 배치가 잠겨 있습니다. 잠금을 해제하세요.'); return; }
+    const MAX_PASS = 8;
+    const affectedIds = new Set(filteredRecords.map(r => r.id));
 
     let current = [...records];
     let totalMoved = 0;
 
     for (let pass = 0; pass < MAX_PASS; pass++) {
-      const withCoord = current.filter(r => r._lat && r._lng && r._driverId);
+      const currentScope = current.filter(r => affectedIds.has(r.id));
+      const units = buildAssignedRouteUnits(currentScope, drivers);
+      const mixedIssues = getMixedRouteUnitIssues(units);
+      if (!mixedIssues.size) break;
 
-      // 1) 이번 패스에서 겹치는 레코드 ID 수집
-      const overlappingIds = new Set();
-      for (let i = 0; i < withCoord.length; i++) {
-        for (let j = i + 1; j < withCoord.length; j++) {
-          const rA = withCoord[i], rB = withCoord[j];
-          if (rA._driverId === rB._driverId) continue;
-          if (haversine(rA._lat, rA._lng, rB._lat, rB._lng) < OVERLAP_DIST) {
-            overlappingIds.add(rA.id);
-            overlappingIds.add(rB.id);
-          }
-        }
-      }
-      if (!overlappingIds.size) break; // 수렴
-
-      // 2) 각 겹침 레코드에 대해 VOTE_RADIUS 내 이웃 기사 다수결
       const updates = {};
-      overlappingIds.forEach(id => {
-        if (updates[id]) return;
-        const r = withCoord.find(x => x.id === id);
-        if (!r) return;
-
-        const votes = {};
-        withCoord.forEach(nb => {
-          if (nb.id === id) return;
-          if (haversine(r._lat, r._lng, nb._lat, nb._lng) <= VOTE_RADIUS) {
-            votes[nb._driverId] = (votes[nb._driverId] || 0) + 1;
-          }
+      units.filter(unit => mixedIssues.has(unit.key)).forEach(unit => {
+        const issue = mixedIssues.get(unit.key);
+        const bestDriver = issue?.targetDriverId;
+        if (!bestDriver) return;
+        unit.records.forEach(record => {
+          if (record._driverId !== bestDriver) updates[record.id] = bestDriver;
         });
-
-        // 주변에서 가장 많은 기사 ID
-        let bestDriver = r._driverId;
-        let bestCount = votes[r._driverId] || 0;
-        Object.entries(votes).forEach(([did, cnt]) => {
-          if (cnt > bestCount) { bestCount = cnt; bestDriver = did; }
-        });
-        if (bestDriver !== r._driverId) updates[id] = bestDriver;
       });
 
       const movedThisPass = Object.keys(updates).length;
@@ -1592,12 +2610,13 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
     }
 
     if (!totalMoved) {
+      setOverlapCount(0);
       showToast('info', '해소할 겹침이 없습니다.');
       return;
     }
     setRecords(current);
-    showToast('success', `겹침 해소 완료 — 총 ${totalMoved}건 재배정`);
-  }, [records, showToast]);
+    showToast('success', `혼재 보정 완료 — 아파트/동일주소 묶음을 지키며 ${totalMoved}건 재배정`);
+  }, [records, filteredRecords, drivers, showToast, isAssignmentLocked]);
 
   // ── 배송순번 전체 초기화 ──────────────────────────────────────────────
   const handleClearSequence = useCallback(() => {
@@ -1803,16 +2822,31 @@ ${folders}
     }
   };
 
-  // ── 좌표 보완 (Kakao 지오코딩 3라운드 순환) ────────────────────────
-  const handleFetchMissingCoords = async () => {
-    const targets = records.filter(r => (!r._lat || !r._lng) && r.주소);
+  // ── 좌표 보완/재매칭 (Kakao 지오코딩 다단계 순환) ─────────────────────
+  const handleFetchMissingCoords = async (options = {}) => {
+    const {
+      recordIds = null,
+      force = false,
+      skipConfirm = false,
+      reason = 'missing',
+    } = options;
+    const idSet = recordIds ? new Set(recordIds) : null;
+    const targets = records.filter(r =>
+      (idSet ? idSet.has(r.id) : (!r._lat || !r._lng)) &&
+      (r.주소 || r.원본주소 || r.지번주소 || r.jibunAddr || r.확인사유 || r._사유)
+    );
     if (!targets.length) { alert('좌표 미수신 데이터가 없습니다.'); return; }
-    if (!window.confirm(`좌표 없는 ${targets.length}건을 카카오 API로 조회합니다.\n(1라운드 도로명 → 2라운드 키워드 → 3라운드 행정동+주소)\n계속하시겠습니까?`)) return;
+    const confirmText = force
+      ? `선택한 ${targets.length}건의 기존 좌표를 버리고 다시 조회합니다.\n도로명·지번·원본주소·행정동 조합으로 재매칭합니다.\n계속하시겠습니까?`
+      : `좌표 없는 ${targets.length}건을 카카오 API로 조회합니다.\n도로명·지번·원본주소·행정동 조합으로 조회합니다.\n계속하시겠습니까?`;
+    if (!skipConfirm && !window.confirm(confirmText)) return;
     setIsFetchingCoords(true);
     const updates = {};
+    const updateMeta = {};
+    const areaMeta = {};
     const concurrency = 10;
 
-    const fetchCoord = async (url) => {
+    const fetchCoord = async (url, source) => {
       const ctrl = new AbortController();
       const tid = setTimeout(() => ctrl.abort(), 5000);
       try {
@@ -1821,33 +2855,55 @@ ${folders}
         if (!res.ok) return null;
         const data = await res.json();
         const d = data.documents?.[0];
-        return (d?.x && d?.y) ? { lat: parseFloat(d.y), lng: parseFloat(d.x) } : null;
+        return (d?.x && d?.y) ? { lat: parseFloat(d.y), lng: parseFloat(d.x), source, raw: d } : null;
       } catch { clearTimeout(tid); return null; }
     };
 
+    const getJibunFromReason = (r) => {
+      const reasonText = r.확인사유 || r._사유 || '';
+      const match = String(reasonText).match(/지번주소만 확인(?:됨)?:\s*(.+)$/);
+      return match?.[1]?.trim() || '';
+    };
+
+    const uniq = (items) => [...new Set(items.map(v => String(v || '').replace(/\s+/g, ' ').trim()).filter(v => v.length >= 2))];
+
     // 2단계: 캐시에서 먼저 확인 (API 호출 전)
     const cacheCity = isCloudMode ? cloudCity : (fileInfo?.city || '');
-    if (cacheCity) {
+    if (cacheCity && !force) {
       setCoordProgress({ done: 0, total: targets.length, round: 0 });
       let cacheHits = 0;
       for (const r of targets) {
         const road = extractRoadAddress(r.주소);
         const cached = await getCachedCoord(cacheCity, road);
-        if (cached) { updates[r.id] = cached; cacheHits++; }
+        if (cached) {
+          updates[r.id] = cached;
+          updateMeta[r.id] = { source: 'cache', query: road };
+          areaMeta[r.id] = { status: r.좌표검증상태 || '정상', routeDong: getRouteDong(r), transferNeeded: !!r.이관필요 };
+          cacheHits++;
+        }
         setCoordProgress(prev => prev ? { ...prev, done: prev.done + 1 } : prev);
       }
       if (cacheHits > 0) console.log(`좌표 캐시 ${cacheHits}건 즉시 적용`);
     }
 
-    const runRound = async (roundTargets, round, queryFn) => {
+    const runRound = async (roundTargets, round, label, queryBuilder) => {
       if (!roundTargets.length) return;
       setCoordProgress({ done: 0, total: roundTargets.length, round });
       const executing = new Set();
       for (const r of roundTargets) {
         const p = (async () => {
-          const coord = await fetchCoord(queryFn(r));
+          const candidate = queryBuilder(r);
+          const candidates = Array.isArray(candidate) ? candidate : [candidate];
+          let coord = null;
+          let used = null;
+          for (const c of candidates.filter(Boolean)) {
+            coord = await fetchCoord(c.url, c.source || label);
+            if (coord) { used = c; break; }
+          }
           if (coord) {
             updates[r.id] = coord;
+            updateMeta[r.id] = { source: coord.source || label, query: used?.query || '' };
+            areaMeta[r.id] = assessKakaoAreaMatch(r, coord.raw, cacheCity);
             // 캐시에 저장
             if (cacheCity) await saveCoordCache(cacheCity, extractRoadAddress(r.주소), coord.lat, coord.lng);
           }
@@ -1859,41 +2915,121 @@ ${folders}
       await Promise.all(executing);
     };
 
+    // 지자체 토큰 추출 (시/군/구 — 다른 지자체 좌표 오매칭 방지)
+    const cityTok = cacheCity
+      ? (cacheCity.trim().split(/\s+/).filter(t => /(시|군|구)$/.test(t)).pop() || '')
+      : '';
+    const cityFull = cacheCity || '';
+    const makeAddressUrl = (query, source) => ({
+      source,
+      query,
+      url: `https://dapi.kakao.com/v2/local/search/address.json?query=${encodeURIComponent(query)}&size=1`,
+    });
+    const makeKeywordUrl = (query, source) => ({
+      source,
+      query,
+      url: `https://dapi.kakao.com/v2/local/search/keyword.json?query=${encodeURIComponent(query)}&size=1`,
+    });
+
     try {
-      // 1라운드: 순수 도로명주소 추출 → address API (가장 정확)
-      await runRound(targets, 1, r => {
+      // 1라운드: 지자체+도로명 → address API (가장 정확)
+      await runRound(targets.filter(r => !updates[r.id]), 1, 'kakao-road', r => {
         const road = extractRoadAddress(r.주소);
-        return `https://dapi.kakao.com/v2/local/search/address.json?query=${encodeURIComponent(road)}&size=1`;
+        return uniq([cityFull && road ? `${cityFull} ${road}` : '', cityTok && road ? `${cityTok} ${road}` : road])
+          .map(q => makeAddressUrl(q, 'kakao-road'));
       });
 
-      // 2라운드: 캐시 미스 + 1라운드 실패 건 → keyword 검색
+      // 2라운드: 지번주소/확인사유 지번 → address API
       const r2 = targets.filter(r => !updates[r.id]);
-      await runRound(r2, 2, r => {
-        const road = extractRoadAddress(r.주소);
-        return `https://dapi.kakao.com/v2/local/search/keyword.json?query=${encodeURIComponent(road)}&size=1`;
+      await runRound(r2, 2, 'kakao-jibun', r => {
+        const jibun = r.지번주소 || r.jibunAddr || getJibunFromReason(r);
+        return uniq([cityFull && jibun ? `${cityFull} ${jibun}` : '', cityTok && jibun ? `${cityTok} ${jibun}` : jibun])
+          .map(q => makeAddressUrl(q, 'kakao-jibun'));
       });
 
-      // 3라운드: 행정동 + 추출 도로명 조합 keyword
+      // 3라운드: 원본주소/현재주소 → address API
       const r3 = targets.filter(r => !updates[r.id]);
-      await runRound(r3, 3, r => {
-        const road = extractRoadAddress(r.주소).slice(0, 35);
-        const q = r.행정동 ? `${r.행정동} ${road}` : road;
-        return `https://dapi.kakao.com/v2/local/search/keyword.json?query=${encodeURIComponent(q)}&size=1`;
+      await runRound(r3, 3, 'kakao-original', r => {
+        const original = r.원본주소 || r.originalAddress || r.rawAddress || r.주소 || '';
+        return uniq([cityFull && original ? `${cityFull} ${original}` : '', cityTok && original ? `${cityTok} ${original}` : original])
+          .map(q => makeAddressUrl(q, 'kakao-original'));
       });
 
-      setRecords(prev => prev.map(r => updates[r.id] ? { ...r, _lat: updates[r.id].lat, _lng: updates[r.id].lng } : r));
+      // 4라운드: 도로명/원본 키워드 검색
+      const r4 = targets.filter(r => !updates[r.id]);
+      await runRound(r4, 4, 'kakao-keyword', r => {
+        const road = extractRoadAddress(r.주소).slice(0, 35);
+        const original = String(r.원본주소 || r.originalAddress || r.주소 || '').slice(0, 45);
+        return uniq([
+          [cityFull || cityTok, getRouteDong(r), road].filter(Boolean).join(' '),
+          [cityFull || cityTok, getRouteDong(r), original].filter(Boolean).join(' '),
+          [getRouteDong(r), road].filter(Boolean).join(' '),
+        ]).map(q => makeKeywordUrl(q, 'kakao-keyword'));
+      });
+
+      // 좌표가 수정된 레코드는 기존 배정도 초기화 — 잘못된 좌표 기반 배정 오염 방지
+      setRecords(prev => prev.map(r => {
+        if (!updates[r.id]) return r;
+        const area = areaMeta[r.id] || { status: r.좌표검증상태 || '정상', routeDong: getRouteDong(r), transferNeeded: false };
+        const isCityOut = area.status === '지자체벗어남';
+        const isDongOut = area.status === '행정동벗어남';
+        return {
+            ...r,
+            _lat: updates[r.id].lat,
+            _lng: updates[r.id].lng,
+            _driverId: null,
+            좌표상태: updateMeta[r.id]?.source === 'kakao-jibun' ? '지번좌표확인' : (force ? '재매칭됨' : '좌표확인'),
+            좌표출처: updateMeta[r.id]?.source || (force ? 'rematch' : 'kakao'),
+            좌표검증상태: area.status,
+            좌표확인지자체: [area.matchedSido, area.matchedSigungu].filter(Boolean).join(' '),
+            좌표확인행정동: area.matchedDong || '',
+            좌표오류지정: false,
+            원행정동: isDongOut && !r.원행정동 ? r.행정동 || '' : r.원행정동,
+            배정행정동: isDongOut ? area.routeDong : (r.배정행정동 || ''),
+            이관필요: isDongOut,
+            확인필요: isCityOut ? true : r.확인필요,
+            확인사유: area.reason ? [r.확인사유, area.reason].filter(Boolean).join(' / ') : r.확인사유,
+            _에러: isCityOut ? true : r._에러,
+            _사유: area.reason ? [r._사유, area.reason].filter(Boolean).join(' / ') : r._사유,
+            배송상태: isCityOut ? '타지자체확인필요' : (isDongOut ? '타동이관필요' : (r.확인필요 || r._에러 ? '확인후배정가능' : '배송준비')),
+            이전좌표: force && r._lat && r._lng ? { lat: r._lat, lng: r._lng, source: r.좌표출처 || '' } : r.이전좌표,
+          };
+      }));
       setHasRunGeocoding(true);
 
       // 클라우드 저장
       if (isCloudMode && cloudCity && cloudMonthId && Object.keys(updates).length) {
         const cloudUpdates = Object.entries(updates).flatMap(([id, coord]) => {
           const rec = records.find(r => r.id === id);
-          return rec?._cloudDocId ? [{ docId: rec._cloudDocId, coord }] : [];
+          return rec?._cloudDocId ? [{ docId: rec._cloudDocId, coord, meta: updateMeta[id] || {}, rec }] : [];
         });
         for (let i = 0; i < cloudUpdates.length; i += 499) {
           const batch = writeBatch(db);
-          cloudUpdates.slice(i, i + 499).forEach(({ docId, coord }) => {
-            batch.update(doc(db, 'cloud_lists', cloudCity, 'months', cloudMonthId, 'records', docId), { lat: coord.lat, lng: coord.lng });
+          cloudUpdates.slice(i, i + 499).forEach(({ docId, coord, meta, rec }) => {
+            const area = areaMeta[rec.id] || { status: rec.좌표검증상태 || '정상', routeDong: getRouteDong(rec), transferNeeded: false };
+            const isCityOut = area.status === '지자체벗어남';
+            const isDongOut = area.status === '행정동벗어남';
+            batch.update(doc(db, 'cloud_lists', cloudCity, 'months', cloudMonthId, 'records', docId), {
+              lat: coord.lat,
+              lng: coord.lng,
+              좌표상태: meta.source === 'kakao-jibun' ? '지번좌표확인' : (force ? '재매칭됨' : '좌표확인'),
+              좌표출처: meta.source || (force ? 'rematch' : 'kakao'),
+              좌표검증상태: area.status,
+              좌표확인지자체: [area.matchedSido, area.matchedSigungu].filter(Boolean).join(' '),
+              좌표확인행정동: area.matchedDong || '',
+              좌표오류지정: false,
+              원행정동: isDongOut && !rec.원행정동 ? rec.행정동 || '' : rec.원행정동 || '',
+              배정행정동: isDongOut ? area.routeDong : (rec.배정행정동 || ''),
+              이관필요: isDongOut,
+              확인필요: isCityOut ? true : !!rec.확인필요,
+              확인사유: area.reason ? [rec.확인사유, area.reason].filter(Boolean).join(' / ') : rec.확인사유 || '',
+              _에러: isCityOut ? true : !!rec._에러,
+              _사유: area.reason ? [rec._사유, area.reason].filter(Boolean).join(' / ') : rec._사유 || '',
+              좌표수정일시: serverTimestamp(),
+              좌표수정자: auth.currentUser?.email || '',
+              배송상태: isCityOut ? '타지자체확인필요' : (isDongOut ? '타동이관필요' : (rec.확인필요 || rec._에러 ? '확인후배정가능' : '배송준비')),
+              ...(force && rec._lat && rec._lng ? { 이전좌표: { lat: rec._lat, lng: rec._lng, source: rec.좌표출처 || '' } } : {}),
+            });
           });
           await batch.commit();
         }
@@ -1901,32 +3037,29 @@ ${folders}
 
       const success = Object.keys(updates).length;
       const remain = targets.length - success;
-      alert(`✅ 좌표 보완 완료 (3라운드)\n성공: ${success}/${targets.length}건${remain > 0 ? `\n미수신 ${remain}건은 주소 재확인이 필요합니다.` : ' (100% 완료!)'}`);
+      const title = force ? '좌표 재매칭 완료' : '좌표 보완 완료';
+      alert(`✅ ${title}\n성공: ${success}/${targets.length}건${remain > 0 ? `\n미수신 ${remain}건은 주소 재확인이 필요합니다.` : ' (100% 완료!)'}`);
     } catch (e) {
-      alert('좌표 보완 실패: ' + e.message);
+      alert('좌표 처리 실패: ' + e.message);
     } finally {
       setIsFetchingCoords(false);
       setCoordProgress(null);
     }
   };
 
-  const addDriver = () => {
+  // ── 소속사 기사 추가 (피커에서 선택하거나 직접 입력)
+  const addCompanyDriver = useCallback((driverInfo) => {
     if (drivers.length >= 8) return;
     const idx = drivers.length;
-    setDrivers(prev => [...prev, { id: `d${Date.now()}`, name: `기사${idx + 1}`, color: DRIVER_COLORS[idx] }]);
-    setDriverCount(c => c + 1);
-  };
-
-  const addExternalDriver = () => {
-    if (drivers.length >= 8) return;
     setDrivers(prev => [...prev, {
-      id: `dext_${Date.now()}`,
-      name: '외부기사',
-      color: '#a855f7',
-      isExternal: true,
-      capacity: 0,
+      id: `d${Date.now()}`,
+      name: driverInfo.name || `기사${idx + 1}`,
+      color: driverInfo.color || DRIVER_COLORS[idx % DRIVER_COLORS.length],
+      capacity: driverInfo.capacity || 100,
     }]);
-  };
+    setDriverCount(c => c + 1);
+    setShowCompanyPicker(false);
+  }, [drivers]);
 
   const removeDriver = (id) => {
     setDrivers(prev => prev.filter(d => d.id !== id));
@@ -2015,15 +3148,13 @@ ${folders}
         </div>
 
         {overlapCount > 0 && (
-          <button onClick={handleResolveOverlap}
-            title="클릭하면 자동으로 겹침을 해소합니다. 여러 번 클릭하면 점점 줄어듭니다."
-            className="flex items-center gap-1.5 px-2.5 py-1 bg-amber-900/50 border border-amber-500/60 rounded-lg text-amber-300 text-[10px] font-black hover:bg-amber-800/60 transition-colors animate-pulse shadow-[0_0_8px_rgba(245,158,11,0.3)]">
-            <AlertTriangle size={11} className="shrink-0" />
-            구역 겹침 <span className="text-white">{overlapCount.toLocaleString()}건</span> — 클릭하여 해소
-          </button>
+          <span className="flex items-center gap-1 text-[10px] text-red-300 font-black">
+            <AlertTriangle size={11} className="text-red-400" />
+            혼재 {overlapCount.toLocaleString()}건
+          </span>
         )}
         {overlapCount === 0 && withCoordCount > 0 && (
-          <span className="text-[10px] text-emerald-500/70 font-bold">✓ 겹침 없음</span>
+          <span className="text-[10px] text-emerald-500/70 font-bold">✓ 구역 정리됨</span>
         )}
 
         <div className="ml-auto flex items-center gap-1.5">
@@ -2074,18 +3205,9 @@ ${folders}
             </div>
           )}
 
-          {/* ── 그룹 2: 도구 ─────────────────────────────────────────── */}
+          {/* ── 그룹 2: 좌표 ─────────────────────────────────────────── */}
           <div className="flex items-center gap-1 bg-[#0a0a0a] border border-[#1e1e1e] rounded-xl px-2 py-1">
-            <span className="text-[8px] text-gray-700 font-black tracking-widest mr-1">도구</span>
-            {/* 기사 배치 잠금 — 브러시 보정 후 실수 초기화 방지 */}
-            <button
-              onClick={() => { setIsAssignmentLocked(v => !v); showToast('info', isAssignmentLocked ? '🔓 기사 배치 잠금 해제' : '🔒 기사 배치 잠금 — 자동배정/이전달 승계 차단'); }}
-              title={isAssignmentLocked ? '기사 배치 잠금 해제 — 자동배정·초기화 허용' : '기사 배치 잠금 — 브러시 보정 결과를 보호합니다'}
-              className={`px-2 py-1 rounded-lg text-[10px] font-black flex items-center gap-1 border transition-colors ${isAssignmentLocked ? 'bg-amber-900/60 border-amber-500/70 text-amber-300 shadow-[0_0_6px_rgba(245,158,11,0.4)]' : 'bg-[#111] border-[#2a2a2a] text-gray-500 hover:text-amber-400 hover:border-amber-600/40'}`}
-            >
-              {isAssignmentLocked ? '🔒 배치잠금' : '🔓 배치잠금'}
-            </button>
-            {/* 좌표 매칭 */}
+            <span className="text-[8px] text-gray-700 font-black tracking-widest mr-1">좌표</span>
             <button
               onClick={handleFetchMissingCoords}
               disabled={isFetchingCoords}
@@ -2098,28 +3220,92 @@ ${folders}
             >
               {isFetchingCoords
                 ? <><RefreshCw size={10} className="animate-spin" />{coordProgress ? `${coordProgress.done}/${coordProgress.total}` : '처리중'}</>
-                : <><MapPin size={10} />좌표 매칭{totalNoCoord > 0 ? ` (${totalNoCoord})` : ' ✓'}</>
+                : <><MapPin size={10} />매칭{totalNoCoord > 0 ? ` ${totalNoCoord}` : ' ✓'}</>
               }
             </button>
-            {/* 자동 순번 */}
+            <button
+              onClick={() => setShowCoordBrush(true)}
+              title="잘못 찍힌 좌표를 지도나 목록에서 오류로 지정하고, 삭제 또는 삭제 후 즉시 재매칭합니다"
+              className="px-2 py-1 bg-[#0d1a1a] border border-cyan-600/40 text-cyan-400 hover:bg-cyan-900/20 rounded-lg text-[10px] font-bold flex items-center gap-1 transition-colors"
+            >
+              <Eraser size={10} /> 오류지정
+            </button>
+          </div>
+
+          {/* ── 그룹 3: 분석 ─────────────────────────────────────────── */}
+          <div className="flex items-center gap-1 bg-[#0a0a0a] border border-[#1e1e1e] rounded-xl px-2 py-1">
+            <span className="text-[8px] text-gray-700 font-black tracking-widest mr-1">분석</span>
+            <button
+              onClick={handleRunMapAnalysis}
+              title="도로 좌우·혼재·외곽지·대형단지를 분석해 작업 후보를 보여줍니다"
+              className={`px-2 py-1 rounded-lg text-[10px] font-black flex items-center gap-1 border transition-colors ${
+                showMapAnalysis
+                  ? 'bg-emerald-500/15 border-emerald-400/40 text-emerald-300'
+                  : 'bg-[#0d1a14] border-emerald-600/30 text-emerald-400 hover:bg-emerald-900/20'
+              }`}
+            >
+              <Search size={10} /> 지도 분석
+            </button>
+            {overlapCount > 0 && (
+              <button
+                onClick={handleResolveOverlap}
+                title="아파트/동일주소 묶음을 유지한 채 권역 안에 섞인 배송지만 보정합니다"
+                className="px-2 py-1 bg-red-950/70 border border-red-500/50 rounded-lg text-red-300 text-[10px] font-black hover:bg-red-900/60 transition-colors"
+              >
+                혼재 {overlapCount.toLocaleString()}
+              </button>
+            )}
+          </div>
+
+          {/* ── 그룹 4: 배정·순번 ───────────────────────────────────── */}
+          <div className="flex items-center gap-1 bg-[#0a0a0a] border border-[#1e1e1e] rounded-xl px-2 py-1">
+            <span className="text-[8px] text-gray-700 font-black tracking-widest mr-1">배정</span>
+            <button
+              onClick={() => { setIsAssignmentLocked(v => !v); showToast('info', isAssignmentLocked ? '🔓 기사 배치 잠금 해제' : '🔒 기사 배치 잠금 — 자동배정/이전달 승계 차단'); }}
+              title={isAssignmentLocked ? '기사 배치 잠금 해제 — 자동배정·초기화 허용' : '기사 배치 잠금 — 브러시 보정 결과를 보호합니다'}
+              className={`px-2 py-1 rounded-lg text-[10px] font-black flex items-center gap-1 border transition-colors ${isAssignmentLocked ? 'bg-amber-900/60 border-amber-500/70 text-amber-300 shadow-[0_0_6px_rgba(245,158,11,0.4)]' : 'bg-[#111] border-[#2a2a2a] text-gray-500 hover:text-amber-400 hover:border-amber-600/40'}`}
+            >
+              {isAssignmentLocked ? '잠금중' : '잠금'}
+            </button>
             <button
               onClick={handleAutoSequence}
-              title="도로명 기반으로 기사별 배송 순번을 자동 부여합니다"
+              title="표준주소·도로 좌우·아파트 묶음 기준으로 기사별 배송 순번을 자동 부여합니다"
               className="px-2 py-1 bg-[#0d1520] border border-purple-500/30 text-purple-400 hover:bg-purple-900/20 rounded-lg text-[10px] font-bold flex items-center gap-1 transition-colors"
             >
-              <Navigation2 size={10} /> 자동 순번
+              <Navigation2 size={10} /> 순번
             </button>
-            {/* 순번 초기화 */}
+            {isAdminUser && (
+              <button
+                onClick={handleAdvancedAutoSequence}
+                disabled={isAdvancedSequencing}
+                title="관리자 실험 기능: 차량 경로 API 후보 검증 + 도보 후보 + 도로망 점수로 배송순번을 계산합니다"
+                className="px-2 py-1 bg-[#1a1024] border border-fuchsia-500/35 text-fuchsia-300 hover:bg-fuchsia-900/25 rounded-lg text-[10px] font-black flex items-center gap-1 transition-colors disabled:opacity-50"
+              >
+                {isAdvancedSequencing ? <RefreshCw size={10} className="animate-spin" /> : <Navigation2 size={10} />}
+                AI순번
+              </button>
+            )}
+            <button
+              onClick={handleRunSequenceAnalysis}
+              title="배송순번의 점프·도보 후보·좌표 없음·도로 재방문을 분석합니다"
+              className={`px-2 py-1 rounded-lg text-[10px] font-bold flex items-center gap-1 border transition-colors ${
+                showSequenceAnalysis
+                  ? 'bg-violet-500/15 border-violet-400/40 text-violet-300'
+                  : 'bg-[#140d20] border-violet-500/25 text-violet-400 hover:bg-violet-900/20'
+              }`}
+            >
+              <Search size={10} /> 분석
+            </button>
             <button
               onClick={handleClearSequence}
               title="전체 배송순번을 지워 새로 지정할 수 있게 합니다"
               className="px-2 py-1 bg-[#1a0d0d] border border-red-700/30 text-red-400 hover:bg-red-900/20 rounded-lg text-[10px] font-bold flex items-center gap-1 transition-colors"
             >
-              <X size={10} /> 순번 초기화
+              <X size={10} /> 초기화
             </button>
           </div>
 
-          {/* ── 그룹 3: 레이아웃 ─────────────────────────────────────── */}
+          {/* ── 그룹 5: 레이아웃 ─────────────────────────────────────── */}
           <div className="flex rounded-xl overflow-hidden border border-[#2a2a2a]">
             <button onClick={() => setLayoutMode('map')} title="지도만 표시"
               className={`px-2.5 py-1.5 text-[10px] font-bold flex items-center gap-1 transition-colors ${layoutMode === 'map' ? 'bg-[#1a2e1a] text-[#3b82f6]' : 'bg-[#111] text-gray-500 hover:text-gray-300'}`}>
@@ -2185,6 +3371,17 @@ ${folders}
               {isCreatingShare ? <RefreshCw size={10} className="animate-spin" /> : <Share2 size={10} />}
               {isCreatingShare ? '생성중...' : '공유'}
             </button>
+            {isCloudMode && (
+              <button
+                onClick={handleLoadOrderApplyRequests}
+                disabled={isLoadingOrderRequests}
+                title="기사가 요청한 순번을 조회하고, 유선 확인 후 공식 명단에 반영합니다"
+                className="px-2 py-1 bg-amber-950/35 border border-amber-600/45 text-amber-300 hover:bg-amber-900/35 rounded-lg text-[10px] font-bold flex items-center gap-1 transition-colors disabled:opacity-50"
+              >
+                {isLoadingOrderRequests ? <RefreshCw size={10} className="animate-spin" /> : <Clock size={10} />}
+                순번요청
+              </button>
+            )}
           </div>
 
           {/* ── 그룹 5: 최종 저장 + 닫기 ────────────────────────────── */}
@@ -2216,62 +3413,250 @@ ${folders}
       <div className="flex-1 flex min-h-0 relative">
 
         {/* 좌측 패널 — mapfull / listfull 모드에서 숨김 */}
-        <div className={`w-60 shrink-0 bg-[#070707] border-r border-[#1a1a1a] flex flex-col overflow-hidden ${layoutMode === 'mapfull' || layoutMode === 'listfull' ? 'hidden' : ''}`}>
+        <div className={`w-56 shrink-0 bg-[#070707] border-r border-[#1a1a1a] flex flex-col overflow-hidden ${layoutMode === 'mapfull' || layoutMode === 'listfull' ? 'hidden' : ''}`}>
 
           {/* 행정동 필터 */}
-          <div className="p-3 border-b border-[#1a1a1a]">
-            <div className="text-[9px] text-gray-600 mb-1.5 font-black tracking-widest uppercase">행정동 필터</div>
+          <div className="p-2 border-b border-[#1a1a1a]">
+            <div className="flex items-center justify-between mb-1">
+              <div className="text-[8px] text-gray-600 font-black tracking-widest uppercase">행정동</div>
+              <div className="text-[8px] text-gray-700">
+                <span className="text-blue-400 font-black">{filteredQty}포</span> · 미배정 <span className={unassigned > 0 ? 'text-amber-500' : 'text-[#3b82f6]'}>{unassigned}</span>
+              </div>
+            </div>
             <select value={selectedDong} onChange={e => setSelectedDong(e.target.value)}
-              className="w-full bg-[#111] text-white text-xs border border-[#2a2a2a] rounded px-2 py-1.5 focus:outline-none focus:border-[#3b82f6]/40">
+              className="w-full bg-[#111] text-white text-xs border border-[#2a2a2a] rounded px-2 py-1 focus:outline-none focus:border-[#3b82f6]/40">
               {dongList.map(d => <option key={d}>{d}</option>)}
             </select>
-            <div className="mt-1 text-[9px] text-gray-700">
-              {filteredRecords.length}건 · <span className="text-blue-400 font-black">{filteredQty}포</span> | 미배정 <span className={unassigned > 0 ? 'text-amber-500' : 'text-[#3b82f6]'}>{unassigned}건</span>
-            </div>
+            <div className="mt-0.5 text-[8px] text-gray-700">{filteredRecords.length}건 · 좌표 {mapRecords.length}건</div>
           </div>
 
           {/* 자동 배정 */}
-          <div className="p-3 border-b border-[#1a1a1a]">
-            <div className="text-[9px] text-gray-600 mb-2 font-black tracking-widest uppercase">자동 배정</div>
-            <div className="text-[8px] text-gray-700 mb-1.5 text-center">임대·계단·특이사항 자동 반영</div>
-            <div className="flex items-center gap-2 mb-2">
+          <div className="p-2 border-b border-[#1a1a1a]">
+            <div className="flex items-center justify-between mb-1.5">
+              <div className="text-[8px] text-gray-600 font-black tracking-widest uppercase">자동 배정</div>
+              <span className="text-[8px] text-gray-700">임대·계단 반영</span>
+            </div>
+            <div className="flex items-center gap-1.5 mb-1.5">
               <button onClick={() => setDriverCount(c => Math.max(1, c - 1))}
-                className="w-7 h-7 bg-[#1a1a1a] border border-[#2a2a2a] rounded text-gray-400 hover:text-white flex items-center justify-center">
+                className="w-7 h-7 bg-[#1a1a1a] border border-[#2a2a2a] rounded text-gray-400 hover:text-white flex items-center justify-center shrink-0">
                 <Minus size={11} />
               </button>
-              <span className="flex-1 text-center text-white font-black">{driverCount}명</span>
+              <span className="w-10 text-center text-white font-black text-sm shrink-0">{driverCount}명</span>
               <button onClick={() => setDriverCount(c => Math.min(8, c + 1))}
-                className="w-7 h-7 bg-[#1a1a1a] border border-[#2a2a2a] rounded text-gray-400 hover:text-white flex items-center justify-center">
+                className="w-7 h-7 bg-[#1a1a1a] border border-[#2a2a2a] rounded text-gray-400 hover:text-white flex items-center justify-center shrink-0">
                 <Plus size={11} />
               </button>
+              <button
+                onClick={handleAutoSplit}
+                disabled={isSplitting || totalWithCoord === 0 || (totalNoCoord > 0 && !hasRunGeocoding)}
+                title={totalNoCoord > 0 && !hasRunGeocoding ? `좌표 없는 ${totalNoCoord}건 있음 — 먼저 [좌표 매칭]을 실행하세요 (R-B)` : ''}
+                className="flex-1 h-7 bg-[#3b82f6]/15 border border-[#3b82f6]/25 text-[#3b82f6] rounded text-[10px] font-bold hover:bg-[#3b82f6]/25 disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-1 transition-colors">
+                {isSplitting ? <><RefreshCw size={10} className="animate-spin" /> 배정</>
+                  : totalNoCoord > 0 && !hasRunGeocoding ? <><AlertCircle size={10} className="text-amber-400" /> 좌표</>
+                  : <><Navigation2 size={10} /> 자동</>}
+              </button>
             </div>
-            <button
-              onClick={handleAutoSplit}
-              disabled={isSplitting || totalWithCoord === 0 || (totalNoCoord > 0 && !hasRunGeocoding)}
-              title={totalNoCoord > 0 && !hasRunGeocoding ? `좌표 없는 ${totalNoCoord}건 있음 — 먼저 [좌표 매칭]을 실행하세요 (R-B)` : ''}
-              className="w-full py-1.5 bg-[#3b82f6]/15 border border-[#3b82f6]/25 text-[#3b82f6] rounded text-xs font-bold hover:bg-[#3b82f6]/25 disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-1.5 transition-colors">
-              {isSplitting ? <><RefreshCw size={11} className="animate-spin" /> 배정 중...</>
-                : totalNoCoord > 0 && !hasRunGeocoding ? <><AlertCircle size={11} className="text-amber-400" /> 좌표 매칭 필요</>
-                : <><Navigation2 size={11} /> 자동 {driverCount}등분</>}
-            </button>
+            <div className="grid grid-cols-2 gap-1">
+              <button onClick={handleResetAssignments}
+                className="py-1 bg-[#111] border border-[#333] text-gray-600 rounded text-[9px] font-bold hover:text-red-400 hover:border-red-800/50 flex items-center justify-center gap-1 transition-colors">
+                <X size={9} /> 초기화
+              </button>
+              <button onClick={handleLoadLastMonth}
+                className="py-1 bg-[#111] border border-[#2a2a2a] text-gray-500 rounded text-[9px] font-bold hover:text-gray-300 hover:border-[#3a3a3a] flex items-center justify-center gap-1 transition-colors">
+                <Clock size={9} /> 지난달
+              </button>
+            </div>
+          </div>
 
-            {/* 배정 초기화 */}
-            <button onClick={handleResetAssignments}
-              className="w-full mt-2 py-1.5 bg-[#111] border border-[#333] text-gray-600 rounded text-[10px] font-bold hover:text-red-400 hover:border-red-800/50 flex items-center justify-center gap-1.5 transition-colors">
-              <X size={10} /> 배정 전체 초기화
-            </button>
+          {/* ── 지도/배정 분석 안내 ─────────────────────────────────── */}
+          <div className="p-2 border-b border-[#1a1a1a] bg-[#07110f]">
+            <div className="flex items-center justify-between mb-1.5">
+              <div className="text-[8px] text-emerald-400 font-black tracking-widest uppercase">지도 분석</div>
+              <button
+                onClick={handleRunMapAnalysis}
+                className="px-2 py-0.5 rounded-md bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-[8px] font-black hover:bg-emerald-500/25 transition-colors"
+              >
+                분석 실행
+              </button>
+            </div>
 
-            {/* 지난달 배정 불러오기 */}
-            <button onClick={handleLoadLastMonth}
-              className="w-full mt-1.5 py-1.5 bg-[#111] border border-[#2a2a2a] text-gray-500 rounded text-[10px] font-bold hover:text-gray-300 hover:border-[#3a3a3a] flex items-center justify-center gap-1.5 transition-colors">
-              <Clock size={10} /> 지난달 배정 불러오기
-            </button>
-            <div className="text-[9px] text-gray-700 mt-1 text-center">기사명이 일치해야 적용됩니다</div>
+            <div className="grid grid-cols-4 gap-1 mb-1.5">
+              <button
+                onClick={() => focusAnalysisRecords(mapInsights.mixedRecords.map(r => r.id), '혼재 의심')}
+                className={`rounded-md border px-1 py-1 text-center transition-colors ${mapInsights.mixedCount ? 'bg-red-950/35 border-red-500/35 text-red-300 hover:bg-red-900/35' : 'bg-black/30 border-emerald-900/30 text-emerald-500'}`}
+              >
+                <div className="text-[10px] font-black tabular-nums">{mapInsights.mixedCount}</div>
+                <div className="text-[8px] font-bold">혼재</div>
+              </button>
+              <button
+                onClick={() => focusAnalysisRecords(mapInsights.mixedRoads[0]?.recordIds || [], '도로 분산')}
+                className={`rounded-md border px-1 py-1 text-center transition-colors ${mapInsights.mixedRoads.length ? 'bg-amber-950/35 border-amber-500/35 text-amber-300 hover:bg-amber-900/35' : 'bg-black/30 border-emerald-900/30 text-emerald-500'}`}
+              >
+                <div className="text-[10px] font-black tabular-nums">{mapInsights.mixedRoads.length}</div>
+                <div className="text-[8px] font-bold">도로</div>
+              </button>
+              <button
+                onClick={() => focusAnalysisRecords(mapInsights.isolatedUnits.flatMap(unit => unit.ids), '외곽 고립')}
+                className={`rounded-md border px-1 py-1 text-center transition-colors ${mapInsights.isolatedUnits.length ? 'bg-blue-950/35 border-blue-500/35 text-blue-300 hover:bg-blue-900/35' : 'bg-black/30 border-emerald-900/30 text-emerald-500'}`}
+              >
+                <div className="text-[10px] font-black tabular-nums">{mapInsights.isolatedUnits.length}</div>
+                <div className="text-[8px] font-bold">외곽</div>
+              </button>
+              <button
+                onClick={() => largeAptComplexes[0] ? openAptMultiModal(largeAptComplexes[0].aptKey) : showToast('info', '대형단지 후보가 없습니다.')}
+                className={`rounded-md border px-1 py-1 text-center transition-colors ${largeAptComplexes.length ? 'bg-orange-950/35 border-orange-500/35 text-orange-300 hover:bg-orange-900/35' : 'bg-black/30 border-emerald-900/30 text-emerald-500'}`}
+              >
+                <div className="text-[10px] font-black tabular-nums">{largeAptComplexes.length}</div>
+                <div className="text-[8px] font-bold">단지</div>
+              </button>
+            </div>
+
+            {showMapAnalysis && (
+              <div className="max-h-20 overflow-y-auto pr-1 space-y-1 scrollbar-thin">
+                <div className="space-y-1">
+                  {mapInsights.actions.slice(0, 2).map((msg, idx) => (
+                    <div key={idx} className="text-[8px] text-gray-500 leading-relaxed">• {msg}</div>
+                  ))}
+                </div>
+
+                {mapInsights.mixedRoads.length > 0 && (
+                  <div className="space-y-1">
+                    {mapInsights.mixedRoads.slice(0, 2).map(road => (
+                      <button
+                        key={road.key}
+                        onClick={() => focusAnalysisRecords(road.recordIds, road.label)}
+                        className="w-full flex items-center justify-between gap-2 text-[8px] bg-black/30 hover:bg-amber-950/25 border border-amber-900/20 rounded px-2 py-1 transition-colors"
+                      >
+                        <span className="text-gray-300 truncate">{road.label}</span>
+                        <span className="text-amber-400 font-black shrink-0">{road.qty}포 · {road.driverCount}기사</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {routeAnalysis && routeAnalysis.load?.stats?.length > 0 && (
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <div className="text-[8px] text-gray-600 font-black tracking-widest">기사별 부담</div>
+                      <span className={`text-[8px] font-black ${routeAnalysis.load?.maxAbsDiffPct > 25 ? 'text-amber-400' : 'text-emerald-400'}`}>
+                        최대 편차 {routeAnalysis.load?.maxAbsDiffPct ?? 0}%
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-1">
+                      {(routeAnalysis.load?.stats || []).slice(0, 2).map(stat => (
+                        <div key={stat.driverId} className="rounded-md bg-black/35 border border-emerald-900/30 px-1.5 py-1">
+                          <div className="text-[9px] text-white font-bold truncate">{stat.driverName}</div>
+                          <div className="text-[8px] text-gray-500 tabular-nums">
+                            {stat.qty}포 · 부담 {stat.load}/{stat.targetLoad}
+                          </div>
+                          <div className={`text-[8px] font-black ${Math.abs(stat.diffPct) > 25 ? 'text-amber-400' : 'text-emerald-400'}`}>
+                            {stat.diffPct > 0 ? '+' : ''}{stat.diffPct}%
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* ── 배송순번 분석 ─────────────────────────────────────── */}
+          <div className="p-2 border-b border-[#1a1a1a] bg-[#0d0a16]">
+            <div className="flex items-center justify-between mb-1.5">
+              <div className="text-[8px] text-violet-400 font-black tracking-widest uppercase">순번 분석</div>
+              <button
+                onClick={handleRunSequenceAnalysis}
+                className="px-2 py-0.5 rounded-md bg-violet-500/15 border border-violet-500/30 text-violet-300 text-[8px] font-black hover:bg-violet-500/25 transition-colors"
+              >
+                분석 실행
+              </button>
+            </div>
+            <div className="grid grid-cols-4 gap-1 mb-1.5">
+              <button
+                onClick={() => {
+                  const ids = (sequenceAnalysis?.driverStats || []).flatMap(stat => stat.jumpIds || []);
+                  focusAnalysisRecords(ids, '순번 점프');
+                }}
+                className={`rounded-md border px-1 py-1 text-center transition-colors ${
+                  (sequenceAnalysis?.driverStats || []).some(stat => stat.jumpCount > 0)
+                    ? 'bg-red-950/35 border-red-500/35 text-red-300 hover:bg-red-900/35'
+                    : 'bg-black/30 border-violet-900/30 text-violet-400'
+                }`}
+              >
+                <div className="text-[10px] font-black tabular-nums">{(sequenceAnalysis?.driverStats || []).reduce((s, stat) => s + stat.jumpCount, 0)}</div>
+                <div className="text-[8px] font-bold">점프</div>
+              </button>
+              <button
+                onClick={() => {
+                  const ids = (sequenceAnalysis?.driverStats || []).flatMap(stat => stat.walkIds || []);
+                  focusAnalysisRecords(ids, '도보 후보');
+                }}
+                className={`rounded-md border px-1 py-1 text-center transition-colors ${
+                  (sequenceAnalysis?.driverStats || []).some(stat => stat.walkCount > 0)
+                    ? 'bg-cyan-950/35 border-cyan-500/35 text-cyan-300 hover:bg-cyan-900/35'
+                    : 'bg-black/30 border-violet-900/30 text-violet-400'
+                }`}
+              >
+                <div className="text-[10px] font-black tabular-nums">{(sequenceAnalysis?.driverStats || []).reduce((s, stat) => s + stat.walkCount, 0)}</div>
+                <div className="text-[8px] font-bold">도보</div>
+              </button>
+              <button
+                onClick={() => {
+                  const ids = (sequenceAnalysis?.driverStats || []).flatMap(stat => stat.noCoordIds || []);
+                  focusAnalysisRecords(ids, '좌표 없는 순번');
+                }}
+                className={`rounded-md border px-1 py-1 text-center transition-colors ${
+                  (sequenceAnalysis?.driverStats || []).some(stat => stat.noCoordCount > 0)
+                    ? 'bg-amber-950/35 border-amber-500/35 text-amber-300 hover:bg-amber-900/35'
+                    : 'bg-black/30 border-violet-900/30 text-violet-400'
+                }`}
+              >
+                <div className="text-[10px] font-black tabular-nums">{(sequenceAnalysis?.driverStats || []).reduce((s, stat) => s + stat.noCoordCount, 0)}</div>
+                <div className="text-[8px] font-bold">좌표</div>
+              </button>
+              <div className={`rounded-md border px-1 py-1 text-center ${
+                sequenceAnalysis?.avgAccuracy >= 90
+                  ? 'bg-emerald-950/30 border-emerald-500/30 text-emerald-300'
+                  : sequenceAnalysis?.avgAccuracy
+                  ? 'bg-orange-950/30 border-orange-500/30 text-orange-300'
+                  : 'bg-black/30 border-violet-900/30 text-violet-400'
+              }`}>
+                <div className="text-[10px] font-black tabular-nums">{sequenceAnalysis?.avgAccuracy || 0}%</div>
+                <div className="text-[8px] font-bold">정확도</div>
+              </div>
+            </div>
+            {showSequenceAnalysis && (
+              <div className="max-h-24 overflow-y-auto pr-1 space-y-1">
+                {(sequenceAnalysis?.driverStats || []).slice(0, 3).map(stat => (
+                  <button
+                    key={stat.driverId}
+                    onClick={() => {
+                      const ids = [...(stat.jumpIds || []), ...(stat.noCoordIds || []), ...(stat.noRoadIds || [])];
+                      focusAnalysisRecords(ids, `${stat.driverName} 순번 확인`);
+                    }}
+                    className="w-full rounded-md bg-black/35 border border-violet-900/25 px-2 py-1 text-left hover:bg-violet-950/25 transition-colors"
+                  >
+                    <div className="flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full shrink-0" style={{ background: stat.color }} />
+                      <span className="text-[9px] text-white font-bold truncate flex-1">{stat.driverName}</span>
+                      <span className={`text-[8px] font-black ${stat.accuracy >= 90 ? 'text-emerald-400' : 'text-amber-400'}`}>{stat.accuracy}%</span>
+                    </div>
+                    <div className="mt-0.5 text-[8px] text-gray-500 flex items-center justify-between">
+                      <span>평균 {stat.avgDist}m · 최대 {stat.maxDist}m</span>
+                      <span>점프 {stat.jumpCount} · 도보 {stat.walkCount}</span>
+                    </div>
+                  </button>
+                ))}
+                {!(sequenceAnalysis?.driverStats || []).length && (
+                  <div className="text-[8px] text-gray-600 leading-relaxed">순번 실행 후 분석하면 기사별 점프·도보 후보가 표시됩니다.</div>
+                )}
+              </div>
+            )}
           </div>
 
           {/* ── 2차 보정: 페인트 브러시 ─────────────────────────────── */}
-          <div className="px-3 pb-3 border-t border-[#1a1a1a] pt-3">
-            <div className="text-[9px] text-gray-600 mb-2 font-black tracking-widest uppercase">2차 보정</div>
+          <div className="order-5 px-2 py-2 border-t border-[#1a1a1a]">
             <button
               onClick={() => {
                 const next = !isPaintMode;
@@ -2281,22 +3666,21 @@ ${folders}
                 // 브러시 ON → 지도 드래그 잠금, OFF → 복원
                 if (kakaoMapRef.current) kakaoMapRef.current.setDraggable(!next);
               }}
-              className={`w-full py-1.5 rounded text-[10px] font-black flex items-center justify-center gap-1.5 transition-all border ${
+              className={`w-full py-1 rounded text-[9px] font-black flex items-center justify-center gap-1 transition-all border ${
                 isPaintMode
                   ? 'bg-amber-500/20 border-amber-400/50 text-amber-300 shadow-[0_0_12px_rgba(251,191,36,0.25)]'
                   : 'bg-[#111] border-[#2a2a2a] text-gray-500 hover:text-amber-400 hover:border-amber-700/40'
               }`}>
-              ✏️ {isPaintMode ? '브러시 모드 ON (Esc 종료)' : '브러시 보정 모드'}
+              {isPaintMode ? '브러시 ON (Esc)' : '브러시 보정'}
             </button>
             {isPaintMode && (
-              <div className="mt-2 space-y-2">
+              <div className="mt-1.5 space-y-1.5 max-h-28 overflow-y-auto pr-1">
                 {/* 기사 색상 선택 */}
-                <div className="text-[8px] text-gray-600 mb-1">칠할 기사 선택</div>
-                <div className="flex flex-wrap gap-1.5">
+                <div className="flex flex-wrap gap-1">
                   {drivers.map(d => (
                     <button key={d.id}
                       onClick={() => setPaintDriverId(d.id)}
-                      className="flex items-center gap-1 px-2 py-1 rounded-full text-[9px] font-bold transition-all border"
+                      className="flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[8px] font-bold transition-all border"
                       style={{
                         borderColor: paintDriverId === d.id ? d.color : 'transparent',
                         background: paintDriverId === d.id ? `${d.color}30` : '#111',
@@ -2309,7 +3693,6 @@ ${folders}
                   ))}
                 </div>
                 {/* 브러시 크기 */}
-                <div className="text-[8px] text-gray-600 mb-1">브러시 크기</div>
                 <div className="flex gap-1">
                   {[['소', 30], ['중', 60], ['대', 100], ['특대', 160]].map(([label, px]) => (
                     <button key={label}
@@ -2327,29 +3710,67 @@ ${folders}
             )}
           </div>
 
+          {/* ── 대형 아파트/임대단지 배정 ───────────────────────────── */}
+          {largeAptComplexes.length > 0 && (
+            <div className="order-6 px-2 py-2 border-t border-[#1a1a1a]">
+              <div className="flex items-center justify-between mb-1">
+                <div className="text-[8px] text-gray-600 font-black tracking-widest uppercase">대형단지</div>
+                <span className="text-[9px] text-orange-400 font-bold">{largeAptComplexes.length}개</span>
+              </div>
+              <div className="space-y-1 max-h-24 overflow-y-auto pr-1">
+                {largeAptComplexes.slice(0, 4).map(({ aptKey, aptName, road, totalQty, rentalDetected, buildingCount }) => (
+                  <div key={aptKey} className="flex items-center gap-1.5 bg-[#111] border border-orange-700/20 rounded-lg px-1.5 py-1">
+                    <Building2 size={10} className="text-orange-400 shrink-0" />
+                    <div className="min-w-0 flex-1">
+                      <div className="text-[9px] text-white font-bold truncate">{aptName}</div>
+                      <div className="flex items-center gap-1 text-[8px]">
+                        <span className="text-orange-400">{totalQty}포</span>
+                        {buildingCount > 0 && <span className="text-gray-600">· {buildingCount}개 동</span>}
+                        <span className={rentalDetected ? 'text-emerald-400' : 'text-amber-500'}>
+                          · {rentalDetected ? '임대감지' : '대형단지'}
+                        </span>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => openAptMultiModal(aptKey)}
+                      className="shrink-0 px-1.5 py-0.5 bg-orange-500/20 border border-orange-400/40 text-orange-300 rounded text-[8px] font-bold hover:bg-orange-500/30 transition-colors"
+                    >
+                      분할
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* 기사 목록 */}
-          <div className="flex-1 overflow-y-auto p-3">
-            <div className="flex items-center justify-between mb-2">
+          <div className="order-4 flex-1 min-h-0 overflow-y-auto p-2">
+            <div className="flex items-center justify-between mb-1.5 sticky top-0 bg-[#070707]/95 z-10 pb-1">
               <div className="text-[9px] text-gray-600 font-black tracking-widest uppercase">기사 목록</div>
               <div className="flex items-center gap-1.5">
+                <button
+                  onClick={openDriverSwapModal}
+                  title="두 기사에게 배정된 구역 전체를 서로 맞바꿉니다"
+                  className="text-[9px] px-1.5 py-0.5 rounded border font-bold transition-colors bg-[#111] border-[#222] text-cyan-400 hover:border-cyan-500/40 hover:bg-cyan-950/20 flex items-center gap-0.5"
+                >
+                  <ArrowLeftRight size={9} /> 교체
+                </button>
                 <button onClick={() => setScheduleMode(v => !v)}
                   className={`text-[9px] px-1.5 py-0.5 rounded border font-bold transition-colors ${scheduleMode ? 'bg-purple-900/30 border-purple-500/40 text-purple-400' : 'bg-[#111] border-[#222] text-gray-600 hover:text-gray-400'}`}>
                   일정
                 </button>
-                <button onClick={addDriver} disabled={drivers.length >= 8}
+                <button
+                  onClick={() => setShowCompanyPicker(true)}
+                  disabled={drivers.length >= 8}
+                  title="소속사 기사 추가 — 이사·외곽 레코드를 다른 기사에게 배정할 때 사용"
                   className="text-[10px] text-[#3b82f6] hover:text-[#93c5fd] disabled:text-gray-700 flex items-center gap-0.5">
                   <Plus size={10} /> 추가
                 </button>
-                <button onClick={addExternalDriver} disabled={drivers.length >= 8}
-                  title="외부 기사 추가 — 자동배정 제외, 겹침 감지 제외. 이사 등 예외 케이스 수동 배정용"
-                  className="text-[10px] text-purple-400 hover:text-purple-300 disabled:text-gray-700 flex items-center gap-0.5">
-                  <Plus size={10} /> 외부
-                </button>
               </div>
             </div>
-            <div className="space-y-1.5">
+            <div className="space-y-1">
               <button onClick={() => setSelectedDriverFilter(selectedDriverFilter === 'none' ? 'all' : 'none')}
-                className={`w-full p-2 rounded-lg border text-left transition-colors ${selectedDriverFilter === 'none' ? 'bg-[#1a1a1a] border-gray-600' : 'bg-[#0d0d0d] border-[#1e1e1e] hover:border-[#2a2a2a]'}`}>
+                className={`w-full px-2 py-1.5 rounded-lg border text-left transition-colors ${selectedDriverFilter === 'none' ? 'bg-[#1a1a1a] border-gray-600' : 'bg-[#0d0d0d] border-[#1e1e1e] hover:border-[#2a2a2a]'}`}>
                 <div className="flex items-center gap-2">
                   <div className="w-2.5 h-2.5 rounded-full bg-gray-600 shrink-0" />
                   <span className="text-gray-400 text-xs flex-1">미배정</span>
@@ -2364,9 +3785,10 @@ ${folders}
                 const maxLoad = Math.round(baseDailyQtyProp * (d.capacity || 100) / 100);
                 const loadPct = maxLoad > 0 ? Math.min(150, Math.round(effLoad / maxLoad * 100)) : 0;
                 const isOver = effLoad > maxLoad;
+                const zoneNo = drivers.findIndex(dr => dr.id === d.id) + 1;
                 return (
                   <div key={d.id}
-                    className={`p-2 rounded-lg border transition-colors cursor-pointer`}
+                    className={`p-1.5 rounded-lg border transition-colors cursor-pointer`}
                     style={{
                       borderColor: isActive ? d.color + '60' : (d.isExternal ? '#7c3aed40' : '#1e1e1e'),
                       borderStyle: d.isExternal ? 'dashed' : 'solid',
@@ -2375,6 +3797,7 @@ ${folders}
                     onClick={() => setSelectedDriverFilter(isActive ? 'all' : d.id)}>
                     <div className="flex items-center gap-2">
                       <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: d.color }} />
+                      <span className="text-[8px] font-black px-1 py-0.5 rounded bg-black/40 border border-white/5 text-gray-500 shrink-0">{zoneNo}구역</span>
                       <input value={d.name}
                         onChange={e => setDrivers(prev => prev.map(dr => dr.id === d.id ? { ...dr, name: e.target.value } : dr))}
                         onClick={e => e.stopPropagation()}
@@ -2455,19 +3878,15 @@ ${folders}
             </div>
           </div>
 
-          <div className="p-3 border-t border-[#1a1a1a] space-y-1">
-            <div className="text-[9px] text-gray-700 font-black tracking-widest uppercase mb-1">범례</div>
-            <div className="flex items-center gap-1.5 text-[9px] text-gray-600">
-              <div className="w-2 h-2 rounded-full bg-[#ef4444]" />주소 확인필요
+          <div className="order-7 px-2 py-1.5 border-t border-[#1a1a1a]">
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span className="text-[8px] text-gray-700 font-black tracking-widest uppercase mr-0.5">범례</span>
+              <span title="주소 확인필요" className="w-2 h-2 rounded-full bg-[#ef4444]" />
+              <span title="미배정" className="w-2 h-2 rounded-full bg-gray-600" />
+              {drivers.map(d => (
+                <span key={d.id} title={d.name} className="w-2 h-2 rounded-full" style={{ background: d.color }} />
+              ))}
             </div>
-            <div className="flex items-center gap-1.5 text-[9px] text-gray-600">
-              <div className="w-2 h-2 rounded-full bg-gray-600" />미배정
-            </div>
-            {drivers.map(d => (
-              <div key={d.id} className="flex items-center gap-1.5 text-[9px] text-gray-500">
-                <div className="w-2 h-2 rounded-full" style={{ background: d.color }} />{d.name}
-              </div>
-            ))}
           </div>
         </div>
 
@@ -2687,6 +4106,7 @@ ${folders}
                   {listRecords.map((r, idx) => {
                     const driver = drivers.find(d => d.id === r._driverId);
                     const isSelected = selectedRecordId === r.id;
+                    const isSelectionPulse = selectionPulseId === r.id;
                     const isDragOver = isSeqDragMode && dragOverId === r.id;
                     return (
                       <tr
@@ -2708,15 +4128,28 @@ ${folders}
                           if (r._lat && r._lng) handleSelectRecord(r);
                           else setSelectedRecordId(r.id);
                         }}
-                        className={`border-b transition-colors cursor-pointer ${!r._lat ? 'opacity-50' : ''} ${isSeqDragMode ? 'hover:bg-purple-900/10' : isSeqClickMode ? 'hover:bg-amber-900/20' : isSelected ? 'bg-blue-900/20' : 'hover:bg-[#0f0f0f]'}`}
+                        className={`border-b transition-colors cursor-pointer ${!r._lat ? 'opacity-50' : ''} ${isSeqDragMode ? 'hover:bg-purple-900/10' : isSeqClickMode ? 'hover:bg-amber-900/20' : isSelected ? 'bg-blue-500/20' : 'hover:bg-[#0f0f0f]'}`}
                         style={{
                           borderBottomColor: isDragOver ? '#a855f7' : '#0e0e0e',
                           borderBottomWidth: isDragOver ? '2px' : '1px',
-                          ...(isSelected && !isSeqDragMode ? { outline: '1px solid rgba(59,130,246,0.35)', outlineOffset: '-1px' } : {}),
+                          ...(isSelected && !isSeqDragMode ? {
+                            outline: '2px solid rgba(59,130,246,0.75)',
+                            outlineOffset: '-2px',
+                            boxShadow: isSelectionPulse
+                              ? 'inset 0 0 0 9999px rgba(59,130,246,0.10), 0 0 18px rgba(59,130,246,0.45)'
+                              : 'inset 0 0 0 9999px rgba(59,130,246,0.04)',
+                          } : {}),
                           cursor: isSeqDragMode ? 'grab' : 'pointer',
                         }}>
                         {/* 기사 컬러 스트라이프 */}
-                        <td className="w-1 p-0 rounded-l" style={{ background: driver?.color || 'transparent', opacity: driver ? 0.85 : 0 }} />
+                        <td
+                          className="w-1 p-0 rounded-l"
+                          style={{
+                            background: isSelected ? '#60a5fa' : (driver?.color || 'transparent'),
+                            opacity: isSelected ? 1 : (driver ? 0.85 : 0),
+                            boxShadow: isSelected ? '0 0 10px rgba(96,165,250,0.8)' : 'none',
+                          }}
+                        />
                         {/* 드래그 핸들 */}
                         {isSeqDragMode && (
                           <td className="w-5 px-1 text-center text-gray-600 select-none" style={{ cursor: 'grab', fontSize: 11 }}>⠿</td>
@@ -2732,7 +4165,16 @@ ${folders}
                             {drivers.map(d => <option key={d.id} value={d.id} style={{ color: d.color }}>{d.name}</option>)}
                           </select>
                         </td>
-                        <td className="px-1 py-0.5 text-white font-bold whitespace-nowrap">{r.이름}</td>
+                        <td className={`px-1 py-0.5 font-bold whitespace-nowrap ${isSelected ? 'text-blue-100' : 'text-white'}`}>
+                          <span className="inline-flex items-center gap-1">
+                            {isSelected && (
+                              <span className="px-1 py-0 rounded bg-blue-500 text-white text-[8px] font-black leading-4 shadow-[0_0_8px_rgba(59,130,246,0.55)]">
+                                선택
+                              </span>
+                            )}
+                            {r.이름}
+                          </span>
+                        </td>
                         <td className="px-1 py-0.5 text-gray-500 max-w-0 w-full">
                           <span className="block truncate" title={r.주소}>{r.주소}</span>
                         </td>
@@ -2758,206 +4200,6 @@ ${folders}
         {/* 선택 핀 — 우측 목록으로 스크롤/하이라이트 처리됨 (팝업 없음) */}
       </div>
 
-      {/* ── 토스트 알림 전 더미 시작 - 행정동 배정 오버레이 제거됨 */}
-      {false && (
-        <div>
-          {/* 헤더 */}
-          <div className="shrink-0 h-14 bg-[#080808] border-b border-[#222] px-5 flex items-center gap-3">
-            <Navigation2 size={16} className="text-purple-400 shrink-0" />
-            <div className="min-w-0">
-              <h2 className="text-sm font-black text-white leading-tight">
-                {workDongStep === 'select' ? '작업 행정동 선택' : '행정동별 기사 배치'}
-              </h2>
-              <p className="text-[10px] text-gray-600 leading-tight truncate">
-                {workDongStep === 'select'
-                  ? `${dongList.filter(d => d !== '전체').length}개 행정동 · 배정 작업할 동을 선택하세요`
-                  : `${Object.keys(dongAssignments).length}개 동 · 기사를 배치하고 적용률 합계를 N×100%로 맞추세요`
-                }
-              </p>
-            </div>
-            {workDongStep === 'assign' && (
-              <button onClick={() => setWorkDongStep('select')}
-                className="flex items-center gap-1.5 text-[11px] text-purple-400 hover:text-purple-300 bg-purple-900/20 border border-purple-500/20 px-3 py-1.5 rounded-lg transition-colors shrink-0">
-                ← 동 재선택
-              </button>
-            )}
-            <button onClick={() => setShowDongAssign(false)}
-              className="ml-auto p-2 text-gray-600 hover:text-white transition-colors shrink-0">
-              <X size={16} />
-            </button>
-          </div>
-
-          {/* 바디 */}
-          <div className="flex-1 overflow-auto bg-[#060606]">
-            {workDongStep === 'select' ? (
-
-              /* ─ Step 1: 행정동 선택 ─ */
-              <div className="p-5">
-                <div className="max-w-4xl mx-auto space-y-3">
-
-                  {/* 전체 선택 */}
-                  <label className="flex items-center gap-3 p-4 bg-[#0d0d0d] rounded-xl border border-[#2a2a2a] cursor-pointer hover:border-purple-500/30 transition-colors group">
-                    <input type="checkbox"
-                      checked={dongList.filter(d => d !== '전체').length > 0 && workDongSelection.size === dongList.filter(d => d !== '전체').length}
-                      onChange={e => {
-                        const all = dongList.filter(d => d !== '전체');
-                        setWorkDongSelection(e.target.checked ? new Set(all) : new Set());
-                      }}
-                      className="accent-purple-500 w-5 h-5 shrink-0" />
-                    <span className="text-white font-black text-sm group-hover:text-purple-300 transition-colors">전체 선택</span>
-                    <span className="text-gray-600 text-xs ml-auto">{dongList.filter(d => d !== '전체').length}개 행정동 전체</span>
-                  </label>
-
-                  {/* 동 목록 */}
-                  <div className="grid grid-cols-2 gap-2">
-                    {dongList.filter(d => d !== '전체').map(dong => {
-                      const total = records.filter(r => r.행정동 === dong).length;
-                      const withCoord = records.filter(r => r.행정동 === dong && r._lat && r._lng).length;
-                      const noCoord = total - withCoord;
-                      const isSelected = workDongSelection.has(dong);
-                      return (
-                        <label key={dong}
-                          className={`flex items-center gap-3 p-3.5 rounded-xl border cursor-pointer transition-all ${
-                            isSelected
-                              ? 'bg-purple-900/15 border-purple-500/40'
-                              : 'bg-[#0a0a0a] border-[#1a1a1a] hover:border-[#2a2a2a]'
-                          }`}>
-                          <input type="checkbox"
-                            checked={isSelected}
-                            onChange={e => setWorkDongSelection(prev => {
-                              const next = new Set(prev);
-                              e.target.checked ? next.add(dong) : next.delete(dong);
-                              return next;
-                            })}
-                            className="accent-purple-500 w-4 h-4 shrink-0" />
-                          <span className={`text-sm font-bold flex-1 truncate ${isSelected ? 'text-purple-200' : 'text-gray-400'}`}>
-                            {dong}
-                          </span>
-                          <div className="text-right shrink-0">
-                            <div className="text-xs font-black text-white">{total}건</div>
-                            <div className="text-[9px] text-gray-700">
-                              지도 {withCoord}
-                              {noCoord > 0 && <span className="text-red-800"> ✗{noCoord}</span>}
-                            </div>
-                          </div>
-                        </label>
-                      );
-                    })}
-                  </div>
-                </div>
-              </div>
-
-            ) : (
-
-              /* ─ Step 2: 기사 배치 ─ */
-              <div className="p-5">
-                <div className="grid gap-4" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))' }}>
-                  {Object.entries(dongAssignments).map(([dong, assignments]) => {
-                    const totalRate = assignments.reduce((s, a) => s + (parseFloat(a.rate) || 0), 0);
-                    const targetRate = assignments.length * 100;
-                    const isValid = Math.abs(totalRate - targetRate) < 1;
-                    const cntCoord = records.filter(r => r.행정동 === dong && r._lat && r._lng).length;
-                    const cntAll = records.filter(r => r.행정동 === dong).length;
-                    return (
-                      <div key={dong} className="bg-[#0a0a0a] border border-[#1e1e1e] rounded-xl p-4">
-                        <div className="flex items-start justify-between mb-3">
-                          <div>
-                            <div className="text-sm font-black text-white">{dong}</div>
-                            <div className="text-[10px] text-gray-600 mt-0.5">전체 {cntAll}건 · 지도 {cntCoord}건</div>
-                          </div>
-                          <div className={`text-xs font-black px-2 py-0.5 rounded-lg shrink-0 ml-2 ${
-                            isValid
-                              ? 'text-[#3b82f6] bg-[#3b82f6]/10 border border-[#3b82f6]/20'
-                              : 'text-red-400 bg-red-900/20 border border-red-500/20'
-                          }`}>
-                            {totalRate}/{targetRate}%
-                          </div>
-                        </div>
-                        <div className="space-y-2">
-                          {assignments.map(a => {
-                            const driver = drivers.find(d => d.id === a.driverId);
-                            return (
-                              <div key={a.id} className="flex items-center gap-2">
-                                <select value={a.driverId}
-                                  onChange={e => updateDongAssignment(dong, a.id, 'driverId', e.target.value)}
-                                  className="flex-1 min-w-0 bg-[#111] border border-[#252525] rounded-lg px-2.5 py-2 text-sm font-bold focus:outline-none focus:border-purple-500/40"
-                                  style={{ color: driver?.color || '#6b7280' }}>
-                                  {drivers.map(d => (
-                                    <option key={d.id} value={d.id} style={{ color: d.color }}>{d.name}</option>
-                                  ))}
-                                </select>
-                                <div className="flex items-center gap-1 shrink-0">
-                                  <input type="number" min="1" max="999"
-                                    value={a.rate}
-                                    onChange={e => updateDongAssignment(dong, a.id, 'rate', parseFloat(e.target.value) || 0)}
-                                    className="w-16 bg-[#111] border border-[#252525] rounded-lg px-2 py-2 text-sm text-purple-300 text-center focus:outline-none focus:border-purple-500/40" />
-                                  <span className="text-xs text-gray-600">%</span>
-                                </div>
-                                <button onClick={() => removeDriverFromDong(dong, a.id)}
-                                  disabled={assignments.length <= 1}
-                                  className="w-7 h-7 flex items-center justify-center text-gray-700 hover:text-red-400 disabled:opacity-30 hover:bg-red-900/20 rounded transition-colors shrink-0">
-                                  <X size={13} />
-                                </button>
-                              </div>
-                            );
-                          })}
-                        </div>
-                        <button onClick={() => addDriverToDong(dong)}
-                          className="mt-3 w-full py-1.5 text-xs text-purple-600 hover:text-purple-400 border border-dashed border-[#252525] hover:border-purple-800/50 rounded-lg transition-colors flex items-center justify-center gap-1.5">
-                          <Plus size={11} /> 기사 추가
-                        </button>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* 하단 액션 바 */}
-          <div className="shrink-0 h-16 bg-[#080808] border-t border-[#222] px-5 flex items-center justify-between gap-4">
-            {workDongStep === 'select' ? (
-              <>
-                <div className="text-sm text-gray-400">
-                  <span className="text-purple-400 font-black text-base">{workDongSelection.size}</span>개 선택됨
-                </div>
-                <div className="flex gap-2">
-                  <button onClick={() => setShowDongAssign(false)}
-                    className="px-5 py-2 bg-[#111] border border-[#2a2a2a] text-gray-400 rounded-lg text-sm font-bold hover:text-white transition-colors">
-                    취소
-                  </button>
-                  <button onClick={handleSaveWorkDongs} disabled={workDongSelection.size === 0}
-                    className="px-6 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-lg text-sm font-bold disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex items-center gap-2">
-                    다음 — 기사 배치 →
-                  </button>
-                </div>
-              </>
-            ) : (
-              <>
-                <div className="text-sm text-gray-500 min-w-0 truncate">
-                  기사 <span className="text-white font-black">{drivers.length}</span>명 ·
-                  기사 N명이면 합계 N×100% 맞추세요
-                </div>
-                <div className="flex gap-2 shrink-0">
-                  <button onClick={handleClearSequence}
-                    className="px-4 py-2 bg-[#1a0d0d] border border-red-700/40 text-red-400 hover:text-red-300 rounded-lg text-sm font-bold transition-colors flex items-center gap-1.5">
-                    <X size={13} /> 순번 초기화
-                  </button>
-                  <button onClick={handleAutoSequence}
-                    className="px-4 py-2 bg-[#111] border border-[#2a2a2a] text-gray-400 hover:text-white rounded-lg text-sm font-bold transition-colors flex items-center gap-1.5">
-                    <Navigation2 size={13} /> 순번 자동 정렬
-                  </button>
-                  <button onClick={() => { handleDongAssign(); setShowDongAssign(false); }}
-                    className="px-6 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-lg text-sm font-bold transition-colors flex items-center gap-2">
-                    <Navigation2 size={14} /> 배정 적용 후 지도 보기
-                  </button>
-                </div>
-              </>
-            )}
-          </div>
-        </div>
-      )}
-
       {/* ── 토스트 알림 ──────────────────────────────────────────────── */}
       {toast && (
         <div
@@ -2974,7 +4216,7 @@ ${folders}
 
       {/* ── 미확인 건 패널 ─────────────────────────────────────────── */}
       {showErrorPanel && (() => {
-        const errorRecords = records.filter(r => !r._lat || !r._lng);
+        const errorRecords = records.filter(r => !r._lat || !r._lng || r.좌표검증상태 === '지자체벗어남');
 
         const handleReprocess = async (r) => {
           const addrToUse = errorAddrOverrides[r.id]?.trim() || r.주소 || '';
@@ -2990,22 +4232,59 @@ ${folders}
                 if (!res.ok) return null;
                 const data = await res.json();
                 const d = data.documents?.[0];
-                return (d?.x && d?.y) ? { lat: parseFloat(d.y), lng: parseFloat(d.x) } : null;
+                return (d?.x && d?.y) ? { lat: parseFloat(d.y), lng: parseFloat(d.x), raw: d } : null;
               } catch { clearTimeout(tid); return null; }
             };
             const road = extractRoadAddress(addrToUse);
             let coord =
               await fetchCoord(`https://dapi.kakao.com/v2/local/search/address.json?query=${encodeURIComponent(road)}&size=1`) ||
               await fetchCoord(`https://dapi.kakao.com/v2/local/search/keyword.json?query=${encodeURIComponent(road)}&size=1`) ||
-              await fetchCoord(`https://dapi.kakao.com/v2/local/search/keyword.json?query=${encodeURIComponent((r.행정동 ? `${r.행정동} ` : '') + road.slice(0, 35))}&size=1`);
+              await fetchCoord(`https://dapi.kakao.com/v2/local/search/keyword.json?query=${encodeURIComponent((getRouteDong(r) ? `${getRouteDong(r)} ` : '') + road.slice(0, 35))}&size=1`);
 
             if (coord) {
-              setRecords(prev => prev.map(x => x.id === r.id ? { ...x, _lat: coord.lat, _lng: coord.lng, 주소: errorAddrOverrides[r.id]?.trim() || x.주소 } : x));
               const cacheCity = isCloudMode ? cloudCity : (fileInfo?.city || '');
+              const area = assessKakaoAreaMatch(r, coord.raw, cacheCity);
+              const isCityOut = area.status === '지자체벗어남';
+              const isDongOut = area.status === '행정동벗어남';
+              setRecords(prev => prev.map(x => x.id === r.id ? {
+                ...x,
+                _lat: coord.lat,
+                _lng: coord.lng,
+                _driverId: null,
+                주소: errorAddrOverrides[r.id]?.trim() || x.주소,
+                좌표검증상태: area.status,
+                좌표확인지자체: [area.matchedSido, area.matchedSigungu].filter(Boolean).join(' '),
+                좌표확인행정동: area.matchedDong || '',
+                좌표오류지정: false,
+                원행정동: isDongOut && !x.원행정동 ? x.행정동 || '' : x.원행정동,
+                배정행정동: isDongOut ? area.routeDong : (x.배정행정동 || ''),
+                이관필요: isDongOut,
+                확인필요: isCityOut ? true : x.확인필요,
+                확인사유: area.reason ? [x.확인사유, area.reason].filter(Boolean).join(' / ') : x.확인사유,
+                _에러: isCityOut ? true : x._에러,
+                _사유: area.reason ? [x._사유, area.reason].filter(Boolean).join(' / ') : x._사유,
+                배송상태: isCityOut ? '타지자체확인필요' : (isDongOut ? '타동이관필요' : (x.확인필요 || x._에러 ? '확인후배정가능' : '배송준비')),
+              } : x));
               if (cacheCity) await saveCoordCache(cacheCity, road, coord.lat, coord.lng);
               if (isCloudMode && cloudCity && cloudMonthId && r._cloudDocId) {
                 const batch = writeBatch(db);
-                batch.update(doc(db, 'cloud_lists', cloudCity, 'months', cloudMonthId, 'records', r._cloudDocId), { lat: coord.lat, lng: coord.lng, ...(errorAddrOverrides[r.id]?.trim() ? { 주소: errorAddrOverrides[r.id].trim() } : {}) });
+                batch.update(doc(db, 'cloud_lists', cloudCity, 'months', cloudMonthId, 'records', r._cloudDocId), {
+                  lat: coord.lat,
+                  lng: coord.lng,
+                  ...(errorAddrOverrides[r.id]?.trim() ? { 주소: errorAddrOverrides[r.id].trim() } : {}),
+                  좌표검증상태: area.status,
+                  좌표확인지자체: [area.matchedSido, area.matchedSigungu].filter(Boolean).join(' '),
+                  좌표확인행정동: area.matchedDong || '',
+                  좌표오류지정: false,
+                  원행정동: isDongOut && !r.원행정동 ? r.행정동 || '' : r.원행정동 || '',
+                  배정행정동: isDongOut ? area.routeDong : (r.배정행정동 || ''),
+                  이관필요: isDongOut,
+                  확인필요: isCityOut ? true : !!r.확인필요,
+                  확인사유: area.reason ? [r.확인사유, area.reason].filter(Boolean).join(' / ') : r.확인사유 || '',
+                  _에러: isCityOut ? true : !!r._에러,
+                  _사유: area.reason ? [r._사유, area.reason].filter(Boolean).join(' / ') : r._사유 || '',
+                  배송상태: isCityOut ? '타지자체확인필요' : (isDongOut ? '타동이관필요' : (r.확인필요 || r._에러 ? '확인후배정가능' : '배송준비')),
+                });
                 await batch.commit();
               }
             } else {
@@ -3108,6 +4387,151 @@ ${folders}
         );
       })()}
 
+      {/* ── 기사 배정 맞교환 모달 ─────────────────────────────────── */}
+      {showDriverSwapModal && (() => {
+        const useDongScope = swapScope === 'dong' && selectedDong !== '전체';
+        const scopeRecords = useDongScope ? records.filter(r => getRouteDong(r) === selectedDong) : records;
+        const scopeLabel = useDongScope ? selectedDong : '전체';
+        const driverStats = drivers.map((driver, index) => {
+          const assigned = scopeRecords.filter(r => r._driverId === driver.id);
+          const qty = assigned.reduce((s, r) => s + (parseInt(r.포수 || r['수량(포수)']) || 1), 0);
+          return {
+            ...driver,
+            zoneNo: index + 1,
+            count: assigned.length,
+            qty,
+            effectiveLoad: Math.round(assigned.reduce((s, r) => s + getEffectiveLoad(r), 0)),
+          };
+        });
+        const fromStat = driverStats.find(d => d.id === swapFromDriverId);
+        const toStat = driverStats.find(d => d.id === swapToDriverId);
+        const assignedOptions = driverStats.filter(d => d.count > 0);
+        return (
+          <div
+            className="absolute inset-0 z-[280] bg-black/75 flex items-center justify-center p-4"
+            onClick={() => setShowDriverSwapModal(false)}
+          >
+            <div
+              className="bg-[#0d0d0d] border border-cyan-500/30 rounded-2xl w-full max-w-md shadow-2xl shadow-cyan-950/20"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="px-5 py-4 border-b border-[#1a1a1a] flex items-center gap-3">
+                <div className="w-8 h-8 rounded-xl bg-cyan-500/10 border border-cyan-400/30 flex items-center justify-center shrink-0">
+                  <ArrowLeftRight size={15} className="text-cyan-300" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <h3 className="text-sm font-black text-white">기사 배정 교체</h3>
+                  <p className="text-[10px] text-gray-500">두 기사에게 배정된 명단만 서로 맞바꿉니다. 좌표와 순번은 유지됩니다.</p>
+                </div>
+                <button onClick={() => setShowDriverSwapModal(false)} className="p-1.5 text-gray-600 hover:text-white transition-colors">
+                  <X size={14} />
+                </button>
+              </div>
+
+              <div className="px-5 py-4 space-y-4">
+                <div>
+                  <div className="text-[9px] text-gray-600 font-black tracking-widest uppercase mb-1.5">적용 범위</div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      onClick={() => setSwapScope('all')}
+                      className={`py-2 rounded-xl border text-xs font-black transition-colors ${swapScope === 'all' ? 'bg-cyan-500/15 border-cyan-400/40 text-cyan-300' : 'bg-[#111] border-[#262626] text-gray-500 hover:text-gray-300'}`}
+                    >
+                      전체 명단
+                    </button>
+                    <button
+                      onClick={() => setSwapScope('dong')}
+                      disabled={selectedDong === '전체'}
+                      className={`py-2 rounded-xl border text-xs font-black transition-colors disabled:opacity-30 disabled:cursor-not-allowed ${swapScope === 'dong' && selectedDong !== '전체' ? 'bg-cyan-500/15 border-cyan-400/40 text-cyan-300' : 'bg-[#111] border-[#262626] text-gray-500 hover:text-gray-300'}`}
+                    >
+                      현재 행정동
+                    </button>
+                  </div>
+                  <div className="mt-1.5 text-[10px] text-gray-600">
+                    현재 범위: <span className="text-cyan-300 font-bold">{scopeLabel}</span>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-[1fr_auto_1fr] gap-2 items-end">
+                  <div>
+                    <label className="block text-[9px] text-gray-600 font-black tracking-widest uppercase mb-1">기사 A</label>
+                    <select
+                      value={swapFromDriverId}
+                      onChange={e => setSwapFromDriverId(e.target.value)}
+                      className="w-full bg-[#111] border border-[#2a2a2a] rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-500/40"
+                    >
+                      {assignedOptions.map(d => (
+                        <option key={d.id} value={d.id}>{d.zoneNo}구역 {d.name} · {d.count}건</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="pb-2 text-cyan-400">
+                    <ArrowLeftRight size={16} />
+                  </div>
+                  <div>
+                    <label className="block text-[9px] text-gray-600 font-black tracking-widest uppercase mb-1">기사 B</label>
+                    <select
+                      value={swapToDriverId}
+                      onChange={e => setSwapToDriverId(e.target.value)}
+                      className="w-full bg-[#111] border border-[#2a2a2a] rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-500/40"
+                    >
+                      {assignedOptions.map(d => (
+                        <option key={d.id} value={d.id}>{d.zoneNo}구역 {d.name} · {d.count}건</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  {[fromStat, toStat].map((stat, idx) => (
+                    <div key={stat?.id || idx} className="rounded-xl bg-[#111] border border-[#242424] p-3 min-w-0">
+                      {stat ? (
+                        <>
+                          <div className="flex items-center gap-2 mb-2">
+                            <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: stat.color }} />
+                            <span className="text-white text-xs font-black truncate">{stat.zoneNo}구역 {stat.name}</span>
+                          </div>
+                          <div className="flex items-center justify-between text-[10px]">
+                            <span className="text-gray-600">배정</span>
+                            <span className="text-cyan-300 font-black">{stat.count}건 · {stat.qty}포</span>
+                          </div>
+                          <div className="flex items-center justify-between text-[10px] mt-0.5">
+                            <span className="text-gray-600">유효부담</span>
+                            <span className="text-gray-300 font-bold">{stat.effectiveLoad}</span>
+                          </div>
+                        </>
+                      ) : (
+                        <div className="text-[10px] text-gray-600">기사를 선택하세요.</div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+
+                <div className="rounded-xl bg-cyan-950/10 border border-cyan-500/20 px-3 py-2 text-[10px] text-gray-400 leading-relaxed">
+                  예: <span className="text-cyan-300 font-bold">1구역 기사1</span>과 <span className="text-cyan-300 font-bold">3구역 기사3</span>을 선택하면,
+                  기사1에게 있던 명단은 기사3으로, 기사3에게 있던 명단은 기사1로 이동합니다.
+                </div>
+              </div>
+
+              <div className="px-5 py-4 border-t border-[#1a1a1a] flex items-center justify-between gap-3">
+                <button
+                  onClick={() => setShowDriverSwapModal(false)}
+                  className="px-4 py-2 bg-[#1a1a1a] border border-[#2a2a2a] text-gray-400 hover:text-white text-xs font-bold rounded-xl transition-colors"
+                >
+                  취소
+                </button>
+                <button
+                  onClick={handleSwapDriverAssignments}
+                  disabled={!swapFromDriverId || !swapToDriverId || swapFromDriverId === swapToDriverId}
+                  className="flex-1 py-2 bg-cyan-700 hover:bg-cyan-600 disabled:bg-gray-800 disabled:text-gray-600 text-white text-xs font-black rounded-xl transition-colors flex items-center justify-center gap-1.5"
+                >
+                  <ArrowLeftRight size={12} /> 배정 맞교환
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* ── 임대 아파트 다기사 배정 모달 ────────────────────────── */}
       {aptMultiModal && (
         <div className="absolute inset-0 z-[300] bg-black/80 flex items-center justify-center p-4">
@@ -3117,6 +4541,9 @@ ${folders}
               <Building2 size={16} className="text-orange-400 shrink-0" />
               <div className="min-w-0 flex-1">
                 <h3 className="text-sm font-black text-white truncate">{aptMultiModal.aptName}</h3>
+                {aptMultiModal.road && aptMultiModal.road !== aptMultiModal.aptName && (
+                  <p className="text-[10px] text-gray-600 truncate">{aptMultiModal.road}</p>
+                )}
                 <p className="text-[10px] text-gray-500">총 {aptMultiModal.totalQty}포 · 동별 기사 배정</p>
               </div>
               <button onClick={() => setAptMultiModal(null)} className="p-1.5 text-gray-600 hover:text-white transition-colors shrink-0">
@@ -3172,8 +4599,169 @@ ${folders}
         </div>
       )}
 
+      {/* ── 소속사 기사 추가 피커 ─────────────────────────────────────── */}
+      {showCompanyPicker && (
+        <div
+          className="absolute inset-0 z-[250] bg-black/70 flex items-start justify-center pt-24"
+          onClick={() => setShowCompanyPicker(false)}
+        >
+          <div
+            className="bg-[#0d0d0d] border border-[#2a2a2a] rounded-2xl w-72 shadow-2xl"
+            onClick={e => e.stopPropagation()}
+          >
+            {/* 헤더 */}
+            <div className="px-4 py-3 border-b border-[#1a1a1a] flex items-center justify-between">
+              <div>
+                <span className="text-white font-black text-sm">소속사 기사 추가</span>
+                {selectedDong !== '전체' && (
+                  <span className="ml-2 text-[10px] text-gray-600">{selectedDong} 주기사 제외</span>
+                )}
+              </div>
+              <button onClick={() => setShowCompanyPicker(false)} className="text-gray-600 hover:text-white transition-colors">
+                <X size={14} />
+              </button>
+            </div>
+
+            {availableCompanyDrivers.length > 0 ? (
+              /* 소속사 기사 목록 */
+              <div className="py-1 max-h-64 overflow-y-auto">
+                {availableCompanyDrivers.map(d => (
+                  <button
+                    key={d.id || d.name}
+                    onClick={() => addCompanyDriver(d)}
+                    className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-[#1a1a1a] transition-colors text-left group"
+                  >
+                    <div className="w-3 h-3 rounded-full shrink-0 ring-2 ring-white/10 group-hover:ring-white/20"
+                      style={{ background: d.color || '#3b82f6' }} />
+                    <div className="min-w-0 flex-1">
+                      <div className="text-white text-[11px] font-bold">{d.name}</div>
+                      {d.assignedZones?.length > 0 && (
+                        <div className="text-gray-600 text-[9px] truncate">
+                          {d.assignedZones.flatMap(z => z.dongs || []).join(' · ')}
+                        </div>
+                      )}
+                    </div>
+                    {d.capacity && d.capacity !== 100 && (
+                      <span className="text-[9px] text-gray-600 shrink-0">{d.capacity}%</span>
+                    )}
+                    <Plus size={10} className="text-gray-600 group-hover:text-blue-400 shrink-0 transition-colors" />
+                  </button>
+                ))}
+              </div>
+            ) : (
+              /* 소속사 기사 없음 → 직접 입력 */
+              <div className="px-4 py-4">
+                <div className="text-[10px] text-gray-600 mb-3 leading-relaxed">
+                  {initialDriversProp?.length
+                    ? '추가 가능한 소속사 기사가 없습니다.'
+                    : '소속사 기사 목록이 없습니다.'}
+                  <br />기사 이름을 직접 입력하세요.
+                </div>
+                <input
+                  autoFocus
+                  id="company-driver-name-input"
+                  placeholder={`기사${drivers.length + 1}`}
+                  className="w-full bg-[#111] border border-[#2a2a2a] rounded-lg px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-blue-500/40"
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') {
+                      const name = e.target.value.trim() || `기사${drivers.length + 1}`;
+                      addCompanyDriver({ name });
+                    } else if (e.key === 'Escape') {
+                      setShowCompanyPicker(false);
+                    }
+                  }}
+                />
+                <button
+                  onClick={() => {
+                    const input = document.getElementById('company-driver-name-input');
+                    addCompanyDriver({ name: (input?.value || '').trim() || `기사${drivers.length + 1}` });
+                  }}
+                  className="mt-2 w-full py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-black rounded-lg transition-colors"
+                >
+                  추가
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── 좌표 삭제 브러시 모달 ──────────────────────────────────── */}
+      {showCoordBrush && (
+        <CoordBrushModal
+          records={records.map(r => ({ ...r, lat: r._lat, lng: r._lng }))}
+          selectedCity={isCloudMode ? cloudCity : (fileInfo?.city || '')}
+          onClose={() => setShowCoordBrush(false)}
+          onApplyDelete={handleCoordBrushApply}
+          onApplyRematch={async (ids) => {
+            await handleCoordBrushApply(ids, true);
+            setShowCoordBrush(false);
+            await handleFetchMissingCoords({ recordIds: ids, force: true, skipConfirm: true, reason: 'brush-rematch' });
+          }}
+        />
+      )}
+
       {/* ── 오버레이 패널 (지도 DOM 유지) ─────────────────────────── */}
       {cloudPickerOverlay}
+
+      {/* ── 기사 순번 반영 요청 승인 모달 ─────────────────────────── */}
+      {orderRequestModal && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[210] flex items-center justify-center p-4">
+          <div className="bg-[#0d0d0d] border border-[#2a2a2a] rounded-2xl w-full max-w-lg shadow-2xl">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-[#1a1a1a]">
+              <div className="flex items-center gap-2">
+                <Clock size={16} className="text-amber-300" />
+                <span className="text-white font-black text-sm">기사 순번 반영 요청</span>
+              </div>
+              <button onClick={() => setOrderRequestModal(null)} className="p-1.5 hover:bg-white/10 rounded-lg text-gray-400 hover:text-white transition-colors">
+                <X size={14} />
+              </button>
+            </div>
+            <div className="px-5 py-4 space-y-3 max-h-[60vh] overflow-y-auto">
+              <div className="rounded-xl border border-amber-500/25 bg-amber-950/20 px-3 py-2 text-[10px] text-amber-100 leading-relaxed">
+                기사 요청은 바로 원본을 바꾸지 않습니다. 담당자가 기사와 유선 확인 후 [확인 후 반영]을 누르면 해당 기사 명단의 배송순번만 공식 월별 명단에 저장됩니다.
+              </div>
+              {orderRequestModal.requests.length === 0 ? (
+                <div className="py-8 text-center text-gray-500 text-xs font-bold">
+                  대기 중인 순번 반영 요청이 없습니다.
+                </div>
+              ) : orderRequestModal.requests.map(req => (
+                <div key={`${req.shareId}_${req.driverId}`} className="bg-[#111] border border-[#2a2a2a] rounded-xl p-3">
+                  <div className="flex items-center gap-2">
+                    <div className="w-3 h-3 rounded-full shrink-0" style={{ background: req.driverColor }} />
+                    <div className="min-w-0 flex-1">
+                      <div className="text-white text-xs font-black truncate">{req.driverName}</div>
+                      <div className="text-[9px] text-gray-500 truncate">
+                        요청 {req.count?.toLocaleString?.() || req.orderIds.length}건
+                        {req.requestedAt ? ` · ${new Date(req.requestedAt).toLocaleString('ko-KR')}` : ''}
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => handleApproveOrderRequest(req)}
+                      disabled={isApplyingOrderRequest}
+                      className="px-3 py-1.5 bg-amber-600/20 border border-amber-500/40 text-amber-200 hover:bg-amber-600/30 rounded-lg text-[10px] font-black flex items-center gap-1.5 shrink-0 transition-colors disabled:opacity-50"
+                    >
+                      {isApplyingOrderRequest ? <RefreshCw size={10} className="animate-spin" /> : <Save size={10} />}
+                      확인 후 반영
+                    </button>
+                  </div>
+                  <div className="mt-2 text-[9px] text-gray-600 truncate">공유ID: {req.shareId}</div>
+                </div>
+              ))}
+            </div>
+            <div className="px-5 pb-4 flex gap-2 justify-end">
+              <button
+                onClick={handleLoadOrderApplyRequests}
+                disabled={isLoadingOrderRequests}
+                className="px-4 py-2 bg-[#111] border border-[#2a2a2a] text-gray-300 hover:text-white rounded-xl text-xs font-black flex items-center gap-1.5 transition-colors disabled:opacity-50"
+              >
+                {isLoadingOrderRequests ? <RefreshCw size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+                새로고침
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── 공유 링크 모달 ──────────────────────────────────────────── */}
       {shareModal && (
@@ -3190,6 +4778,11 @@ ${folders}
             </div>
             <div className="px-5 py-4 space-y-3">
               <p className="text-[10px] text-gray-500">링크 전달 → 기사가 모바일에서 배송루트 카카오지도 확인 및 <span className="text-green-400">● 내 위치 실시간 표시</span> 가능.</p>
+              {shareModal.expiresAtLabel && (
+                <div className="rounded-xl border border-amber-500/25 bg-amber-950/20 px-3 py-2 text-[10px] text-amber-200">
+                  이 배송 URL은 <span className="font-black text-amber-100">{shareModal.expiresAtLabel}</span>까지 사용할 수 있습니다. 만료 후에는 새 공유 링크를 다시 생성하세요.
+                </div>
+              )}
               {shareModal.links.map(l => (
                 <div key={l.driverId} className="bg-[#111] border border-[#2a2a2a] rounded-xl p-3">
                   <div className="flex items-center gap-2">

@@ -66,6 +66,50 @@ const CLOUD_FIELDS = [
 
 const ROW_HEIGHT = 36; // px — 고정 행 높이
 
+const normalizeRoadAddressCompareKey = (addr) => {
+  const text = String(addr || '')
+    .normalize('NFC')
+    .replace(/\u00a0/g, ' ')
+    .replace(/[“”"'`]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!text) return '';
+
+  const formatRoadKey = (road, mainNo, subNo) => {
+    const adminSuffixCount = (road.match(/특별시|광역시|특별자치시|특별자치도|자치도|도|시|군|구|읍|면|리/g) || []).length;
+    const roadName = adminSuffixCount >= 2
+      ? road.replace(/^(?:[가-힣]+?(?:특별시|광역시|특별자치시|특별자치도|자치도|도|시|군|구|읍|면|리))+/, '') || road
+      : road;
+    const main = String(Number(mainNo));
+    const sub = subNo ? `-${Number(subNo)}` : '';
+    return `${roadName} ${main}${sub}`;
+  };
+
+  const candidates = [
+    text,
+    text.replace(/\([^)]*\)/g, ' '),
+    text.split(',')[0] || text,
+  ];
+
+  for (const candidate of candidates) {
+    const spaced = candidate.replace(/\s+/g, ' ').trim();
+    const spacedMatch = spaced.match(/([가-힣A-Za-z0-9·.\-]+(?:대로|로|길|가))\s*(\d+)(?:\s*-\s*(\d+))?/);
+    if (spacedMatch) return formatRoadKey(spacedMatch[1], spacedMatch[2], spacedMatch[3]);
+
+    const compact = candidate.replace(/\s+/g, '');
+    const compactMatch = compact.match(/([가-힣A-Za-z0-9·.\-]+(?:대로|로|길|가))(\d+)(?:-(\d+))?/);
+    if (compactMatch) return formatRoadKey(compactMatch[1], compactMatch[2], compactMatch[3]);
+  }
+
+  return '';
+};
+
+const hasRoadAddressChanged = (prevAddr, currentAddr) => {
+  const prevKey = normalizeRoadAddressCompareKey(prevAddr);
+  const currentKey = normalizeRoadAddressCompareKey(currentAddr);
+  return Boolean(prevKey && currentKey && prevKey !== currentKey);
+};
+
 // 셀 편집 입력 — 자체 상태 관리로 부모 리렌더 완전 차단
 const CellInput = memo(function CellInput({ type, opts, initial, onCommit, onCancel, isPhone }) {
   const [val, setVal] = useState(String(initial ?? ''));
@@ -1076,18 +1120,11 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
       });
     } catch (e) { console.warn('[주소정제] 저번달 로드 실패:', e); }
 
-    // 도로명+번호만 추출 (공백·괄호·쉼표 이후 무시) — 이사 판별용 유사값 비교
-    const getRoadPart = (addr) => {
-      const clean = (addr || '').replace(/\s+/g, '').replace(/\(.*?\)/g, '');
-      const m = clean.match(/[가-힣\d]+(대로|로|길)[가-힣\d]*\d+(?:-\d+)?/);
-      return m ? m[0] : clean.slice(0, 10);
-    };
-
     const changes = [];
     const dirtyUpdates = {};
     let current = 0;
 
-    await asyncPool(10, records, async (rec) => {
+    await asyncPool(20, records, async (rec) => {
       try {
         // A-21: 주소·특이사항 내 동사무소/읍사무소/면사무소 → 주민센터 정규화
         const normNote = (rec.특이사항 || '').replace(/동사무소|읍사무소|면사무소/g, '주민센터');
@@ -1101,14 +1138,14 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
         }
 
         const refined = await processAddress(
-          normAddr, rec.이름 || '', rec.행정동 || '', selectedCity, normNote
+          normAddr, rec.이름 || '', rec.행정동 || '', selectedCity, normNote, { includeCoords: false }
         );
         current++;
         setRefineProgress({ current, total: records.length });
 
         const oldAddr = (rec.주소 || '').trim();
         const newAddr = (refined.주소 || '').trim();
-        if (!newAddr || newAddr === oldAddr) return;
+        if (!newAddr || (newAddr === oldAddr && !refined.확인필요)) return;
 
         // 저번달 주소 매칭
         const digits = v => String(v || '').replace(/[^\d]/g, '');
@@ -1118,10 +1155,10 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
         const prevAddr = (k1 && prevMap.get(k1)) || (k2 && prevMap.get(k2)) || null;
 
         // 변경 유형 자동 감지 — 도로명+번호 기준 유사값 비교
-        // 도로가 같으면 정제(포맷 변경), 도로가 다르면 이사
+        // 도로명+건물번호가 둘 다 잡힌 경우에만 이사로 본다. 상세주소/괄호/띄어쓰기는 무시.
         let changeType = '정제';
         if (refined.확인필요) changeType = '오류';
-        else if (prevAddr && getRoadPart(prevAddr) !== getRoadPart(newAddr)) changeType = '이사';
+        else if (prevAddr && hasRoadAddressChanged(prevAddr, newAddr)) changeType = '이사';
 
         changes.push({
           rowId: rec.id,
@@ -1162,7 +1199,7 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
       const prevAddr = (k1 && prevMap.get(k1)) || (k2 && prevMap.get(k2)) || null;
       if (!prevAddr) return;
       const currentAddr = (dirtyUpdates[rec.id]?.주소 || rec.주소 || '').trim();
-      if (getRoadPart(prevAddr) !== getRoadPart(currentAddr)) {
+      if (hasRoadAddressChanged(prevAddr, currentAddr)) {
         const dong = rec.행정동 || '미분류';
         dongCount[dong] = (dongCount[dong] || 0) + 1;
       }

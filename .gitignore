@@ -35,3 +35,9 @@ dist-ssr
 
 # AI/ML 학습 캐시 (로컬 전용)
 unsloth_compiled_cache/
+
+# Nationwide address source dumps (large local import files)
+202604_*/
+
+# Local lint/report artifacts
+lint-report.json

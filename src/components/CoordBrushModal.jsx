@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { X, Eraser } from 'lucide-react';
+import { X, Eraser, Search } from 'lucide-react';
 
 const KAKAO_JS_KEY = import.meta.env.VITE_KAKAO_JS_KEY;
 
@@ -13,23 +13,36 @@ const haversine = (lat1, lng1, lat2, lng2) => {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 };
 
-export default function CoordBrushModal({ records, selectedCity, onClose, onApplyDelete }) {
+export default function CoordBrushModal({ records, selectedCity, onClose, onApplyDelete, onApplyRematch }) {
   const [isMapReady, setIsMapReady] = useState(false);
   const [brushRadiusPx, setBrushRadiusPx] = useState(50);
   const [cursorPx, setCursorPx] = useState(null);
   const [selectedIds, setSelectedIds] = useState(new Set());
+  const [searchText, setSearchText] = useState('');
+  const [viewMode, setViewMode] = useState('split'); // 'split' | 'map' | 'list'
+  const [isBrushMode, setIsBrushMode] = useState(false);
 
   const mapRef = useRef(null);
   const kakaoMapRef = useRef(null);
   const isPaintingRef = useRef(false);
   const pendingRef = useRef(new Set());
   const recordsRef = useRef([]);
+  const listRef = useRef(null);
 
   const coordRecords = useMemo(() => records.filter(r => r.lat && r.lng), [records]);
-
   useEffect(() => { recordsRef.current = coordRecords; }, [coordRecords]);
 
-  // ── Kakao SDK 로딩 ────────────────────────────────────────────────────
+  const filteredRecords = useMemo(() => {
+    if (!searchText.trim()) return coordRecords;
+    const q = searchText.trim().toLowerCase();
+    return coordRecords.filter(r =>
+      (r.이름 || '').toLowerCase().includes(q) ||
+      (r.주소 || '').toLowerCase().includes(q) ||
+      (r.행정동 || '').toLowerCase().includes(q)
+    );
+  }, [coordRecords, searchText]);
+
+  // ── Kakao SDK ────────────────────────────────────────────────────────────
   useEffect(() => {
     if (window.kakao?.maps?.Map) { setIsMapReady(true); return; }
     const existing = document.getElementById('kakao-map-sdk');
@@ -49,7 +62,7 @@ export default function CoordBrushModal({ records, selectedCity, onClose, onAppl
     document.head.appendChild(script);
   }, []);
 
-  // ── 지도 초기화 ───────────────────────────────────────────────────────
+  // ── 지도 초기화 ──────────────────────────────────────────────────────────
   useEffect(() => {
     if (!isMapReady || !mapRef.current || kakaoMapRef.current) return;
     kakaoMapRef.current = new window.kakao.maps.Map(mapRef.current, {
@@ -58,16 +71,31 @@ export default function CoordBrushModal({ records, selectedCity, onClose, onAppl
     });
   }, [isMapReady]);
 
-  // ── 핀 오버레이 렌더링 ─────────────────────────────────────────────────
+  // ── 핀 DOM 색상 유틸 ─────────────────────────────────────────────────────
+  const setPinColor = useCallback((id, selected) => {
+    const el = document.querySelector(`[data-coord-id="${id}"]`);
+    if (!el) return;
+    if (selected) {
+      el.style.background = '#ef4444';
+      el.style.boxShadow = '0 0 8px rgba(239,68,68,0.9)';
+      el.style.borderColor = 'rgba(255,200,200,0.7)';
+      el.style.zIndex = '10';
+    } else {
+      el.style.background = '#06b6d4';
+      el.style.boxShadow = '0 0 6px rgba(6,182,212,0.85)';
+      el.style.borderColor = 'rgba(255,255,255,0.55)';
+      el.style.zIndex = '5';
+    }
+  }, []);
+
+  // ── 핀 오버레이 렌더링 ───────────────────────────────────────────────────
   useEffect(() => {
     if (!kakaoMapRef.current || !isMapReady || !coordRecords.length) return;
 
+    // 기존 핀 제거
+    document.querySelectorAll('[data-coord-id]').forEach(el => el.remove());
+
     const bounds = new window.kakao.maps.LatLngBounds();
-    // 기존 오버레이 정리 (DOM 요소에 data-coord-id가 있는 것들)
-    document.querySelectorAll('[data-coord-id]').forEach(el => {
-      // CustomOverlay content는 직접 setMap(null) 불가 → 부모에서 제거
-      el.remove();
-    });
 
     coordRecords.forEach(r => {
       const pos = new window.kakao.maps.LatLng(r.lat, r.lng);
@@ -81,9 +109,22 @@ export default function CoordBrushModal({ records, selectedCity, onClose, onAppl
         'border:2px solid rgba(255,255,255,0.55)',
         'border-radius:50%',
         'box-shadow:0 0 6px rgba(6,182,212,0.85)',
-        'pointer-events:none',
         'transform:translate(-50%,-50%)',
+        'cursor:pointer',
+        'transition:background 0.1s,box-shadow 0.1s',
+        'position:relative',
       ].join(';');
+
+      // 클릭: 개별 토글 선택
+      el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        setSelectedIds(prev => {
+          const next = new Set(prev);
+          if (next.has(r.id)) { next.delete(r.id); setPinColor(r.id, false); }
+          else { next.add(r.id); setPinColor(r.id, true); }
+          return next;
+        });
+      });
 
       new window.kakao.maps.CustomOverlay({
         position: pos,
@@ -93,25 +134,22 @@ export default function CoordBrushModal({ records, selectedCity, onClose, onAppl
       });
     });
 
-    kakaoMapRef.current.setBounds(bounds, 60, 60, 60, 60);
-  }, [isMapReady, coordRecords]);
+    kakaoMapRef.current.relayout();
+    kakaoMapRef.current.setBounds(bounds, 80, 80, 80, 80);
+    // 너무 넓게 펼쳐지지 않도록 최대 레벨 제한
+    setTimeout(() => {
+      if (kakaoMapRef.current && kakaoMapRef.current.getLevel() > 7)
+        kakaoMapRef.current.setLevel(7);
+    }, 350);
+  }, [isMapReady, coordRecords, setPinColor]);
 
-  // ── DOM 핀 색상 갱신 ──────────────────────────────────────────────────
-  const updatePinDOM = useCallback((id, selected) => {
-    const el = document.querySelector(`[data-coord-id="${id}"]`);
-    if (!el) return;
-    if (selected) {
-      el.style.background = '#ef4444';
-      el.style.boxShadow = '0 0 8px rgba(239,68,68,0.9)';
-      el.style.borderColor = 'rgba(255,200,200,0.7)';
-    } else {
-      el.style.background = '#06b6d4';
-      el.style.boxShadow = '0 0 6px rgba(6,182,212,0.85)';
-      el.style.borderColor = 'rgba(255,255,255,0.55)';
-    }
-  }, []);
+  // ── viewMode 전환 시 지도 relayout ───────────────────────────────────────
+  useEffect(() => {
+    if (!kakaoMapRef.current) return;
+    setTimeout(() => kakaoMapRef.current?.relayout(), 50);
+  }, [viewMode]);
 
-  // ── 브러시 드래그 — DOM만 조작 (React state 갱신 없음 → 지도 줌 고정) ──
+  // ── 브러시 ───────────────────────────────────────────────────────────────
   const applyBrush = useCallback((clientX, clientY) => {
     if (!kakaoMapRef.current || !mapRef.current) return;
     const rect = mapRef.current.getBoundingClientRect();
@@ -128,12 +166,11 @@ export default function CoordBrushModal({ records, selectedCity, onClose, onAppl
       if (haversine(cLat, cLng, r.lat, r.lng) > radiusM) return;
       if (!pendingRef.current.has(r.id)) {
         pendingRef.current.add(r.id);
-        updatePinDOM(r.id, true);
+        setPinColor(r.id, true);
       }
     });
-  }, [brushRadiusPx, updatePinDOM]);
+  }, [brushRadiusPx, setPinColor]);
 
-  // ── 드래그 종료 → React state에 한 번만 반영 ─────────────────────────
   const commitBrush = useCallback(() => {
     isPaintingRef.current = false;
     if (kakaoMapRef.current) kakaoMapRef.current.setDraggable(true);
@@ -143,22 +180,51 @@ export default function CoordBrushModal({ records, selectedCity, onClose, onAppl
     setSelectedIds(prev => new Set([...prev, ...pending]));
   }, []);
 
-  // ── 선택 초기화 ────────────────────────────────────────────────────────
+  // ── 선택 초기화 ──────────────────────────────────────────────────────────
   const handleClearSelection = useCallback(() => {
     pendingRef.current.clear();
     setSelectedIds(prev => {
-      prev.forEach(id => updatePinDOM(id, false));
+      prev.forEach(id => setPinColor(id, false));
       return new Set();
     });
-  }, [updatePinDOM]);
+  }, [setPinColor]);
 
-  // ── 삭제 적용 ─────────────────────────────────────────────────────────
+  // ── 개별 토글 (목록 클릭) ────────────────────────────────────────────────
+  const toggleRecord = useCallback((id) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) { next.delete(id); setPinColor(id, false); }
+      else { next.add(id); setPinColor(id, true); }
+      return next;
+    });
+  }, [setPinColor]);
+
+  // ── 지도 중심 이동 ───────────────────────────────────────────────────────
+  const centerOnRecord = useCallback((r) => {
+    if (!kakaoMapRef.current) return;
+    kakaoMapRef.current.setCenter(new window.kakao.maps.LatLng(r.lat, r.lng));
+    if (kakaoMapRef.current.getLevel() > 4) kakaoMapRef.current.setLevel(4);
+  }, []);
+
+  // ── 전체 선택 (필터된 목록) ──────────────────────────────────────────────
+  const selectAllFiltered = useCallback(() => {
+    const newIds = new Set(filteredRecords.map(r => r.id));
+    setSelectedIds(prev => new Set([...prev, ...newIds]));
+    filteredRecords.forEach(r => setPinColor(r.id, true));
+  }, [filteredRecords, setPinColor]);
+
+  // ── 삭제 적용 ────────────────────────────────────────────────────────────
   const handleApply = () => {
     if (!selectedIds.size) return;
     onApplyDelete(new Set(selectedIds));
   };
 
-  // ── ESC 닫기 ──────────────────────────────────────────────────────────
+  const handleRematch = () => {
+    if (!selectedIds.size || !onApplyRematch) return;
+    onApplyRematch(new Set(selectedIds));
+  };
+
+  // ── ESC 닫기 ─────────────────────────────────────────────────────────────
   useEffect(() => {
     const handler = (e) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', handler);
@@ -167,10 +233,11 @@ export default function CoordBrushModal({ records, selectedCity, onClose, onAppl
 
   return (
     <div className="absolute inset-0 bg-black/90 backdrop-blur-sm flex flex-col z-[200]">
-      {/* 헤더 */}
-      <div className="flex items-center justify-between px-5 py-3 border-b border-white/10 bg-[#0e0e0e] shrink-0">
+
+      {/* ── 헤더 ─────────────────────────────────────────────────────────── */}
+      <div className="flex items-center justify-between px-5 py-2.5 border-b border-white/10 bg-[#0e0e0e] shrink-0">
         <div className="flex items-center gap-2.5 flex-wrap">
-          <Eraser size={16} className="text-cyan-400" />
+          <Eraser size={15} className="text-cyan-400" />
           <h2 className="text-sm font-black text-white">좌표 삭제 브러시</h2>
           {selectedCity && <span className="text-[10px] text-gray-500">{selectedCity}</span>}
           <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-cyan-500/15 text-cyan-400 border border-cyan-500/30">
@@ -182,126 +249,216 @@ export default function CoordBrushModal({ records, selectedCity, onClose, onAppl
             </span>
           )}
         </div>
-        <button onClick={onClose} className="p-1.5 hover:bg-white/10 rounded-lg text-gray-500 hover:text-white transition-colors shrink-0">
-          <X size={15} />
-        </button>
+        <div className="flex items-center gap-2">
+          {/* 뷰 모드 */}
+          <div className="flex rounded-lg overflow-hidden border border-[#2a2a2a]">
+            {[['분할', 'split'], ['목록', 'list'], ['지도', 'map']].map(([label, mode]) => (
+              <button key={mode}
+                onClick={() => setViewMode(mode)}
+                className={`px-2.5 py-1 text-[10px] font-bold transition-colors border-r last:border-r-0 border-[#2a2a2a] ${viewMode === mode ? 'bg-cyan-900/40 text-cyan-300' : 'bg-[#111] text-gray-500 hover:text-gray-300'}`}>
+                {label}
+              </button>
+            ))}
+          </div>
+          <button onClick={onClose} className="p-1.5 hover:bg-white/10 rounded-lg text-gray-500 hover:text-white transition-colors">
+            <X size={15} />
+          </button>
+        </div>
       </div>
 
-      {/* 본문 */}
-      <div className="flex-1 flex overflow-hidden">
-        {/* 좌측 컨트롤 */}
-        <div className="w-52 bg-[#0a0a0a] border-r border-white/5 p-4 flex flex-col gap-4 shrink-0 overflow-y-auto">
-          <div className="bg-cyan-500/5 border border-cyan-500/20 rounded-xl p-3">
-            <div className="text-[9px] text-gray-600 font-black tracking-widest uppercase mb-2">사용법</div>
-            <p className="text-[10px] text-gray-400 leading-relaxed">
-              지도 위에서 드래그하면 브러시 반경 내 핀이{' '}
-              <span className="text-red-400 font-bold">빨간색</span>으로 선택됩니다.
-              <br />
-              <span className="text-red-400 font-bold">삭제 적용</span> 클릭 시 해당 레코드의 좌표가 삭제됩니다.
-            </p>
-          </div>
+      {/* ── 본문 ─────────────────────────────────────────────────────────── */}
+      <div className="flex-1 flex overflow-hidden min-h-0">
 
-          {/* 브러시 반경 */}
-          <div>
-            <div className="text-[9px] text-gray-600 font-black tracking-widest uppercase mb-2">브러시 반경</div>
-            <div className="flex gap-1">
-              {[{ label: 'S', px: 30 }, { label: 'M', px: 50 }, { label: 'L', px: 80 }, { label: 'XL', px: 120 }].map(({ label, px }) => (
-                <button key={label}
-                  onClick={() => setBrushRadiusPx(px)}
-                  className={`flex-1 py-1 rounded text-[10px] font-bold border transition-colors ${
-                    brushRadiusPx === px
-                      ? 'bg-cyan-500/20 border-cyan-400/40 text-cyan-300'
-                      : 'bg-[#111] border-[#222] text-gray-600 hover:text-gray-400'
-                  }`}
-                >{label}</button>
-              ))}
+        {/* ── 목록 패널 ─────────────────────────────────────────────────── */}
+        {viewMode !== 'map' && (
+          <div className={`flex flex-col bg-[#0a0a0a] border-r border-[#1a1a1a] shrink-0 ${viewMode === 'split' ? 'w-[340px]' : 'flex-1'}`}>
+
+            {/* 검색 + 필터 */}
+            <div className="px-3 pt-3 pb-2 border-b border-[#1a1a1a] space-y-2">
+              <div className="relative">
+                <Search size={11} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-600 pointer-events-none" />
+                <input
+                  value={searchText}
+                  onChange={e => setSearchText(e.target.value)}
+                  placeholder="이름·주소·행정동 검색..."
+                  className="w-full bg-[#111] border border-[#2a2a2a] rounded-lg pl-7 pr-3 py-1.5 text-[11px] text-white placeholder-gray-600 focus:outline-none focus:border-cyan-500/40"
+                />
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] text-gray-600">{filteredRecords.length}건 표시</span>
+                <div className="flex gap-1.5">
+                  <button
+                    onClick={selectAllFiltered}
+                    className="px-2 py-0.5 text-[9px] bg-red-900/30 border border-red-600/30 text-red-400 rounded font-bold hover:bg-red-900/50 transition-colors"
+                  >
+                    전체선택
+                  </button>
+                  {selectedIds.size > 0 && (
+                    <button
+                      onClick={handleClearSelection}
+                      className="px-2 py-0.5 text-[9px] bg-[#1a1a1a] border border-[#333] text-gray-500 rounded font-bold hover:text-gray-300 transition-colors"
+                    >
+                      선택해제
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* 레코드 목록 */}
+            <div ref={listRef} className="flex-1 overflow-y-auto">
+              {filteredRecords.map(r => {
+                const isSelected = selectedIds.has(r.id);
+                return (
+                  <div
+                    key={r.id}
+                    className={`px-3 py-2 border-b border-[#0f0f0f] cursor-pointer hover:bg-[#111] transition-colors flex items-start gap-2 ${isSelected ? 'bg-red-950/25 hover:bg-red-950/35' : ''}`}
+                    onClick={() => { toggleRecord(r.id); centerOnRecord(r); }}
+                  >
+                    <div className={`w-2.5 h-2.5 rounded-full mt-0.5 shrink-0 transition-colors ${isSelected ? 'bg-red-500' : 'bg-cyan-500'}`} />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5 mb-0.5">
+                        <span className="text-[11px] text-white font-bold truncate">{r.이름 || '(이름없음)'}</span>
+                        {r.행정동 && <span className="text-[9px] text-gray-600 shrink-0">{r.행정동}</span>}
+                        {r.포수 && <span className="text-[9px] text-amber-600 shrink-0">{r.포수}포</span>}
+                      </div>
+                      <div className="text-[10px] text-gray-400 truncate">{r.주소 || '(주소없음)'}</div>
+                      <div className="text-[9px] text-gray-700 tabular-nums mt-0.5">
+                        {Number(r.lat).toFixed(5)}, {Number(r.lng).toFixed(5)}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </div>
+        )}
 
-          {selectedIds.size > 0 && (
-            <button
-              onClick={handleClearSelection}
-              className="w-full py-2 rounded-xl text-[11px] font-bold bg-[#111] hover:bg-white/5 text-gray-400 border border-[#2a2a2a] transition-colors"
-            >
-              선택 초기화 ({selectedIds.size}건)
-            </button>
-          )}
+        {/* ── 지도 패널 ─────────────────────────────────────────────────── */}
+        {viewMode !== 'list' && (
+          <div className="flex-1 flex flex-col relative min-w-0 min-h-0">
 
+            {/* 지도 툴바 */}
+            <div className="shrink-0 flex items-center gap-2 px-3 py-2 bg-[#0a0a0a] border-b border-[#1a1a1a] flex-wrap">
+              <button
+                onClick={() => {
+                  const next = !isBrushMode;
+                  setIsBrushMode(next);
+                  setCursorPx(null);
+                  isPaintingRef.current = false;
+                  if (kakaoMapRef.current) kakaoMapRef.current.setDraggable(!next === false ? false : true);
+                }}
+                className={`px-3 py-1 rounded-lg text-[10px] font-black flex items-center gap-1.5 border transition-all ${
+                  isBrushMode
+                    ? 'bg-amber-500/20 border-amber-400/50 text-amber-300 shadow-[0_0_10px_rgba(251,191,36,0.2)]'
+                    : 'bg-[#111] border-[#2a2a2a] text-gray-500 hover:text-amber-400 hover:border-amber-600/40'
+                }`}
+              >
+                <Eraser size={11} /> {isBrushMode ? '브러시 ON — 드래그로 일괄선택' : '브러시 모드'}
+              </button>
+
+              {isBrushMode && (
+                <>
+                  <span className="text-[9px] text-gray-600">반경:</span>
+                  {[['S', 30], ['M', 60], ['L', 100], ['XL', 160]].map(([label, px]) => (
+                    <button key={label}
+                      onClick={() => setBrushRadiusPx(px)}
+                      className={`px-2 py-0.5 rounded text-[9px] font-bold border transition-colors ${brushRadiusPx === px ? 'bg-amber-500/20 border-amber-400/40 text-amber-300' : 'bg-[#111] border-[#222] text-gray-600 hover:text-gray-400'}`}
+                    >{label}</button>
+                  ))}
+                </>
+              )}
+
+              {!isBrushMode && (
+                <span className="text-[9px] text-gray-700">
+                  핀 클릭으로 개별 선택 · 브러시 모드 ON 시 드래그로 일괄 선택
+                </span>
+              )}
+            </div>
+
+            {/* 지도 */}
+            <div ref={mapRef} className="flex-1 relative" style={{ cursor: isBrushMode ? 'none' : 'default' }}>
+
+              {/* 브러시 인터셉터 — isBrushMode 시 지도 위를 덮어 카카오맵 이벤트 차단 */}
+              {isBrushMode && (
+                <div
+                  style={{ position: 'absolute', inset: 0, zIndex: 200, cursor: 'none' }}
+                  onMouseMove={e => {
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    setCursorPx({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+                    if (isPaintingRef.current) applyBrush(e.clientX, e.clientY);
+                  }}
+                  onMouseDown={e => {
+                    e.preventDefault();
+                    isPaintingRef.current = true;
+                    if (kakaoMapRef.current) kakaoMapRef.current.setDraggable(false);
+                    applyBrush(e.clientX, e.clientY);
+                  }}
+                  onMouseUp={() => commitBrush()}
+                  onMouseLeave={() => { commitBrush(); setCursorPx(null); }}
+                  onWheel={e => {
+                    if (!kakaoMapRef.current) return;
+                    const lv = kakaoMapRef.current.getLevel();
+                    kakaoMapRef.current.setLevel(e.deltaY > 0 ? lv + 1 : lv - 1);
+                  }}
+                >
+                  {cursorPx && (
+                    <div className="absolute pointer-events-none rounded-full"
+                      style={{
+                        left: cursorPx.x - brushRadiusPx,
+                        top: cursorPx.y - brushRadiusPx,
+                        width: brushRadiusPx * 2,
+                        height: brushRadiusPx * 2,
+                        border: '2.5px solid #ef4444',
+                        background: 'rgba(239,68,68,0.12)',
+                        boxShadow: '0 0 0 1px rgba(0,0,0,0.5), 0 0 18px rgba(239,68,68,0.35)',
+                      }}
+                    />
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* ── 하단 액션바 ──────────────────────────────────────────────────── */}
+      <div className="shrink-0 flex items-center justify-between px-5 py-3 border-t border-[#1a1a1a] bg-[#0a0a0a]">
+        <div className="text-[10px] text-gray-600">
+          {selectedIds.size > 0
+            ? <span className="text-red-400 font-bold">선택 {selectedIds.size}건 — 삭제 적용 시 좌표 초기화 (재매칭 가능)</span>
+            : '목록 클릭 또는 브러시 드래그로 삭제할 좌표를 선택하세요'}
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleClearSelection}
+            disabled={!selectedIds.size}
+            className="px-4 py-2 bg-[#1a1a1a] border border-[#2a2a2a] text-gray-400 hover:text-white text-xs font-bold rounded-xl disabled:opacity-30 transition-colors"
+          >
+            선택 초기화
+          </button>
           <button
             onClick={handleApply}
             disabled={!selectedIds.size}
-            className="w-full py-2.5 rounded-xl text-[11px] font-black bg-red-950/50 hover:bg-red-900/60 text-red-400 border border-red-500/30 transition-colors disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center gap-1.5"
+            className="px-5 py-2 bg-red-800 hover:bg-red-700 disabled:opacity-30 disabled:cursor-not-allowed text-white text-xs font-black rounded-xl flex items-center gap-1.5 transition-colors"
           >
-            <Eraser size={12} />
-            {selectedIds.size > 0 ? `삭제 적용 (${selectedIds.size}건)` : '삭제 적용'}
+            <Eraser size={12} /> 삭제 적용 ({selectedIds.size}건)
           </button>
-
-          <button
-            onClick={onClose}
-            className="w-full py-2 rounded-xl text-[10px] font-bold bg-[#111] hover:bg-white/5 text-gray-600 border border-[#222] transition-colors"
+          {onApplyRematch && (
+            <button
+              onClick={handleRematch}
+              disabled={!selectedIds.size}
+              className="px-5 py-2 bg-cyan-700 hover:bg-cyan-600 disabled:opacity-30 disabled:cursor-not-allowed text-white text-xs font-black rounded-xl flex items-center gap-1.5 transition-colors"
+              title="선택한 좌표를 초기화한 뒤 도로명·지번·원본주소 기준으로 즉시 다시 조회합니다"
+            >
+              <Search size={12} /> 삭제 후 재매칭 ({selectedIds.size}건)
+            </button>
+          )}
+          <button onClick={onClose}
+            className="px-4 py-2 bg-[#111] border border-[#2a2a2a] text-gray-500 hover:text-white text-xs font-bold rounded-xl transition-colors"
           >
             취소
           </button>
-
-          <div className="mt-auto pt-4 border-t border-white/5 text-[9px] text-gray-700 leading-relaxed">
-            <div className="flex items-center gap-1.5 mb-1">
-              <span className="w-2.5 h-2.5 rounded-full bg-cyan-500 shrink-0" />
-              좌표 있는 레코드
-            </div>
-            <div className="flex items-center gap-1.5 mb-1">
-              <span className="w-2.5 h-2.5 rounded-full bg-red-500 shrink-0" />
-              삭제 선택된 레코드
-            </div>
-            <div className="text-gray-800 mt-1.5">Esc 키로 닫기</div>
-          </div>
-        </div>
-
-        {/* 지도 영역 */}
-        <div className="flex-1 relative overflow-hidden">
-          {!isMapReady && (
-            <div className="absolute inset-0 flex items-center justify-center bg-[#0a0a0a] z-10">
-              <div className="flex items-center gap-3 text-gray-500 text-sm">
-                <span className="w-5 h-5 rounded-full border-2 border-cyan-400 border-t-transparent animate-spin" />
-                지도 로딩 중...
-              </div>
-            </div>
-          )}
-
-          <div ref={mapRef} className="w-full h-full" />
-
-          {/* 브러시 인터셉터 — 지도 전체를 덮어 카카오맵 이벤트 차단 */}
-          <div
-            className="absolute inset-0 z-[100]"
-            style={{ cursor: 'none' }}
-            onMouseMove={e => {
-              const rect = e.currentTarget.getBoundingClientRect();
-              setCursorPx({ x: e.clientX - rect.left, y: e.clientY - rect.top });
-              if (isPaintingRef.current) applyBrush(e.clientX, e.clientY);
-            }}
-            onMouseDown={e => {
-              e.preventDefault();
-              isPaintingRef.current = true;
-              if (kakaoMapRef.current) kakaoMapRef.current.setDraggable(false);
-              applyBrush(e.clientX, e.clientY);
-            }}
-            onMouseUp={() => commitBrush()}
-            onMouseLeave={() => { commitBrush(); setCursorPx(null); }}
-          >
-            {cursorPx && (
-              <div
-                className="absolute pointer-events-none rounded-full"
-                style={{
-                  left: cursorPx.x - brushRadiusPx,
-                  top: cursorPx.y - brushRadiusPx,
-                  width: brushRadiusPx * 2,
-                  height: brushRadiusPx * 2,
-                  border: '2.5px solid #ef4444',
-                  background: 'rgba(239,68,68,0.07)',
-                  boxShadow: '0 0 0 1px rgba(0,0,0,0.5), 0 0 18px rgba(239,68,68,0.3)',
-                }}
-              />
-            )}
-          </div>
         </div>
       </div>
     </div>

@@ -5,6 +5,9 @@ const ttl90 = () => Timestamp.fromMillis(Date.now() + 90 * 24 * 60 * 60 * 1000);
 import { X, Users, BarChart2, Clock, ShieldOff, ShieldCheck, AlertTriangle, Crown, MessageSquare, CheckCircle2, MapPin, XCircle, Building2, ShieldAlert, Plus, ChevronDown, TrendingUp, AlertCircle, UserX, Activity, Zap, Trash2, Truck, Edit2, RefreshCw, UserCheck, ChevronRight } from 'lucide-react';
 import { REGIONS, getSigunguOptions } from '../utils/regions.js';
 
+const getProcessedRows = (u) => Number(u?.totalRowsProcessed || u?.processedRows || u?.totalProcessedRows || 0);
+const getProcessedFiles = (u) => Number(u?.totalFilesProcessed || u?.processedFiles || u?.totalProcessedFiles || 0);
+
 function OrgSelect({ value, options, onChange, onBulkAssign }) {
   const [open, setOpen] = useState(false);
   const btnRef = useRef(null);
@@ -224,6 +227,12 @@ export default function AdminPanel({ onClose, user }) {
   const [tierTarget, setTierTarget] = useState(null);
   const [roleTarget, setRoleTarget] = useState(null);
   const [editingCity, setEditingCity] = useState({});
+  const [allUsersCount, setAllUsersCount] = useState(0);
+  const [allTotalRows, setAllTotalRows] = useState(0);
+  const [allTotalFiles, setAllTotalFiles] = useState(0);
+  const [allBannedCount, setAllBannedCount] = useState(0);
+  const [editingCompany, setEditingCompany] = useState(null);
+  const [editingRealName, setEditingRealName] = useState({});
 
   // 사용자 기사 관리 모달
   const [driverManageTarget, setDriverManageTarget] = useState(null); // 선택된 user 객체
@@ -235,15 +244,14 @@ export default function AdminPanel({ onClose, user }) {
   // AI Advisor States
   const [aiLogs, setAiLogs] = useState([]);
   const [aiLogsAll, setAiLogsAll] = useState([]); // applied/rejected 포함 전체
-  const [aiFilter, setAiFilter] = useState('pending'); // 'all' | 'applied' | 'pending'
+  const [aiFilter, setAiFilter] = useState('applied'); // 'all' | 'applied' | 'pending'
   const [aiLoading, setAiLoading] = useState(false);
   const [aiRules, setAiRules] = useState(null);
   const [userMappingStats, setUserMappingStats] = useState([]);
 
   const [inquiries, setInquiries] = useState([]);
-  const [cityRequests, setCityRequests] = useState([]);
-  const [rejectTarget, setRejectTarget] = useState(null);
-  const [rejectReason, setRejectReason] = useState('');
+  const [editingAiRule, setEditingAiRule] = useState(null);
+  const [editingAiRuleNewField, setEditingAiRuleNewField] = useState('');
 
   // 소속사 글로벌 목록 (nexus_config/orgs)
   const [globalOrgs, setGlobalOrgs] = useState([]);
@@ -446,6 +454,17 @@ export default function AdminPanel({ onClose, user }) {
     } catch (e) { alert('회사 삭제 실패: ' + e.message); }
   };
 
+  const updateCompanyName = async (id, newName) => {
+    const trimmed = newName.trim();
+    if (!trimmed) { setEditingCompany(null); return; }
+    try {
+      await updateDoc(doc(db, 'user_companies', id), { name: trimmed });
+      setUserCompanies(prev => prev.map(c => c.id === id ? { ...c, name: trimmed } : c)
+        .sort((a, b) => (a.name || '').localeCompare(b.name || '')));
+      setEditingCompany(null);
+    } catch (e) { alert('회사명 수정 실패: ' + e.message); }
+  };
+
   const saveUserCompany = async (uid, code) => {
     const company = userCompanies.find(c => c.id === code);
     const cities = company?.cities || [];
@@ -523,46 +542,15 @@ export default function AdminPanel({ onClose, user }) {
     } catch (e) { alert('지자체 제거 실패: ' + e.message); }
   };
 
-  const handleApproveRequest = async (req) => {
-    setProcessing(true);
-    try {
-      const batch = writeBatch(db);
-      batch.update(doc(db, 'city_requests', req.id), {
-        status: 'approved',
-        processedAt: serverTimestamp(),
-        processedBy: user?.email || 'admin',
-      });
-      batch.update(doc(db, 'users', req.uid), {
-        citiesApproved: arrayUnion(req.cityId),
-      });
-      await batch.commit();
-    } catch (e) { alert('승인 오류: ' + e.message); }
-    finally { setProcessing(false); }
-  };
-
-  const handleRejectRequest = async (req, reason) => {
-    setProcessing(true);
-    try {
-      await updateDoc(doc(db, 'city_requests', req.id), {
-        status: 'rejected',
-        processedAt: serverTimestamp(),
-        processedBy: user?.email || 'admin',
-        rejectedReason: reason.trim(),
-      });
-      setRejectTarget(null);
-      setRejectReason('');
-    } catch (e) { alert('거절 오류: ' + e.message); }
-    finally { setProcessing(false); }
-  };
-
   const fetchUsers = () => {
     setLoading(true);
-    // limit(500) — 사용자 수가 늘어도 한 번에 최대 500명만 로드 (페이징 대비)
     getDocs(query(collection(db, 'users'), orderBy('lastLogin', 'desc'), limit(500))).then(snap => {
-      const list = snap.docs
-        .map(d => ({ id: d.id, ...d.data() }))
-        .filter(u => u.id !== user?.uid);
-      setUsers(list);
+      const allList = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      setAllUsersCount(allList.length);
+      setAllTotalRows(allList.reduce((s, u) => s + getProcessedRows(u), 0));
+      setAllTotalFiles(allList.reduce((s, u) => s + getProcessedFiles(u), 0));
+      setAllBannedCount(allList.filter(u => u.status === 'banned').length);
+      setUsers(allList.filter(u => u.id !== user?.uid));
     }).finally(() => setLoading(false));
   };
 
@@ -622,16 +610,6 @@ export default function AdminPanel({ onClose, user }) {
     loadGlobalOrgs();
     loadAllCompanies();
 
-    const q = query(collection(db, 'city_requests'), where('status', '==', 'pending'));
-    const unsub = onSnapshot(q,
-      snap => {
-        const docs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-        docs.sort((a, b) => (a.requestedAt?.seconds || 0) - (b.requestedAt?.seconds || 0));
-        setCityRequests(docs);
-      },
-      err => console.error('[AdminPanel] cityRequests snapshot:', err)
-    );
-    return () => unsub();
   }, []);
 
   const fetchInquiries = () => {
@@ -641,6 +619,14 @@ export default function AdminPanel({ onClose, user }) {
         .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
       setInquiries(list);
     });
+  };
+
+  const handleDeleteInquiry = async (inqId) => {
+    if (!window.confirm('이 문의를 영구 삭제하시겠습니까?')) return;
+    try {
+      await deleteDoc(doc(db, 'inquiries', inqId));
+      setInquiries(prev => prev.filter(i => i.id !== inqId));
+    } catch (e) { alert('삭제 실패: ' + e.message); }
   };
 
   const analyzeSuggestion = (colName) => {
@@ -688,7 +674,8 @@ export default function AdminPanel({ onClose, user }) {
       } else {
         currentRules.push({ k: targetKey, kws: [colName] });
       }
-      await setDoc(ref, { reqKeys: currentRules }, { merge: true });
+      const currentForced = aiRules?.forced || [];
+      await setDoc(ref, { reqKeys: currentRules, forced: [...new Set([...currentForced, colName])] }, { merge: true });
       const logsToUpdate = aiLogs.filter(l => {
         const colList = Array.isArray(l.cols) ? l.cols : (l.columnName ? [l.columnName] : []);
         return colList.includes(colName);
@@ -696,7 +683,6 @@ export default function AdminPanel({ onClose, user }) {
       for (const l of logsToUpdate) {
         await updateDoc(doc(db, 'nexus_ai_logs', l.id), { status: 'applied', appliedKey: targetKey, appliedCol: colName });
       }
-      alert(`'${colName}' 컬럼이 '${targetKey}' 규칙에 성공적으로 추가되었습니다!`);
       fetchAiData();
     } catch (err) {
       console.error(err);
@@ -724,6 +710,34 @@ export default function AdminPanel({ onClose, user }) {
     }
   };
 
+  const handleDeleteAiRuleKeyword = async (ruleKey, keyword) => {
+    if (!aiRules?.reqKeys) return;
+    const newReqKeys = aiRules.reqKeys.map(r =>
+      r.k === ruleKey ? { ...r, kws: r.kws.filter(kw => kw !== keyword) } : r
+    ).filter(r => r.kws.length > 0);
+    const newForced = (aiRules.forced || []).filter(f => f !== keyword);
+    try {
+      await setDoc(doc(db, 'nexus_config', 'ai_rules'), { reqKeys: newReqKeys, forced: newForced }, { merge: true });
+      setAiRules(prev => ({ ...prev, reqKeys: newReqKeys, forced: newForced }));
+    } catch (e) { alert('규칙 삭제 실패: ' + e.message); }
+  };
+
+  const handleDeleteAiLog = async (colName) => {
+    const logsToUpdate = aiLogsAll.filter(l => {
+      const colList = Array.isArray(l.cols) ? l.cols : (l.columnName ? [l.columnName] : []);
+      return colList.includes(colName) && l.status === 'pending';
+    });
+    try {
+      for (const l of logsToUpdate) {
+        await updateDoc(doc(db, 'nexus_ai_logs', l.id), { status: 'rejected', rejectedCol: colName });
+      }
+      setAiLogs(prev => prev.filter(l => {
+        const colList = Array.isArray(l.cols) ? l.cols : (l.columnName ? [l.columnName] : []);
+        return !colList.includes(colName);
+      }));
+    } catch (e) { alert('제안 삭제 실패: ' + e.message); }
+  };
+
   const buildSuggestions = (logs) => {
     const agg = {};
     logs.forEach(l => {
@@ -741,19 +755,16 @@ export default function AdminPanel({ onClose, user }) {
       .sort((a, b) => b.count - a.count);
   };
 
-  const filteredAiLogs = aiFilter === 'pending' ? aiLogs
-    : aiFilter === 'applied' ? aiLogsAll.filter(l => l.status === 'applied')
-    : aiLogsAll;
-  const aiSuggestions = buildSuggestions(filteredAiLogs);
-  const pendingCount = buildSuggestions(aiLogs).length;
-  const appliedCount = buildSuggestions(aiLogsAll.filter(l => l.status === 'applied')).length;
+  const pendingAiSuggestions = buildSuggestions(aiLogs);
+  const pendingSuggestionsCount = pendingAiSuggestions.length;
+  const appliedRulesCount = (aiRules?.reqKeys || []).reduce((s, r) => s + r.kws.length, 0);
 
   const tierCounts = Object.keys(TIERS).reduce((acc, k) => {
     acc[k] = users.filter(u => (u.tier || 'basic') === k).length;
     return acc;
   }, {});
-  const totalRows   = users.reduce((s, u) => s + (u.totalRowsProcessed  || 0), 0);
-  const totalFiles  = users.reduce((s, u) => s + (u.totalFilesProcessed || 0), 0);
+  const totalRows   = users.reduce((s, u) => s + getProcessedRows(u), 0);
+  const totalFiles  = users.reduce((s, u) => s + getProcessedFiles(u), 0);
   const bannedCount = users.filter(u => u.status === 'banned').length;
 
   const nowSec = Date.now() / 1000;
@@ -944,6 +955,15 @@ export default function AdminPanel({ onClose, user }) {
     setEditingCity(prev => { const n = { ...prev }; delete n[uid]; return n; });
   };
 
+  const saveRealName = async (uid, name) => {
+    const trimmed = (name || '').trim();
+    try {
+      await updateDoc(doc(db, 'users', uid), { realName: trimmed || null });
+      setUsers(prev => prev.map(u => u.id === uid ? { ...u, realName: trimmed || null } : u));
+    } catch (e) { alert('성명 수정 실패: ' + e.message); }
+    setEditingRealName(prev => { const n = { ...prev }; delete n[uid]; return n; });
+  };
+
   const sidoList = Object.keys(REGIONS);
 
   return (
@@ -968,17 +988,8 @@ export default function AdminPanel({ onClose, user }) {
               className={`px-4 py-2 rounded-lg text-sm font-bold transition-colors flex items-center gap-2 ${activeTab === 'ai_advisor' ? 'bg-[#3b82f6] text-black shadow-[0_0_15px_rgba(59,130,246,0.3)]' : 'bg-[#111] text-gray-400 border border-[#333] hover:text-white hover:bg-[#222]'}`}
             >
               <Crown size={16} /> NEXUS AI Advisor
-              {aiSuggestions.length > 0 && (
-                <span className="bg-red-500 text-white text-[10px] px-1.5 py-0.5 rounded-full ml-1">{aiSuggestions.length}</span>
-              )}
-            </button>
-            <button
-              onClick={() => setActiveTab('city_approval')}
-              className={`px-4 py-2 rounded-lg text-sm font-bold transition-colors flex items-center gap-2 ${activeTab === 'city_approval' ? 'bg-[#3b82f6] text-black shadow-[0_0_15px_rgba(59,130,246,0.3)]' : 'bg-[#111] text-gray-400 border border-[#333] hover:text-white hover:bg-[#222]'}`}
-            >
-              <MapPin size={16} /> 지자체 승인
-              {cityRequests.length > 0 && (
-                <span className="bg-orange-500 text-white text-[10px] px-1.5 py-0.5 rounded-full ml-1">{cityRequests.length}</span>
+              {pendingSuggestionsCount > 0 && (
+                <span className="bg-amber-500 text-white text-[10px] px-1.5 py-0.5 rounded-full ml-1">{pendingSuggestionsCount}</span>
               )}
             </button>
             <button
@@ -1025,10 +1036,10 @@ export default function AdminPanel({ onClose, user }) {
               <div className="flex items-center gap-3">
                 <div className="grid grid-cols-4 gap-3 flex-1">
                   {[
-                    { icon: <Users size={14}/>,     label: '총 사용자',      value: `${users.length}명` },
-                    { icon: <ShieldOff size={14}/>, label: '제재 중',        value: `${bannedCount}명`, red: bannedCount > 0 },
-                    { icon: <BarChart2 size={14}/>, label: '누적 처리 행',   value: `${totalRows.toLocaleString()}행` },
-                    { icon: <Clock size={14}/>,     label: '누적 처리 파일', value: `${totalFiles.toLocaleString()}건` },
+                    { icon: <Users size={14}/>,     label: '총 사용자',      value: `${allUsersCount}명` },
+                    { icon: <ShieldOff size={14}/>, label: '제재 중',        value: `${allBannedCount}명`, red: allBannedCount > 0 },
+                    { icon: <BarChart2 size={14}/>, label: '정제 누적 행',   value: `${allTotalRows.toLocaleString()}행` },
+                    { icon: <Clock size={14}/>,     label: '정제 누적 파일', value: `${allTotalFiles.toLocaleString()}건` },
                   ].map(({ icon, label, value, red }) => (
                     <div key={label} className="bg-black/50 rounded-xl p-3 border border-[#0f1a2e]">
                       <p className="text-gray-500 text-[10px] font-bold mb-1 flex items-center gap-1">{icon}{label}</p>
@@ -1036,13 +1047,21 @@ export default function AdminPanel({ onClose, user }) {
                     </div>
                   ))}
                 </div>
-                {/* 소속사 목록 관리 버튼 */}
-                <button
-                  onClick={() => setShowOrgMgr(true)}
-                  className="flex items-center gap-2 px-4 py-2 bg-purple-950/40 border border-purple-700/40 text-purple-300 text-xs font-black rounded-xl hover:bg-purple-900/50 transition-colors shrink-0"
-                >
-                  <Building2 size={14}/> 소속사·회사 관리
-                </button>
+                <div className="flex flex-col gap-2 shrink-0">
+                  <button
+                    onClick={fetchUsers}
+                    disabled={loading}
+                    className="flex items-center gap-1.5 px-3 py-2 bg-[#3b82f6]/10 border border-[#3b82f6]/30 text-[#3b82f6] text-xs font-black rounded-xl hover:bg-[#3b82f6]/20 transition-colors disabled:opacity-40"
+                  >
+                    <RefreshCw size={12} className={loading ? 'animate-spin' : ''}/> 새로고침
+                  </button>
+                  <button
+                    onClick={() => setShowOrgMgr(true)}
+                    className="flex items-center gap-2 px-4 py-2 bg-purple-950/40 border border-purple-700/40 text-purple-300 text-xs font-black rounded-xl hover:bg-purple-900/50 transition-colors"
+                  >
+                    <Building2 size={14}/> 소속사·회사 관리
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -1060,7 +1079,8 @@ export default function AdminPanel({ onClose, user }) {
                       <th className="px-4 py-3 text-left">이메일</th>
                       <th className="px-4 py-3 text-center">마지막접속</th>
                       <th className="px-4 py-3 text-center">로그인</th>
-                      <th className="px-4 py-3 text-center">처리행</th>
+                      <th className="px-4 py-3 text-center">정제행</th>
+                      <th className="px-4 py-3 text-center">정제파일</th>
                       <th className="px-4 py-3 text-center">지자체수량</th>
                       <th className="px-4 py-3 text-left">소속사</th>
                       <th className="px-4 py-3 text-left">승인 지자체</th>
@@ -1094,7 +1114,29 @@ export default function AdminPanel({ onClose, user }) {
                           <td className="px-4 py-3"><TierBadge tier={currentTier} /></td>
 
                           {/* 성명 */}
-                          <td className="px-4 py-3 font-bold text-white">{u.realName || <span className="text-gray-600 text-xs">-</span>}</td>
+                          <td className="px-4 py-3">
+                            {editingRealName[u.id] !== undefined ? (
+                              <input
+                                autoFocus
+                                value={editingRealName[u.id]}
+                                onChange={e => setEditingRealName(prev => ({ ...prev, [u.id]: e.target.value }))}
+                                onBlur={() => saveRealName(u.id, editingRealName[u.id])}
+                                onKeyDown={e => {
+                                  if (e.key === 'Enter') saveRealName(u.id, editingRealName[u.id]);
+                                  if (e.key === 'Escape') setEditingRealName(prev => { const n = { ...prev }; delete n[u.id]; return n; });
+                                }}
+                                className="bg-black/60 border border-[#3b82f6]/50 text-white px-2 py-0.5 rounded text-sm outline-none w-24"
+                              />
+                            ) : (
+                              <span
+                                onClick={() => setEditingRealName(prev => ({ ...prev, [u.id]: u.realName || '' }))}
+                                className="font-bold text-white cursor-pointer hover:text-[#3b82f6] transition-colors"
+                                title="클릭하여 수정"
+                              >
+                                {u.realName || <span className="text-gray-500 text-xs italic">클릭하여 입력</span>}
+                              </span>
+                            )}
+                          </td>
 
                           {/* 이메일 */}
                           <td className="px-4 py-3 font-mono text-xs text-gray-500">{u.email}</td>
@@ -1105,8 +1147,13 @@ export default function AdminPanel({ onClose, user }) {
                           {/* 로그인 */}
                           <td className="px-4 py-3 text-center text-[#3b82f6] font-black">{(u.loginCount || 0).toLocaleString()}</td>
 
-                          {/* 처리행 */}
-                          <td className="px-4 py-3 text-center font-mono text-xs">{(u.totalRowsProcessed || 0).toLocaleString()}</td>
+                          {/* 정제 누적 */}
+                          <td className="px-4 py-3 text-center font-mono text-xs" title={`최근 정제: ${u.lastProcessedRows || 0}행 / 오류 ${u.lastProcessedErrorRows || 0}행`}>
+                            {getProcessedRows(u).toLocaleString()}
+                          </td>
+                          <td className="px-4 py-3 text-center font-mono text-xs" title={u.lastProcessedCity ? `최근: ${u.lastProcessedCity} ${u.lastProcessedMonth || ''}` : '정제 기록 없음'}>
+                            {getProcessedFiles(u).toLocaleString()}
+                          </td>
 
                           {/* 지자체 수량 */}
                           <td className="px-4 py-3 text-center">
@@ -1309,115 +1356,130 @@ export default function AdminPanel({ onClose, user }) {
 
         {activeTab === 'ai_advisor' && (
           <div className="flex-1 p-6 overflow-y-auto scrollbar-thin scrollbar-thumb-[#2d4a35]">
-            {/* 헤더 + 탭 */}
-            <div className="flex items-center justify-between mb-5">
+            {/* 헤더 */}
+            <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-3">
                 <Crown size={18} className="text-[#3b82f6]"/>
-                <h3 className="text-base font-black text-[#3b82f6]">AI 자가 진화 분석 리포트</h3>
+                <h3 className="text-base font-black text-[#3b82f6]">AI 자가 진화 분석</h3>
+                <span className="text-gray-600 text-[11px]">칼럼 매핑 학습 현황</span>
               </div>
-              <div className="flex items-center gap-1 bg-black/40 border border-[#1a1a2e] rounded-lg p-0.5">
-                {[
-                  { key: 'pending', label: '미반영', count: pendingCount, color: 'text-red-400' },
-                  { key: 'applied', label: '반영됨', count: appliedCount, color: 'text-green-400' },
-                  { key: 'all',     label: '전체',   count: pendingCount + appliedCount, color: 'text-gray-400' },
-                ].map(t => (
-                  <button
-                    key={t.key}
-                    onClick={() => setAiFilter(t.key)}
-                    className={`px-3 py-1.5 rounded text-xs font-black transition-colors flex items-center gap-1.5 ${
-                      aiFilter === t.key ? 'bg-[#3b82f6] text-black' : 'text-gray-500 hover:text-white'
-                    }`}
-                  >
-                    {t.label}
-                    <span className={`text-[10px] ${aiFilter === t.key ? 'text-black/70' : t.color}`}>{t.count}</span>
-                  </button>
-                ))}
+              <div className="flex items-center gap-2">
+                <button onClick={fetchAiData} disabled={aiLoading}
+                  className="flex items-center gap-1 px-2.5 py-1.5 bg-black/40 border border-[#333] text-gray-500 text-[11px] font-black rounded-lg hover:text-[#3b82f6] hover:border-[#3b82f6]/40 transition-colors disabled:opacity-40">
+                  <RefreshCw size={11} className={aiLoading ? 'animate-spin' : ''}/> 새로고침
+                </button>
+                <div className="flex items-center gap-0.5 bg-black/40 border border-[#1a1a2e] rounded-lg p-0.5">
+                  {[
+                    { key: 'applied', label: '반영됨', count: appliedRulesCount, color: 'text-emerald-400' },
+                    { key: 'pending', label: '미반영',  count: pendingSuggestionsCount, color: 'text-amber-400' },
+                    { key: 'all',     label: '전체',    count: appliedRulesCount + pendingSuggestionsCount, color: 'text-gray-400' },
+                  ].map(t => (
+                    <button key={t.key} onClick={() => setAiFilter(t.key)}
+                      className={`px-3 py-1.5 rounded text-xs font-black transition-colors flex items-center gap-1.5 ${aiFilter === t.key ? 'bg-[#3b82f6] text-black' : 'text-gray-500 hover:text-white'}`}>
+                      {t.label}
+                      <span className={`text-[10px] ${aiFilter === t.key ? 'text-black/70' : t.color}`}>{t.count}</span>
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
 
             {aiLoading ? (
-              <div className="flex items-center justify-center py-20 text-gray-500 text-sm">분석 데이터를 불러오는 중...</div>
+              <div className="flex items-center justify-center py-20 text-gray-500 text-sm">데이터를 불러오는 중...</div>
             ) : (
               <>
-                {/* 사용자 학습 기반 제안 — 미반영/전체 탭에서만 */}
-                {aiFilter !== 'applied' && userMappingStats.length > 0 && (
-                  <div className="mb-5">
-                    <p className="text-gray-500 text-[11px] font-bold mb-2 flex items-center gap-2">
-                      사용자 학습 기반 제안
-                      <span className="bg-[#3b82f6]/20 text-[#3b82f6] border border-[#3b82f6]/30 px-1.5 py-0.5 rounded text-[10px]">
-                        {userMappingStats.reduce((s, m) => s + m.total, 0)}건 학습됨
-                      </span>
-                    </p>
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
-                      {userMappingStats.map((m, idx) => (
-                        <div key={idx} className="bg-black/40 border border-[#3b82f6]/15 rounded-lg p-3 flex items-center gap-2 hover:border-[#3b82f6]/35 transition-colors">
-                          <div className="flex-1 min-w-0">
-                            <p className="text-white font-black text-sm truncate">{m.col}</p>
-                            <p className="text-gray-600 text-[10px]">{m.total}회 → <span className="text-gray-400">{m.fieldLabel}</span></p>
-                          </div>
-                          <div className={`text-[10px] font-black px-1.5 py-0.5 rounded shrink-0 ${
-                            m.confidence >= 90 ? 'text-[#3b82f6]' : m.confidence >= 70 ? 'text-amber-400' : 'text-red-400'
-                          }`}>{m.confidence}%</div>
-                          <button
-                            onClick={() => handleAcceptAiSuggestion(m.col, m.topField)}
-                            disabled={processing}
-                            className="px-2 py-1 rounded bg-[#3b82f6]/10 text-[#3b82f6] text-[10px] font-black border border-[#3b82f6]/30 hover:bg-[#3b82f6] hover:text-black transition-all disabled:opacity-30 shrink-0"
-                          >적용</button>
-                        </div>
-                      ))}
+                {/* 반영된 칼럼 매핑 규칙 */}
+                {(aiFilter === 'applied' || aiFilter === 'all') && (
+                  <div className={aiFilter === 'all' ? 'mb-7' : ''}>
+                    <div className="flex items-center gap-2 mb-3">
+                      <CheckCircle2 size={12} className="text-emerald-400"/>
+                      <p className="text-[11px] font-black text-gray-300">반영된 칼럼 매핑 규칙</p>
+                      <span className="text-gray-600 text-[10px]">— × 클릭으로 키워드 삭제</span>
+                      {appliedRulesCount > 0 && (
+                        <span className="bg-emerald-900/40 text-emerald-400 border border-emerald-700/30 text-[10px] px-1.5 py-0.5 rounded-full font-black ml-auto">{appliedRulesCount}개 키워드</span>
+                      )}
                     </div>
+                    {!aiRules?.reqKeys?.length ? (
+                      <div className="bg-black/30 border border-[#0f1a2e] rounded-xl p-6 text-center">
+                        <p className="text-gray-600 text-sm">설정된 매핑 규칙이 없습니다.</p>
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2">
+                        {(aiRules.reqKeys || []).map(rule => (
+                          <div key={rule.k} className="bg-black/40 border border-[#0a2018] rounded-xl p-3 hover:border-emerald-800/40 transition-colors">
+                            <div className="flex items-center justify-between mb-2">
+                              <span className="text-emerald-400 font-black text-[11px]">{rule.k} 필드</span>
+                              <span className="text-[9px] text-gray-700">{rule.kws.length}개</span>
+                            </div>
+                            <div className="flex flex-wrap gap-1">
+                              {rule.kws.map(kw => {
+                                const isForced = (aiRules.forced || []).includes(kw);
+                                return (
+                                  <span key={kw} className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-bold border group transition-colors cursor-default ${
+                                    isForced ? 'bg-amber-950/40 text-amber-300 border-amber-700/40 hover:border-amber-500/60' : 'bg-[#071410] text-emerald-400/80 border-emerald-900/40 hover:border-emerald-700/50'
+                                  }`}>
+                                    {isForced && <span className="text-amber-400 text-[8px] mr-0.5">★</span>}
+                                    {kw}
+                                    <button onClick={() => handleDeleteAiRuleKeyword(rule.k, kw)}
+                                      className="ml-0.5 opacity-30 group-hover:opacity-100 hover:text-red-400 transition-all leading-none"
+                                      title="규칙에서 제거">×</button>
+                                  </span>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 )}
 
-                {/* 미인식 컬럼 분석 */}
-                {aiFilter !== 'applied' && userMappingStats.length > 0 && (
-                  <p className="text-gray-500 text-[11px] font-bold mb-2">미인식 컬럼 분석</p>
-                )}
-                {aiSuggestions.length === 0 ? (
-                  <div className="bg-black/30 border border-[#0f1a2e] rounded-xl p-8 text-center">
-                    <p className="text-gray-500 font-bold text-sm">
-                      {aiFilter === 'applied' ? '반영된 항목이 없습니다.' : '새로 제안된 미인식 컬럼이 없습니다.'}
-                    </p>
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
-                    {aiSuggestions.map((s, idx) => (
-                      <div key={idx} className={`border rounded-lg p-3 flex items-center gap-2 transition-colors ${
-                        s.status === 'applied'
-                          ? 'bg-green-950/20 border-green-900/30 hover:border-green-700/40'
-                          : 'bg-black/30 border-[#0f1a2e] hover:bg-black/50'
-                      }`}>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-white font-black text-sm truncate">{s.col}</p>
-                          <p className="text-gray-600 text-[10px]">
-                            {s.count}회
-                            {s.status === 'applied'
-                              ? <span className="text-green-500 ml-1">✓ {s.appliedKey || s.analysis.key} 반영됨</span>
-                              : <span className="text-gray-500 ml-1">→ {s.analysis.key}</span>
-                            }
-                          </p>
-                        </div>
-                        <div className={`text-[10px] font-black shrink-0 ${
-                          s.analysis.score >= 80 ? 'text-[#3b82f6]' : s.analysis.score >= 50 ? 'text-amber-400' : 'text-red-400'
-                        }`}>{Math.max(0, s.analysis.score)}%</div>
-                        {s.status !== 'applied' && (
-                          <div className="flex gap-1 shrink-0">
-                            <button
-                              onClick={() => handleRejectAiSuggestion(s.col)}
-                              disabled={processing}
-                              className="px-1.5 py-1 rounded bg-black/50 text-gray-500 text-[10px] font-bold border border-[#333] hover:text-red-400 hover:border-red-900/50 transition-colors disabled:opacity-30"
-                              title="무시"
-                            >✕</button>
-                            <button
-                              onClick={() => handleAcceptAiSuggestion(s.col, s.analysis.key)}
-                              disabled={processing || s.analysis.key === '알수없음'}
-                              className="px-2 py-1 rounded bg-[#3b82f6]/10 text-[#3b82f6] text-[10px] font-black border border-[#3b82f6]/30 hover:bg-[#3b82f6] hover:text-black transition-all disabled:opacity-30"
-                              title={s.analysis.key === '알수없음' ? '적용 불가' : `'${s.analysis.key}' 규칙으로 적용`}
-                            >{s.analysis.key === '알수없음' ? '—' : '적용'}</button>
-                          </div>
-                        )}
+                {/* 미반영 AI 제안 */}
+                {(aiFilter === 'pending' || aiFilter === 'all') && (
+                  <div>
+                    <div className="flex items-center gap-2 mb-3">
+                      <AlertCircle size={12} className="text-amber-400"/>
+                      <p className="text-[11px] font-black text-gray-300">미반영 AI 제안</p>
+                      <span className="text-gray-600 text-[10px]">— ★강력적용 시 칼럼 매핑 최우선 반영</span>
+                      {pendingSuggestionsCount > 0 && (
+                        <span className="bg-amber-900/40 text-amber-400 border border-amber-700/30 text-[10px] px-1.5 py-0.5 rounded-full font-black ml-auto">{pendingSuggestionsCount}건</span>
+                      )}
+                    </div>
+                    {pendingSuggestionsCount === 0 ? (
+                      <div className="bg-black/30 border border-[#0f1a2e] rounded-xl p-6 text-center">
+                        <p className="text-gray-600 text-sm">새로 제안된 미인식 칼럼이 없습니다.</p>
                       </div>
-                    ))}
+                    ) : (
+                      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2">
+                        {pendingAiSuggestions.map((s, idx) => (
+                          <div key={idx} className="bg-black/40 border border-[#1e1408] rounded-xl p-3 hover:border-amber-800/40 transition-colors">
+                            <div className="flex items-start justify-between gap-1 mb-1">
+                              <span className="text-white font-black text-sm leading-tight truncate flex-1" title={s.col}>{s.col}</span>
+                              <span className={`text-[10px] font-black shrink-0 px-1 py-0.5 rounded ${
+                                s.analysis.score >= 80 ? 'text-emerald-400 bg-emerald-950/40' : s.analysis.score >= 50 ? 'text-amber-400 bg-amber-950/40' : 'text-red-400 bg-red-950/40'
+                              }`}>{Math.max(0, s.analysis.score)}%</span>
+                            </div>
+                            <p className="text-gray-600 text-[10px] mb-2.5">
+                              → <span className="text-gray-300 font-bold">{s.analysis.key}</span>
+                              <span className="text-gray-700 ml-1">· {s.count}회</span>
+                            </p>
+                            <div className="flex gap-1">
+                              <button onClick={() => handleDeleteAiLog(s.col)} disabled={processing}
+                                className="flex-1 py-1 rounded bg-black/60 text-gray-600 text-[10px] font-bold border border-[#1a1a1a] hover:text-red-400 hover:border-red-900/50 transition-colors disabled:opacity-30">삭제</button>
+                              <button onClick={() => handleAcceptAiSuggestion(s.col, s.analysis.key)} disabled={processing || s.analysis.key === '알수없음'}
+                                className={`py-1 px-2 rounded text-[10px] font-black border transition-all disabled:opacity-30 ${
+                                  s.analysis.key === '알수없음'
+                                    ? 'bg-black/30 text-gray-700 border-[#1a1a1a] cursor-not-allowed'
+                                    : 'bg-amber-900/40 text-amber-300 border-amber-700/40 hover:bg-amber-800/50'
+                                }`}
+                                title={s.analysis.key !== '알수없음' ? `'${s.analysis.key}'로 강력 지침 적용` : '적용 불가'}>
+                                {s.analysis.key === '알수없음' ? '—' : '★ 강력적용'}
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 )}
               </>
@@ -1440,7 +1502,14 @@ export default function AdminPanel({ onClose, user }) {
                       <span className={`px-2 py-0.5 rounded text-[10px] font-black border ${inq.status === 'pending' ? 'bg-[#3b82f6]/20 text-[#3b82f6] border-[#3b82f6]/40' : 'bg-gray-800 text-gray-400 border-gray-600'}`}>
                         {inq.status === 'pending' ? '대기 중' : '처리 완료'}
                       </span>
-                      <span className="text-[10px] font-mono text-gray-500">{fmt(inq.createdAt)}</span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] font-mono text-gray-500">{fmt(inq.createdAt)}</span>
+                        <button
+                          onClick={() => handleDeleteInquiry(inq.id)}
+                          className="w-6 h-6 flex items-center justify-center text-gray-700 hover:text-red-400 hover:bg-red-950/30 rounded transition-colors"
+                          title="문의 삭제"
+                        ><Trash2 size={11}/></button>
+                      </div>
                     </div>
                     <div className="mb-4">
                       <h4 className="text-white font-bold text-lg">{inq.realName}</h4>
@@ -1489,59 +1558,6 @@ export default function AdminPanel({ onClose, user }) {
           </div>
         )}
 
-        {activeTab === 'city_approval' && (
-          <div className="flex-1 overflow-auto scrollbar-thin scrollbar-thumb-[#2d4a35] p-6">
-            <h3 className="text-xl font-black text-[#3b82f6] mb-1 flex items-center gap-2">
-              <MapPin size={20} /> 지자체 접근 승인 요청
-            </h3>
-            <p className="text-gray-500 text-xs mb-5">
-              승인 즉시 해당 지자체 데이터에 접근 권한이 부여됩니다. 사용자 관리 탭에서 지자체를 직접 추가할 수도 있습니다.
-            </p>
-
-            {cityRequests.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-20 text-gray-600 text-sm gap-2">
-                <MapPin size={32} className="opacity-30" />
-                대기 중인 지자체 승인 요청이 없습니다.
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-                {cityRequests.map(req => (
-                  <div key={req.id} className="bg-[#0f1a10] border border-[#3b82f6]/20 rounded-xl p-5 flex flex-col gap-3">
-                    <div className="flex items-start justify-between">
-                      <div>
-                        <p className="text-white font-black">{req.userName || '이름 없음'}</p>
-                        <p className="text-gray-500 text-xs mt-0.5">{req.userRegion || '소속 미등록'}</p>
-                        <p className="text-gray-600 text-xs font-mono">{req.userEmail}</p>
-                      </div>
-                      <TierBadge tier={req.userTier || 'basic'} />
-                    </div>
-                    <div className="bg-black/40 border border-[#0f1a2e] rounded-lg px-4 py-3 flex items-center gap-2">
-                      <MapPin size={14} className="text-[#3b82f6] shrink-0" />
-                      <span className="text-white font-black text-sm">{req.cityId}</span>
-                    </div>
-                    <p className="text-gray-600 text-[10px] font-mono">{fmt(req.requestedAt)}</p>
-                    <div className="flex gap-2 mt-auto">
-                      <button
-                        onClick={() => { setRejectTarget(req); setRejectReason(''); }}
-                        disabled={processing}
-                        className="flex-1 py-2 bg-red-950/30 text-red-400 border border-red-500/30 rounded-lg text-xs font-black hover:bg-red-950/50 transition-colors disabled:opacity-40 flex items-center justify-center gap-1"
-                      >
-                        <XCircle size={13} /> 거절
-                      </button>
-                      <button
-                        onClick={() => handleApproveRequest(req)}
-                        disabled={processing}
-                        className="flex-2 py-2 px-5 bg-[#3b82f6]/20 text-[#3b82f6] border border-[#3b82f6]/40 rounded-lg text-xs font-black hover:bg-[#3b82f6]/30 transition-colors disabled:opacity-40 flex items-center justify-center gap-1"
-                      >
-                        <CheckCircle2 size={13} /> 승인
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
 
         {activeTab === 'ops' && (
           <div className="flex-1 overflow-auto scrollbar-thin scrollbar-thumb-[#2d4a35] p-6 space-y-6">
@@ -1820,12 +1836,31 @@ export default function AdminPanel({ onClose, user }) {
                       {userCompanies.map(c => (
                         <div key={c.id} className="bg-black/40 border border-[#0f1a2e] rounded-xl p-3 hover:border-blue-700/30 transition-colors">
                           <div className="flex items-center justify-between mb-2">
-                            <div>
-                              <span className="text-white font-black">{c.name}</span>
-                              <span className="font-mono text-[10px] text-blue-400/70 ml-2 bg-blue-950/30 px-1.5 py-0.5 rounded">{c.id}</span>
-                              <span className="text-gray-700 text-[10px] ml-1">{users.filter(u => u.companyCode === c.id).length}명 배정</span>
+                            <div className="flex items-center gap-2 flex-1 min-w-0">
+                              {editingCompany?.id === c.id ? (
+                                <input
+                                  autoFocus
+                                  value={editingCompany.name}
+                                  onChange={e => setEditingCompany(prev => ({ ...prev, name: e.target.value }))}
+                                  onKeyDown={e => {
+                                    if (e.key === 'Enter') updateCompanyName(c.id, editingCompany.name);
+                                    if (e.key === 'Escape') setEditingCompany(null);
+                                  }}
+                                  onBlur={() => updateCompanyName(c.id, editingCompany.name)}
+                                  className="flex-1 bg-black/60 border border-blue-500/60 text-white px-2 py-0.5 rounded text-sm outline-none min-w-0"
+                                />
+                              ) : (
+                                <>
+                                  <span className="text-white font-black">{c.name}</span>
+                                  <button onClick={() => setEditingCompany({ id: c.id, name: c.name })} className="text-gray-600 hover:text-blue-400 transition-colors shrink-0" title="회사명 수정">
+                                    <Edit2 size={11}/>
+                                  </button>
+                                </>
+                              )}
+                              <span className="font-mono text-[10px] text-blue-400/70 ml-1 bg-blue-950/30 px-1.5 py-0.5 rounded shrink-0">{c.id}</span>
+                              <span className="text-gray-700 text-[10px] ml-1 shrink-0">{users.filter(u => u.companyCode === c.id).length}명 배정</span>
                             </div>
-                            <button onClick={() => deleteCompany(c.id)} className="text-gray-600 hover:text-red-400 transition-colors" title="회사 삭제">
+                            <button onClick={() => deleteCompany(c.id)} className="text-gray-600 hover:text-red-400 transition-colors ml-2" title="회사 삭제">
                               <Trash2 size={13}/>
                             </button>
                           </div>
@@ -1944,45 +1979,6 @@ export default function AdminPanel({ onClose, user }) {
           </div>
         )}
 
-        {/* 거절 사유 모달 */}
-        {rejectTarget && (
-          <div className="absolute inset-0 bg-black/80 flex items-center justify-center z-10">
-            <div className="w-full max-w-sm bg-[#0f1a10] border border-red-500/40 rounded-2xl p-6 shadow-[0_0_40px_rgba(239,68,68,0.15)]">
-              <div className="flex items-center gap-2 mb-4">
-                <XCircle size={18} className="text-red-400" />
-                <h3 className="text-white font-black">지자체 신청 거절</h3>
-              </div>
-              <p className="text-gray-400 text-sm mb-1">
-                <span className="text-white font-bold">{rejectTarget.userName || rejectTarget.userEmail}</span> 님의
-              </p>
-              <p className="text-[#3b82f6] font-black mb-4">{rejectTarget.cityId}</p>
-              <div className="mb-4">
-                <label className="text-[11px] text-gray-500 font-bold mb-1.5 block">거절 사유 (선택)</label>
-                <input
-                  value={rejectReason}
-                  onChange={e => setRejectReason(e.target.value)}
-                  onKeyDown={e => e.key === 'Enter' && handleRejectRequest(rejectTarget, rejectReason)}
-                  placeholder="사유를 입력하면 신청자에게 표시됩니다"
-                  className="w-full bg-black/50 border border-[#2d2d2d] focus:border-red-500/50 text-white p-3 rounded-xl outline-none text-sm placeholder-gray-700"
-                  autoFocus
-                />
-              </div>
-              <div className="flex gap-2">
-                <button
-                  onClick={() => { setRejectTarget(null); setRejectReason(''); }}
-                  className="flex-1 py-2.5 bg-black/40 border border-[#333] text-gray-400 font-bold rounded-xl text-sm hover:bg-[#222] transition-colors"
-                >취소</button>
-                <button
-                  onClick={() => handleRejectRequest(rejectTarget, rejectReason)}
-                  disabled={processing}
-                  className="flex-1 py-2.5 bg-red-950/60 border border-red-500/60 text-red-400 font-extrabold rounded-xl text-sm hover:bg-red-900/60 transition-colors disabled:opacity-50"
-                >
-                  {processing ? '처리 중...' : '거절 확정'}
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
 
         {/* 등급 승인 확인 모달 */}
         {tierUpgradeTarget && (

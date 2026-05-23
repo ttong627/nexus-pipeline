@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { db } from '../config/firebase.js';
 import { doc, onSnapshot, updateDoc } from 'firebase/firestore';
-import { MapPin, List, Map as MapIcon, RefreshCw, Building2, Phone, ChevronUp, ChevronDown, Navigation, Crosshair, Star, X, AlertCircle, Share2 } from 'lucide-react';
+import { MapPin, List, Map as MapIcon, RefreshCw, Building2, Phone, ChevronUp, ChevronDown, Navigation, Crosshair, Star, X, AlertCircle, Share2, Save } from 'lucide-react';
 
 const KAKAO_JS_KEY = import.meta.env.VITE_KAKAO_JS_KEY;
 
@@ -158,9 +158,16 @@ export default function ShareRouteView({ shareId, driverId }) {
   });
   const [myLocation, setMyLocation]   = useState(null);
   const [gpsStatus, setGpsStatus]     = useState('idle'); // idle|loading|ok|denied|error
+  const [gpsAccuracy, setGpsAccuracy] = useState(null);
+  const [gpsUpdatedAt, setGpsUpdatedAt] = useState(null);
+  const [followMyLocation, setFollowMyLocation] = useState(true);
   const [isMapCreated, setIsMapCreated] = useState(false);
   const [showGpsGuide, setShowGpsGuide] = useState(false);
   const [copiedLink, setCopiedLink]   = useState(false);
+  const [orderEditMode, setOrderEditMode] = useState(false);
+  const [localOrderIds, setLocalOrderIds] = useState([]);
+  const [isSavingOrder, setIsSavingOrder] = useState(false);
+  const [isRequestingOrderApply, setIsRequestingOrderApply] = useState(false);
   const [isInAppBrowser, setIsInAppBrowser] = useState(() => {
     const ua = navigator.userAgent.toLowerCase();
     return ua.indexOf('kakaotalk') > -1 || ua.indexOf('naver') > -1 || ua.indexOf('line') > -1 || ua.indexOf('instagram') > -1 || ua.indexOf('fban') > -1;
@@ -181,7 +188,13 @@ export default function ShareRouteView({ shareId, driverId }) {
   const selectedIdRef   = useRef(null);
   const driverGpsOverlayRef = useRef(null);
   const latestLocRef    = useRef(null);
+  const followMyLocationRef = useRef(true);
+  const lastBoundsKeyRef = useRef('');
   const isMobile        = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+
+  useEffect(() => {
+    followMyLocationRef.current = followMyLocation;
+  }, [followMyLocation]);
 
   // ── Firestore 실시간 로드 ──────────────────────────────────────────────────
   useEffect(() => {
@@ -211,16 +224,45 @@ export default function ShareRouteView({ shareId, driverId }) {
   }, []);
 
   // ── GPS 추적 ────────────────────────────────────────────────────────
+  const applyGpsPosition = useCallback((pos) => {
+    const next = {
+      lat: pos.coords.latitude,
+      lng: pos.coords.longitude,
+      accuracy: Number.isFinite(pos.coords.accuracy) ? Math.round(pos.coords.accuracy) : null,
+      updatedAt: Date.now(),
+    };
+    latestLocRef.current = next;
+    setMyLocation(next);
+    setGpsAccuracy(next.accuracy);
+    setGpsUpdatedAt(next.updatedAt);
+    setGpsStatus('ok');
+  }, []);
+
+  const handleGpsError = useCallback((err) => {
+    if (latestLocRef.current && err?.code !== 1) {
+      setGpsStatus('ok');
+      return;
+    }
+    setGpsStatus(err?.code === 1 ? 'denied' : 'error');
+  }, []);
+
   const startGps = useCallback(() => {
     if (!navigator.geolocation) { setGpsStatus('error'); return; }
     if (watchIdRef.current != null) navigator.geolocation.clearWatch(watchIdRef.current);
     setGpsStatus('loading');
-    watchIdRef.current = navigator.geolocation.watchPosition(
-      (pos) => { setMyLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude }); setGpsStatus('ok'); },
-      (err) => setGpsStatus(err.code === 1 ? 'denied' : 'error'),
-      { enableHighAccuracy: true, maximumAge: 5000, timeout: 20000 }
+
+    navigator.geolocation.getCurrentPosition(
+      applyGpsPosition,
+      handleGpsError,
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 }
     );
-  }, []);
+
+    watchIdRef.current = navigator.geolocation.watchPosition(
+      applyGpsPosition,
+      handleGpsError,
+      { enableHighAccuracy: true, maximumAge: 3000, timeout: 30000 }
+    );
+  }, [applyGpsPosition, handleGpsError]);
 
   useEffect(() => {
     startGps();
@@ -244,6 +286,21 @@ export default function ShareRouteView({ shareId, driverId }) {
     latestLocRef.current = myLocation;
   }, [myLocation]);
 
+  // watchPosition can be throttled by mobile browsers, so force a fresh point too.
+  useEffect(() => {
+    if (!navigator.geolocation || (gpsStatus !== 'ok' && gpsStatus !== 'loading')) return;
+    const interval = setInterval(() => {
+      navigator.geolocation.getCurrentPosition(
+        applyGpsPosition,
+        (err) => {
+          if (!latestLocRef.current) handleGpsError(err);
+        },
+        { enableHighAccuracy: true, maximumAge: 0, timeout: 12000 }
+      );
+    }, 10000);
+    return () => clearInterval(interval);
+  }, [gpsStatus, applyGpsPosition, handleGpsError]);
+
   // ── 실시간 위치 Firestore 방송 (모바일만 자동) ──────────────────────────
   useEffect(() => {
     if (!isMobile) return;
@@ -254,6 +311,7 @@ export default function ShareRouteView({ shareId, driverId }) {
           [`liveGps.${driverId}`]: {
             lat: loc.lat,
             lng: loc.lng,
+            accuracy: loc.accuracy ?? null,
             updatedAt: new Date().toISOString()
           }
         }).catch(e => console.warn('GPS Upload error:', e));
@@ -329,15 +387,42 @@ export default function ShareRouteView({ shareId, driverId }) {
       });
       myLocOverlayRef.current.setMap(kakaoMapRef.current);
     }
+    if (followMyLocationRef.current) {
+      kakaoMapRef.current.panTo(latlng);
+      if (kakaoMapRef.current.getLevel() > 4) kakaoMapRef.current.setLevel(4);
+    }
   }, [isMapCreated, myLocation]);
 
   // ── 파생 데이터 ──────────────────────────────────────────────────────
   const driver = shareData?.drivers?.find(d => d.id === driverId) || shareData?.drivers?.[0];
-  const allRecords = (shareData?.records || [])
+  const baseRecords = (shareData?.records || [])
     .filter(r => r.driverId === driver?.id)
-    .map((r, i) => ({ ...r, _uid: r.id || `${r.이름}_${r.배송순번 || i}` }))
-    .sort((a, b) => (parseInt(a.배송순번) || 9999) - (parseInt(b.배송순번) || 9999));
+    .map((r, i) => ({ ...r, _uid: r.id || `${r.이름}_${r.배송순번 || i}` }));
+  const remoteOrderIds = Array.isArray(shareData?.driverOrder?.[driver?.id]) ? shareData.driverOrder[driver.id] : [];
+  const activeOrderIds = localOrderIds.length ? localOrderIds : remoteOrderIds;
+  const orderIndex = new Map(activeOrderIds.map((id, i) => [id, i]));
+  const allRecords = baseRecords
+    .sort((a, b) => {
+      const ai = orderIndex.has(a._uid) ? orderIndex.get(a._uid) : 100000 + (parseInt(a.배송순번) || 9999);
+      const bi = orderIndex.has(b._uid) ? orderIndex.get(b._uid) : 100000 + (parseInt(b.배송순번) || 9999);
+      return ai - bi;
+    })
+    .map((r, i) => ({ ...r, _displaySeq: i + 1 }));
   const mapRecords = allRecords.filter(r => r.lat && r.lng);
+
+  useEffect(() => {
+    if (!driver?.id) return;
+    const remote = Array.isArray(shareData?.driverOrder?.[driver.id]) ? shareData.driverOrder[driver.id] : null;
+    if (remote?.length) {
+      setLocalOrderIds(remote);
+      try { localStorage.setItem(`route_order_${shareId}_${driver.id}`, JSON.stringify(remote)); } catch {}
+      return;
+    }
+    try {
+      const saved = JSON.parse(localStorage.getItem(`route_order_${shareId}_${driver.id}`) || '[]');
+      if (Array.isArray(saved) && saved.length) setLocalOrderIds(saved);
+    } catch {}
+  }, [shareData?.driverOrder, driver?.id, shareId]);
 
   // ── 즐겨찾기 ────────────────────────────────────────────────────────
   const handleStarRecord = useCallback((r) => {
@@ -349,6 +434,51 @@ export default function ShareRouteView({ shareId, driverId }) {
       return next;
     });
   }, [shareId, driverId]);
+
+  const moveRecordOrder = useCallback(async (uid, delta) => {
+    if (!driver?.id || isSavingOrder) return;
+    const ids = allRecords.map(r => r._uid);
+    const idx = ids.indexOf(uid);
+    const nextIdx = idx + delta;
+    if (idx < 0 || nextIdx < 0 || nextIdx >= ids.length) return;
+    [ids[idx], ids[nextIdx]] = [ids[nextIdx], ids[idx]];
+    setLocalOrderIds(ids);
+    try { localStorage.setItem(`route_order_${shareId}_${driver.id}`, JSON.stringify(ids)); } catch {}
+    setIsSavingOrder(true);
+    try {
+      await updateDoc(doc(db, 'route_shares', shareId), {
+        [`driverOrder.${driver.id}`]: ids,
+      });
+    } catch (e) {
+      console.warn('Order save error:', e);
+    } finally {
+      setIsSavingOrder(false);
+    }
+  }, [allRecords, driver?.id, isSavingOrder, shareId]);
+
+  const requestOrderApply = useCallback(async () => {
+    if (!driver?.id || isRequestingOrderApply) return;
+    const ids = allRecords.map(r => r._uid);
+    if (!ids.length) return;
+    setLocalOrderIds(ids);
+    try { localStorage.setItem(`route_order_${shareId}_${driver.id}`, JSON.stringify(ids)); } catch {}
+    setIsRequestingOrderApply(true);
+    try {
+      await updateDoc(doc(db, 'route_shares', shareId), {
+        [`driverOrder.${driver.id}`]: ids,
+        [`orderApplyRequests.${driver.id}`]: {
+          status: 'requested',
+          requestedAt: new Date().toISOString(),
+          orderIds: ids,
+          count: ids.length,
+        },
+      });
+    } catch (e) {
+      console.warn('Order apply request error:', e);
+    } finally {
+      setIsRequestingOrderApply(false);
+    }
+  }, [allRecords, driver?.id, isRequestingOrderApply, shareId]);
 
   // ── 링크 복사 ────────────────────────────────────────────────────────
   const handleCopyLink = useCallback(async () => {
@@ -396,6 +526,7 @@ export default function ShareRouteView({ shareId, driverId }) {
 
   const centerOnMyLocation = useCallback(() => {
     if (!myLocation || !kakaoMapRef.current) return;
+    setFollowMyLocation(true);
     kakaoMapRef.current.setCenter(new window.kakao.maps.LatLng(myLocation.lat, myLocation.lng));
     kakaoMapRef.current.setLevel(4);
   }, [myLocation]);
@@ -435,7 +566,7 @@ export default function ShareRouteView({ shareId, driverId }) {
             box-shadow:${shadow};cursor:pointer;
             font-size:${isSelected ? 11 : 9}px;font-weight:900;color:${fg};
             transition:all 0.2s;"
-          title="${r.이름} | ${r.주소}">${r.배송순번 || '?'}</div>`;
+          title="${r.이름} | ${r.주소}">${r._displaySeq || r.배송순번 || '?'}</div>`;
       const overlay = new window.kakao.maps.CustomOverlay({
         position: new window.kakao.maps.LatLng(r.lat, r.lng),
         content, yAnchor: 0.5, xAnchor: 0.5, zIndex: isSelected ? 99 : 1,
@@ -443,10 +574,14 @@ export default function ShareRouteView({ shareId, driverId }) {
       overlay.setMap(kakaoMapRef.current);
       overlaysRef.current.push(overlay);
     });
-    if (!selectedId) {
+    const firstRecord = mapRecords[0];
+    const lastRecord = mapRecords[mapRecords.length - 1];
+    const boundsKey = `${driver?.id || ''}:${mapRecords.length}:${firstRecord?._uid || ''}:${lastRecord?._uid || ''}:${firstRecord?.lat || ''}:${lastRecord?.lng || ''}`;
+    if (!selectedId && lastBoundsKeyRef.current !== boundsKey) {
       const bounds = new window.kakao.maps.LatLngBounds();
       mapRecords.forEach(r => bounds.extend(new window.kakao.maps.LatLng(r.lat, r.lng)));
       kakaoMapRef.current.setBounds(bounds, 50, 50, 50, 50);
+      lastBoundsKeyRef.current = boundsKey;
     }
   }, [isMapReady, shareData, driverId, selectedId]); // eslint-disable-line
 
@@ -520,6 +655,10 @@ export default function ShareRouteView({ shareId, driverId }) {
   const selectedRecord = allRecords.find(r => r._uid === selectedId);
   const driverLive = shareData?.liveGps?.[driverId];
   const isLiveActive = driverLive && (Date.now() - new Date(driverLive.updatedAt).getTime() < 120000);
+  const gpsAgeSec = gpsUpdatedAt ? Math.max(0, Math.round((Date.now() - gpsUpdatedAt) / 1000)) : null;
+  const gpsAgeLabel = gpsAgeSec == null ? '' : gpsAgeSec < 60 ? `${gpsAgeSec}s ago` : `${Math.floor(gpsAgeSec / 60)}m ago`;
+  const orderApplyRequest = driver?.id ? shareData?.orderApplyRequests?.[driver.id] : null;
+  const isOrderApplyRequested = orderApplyRequest?.status === 'requested';
 
   return (
     <div className="fixed inset-0 bg-[#050505] flex flex-col" style={{ fontFamily: 'inherit' }}>
@@ -568,6 +707,30 @@ export default function ShareRouteView({ shareId, driverId }) {
         </button>
 
         {/* 레이아웃 토글 */}
+        <button
+          onClick={() => setOrderEditMode(v => !v)}
+          className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[10px] font-black shrink-0 transition-all active:scale-95 border ${
+            orderEditMode
+              ? 'bg-blue-500/20 border-blue-500/40 text-blue-300'
+              : 'bg-[#1a1a1a] border-[#2a2a2a] text-gray-400 hover:text-white'
+          }`}
+        >
+          <ChevronUp size={10} /> 순번
+        </button>
+
+        <button
+          onClick={requestOrderApply}
+          disabled={isRequestingOrderApply || !allRecords.length}
+          className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[10px] font-black shrink-0 transition-all active:scale-95 border disabled:opacity-50 ${
+            isOrderApplyRequested
+              ? 'bg-amber-500/20 border-amber-500/40 text-amber-300'
+              : 'bg-[#1a1a1a] border-[#2a2a2a] text-gray-400 hover:text-white'
+          }`}
+          title="현재 순번을 담당자에게 공식 반영 요청"
+        >
+          <Save size={10} /> {isOrderApplyRequested ? '요청됨' : '반영요청'}
+        </button>
+
         <div className="flex rounded-lg overflow-hidden border border-[#2a2a2a] shrink-0">
           {[
             ['map',   <MapIcon size={11} key="map" />],
@@ -587,7 +750,7 @@ export default function ShareRouteView({ shareId, driverId }) {
 
         {/* 지도 영역 */}
         <div className={`relative flex flex-col transition-all ${
-          layoutMode === 'map' ? 'flex-1' : layoutMode === 'split' ? 'h-[45%] shrink-0' : 'h-0 overflow-hidden'
+          layoutMode === 'map' ? 'flex-1' : layoutMode === 'split' ? 'h-[68%] shrink-0' : 'h-0 overflow-hidden'
         }`}>
           {!isMapReady && (
             <div className="absolute inset-0 flex items-center justify-center bg-[#080808] z-10">
@@ -595,6 +758,21 @@ export default function ShareRouteView({ shareId, driverId }) {
             </div>
           )}
           <div ref={mapRef} className="flex-1 w-full h-full" />
+
+          {gpsStatus === 'ok' && layoutMode !== 'list' && (
+            <div className="absolute top-3 left-3 z-10 bg-[#050505]/90 border border-blue-500/30 rounded-full px-3 py-1.5 shadow-lg flex items-center gap-2 text-[10px] font-black text-blue-200">
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-70"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-500"></span>
+              </span>
+              <span>내 위치</span>
+              {gpsAccuracy != null && <span className="text-blue-400">±{gpsAccuracy}m</span>}
+              {gpsAgeLabel && <span className="text-gray-500">{gpsAgeLabel}</span>}
+              <span className={followMyLocation ? 'text-emerald-400' : 'text-gray-500'}>
+                {followMyLocation ? '따라가기' : '고정'}
+              </span>
+            </div>
+          )}
 
           {/* GPS 거부 배너 */}
           {(gpsStatus === 'denied' || gpsStatus === 'error') && layoutMode !== 'list' && (
@@ -626,7 +804,21 @@ export default function ShareRouteView({ shareId, driverId }) {
           )}
 
           {/* GPS 버튼 */}
-          <div className="absolute bottom-3 right-3 z-10">
+          <div className="absolute bottom-3 right-3 z-10 flex flex-col items-end gap-2">
+            {gpsStatus === 'ok' && (
+              <button
+                onClick={() => setFollowMyLocation(v => !v)}
+                className={`h-9 px-3 rounded-full flex items-center gap-1.5 shadow-lg border text-[10px] font-black transition-all active:scale-95 ${
+                  followMyLocation
+                    ? 'bg-emerald-950/90 border-emerald-500/40 text-emerald-300'
+                    : 'bg-[#0a0a0a] border-[#333] text-gray-400'
+                }`}
+                title={followMyLocation ? '내 위치 따라가기 끄기' : '내 위치 따라가기 켜기'}
+              >
+                <Navigation size={13} />
+                {followMyLocation ? '따라가기' : '고정'}
+              </button>
+            )}
             <button
               onClick={() => {
                 if (gpsStatus === 'ok') centerOnMyLocation();
@@ -665,7 +857,7 @@ export default function ShareRouteView({ shareId, driverId }) {
             {selectedRecord && (
               <div className="absolute bg-[#0f1a0f] border border-[#2a2a2a] rounded-full px-3 py-0.5 flex items-center gap-2 text-[10px] z-10">
                 <div className="w-2 h-2 rounded-full shrink-0" style={{ background: driverColor }} />
-                <span className="font-black text-white">{selectedRecord.배송순번}번</span>
+                <span className="font-black text-white">{selectedRecord._displaySeq || selectedRecord.배송순번}번</span>
                 <span className="text-gray-400">{selectedRecord.이름}</span>
                 <span className="text-gray-600 max-w-[100px] truncate">{selectedRecord.주소}</span>
               </div>
@@ -683,26 +875,44 @@ export default function ShareRouteView({ shareId, driverId }) {
             <span className="ml-auto text-[9px] text-gray-700">{allRecords.length}건</span>
           </div>
 
-          {allRecords.map((r) => {
+          {allRecords.map((r, idx) => {
             const isSelected = r._uid === selectedId;
             return (
               <div key={r._uid} id={`share-rec-${r._uid}`} onClick={() => handleRecordClick(r)}
-                className={`flex items-center gap-3 px-4 py-3 border-b cursor-pointer transition-colors ${
+                className={`flex items-center gap-2 px-3 py-2 border-b cursor-pointer transition-colors ${
                   isSelected ? 'bg-[#0d1e0d] border-[#1a3a1a]' : 'border-[#111] hover:bg-[#0f0f0f]'
                 }`}
               >
-                <div className="w-9 h-9 rounded-full shrink-0 flex items-center justify-center font-black text-xs"
+                {orderEditMode && (
+                  <div className="shrink-0 flex flex-col gap-1">
+                    <button
+                      onClick={(e) => { e.stopPropagation(); moveRecordOrder(r._uid, -1); }}
+                      disabled={idx === 0 || isSavingOrder}
+                      className="w-7 h-6 rounded-lg border border-[#2a2a2a] bg-[#111] text-gray-400 disabled:opacity-25 active:scale-95 flex items-center justify-center"
+                    >
+                      <ChevronUp size={12} />
+                    </button>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); moveRecordOrder(r._uid, 1); }}
+                      disabled={idx === allRecords.length - 1 || isSavingOrder}
+                      className="w-7 h-6 rounded-lg border border-[#2a2a2a] bg-[#111] text-gray-400 disabled:opacity-25 active:scale-95 flex items-center justify-center"
+                    >
+                      <ChevronDown size={12} />
+                    </button>
+                  </div>
+                )}
+                <div className="w-7 h-7 rounded-full shrink-0 flex items-center justify-center font-black text-[11px]"
                   style={{
                     background: isSelected ? driverColor : `${driverColor}22`,
                     color: isSelected ? '#fff' : driverColor,
                     border: `2px solid ${isSelected ? driverColor : `${driverColor}44`}`,
                     boxShadow: isSelected ? `0 0 10px ${driverColor}60` : 'none',
                   }}>
-                  {r.배송순번 || '?'}
+                  {r._displaySeq || r.배송순번 || '?'}
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-0.5">
-                    <span className={`font-bold text-sm ${isSelected ? 'text-white' : 'text-gray-200'}`}>{r.이름}</span>
+                    <span className={`font-bold text-xs ${isSelected ? 'text-white' : 'text-gray-200'}`}>{r.이름}</span>
                     {r.포수 > 1 && (
                       <span className="text-[9px] px-1.5 py-0.5 rounded-full font-bold"
                         style={{ background: `${driverColor}20`, color: driverColor }}>{r.포수}포</span>
@@ -713,7 +923,7 @@ export default function ShareRouteView({ shareId, driverId }) {
                       </span>
                     )}
                   </div>
-                  <div className="text-gray-600 text-xs truncate">{r.행정동 && `${r.행정동} · `}{r.주소}</div>
+                  <div className="text-gray-600 text-[11px] truncate">{r.행정동 && `${r.행정동} · `}{r.주소}</div>
                   {r.특이사항 && <div className="text-amber-700 text-[10px] truncate mt-0.5">⚠ {r.특이사항}</div>}
                 </div>
                 <div className="shrink-0 flex flex-col items-end gap-1.5">
