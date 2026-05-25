@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
-import { FileSpreadsheet, CheckCircle, Database, ChevronRight, Truck, BookOpen, Loader2, RefreshCw, Calendar, MapPin, Zap, ArrowRight, AlertTriangle, Package } from 'lucide-react';
+import { FileSpreadsheet, CheckCircle, Database, ChevronRight, Truck, BookOpen, RefreshCw, Calendar, MapPin, Zap, AlertTriangle, Package } from 'lucide-react';
 import { APP_VERSION } from '../version.js';
 import { db } from '../config/firebase.js';
 import {
@@ -72,14 +72,28 @@ async function checkBaseExists(city) {
   } catch { return false; }
 }
 
+// ─── 스켈레톤 CityCard ────────────────────────────────────────────────────────
+function SkeletonCityCard() {
+  return (
+    <div className="rounded-xl border border-[#151d1c] bg-[#090d0c] min-h-[160px] overflow-hidden">
+      <div className="h-12 bg-[#0d1513] animate-pulse" />
+      <div className="px-3 pt-3 pb-3 space-y-2.5">
+        <div className="h-3.5 bg-[#0d1513] rounded-md w-3/4 animate-pulse" />
+        <div className="h-2.5 bg-[#0a1110] rounded-md w-1/2 animate-pulse" style={{ animationDelay: '80ms' }} />
+        <div className="h-2.5 bg-[#0a1110] rounded-md w-2/3 animate-pulse" style={{ animationDelay: '160ms' }} />
+      </div>
+    </div>
+  );
+}
+
 // ─── 워크플로우 가이드 (빈 상태용) ──────────────────────────────────────────
 function WorkflowGuide({ onStart, workflowMode, onWorkflowModeChange }) {
   const steps = [
-    { icon: FileSpreadsheet, color: 'text-blue-400', bg: 'bg-blue-900/20 border-blue-800/30', label: '파일 업로드', desc: '엑셀 명단 파일을 불러옵니다' },
-    { icon: CheckCircle, color: 'text-green-400', bg: 'bg-green-900/20 border-green-800/30', label: '주소 정제', desc: '도로명 주소로 자동 변환합니다' },
-    { icon: Truck, color: 'text-amber-400', bg: 'bg-amber-900/20 border-amber-800/30', label: '기사 배정', desc: '기사별 구역을 자동 배분합니다' },
-    { icon: MapPin, color: 'text-purple-400', bg: 'bg-purple-900/20 border-purple-800/30', label: '루트맵', desc: '지도에서 배송순번을 최적화합니다' },
-    { icon: Database, color: 'text-cyan-400', bg: 'bg-cyan-900/20 border-cyan-800/30', label: '저장/내보내기', desc: '클라우드 저장 및 엑셀 출력합니다' },
+    { icon: FileSpreadsheet, color: 'text-sky-400',     num: 1, label: '파일 업로드'  },
+    { icon: CheckCircle,     color: 'text-emerald-400', num: 2, label: '주소 정제'    },
+    { icon: Truck,           color: 'text-amber-400',   num: 3, label: '기사 배정'    },
+    { icon: MapPin,          color: 'text-violet-400',  num: 4, label: '루트맵'       },
+    { icon: Database,        color: 'text-cyan-400',    num: 5, label: '저장/출력'    },
   ];
 
   const purposeCards = [
@@ -106,8 +120,8 @@ function WorkflowGuide({ onStart, workflowMode, onWorkflowModeChange }) {
           const active = workflowMode === mode;
           const tone = {
             emerald: active ? 'border-emerald-400/60 bg-emerald-500/10 text-emerald-200' : 'border-emerald-500/15 bg-[#0a1110] text-emerald-400/80 hover:border-emerald-400/35',
-            cyan: active ? 'border-cyan-400/60 bg-cyan-500/10 text-cyan-200' : 'border-cyan-500/15 bg-[#091011] text-cyan-400/80 hover:border-cyan-400/35',
-            amber: active ? 'border-amber-400/60 bg-amber-500/10 text-amber-200' : 'border-amber-500/15 bg-[#11100a] text-amber-400/80 hover:border-amber-400/35',
+            cyan:    active ? 'border-cyan-400/60 bg-cyan-500/10 text-cyan-200'          : 'border-cyan-500/15 bg-[#091011] text-cyan-400/80 hover:border-cyan-400/35',
+            amber:   active ? 'border-amber-400/60 bg-amber-500/10 text-amber-200'       : 'border-amber-500/15 bg-[#11100a] text-amber-400/80 hover:border-amber-400/35',
           }[accent];
           return (
             <button
@@ -128,24 +142,27 @@ function WorkflowGuide({ onStart, workflowMode, onWorkflowModeChange }) {
         })}
       </div>
 
-      <div className="flex items-start gap-2 overflow-x-auto pb-2">
+      {/* 파이프라인 단계 — 번호 스텝바 */}
+      <div className="flex items-center gap-0 mb-5 overflow-x-auto">
         {steps.map((s, i) => (
-          <div key={i} className="flex items-center gap-2 shrink-0">
-            <div className={`flex flex-col items-center gap-2 p-3 rounded-xl border ${s.bg} min-w-[110px]`}>
-              <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${s.bg}`}>
-                <s.icon size={16} className={s.color} />
+          <div key={i} className="flex items-center shrink-0">
+            <div className="flex items-center gap-2 px-3 py-2 rounded-xl">
+              <div className={`w-6 h-6 rounded-full border flex items-center justify-center text-[10px] font-black ${s.color} border-current opacity-60`}>
+                {s.num}
               </div>
-              <span className={`text-[11px] font-black ${s.color}`}>{s.label}</span>
-              <span className="text-[10px] text-gray-600 text-center leading-relaxed">{s.desc}</span>
+              <div className="flex items-center gap-1.5">
+                <s.icon size={13} className={s.color} />
+                <span className={`text-[11px] font-bold ${s.color} hidden sm:block`}>{s.label}</span>
+              </div>
             </div>
             {i < steps.length - 1 && (
-              <ArrowRight size={14} className="text-gray-700 shrink-0 mt-4" />
+              <div className="w-5 h-px bg-[#1a2a2a] shrink-0" />
             )}
           </div>
         ))}
       </div>
 
-      <div className="mt-5 flex items-center gap-3">
+      <div className="flex items-center gap-3">
         <button
           onClick={() => onStart(1)}
           className="flex items-center gap-2.5 px-5 py-2.5 bg-emerald-400 text-black font-extrabold rounded-xl text-sm hover:bg-emerald-300 transition-all shadow-[0_0_20px_rgba(52,211,153,0.16)]"
@@ -198,10 +215,10 @@ function ActiveWorkCard({ fileInfo, gridData, onStart, onOpenRouteMap, workflowM
             <span className="text-gray-600 text-[9px]">포</span>
           </div>
           {errorCount > 0 && (
-            <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-red-950/30 border border-red-800/30">
-              <AlertTriangle size={11} className="text-red-400" />
-              <span className="text-red-400 text-[11px] font-black">{errorCount}</span>
-              <span className="text-gray-600 text-[9px]">오류</span>
+            <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-amber-950/30 border border-amber-700/30">
+              <AlertTriangle size={11} className="text-amber-400" />
+              <span className="text-amber-400 text-[11px] font-black">{errorCount}</span>
+              <span className="text-gray-600 text-[9px]">확인필요</span>
             </div>
           )}
           {hasDriver && (
@@ -286,7 +303,7 @@ function CityCard({ item, onCloudCard, onBaseCard }) {
 
   return (
     <div
-      className={`group relative flex min-h-[138px] flex-col rounded-xl border bg-[#090d0c] ${theme.line} hover:border-white/20 hover:-translate-y-0.5 hover:shadow-[0_14px_32px_rgba(0,0,0,0.25)] transition-all cursor-pointer overflow-hidden`}
+      className={`group relative flex min-h-[160px] flex-col rounded-xl border bg-[#090d0c] ${theme.line} hover:border-white/20 hover:-translate-y-0.5 hover:shadow-[0_14px_32px_rgba(0,0,0,0.25)] transition-all cursor-pointer overflow-hidden`}
       onClick={handleMain}
     >
       <div className={`relative h-12 bg-gradient-to-r ${theme.band} border-b border-white/5 overflow-hidden`}>
@@ -308,9 +325,9 @@ function CityCard({ item, onCloudCard, onBaseCard }) {
           <span className="block text-white font-black text-[14px] group-hover:text-white transition-colors truncate leading-tight">
             {sigungu}
           </span>
-          <span className="mt-1 block text-[9px] text-gray-600 truncate">{city}</span>
+          <span className="mt-1 block text-[11px] text-gray-600 truncate">{city}</span>
         </div>
-        <ChevronRight size={12} className="mt-1 text-gray-700 group-hover:text-gray-300 transition-colors shrink-0" />
+        <ChevronRight size={13} className="mt-0.5 text-gray-600 group-hover:text-gray-300 transition-colors shrink-0" />
       </div>
 
       {hasCloud ? (
@@ -327,12 +344,12 @@ function CityCard({ item, onCloudCard, onBaseCard }) {
           <div className="flex items-center justify-between">
             <div className="flex flex-wrap gap-1">
               {cloud.suCount > 0 && (
-                <span className="text-[8px] px-1.5 py-0.5 rounded-md bg-cyan-500/10 text-cyan-300 border border-cyan-500/15 font-bold">
+                <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-cyan-500/10 text-cyan-300 border border-cyan-500/15 font-bold">
                   수급 {cloud.suCount.toLocaleString()}
                 </span>
               )}
               {cloud.chaCount > 0 && (
-                <span className="text-[8px] px-1.5 py-0.5 rounded-md bg-amber-500/10 text-amber-300 border border-amber-500/15 font-bold">
+                <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-amber-500/10 text-amber-300 border border-amber-500/15 font-bold">
                   차상위 {cloud.chaCount.toLocaleString()}
                 </span>
               )}
@@ -351,21 +368,21 @@ function CityCard({ item, onCloudCard, onBaseCard }) {
         {hasCloud && (
           <button
             onClick={e => { e.stopPropagation(); onCloudCard?.(city, cloud.monthId); }}
-            className={`text-[8px] px-1.5 py-0.5 rounded-md bg-white/5 ${theme.text} border ${theme.line} font-bold hover:bg-white/10 transition-colors`}
+            className={`text-[10px] px-2 py-0.5 rounded-md bg-white/5 ${theme.text} border ${theme.line} font-bold hover:bg-white/10 transition-colors`}
           >
-            배송명단
+            → 배송명단
           </button>
         )}
         {hasBase && (
           <button
             onClick={e => { e.stopPropagation(); onBaseCard?.(city); }}
-            className="text-[8px] px-1.5 py-0.5 rounded-md bg-violet-500/10 text-violet-300 border border-violet-500/15 font-bold hover:bg-violet-500/15 transition-colors"
+            className="text-[10px] px-2 py-0.5 rounded-md bg-violet-500/10 text-violet-300 border border-violet-500/15 font-bold hover:bg-violet-500/15 transition-colors"
           >
-            기본명단
+            → 기본명단
           </button>
         )}
         {base?.updatedAt && (
-          <span className="text-[8px] text-gray-700 ml-auto">{fmtDate(base.updatedAt)}</span>
+          <span className="text-[10px] text-gray-700 ml-auto">{fmtDate(base.updatedAt)}</span>
         )}
       </div>
     </div>
@@ -373,7 +390,7 @@ function CityCard({ item, onCloudCard, onBaseCard }) {
 }
 
 // ─── Dashboard ────────────────────────────────────────────────────────────────
-export default function Dashboard({ user, onStart, onHelp, onCloudCard, onBaseCard, gridData = [], fileInfo = null, onOpenRouteMap, workflowMode = 'cleaningOnly', onWorkflowModeChange, stepStatus }) {
+export default function Dashboard({ user, onStart, onHelp, onCloudCard, onBaseCard, gridData = [], fileInfo = null, onOpenRouteMap, workflowMode = 'cleaningOnly', onWorkflowModeChange, stepStatus, onOpenIntro }) {
   const totalRows = getProcessedRows(user);
   const totalFiles = getProcessedFiles(user);
   const isAdmin = user?.role === 'admin';
@@ -476,19 +493,26 @@ export default function Dashboard({ user, onStart, onHelp, onCloudCard, onBaseCa
         <div className="flex items-center gap-3">
           {/* 통계 */}
           <div className="hidden lg:flex items-center gap-2">
-            <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-[#060c18] border border-[#0d1520]">
-              <Database size={11} className="text-[#3b82f6]" />
+            <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-emerald-950/20 border border-emerald-900/30">
+              <Database size={11} className="text-emerald-500" />
               <span className="text-gray-500 text-[10px] font-bold">정제 누적</span>
               <span className="text-white text-[11px] font-black">{totalRows.toLocaleString()}</span>
               <span className="text-gray-600 text-[9px]">건</span>
             </div>
-            <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-[#060c18] border border-[#0d1520]">
-              <FileSpreadsheet size={11} className="text-[#3b82f6]" />
+            <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-emerald-950/20 border border-emerald-900/30">
+              <FileSpreadsheet size={11} className="text-emerald-500" />
               <span className="text-gray-500 text-[10px] font-bold">정제 파일</span>
               <span className="text-white text-[11px] font-black">{totalFiles.toLocaleString()}</span>
               <span className="text-gray-600 text-[9px]">개</span>
             </div>
           </div>
+          <button
+            onClick={onOpenIntro}
+            className="flex items-center gap-2 px-4 py-2 bg-[#0a1520] hover:bg-[#0c2438] text-cyan-300 font-extrabold rounded-xl text-sm border border-cyan-500/40 hover:border-cyan-400 transition-all shadow-[0_0_20px_rgba(6,182,212,0.2)] mr-1"
+          >
+            <Zap size={14} className="text-emerald-400" />
+            3D 인트로 감상
+          </button>
           <button
             onClick={() => onStart(1)}
             className="flex items-center gap-2 px-4 py-2 bg-emerald-400 text-black font-extrabold rounded-xl text-sm hover:bg-emerald-300 transition-all shadow-[0_0_20px_rgba(52,211,153,0.14)]"
@@ -499,7 +523,7 @@ export default function Dashboard({ user, onStart, onHelp, onCloudCard, onBaseCa
           </button>
           <button
             onClick={() => window.open('/manual.html', '_blank')}
-            className="w-8 h-8 rounded-full bg-[#060c18] border border-[#3b82f6]/50 text-[#3b82f6] font-black text-sm hover:bg-[#3b82f6]/20 transition-all flex items-center justify-center"
+            className="w-8 h-8 rounded-full bg-emerald-950/30 border border-emerald-500/30 text-emerald-400 font-black text-sm hover:bg-emerald-500/15 transition-all flex items-center justify-center"
             title="사용설명서"
           >
             ?
@@ -527,9 +551,13 @@ export default function Dashboard({ user, onStart, onHelp, onCloudCard, onBaseCa
 
         {/* 지자체 현황 */}
         {loading ? (
-          <div className="flex flex-col items-center justify-center h-48 gap-3 text-gray-500">
-            <Loader2 size={22} className="animate-spin text-[#3b82f6]" />
-            <span className="text-xs">지자체 현황 불러오는 중...</span>
+          <div>
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-sm font-black text-gray-600">지자체 현황</h2>
+            </div>
+            <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-7 2xl:grid-cols-8 gap-2">
+              {Array.from({ length: 12 }).map((_, i) => <SkeletonCityCard key={i} />)}
+            </div>
           </div>
         ) : cityItems.length > 0 ? (
           <div>
@@ -538,7 +566,7 @@ export default function Dashboard({ user, onStart, onHelp, onCloudCard, onBaseCa
               <div className="flex items-center gap-4 text-xs text-gray-600">
                 <h2 className="text-sm font-black text-gray-300">지자체 현황</h2>
                 <span className="flex items-center gap-1.5">
-                  <Truck size={11} className="text-[#3b82f6]" />
+                  <Truck size={11} className="text-emerald-500" />
                   배송명단 <span className="text-white font-bold">{cloudCount}</span>개
                 </span>
                 <span className="flex items-center gap-1.5">

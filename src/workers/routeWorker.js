@@ -322,6 +322,232 @@ const partitionContiguous = (orderedUnits, orderedDrivers) => {
   return unitToDriver;
 };
 
+// ── 힐베르트 공간충전곡선 (2D → 1D, 지역성 보존 정렬용) ──────────────────
+const hilbertXY2d = (n, inX, inY) => {
+  let d = 0;
+  let x = Math.floor(inX);
+  let y = Math.floor(inY);
+  for (let s = Math.floor(n / 2); s > 0; s = Math.floor(s / 2)) {
+    const rx = (x & s) > 0 ? 1 : 0;
+    const ry = (y & s) > 0 ? 1 : 0;
+    d += s * s * ((3 * rx) ^ ry);
+    if (ry === 0) {
+      if (rx === 1) { x = s - 1 - x; y = s - 1 - y; }
+      const tmp = x; x = y; y = tmp;
+    }
+  }
+  return d;
+};
+
+const getHilbertIndex = (lat, lng, bounds, order = 12) => {
+  const n = 1 << order; // 4096
+  const { minLat, maxLat, minLng, maxLng } = bounds;
+  const latSpan = maxLat - minLat || 1e-6;
+  const lngSpan = maxLng - minLng || 1e-6;
+  const xi = Math.min(n - 1, Math.max(0, Math.floor((lng - minLng) / lngSpan * n)));
+  const yi = Math.min(n - 1, Math.max(0, Math.floor((lat - minLat) / latSpan * n)));
+  return hilbertXY2d(n, xi, yi);
+};
+
+const orderUnitsByHilbert = (units) => {
+  if (units.length <= 1) return units;
+  const lats = units.map(u => u.lat);
+  const lngs = units.map(u => u.lng);
+  const bounds = {
+    minLat: Math.min(...lats), maxLat: Math.max(...lats),
+    minLng: Math.min(...lngs), maxLng: Math.max(...lngs),
+  };
+  return [...units]
+    .map(u => ({ ...u, _hilbert: getHilbertIndex(u.lat, u.lng, bounds) }))
+    .sort((a, b) => a._hilbert - b._hilbert);
+};
+
+// ── N-seed 보로노이 배분 (seedVoronoi 전략) ───────────────────────────────────
+// 1) 초기 씨앗: 핀 있으면 핀, 없으면 PCA 분할 중심
+// 2) E-step: 각 unit → 최근접 씨앗 (행정동·도로측면 패널티 적용)
+// 3) M-step: 경계 unit 이동으로 부담 균형 보정
+// 4) 씨앗 갱신 (핀 없는 기사만)
+// 5) 수렴 확인 후 BFS 섬 흡수 (최대 10회)
+const computeSeedVoronoi = (units, orderedDrivers, driverPins) => {
+  const k = orderedDrivers.length;
+  if (k === 0 || units.length === 0) return {};
+  if (k === 1) return Object.fromEntries(units.map(u => [u.id, orderedDrivers[0].id]));
+
+  // 목표 부담 (capacity 비례)
+  const totalLoad = units.reduce((s, u) => s + u.load, 0) || 1;
+  const caps = orderedDrivers.map(d => parseFloat(d.capacity) || 100);
+  const totalCap = caps.reduce((s, c) => s + c, 0) || 1;
+  const targetLoads = caps.map(c => totalLoad * c / totalCap);
+
+  // 초기 씨앗: 핀 → 그대로, 핀 없으면 PCA 분할 중심
+  const pcaOrdered = orderUnitsByRoad(units, orderedDrivers.map(d => driverPins[d.id] || null));
+  const pcaAssign = partitionContiguous(pcaOrdered, orderedDrivers);
+  const seeds = orderedDrivers.map((driver, i) => {
+    const pin = driverPins[driver.id];
+    if (pin) return { driverId: driver.id, lat: Number(pin.lat), lng: Number(pin.lng), fixed: true };
+    const pcaUnits = units.filter(u => pcaAssign[u.id] === driver.id);
+    if (!pcaUnits.length) return { driverId: driver.id, lat: units[0].lat, lng: units[0].lng, fixed: false };
+    const tl = pcaUnits.reduce((s, u) => s + u.load, 0) || 1;
+    return {
+      driverId: driver.id,
+      lat: pcaUnits.reduce((s, u) => s + u.lat * u.load, 0) / tl,
+      lng: pcaUnits.reduce((s, u) => s + u.lng * u.load, 0) / tl,
+      fixed: false,
+    };
+  });
+
+  let assign = {};
+  let prevAssignStr = '';
+
+  for (let iter = 0; iter < 15; iter++) {
+    // dominance 계산 (행정동·도로측면 패널티용)
+    const dongDominant = {};
+    const roadDominant = {};
+    units.forEach(u => {
+      const did = assign[u.id];
+      if (!did) return;
+      if (u.dong) {
+        if (!dongDominant[u.dong]) dongDominant[u.dong] = {};
+        dongDominant[u.dong][did] = (dongDominant[u.dong][did] || 0) + u.load;
+      }
+      if (u.roadKey) {
+        if (!roadDominant[u.roadKey]) roadDominant[u.roadKey] = {};
+        roadDominant[u.roadKey][did] = (roadDominant[u.roadKey][did] || 0) + u.load;
+      }
+    });
+    const getDominant = (map, key) => {
+      if (!map[key]) return null;
+      return Object.entries(map[key]).sort((a, b) => b[1] - a[1])[0]?.[0] || null;
+    };
+
+    // E-step: 최근접 씨앗 배정
+    const newAssign = {};
+    units.forEach(u => {
+      let bestId = seeds[0].driverId, bestDist = Infinity;
+      seeds.forEach(seed => {
+        const base = haversine(u.lat, u.lng, seed.lat, seed.lng);
+        let pen = 0;
+        const dongDom = getDominant(dongDominant, u.dong);
+        if (u.dong && dongDom && dongDom !== seed.driverId) pen += base * 0.15;
+        const roadDom = getDominant(roadDominant, u.roadKey);
+        if (u.roadKey && roadDom && roadDom !== seed.driverId) pen += base * 0.10;
+        const dist = base + pen;
+        if (dist < bestDist) { bestDist = dist; bestId = seed.driverId; }
+      });
+      newAssign[u.id] = bestId;
+    });
+
+    // M-step: 경계 unit 이동으로 부담 균형 보정 (최대 5회 반복)
+    const driverLoads = {};
+    orderedDrivers.forEach(d => { driverLoads[d.id] = 0; });
+    units.forEach(u => {
+      if (newAssign[u.id]) driverLoads[newAssign[u.id]] = (driverLoads[newAssign[u.id]] || 0) + u.load;
+    });
+
+    for (let bal = 0; bal < 5; bal++) {
+      let moved = false;
+      for (let i = 0; i < orderedDrivers.length; i++) {
+        const over = orderedDrivers[i];
+        if ((driverLoads[over.id] || 0) <= targetLoads[i] * 1.05) continue;
+        for (let j = 0; j < orderedDrivers.length; j++) {
+          if (i === j) continue;
+          const under = orderedDrivers[j];
+          if ((driverLoads[under.id] || 0) >= targetLoads[j] * 0.95) continue;
+          const underSeed = seeds.find(s => s.driverId === under.id);
+          const overSeed = seeds.find(s => s.driverId === over.id);
+          if (!underSeed || !overSeed) continue;
+          const candidates = units
+            .filter(u => newAssign[u.id] === over.id && !u.mandatory)
+            .map(u => ({ u, du: haversine(u.lat, u.lng, underSeed.lat, underSeed.lng), do: haversine(u.lat, u.lng, overSeed.lat, overSeed.lng) }))
+            .filter(c => c.du < c.do * 1.5)
+            .sort((a, b) => a.du - b.du);
+          for (const { u, u: unit } of candidates) {
+            const ml = unit.load;
+            const no = (driverLoads[over.id] || 0) - ml;
+            const nu = (driverLoads[under.id] || 0) + ml;
+            if (no >= targetLoads[i] * 0.85 && nu <= targetLoads[j] * 1.15) {
+              newAssign[unit.id] = under.id;
+              driverLoads[over.id] -= ml;
+              driverLoads[under.id] += ml;
+              moved = true;
+              break;
+            }
+          }
+          if (moved) break;
+        }
+        if (moved) break;
+      }
+      if (!moved) break;
+    }
+
+    assign = newAssign;
+
+    // 씨앗 갱신 (핀 없는 기사만)
+    seeds.forEach((seed, i) => {
+      if (seed.fixed) return;
+      const assigned = units.filter(u => assign[u.id] === seed.driverId);
+      if (!assigned.length) return;
+      const tl = assigned.reduce((s, u) => s + u.load, 0) || 1;
+      seeds[i] = { ...seed, lat: assigned.reduce((s, u) => s + u.lat * u.load, 0) / tl, lng: assigned.reduce((s, u) => s + u.lng * u.load, 0) / tl };
+    });
+
+    const assignStr = JSON.stringify(assign);
+    if (assignStr === prevAssignStr) break;
+    prevAssignStr = assignStr;
+  }
+
+  // BFS 섬 흡수: 고립 컴포넌트 → 인근 최다 기사에게 재배정 (최대 10회)
+  const ADJ = 400;
+  for (let fixIter = 0; fixIter < 10; fixIter++) {
+    let fixed = false;
+    orderedDrivers.forEach(driver => {
+      const dUnits = units.filter(u => assign[u.id] === driver.id);
+      if (dUnits.length <= 1) return;
+      const visited = new Set();
+      const components = [];
+      dUnits.forEach(start => {
+        if (visited.has(start.id)) return;
+        const comp = [];
+        const q = [start];
+        visited.add(start.id);
+        while (q.length) {
+          const cur = q.shift();
+          comp.push(cur);
+          dUnits.forEach(other => {
+            if (!visited.has(other.id) && haversine(cur.lat, cur.lng, other.lat, other.lng) <= ADJ) {
+              visited.add(other.id); q.push(other);
+            }
+          });
+        }
+        components.push(comp);
+      });
+      if (components.length <= 1) return;
+      const mainLoad = c => c.reduce((s, u) => s + u.load, 0);
+      components.sort((a, b) => mainLoad(b) - mainLoad(a));
+      components.slice(1).forEach(comp => {
+        comp.forEach(island => {
+          if (island.mandatory) return;
+          const votes = {};
+          units.forEach(other => {
+            if (other.id === island.id) return;
+            const d = haversine(island.lat, island.lng, other.lat, other.lng);
+            if (d > 500) return;
+            const oid = assign[other.id];
+            if (!oid || oid === driver.id) return;
+            votes[oid] = (votes[oid] || 0) + (500 - d) * other.load;
+          });
+          const best = Object.entries(votes).sort((a, b) => b[1] - a[1])[0]?.[0];
+          if (best) { assign[island.id] = best; fixed = true; }
+        });
+      });
+    });
+    if (!fixed) break;
+  }
+
+  return Object.fromEntries(units.map(u => [u.id, assign[u.id] || orderedDrivers[0].id]));
+};
+
+// ── 통계 계산 ────────────────────────────────────────────────────────────────
 const calculateStats = (records, clusterMap, drivers) => {
   const totalLoad = records.reduce((s, r) => s + getEffectiveLoad(r), 0) || 1;
   const totalQty = records.reduce((s, r) => s + getQty(r), 0);
@@ -345,59 +571,251 @@ const calculateStats = (records, clusterMap, drivers) => {
   return { totalLoad: Math.round(totalLoad * 10) / 10, totalQty, stats, maxAbsDiffPct };
 };
 
-const buildDiagnostics = ({ records, units, orderedUnits, clusterMap, activeDrivers, driverPins }) => {
+// ── qualityScore 계산 (0–100, 높을수록 좋음) ─────────────────────────────
+const calcQualityScore = ({
+  splitUnitCount, totalMandatoryUnits,
+  islandCount, totalDrivers,
+  mixedUnitCount, totalUnits,
+  maxAbsDiffPct,
+  roadSideMixCount, totalRoadUnits,
+  forcedAssignCount, totalRecords,
+}) => {
+  const s = (num, den) => num / Math.max(1, den);
+  const raw = 100
+    - 25 * s(splitUnitCount, totalMandatoryUnits)
+    - 20 * s(islandCount, totalDrivers)
+    - 20 * s(mixedUnitCount, totalUnits)
+    - 15 * (maxAbsDiffPct / 100)
+    - 10 * s(roadSideMixCount, totalRoadUnits)
+    - 10 * s(forcedAssignCount, totalRecords);
+  return Math.round(Math.max(0, Math.min(100, raw)));
+};
+
+// ── 14개 진단 항목 ────────────────────────────────────────────────────────
+const buildDiagnostics = ({ records, units, orderedUnits, clusterMap, activeDrivers, driverPins, strategy = 'pca', forcedAssignCount = 0, coordFailCount = 0 }) => {
   const load = calculateStats(records, clusterMap, activeDrivers);
+
+  // ── 도로 통계 (기존 8개 + 도로측면 순수도) ───────────────────────────────
   const roadMap = {};
   orderedUnits.forEach(unit => {
     const label = unit.roadLabel || '도로명 미확인';
-    if (!roadMap[label]) roadMap[label] = { label, qty: 0, load: 0, count: 0, drivers: new Set() };
+    const roadKey = unit.roadKey || '';
+    if (!roadMap[label]) roadMap[label] = { label, roadKey, qty: 0, load: 0, count: 0, drivers: new Set(), sides: new Set() };
     unit.records.forEach(record => {
       roadMap[label].qty += getQty(record);
       roadMap[label].load += getEffectiveLoad(record);
       roadMap[label].count += 1;
-      if (clusterMap[record.id]) roadMap[label].drivers.add(clusterMap[record.id]);
+      if (clusterMap[record.id]) {
+        roadMap[label].drivers.add(clusterMap[record.id]);
+        roadMap[label].sides.add(unit.roadKey);
+      }
     });
   });
   const roadStats = Object.values(roadMap)
-    .map(r => ({ ...r, load: Math.round(r.load * 10) / 10, driverCount: r.drivers.size, drivers: undefined }))
+    .map(r => ({ ...r, load: Math.round(r.load * 10) / 10, driverCount: r.drivers.size, drivers: undefined, sides: undefined }))
     .sort((a, b) => b.load - a.load)
     .slice(0, 8);
 
   const mixedRoads = roadStats.filter(r => r.driverCount > 1).length;
+
+  // ── 도로측면 순수도 (같은 도로 홀수/짝수 측면이 다른 기사에 배정된 수) ──
+  const roadSideMap = {};
+  orderedUnits.forEach(unit => {
+    if (!unit.roadKey || !unit.roadKey.startsWith('road-side:')) return;
+    const baseRoad = unit.roadKey.replace(/:(?:좌측|우측)\([^)]*\)$/, '');
+    if (!roadSideMap[baseRoad]) roadSideMap[baseRoad] = new Set();
+    unit.records.forEach(r => {
+      if (clusterMap[r.id]) roadSideMap[baseRoad].add(clusterMap[r.id]);
+    });
+  });
+  const roadSideMixCount = Object.values(roadSideMap).filter(s => s.size > 1).length;
+  const totalRoadUnits = Object.keys(roadSideMap).length;
+
+  // ── 배송단위 분리 수 (mandatory 단위가 2기사로 갈라진 것) ─────────────────
+  // splitUnitCount: 아파트/동일주소 단위가 여러 기사로 분리된 수
+  let splitUnitCount = 0;
+  units.forEach(unit => {
+    if (!unit.mandatory) return;
+    const assigned = new Set(unit.recordIds.map(id => clusterMap[id]).filter(Boolean));
+    if (assigned.size > 1) splitUnitCount++;
+  });
+
+  // ── 구역 고립 섬 탐지 (islandCount) ─────────────────────────────────────
+  // 각 기사 구역에서 BFS로 연결 컴포넌트 수 확인, 2개 이상이면 섬 존재
+  const ISLAND_RADIUS = 400; // 400m 이내를 "인접"으로 판단
+  let islandCount = 0;
+  activeDrivers.forEach(driver => {
+    const driverRecs = records.filter(r => clusterMap[r.id] === driver.id && r._lat && r._lng);
+    if (driverRecs.length <= 1) return;
+    const visited = new Set();
+    let components = 0;
+    driverRecs.forEach(rec => {
+      if (visited.has(rec.id)) return;
+      components++;
+      const queue = [rec];
+      visited.add(rec.id);
+      while (queue.length) {
+        const cur = queue.shift();
+        driverRecs.forEach(other => {
+          if (visited.has(other.id)) return;
+          if (haversine(cur._lat, cur._lng, other._lat, other._lng) <= ISLAND_RADIUS) {
+            visited.add(other.id);
+            queue.push(other);
+          }
+        });
+      }
+    });
+    if (components > 1) islandCount++;
+  });
+
+  // ── 섬 혼재 단위 (mixedUnitCount): 인접 기사 구역에 고립된 배송단위 ──────
+  // splitUnitCount와 구분: 단위 자체는 분리 안 됐지만 지리적으로 다른 기사 구역에 섬처럼 있는 것
+  const MIXED_RADIUS = 200;
+  let mixedUnitCount = 0;
+  orderedUnits.forEach(unit => {
+    const unitDriver = clusterMap[unit.recordIds[0]];
+    if (!unitDriver || !unit.lat || !unit.lng) return;
+    let sameCount = 0, otherCount = 0;
+    orderedUnits.forEach(other => {
+      if (other.id === unit.id) return;
+      const otherDriver = clusterMap[other.recordIds[0]];
+      if (!otherDriver || !other.lat || !other.lng) return;
+      if (haversine(unit.lat, unit.lng, other.lat, other.lng) > MIXED_RADIUS) return;
+      if (otherDriver === unitDriver) sameCount++;
+      else otherCount++;
+    });
+    if (otherCount > sameCount && otherCount >= 2) mixedUnitCount++;
+  });
+
+  // ── 행정동 순수도 (dongPurity) ────────────────────────────────────────────
+  const dongMap = {};
+  records.forEach(r => {
+    const dong = getDong(r);
+    if (!dong) return;
+    if (!dongMap[dong]) dongMap[dong] = new Set();
+    if (clusterMap[r.id]) dongMap[dong].add(clusterMap[r.id]);
+  });
+  const dongPurity = {
+    total: Object.keys(dongMap).length,
+    pure: Object.values(dongMap).filter(s => s.size === 1).length,
+    mixed: Object.values(dongMap).filter(s => s.size > 1).length,
+    matrix: Object.entries(dongMap).map(([dong, drivers]) => ({ dong, driverCount: drivers.size })).sort((a, b) => b.driverCount - a.driverCount).slice(0, 10),
+  };
+
+  // ── 아파트/단독 비율 ──────────────────────────────────────────────────────
+  const aptRatio = {};
+  activeDrivers.forEach(d => { aptRatio[d.id] = { apt: 0, total: 0, name: d.name }; });
+  records.forEach(r => {
+    const did = clusterMap[r.id];
+    if (!did || !aptRatio[did]) return;
+    aptRatio[did].total++;
+    if (isApartmentLike(r)) aptRatio[did].apt++;
+  });
+  const aptRatioStats = Object.values(aptRatio).map(s => ({
+    name: s.name,
+    aptPct: s.total > 0 ? Math.round(s.apt / s.total * 100) : 0,
+  }));
+
+  // ── 경계 유닛 수 (boundaryUnitCount) ─────────────────────────────────────
+  const BOUNDARY_RADIUS = 150;
+  let boundaryUnitCount = 0;
+  orderedUnits.forEach(unit => {
+    const unitDriver = clusterMap[unit.recordIds[0]];
+    if (!unitDriver || !unit.lat || !unit.lng) return;
+    const hasBoundaryNeighbor = orderedUnits.some(other => {
+      if (other.id === unit.id) return false;
+      const otherDriver = clusterMap[other.recordIds[0]];
+      return otherDriver && otherDriver !== unitDriver && other.lat && other.lng
+        && haversine(unit.lat, unit.lng, other.lat, other.lng) <= BOUNDARY_RADIUS;
+    });
+    if (hasBoundaryNeighbor) boundaryUnitCount++;
+  });
+
+  // ── 대형단지 경계 여부 ────────────────────────────────────────────────────
+  const largeCplexOnBoundary = [];
+  const aptGroups = {};
+  units.forEach(unit => {
+    if (!unit.key.startsWith('apt:') && !unit.key.startsWith('apt-road:') && !unit.key.startsWith('apt-building:')) return;
+    if (!aptGroups[unit.key]) aptGroups[unit.key] = { key: unit.key, qty: 0, drivers: new Set() };
+    aptGroups[unit.key].qty += unit.qty;
+    const did = clusterMap[unit.recordIds[0]];
+    if (did) aptGroups[unit.key].drivers.add(did);
+  });
+  Object.values(aptGroups).forEach(g => {
+    if (g.qty >= 50 && g.drivers.size > 1) largeCplexOnBoundary.push({ key: g.key, qty: g.qty, driverCount: g.drivers.size });
+  });
+
+  // ── qualityScore ──────────────────────────────────────────────────────────
+  const totalMandatoryUnits = units.filter(u => u.mandatory).length;
+  const totalUnits = units.length;
+  const totalRecords = records.length;
+  const qualityScore = calcQualityScore({
+    splitUnitCount, totalMandatoryUnits,
+    islandCount, totalDrivers: activeDrivers.length,
+    mixedUnitCount, totalUnits,
+    maxAbsDiffPct: load.maxAbsDiffPct,
+    roadSideMixCount, totalRoadUnits,
+    forcedAssignCount, totalRecords,
+  });
+
+  // ── 이슈 메시지 ──────────────────────────────────────────────────────────
   const hasPins = activeDrivers.every(d => driverPins?.[d.id]);
   const issues = [];
-  if (load.maxAbsDiffPct > 25) issues.push(`기사별 유효부담 편차가 최대 ${load.maxAbsDiffPct}%입니다. 대형 단지나 긴 도로 한쪽이 한 기사에게 몰렸는지 확인하세요.`);
-  if (mixedRoads > 0) issues.push(`${mixedRoads}개 주요 도로가 여러 기사에게 나뉘었습니다. 큰길 경계가 맞는지 지도에서 확인하세요.`);
-  if (!hasPins && activeDrivers.length >= 2) issues.push('기사 핀이 없어서 도로 연속성과 좌표 분포 기준으로 자동 분할했습니다. 큰길/하천 기준으로 핀을 꽂으면 경계가 더 명확해집니다.');
+  if (splitUnitCount > 0) issues.push(`아파트/동일주소 배송단위 ${splitUnitCount}개가 여러 기사로 분리됐습니다. 대형단지 분할 또는 수동 조정이 필요합니다.`);
+  if (islandCount > 0) issues.push(`${islandCount}명의 기사 구역이 지리적으로 분리됐습니다(섬 존재). 브러시로 경계를 정리하세요.`);
+  if (load.maxAbsDiffPct > 25) issues.push(`기사별 유효부담 편차가 최대 ${load.maxAbsDiffPct}%입니다.`);
+  if (mixedRoads > 0) issues.push(`${mixedRoads}개 주요 도로가 여러 기사에게 나뉘었습니다.`);
+  if (roadSideMixCount > 0) issues.push(`${roadSideMixCount}개 도로의 홀수/짝수 측면이 다른 기사에게 배정됐습니다.`);
+  if (!hasPins && activeDrivers.length >= 2) issues.push('핀이 없어 도로 연속성 기준으로 자동 분할했습니다. 핀을 꽂으면 경계가 더 명확해집니다.');
+  if (largeCplexOnBoundary.length > 0) issues.push(`대형단지 ${largeCplexOnBoundary.length}개가 구역 경계에 걸쳐있습니다.`);
 
   return {
+    strategy,
+    qualityScore,
     load,
     roadStats,
-    unitCount: units.length,
-    mandatoryUnitCount: units.filter(u => u.mandatory).length,
+    splitUnitCount,
+    mixedUnitCount,
+    islandCount,
+    roadSideMixCount,
+    boundaryUnitCount,
+    forcedAssignCount,
+    coordFailCount,
+    dongPurity,
+    aptRatioStats,
+    largeCplexOnBoundary,
+    unitCount: totalUnits,
+    mandatoryUnitCount: totalMandatoryUnits,
     hasPins,
     issues,
     guide: [
-      '아파트와 동일 주소는 먼저 하나의 배정 단위로 묶었습니다.',
-      '대로/로는 본번 홀수=좌측, 짝수=우측 기준으로 같은 도로 측면이 이어지도록 정렬했습니다.',
-      '기사별 capacity 비율에 맞춰 연속 구간을 자르기 때문에 구역이 섞이는 현상을 줄이고 유효부담을 맞춥니다.',
+      '아파트와 동일 주소는 하나의 배정 단위로 묶어 처리했습니다.',
+      '도로 본번 홀수=좌측, 짝수=우측 기준으로 같은 측면이 이어지도록 정렬했습니다.',
+      'capacity 비율에 맞춰 연속 구간을 분할하여 유효부담을 맞춥니다.',
     ],
   };
 };
 
-const computeAutoSplit = ({ target, noCoordRecs = [], allRecords, activeDrivers, driverPins = {} }) => {
-  const assignableRecords = target.filter(r => r._lat && r._lng && r.좌표검증상태 !== '지자체벗어남');
-  const units = buildUnits(assignableRecords);
-  const orderedDrivers = getDriverOrder(activeDrivers, driverPins);
-  const orderedUnits = orderUnitsByRoad(units, orderedDrivers.map(d => driverPins[d.id] || null));
-  const unitAssignments = partitionContiguous(orderedUnits, orderedDrivers);
+// ── 전략별 단위 정렬 ─────────────────────────────────────────────────────────
+const VALID_STRATEGIES = new Set(['pca', 'hilbert', 'bestOfPcaHilbert', 'seedVoronoi']);
 
-  const clusterMap = {};
-  orderedUnits.forEach(unit => {
-    const driverId = unitAssignments[unit.id];
-    unit.recordIds.forEach(id => { clusterMap[id] = driverId; });
-  });
+const getOrderedUnits = (units, orderedDrivers, driverPins, strategy) => {
+  const safeStrategy = VALID_STRATEGIES.has(strategy) ? strategy : 'pca';
+  const pinList = orderedDrivers.map(d => driverPins[d.id] || null);
 
+  if (safeStrategy === 'hilbert') {
+    return orderUnitsByHilbert(units);
+  }
+  // pca, bestOfPcaHilbert, seedVoronoi(미구현) 모두 기본 pca 정렬 반환
+  // bestOfPcaHilbert는 computeAutoSplit에서 두 전략을 비교해 선택
+  return orderUnitsByRoad(units, pinList);
+};
+
+// ── 후처리 공통 로직 (좌표 없는 건, 미배정 강제배정) ────────────────────────
+const applyFallbackAssignments = (assignableRecords, noCoordRecs, allSource, clusterMap, activeDrivers) => {
+  let forcedCount = 0;
+
+  // 행정동 투표 테이블 구성
   const dongDriverCount = {};
   assignableRecords.forEach(record => {
     const dong = getDong(record);
@@ -407,47 +825,126 @@ const computeAutoSplit = ({ target, noCoordRecs = [], allRecords, activeDrivers,
     dongDriverCount[dong][driverId] = (dongDriverCount[dong][driverId] || 0) + 1;
   });
 
+  // 좌표 없는 건 → 행정동 최다배정 기사
   noCoordRecs.forEach(record => {
     if (record.좌표검증상태 === '지자체벗어남') return;
     const dongVotes = dongDriverCount[getDong(record)];
     const driverId = dongVotes
       ? Object.entries(dongVotes).sort((a, b) => b[1] - a[1])[0]?.[0]
       : null;
-    if (driverId) clusterMap[record.id] = driverId;
+    if (driverId) { clusterMap[record.id] = driverId; forcedCount++; }
   });
 
-  const allSource = allRecords || assignableRecords;
+  // 좌표 있지만 미배정 → 가장 가까운 기사 클러스터 중심
   allSource.forEach(record => {
     if (record.좌표검증상태 === '지자체벗어남' || clusterMap[record.id]) return;
     if (record._lat && record._lng) {
-      let bestDriver = null;
-      let bestDist = Infinity;
-      orderedDrivers.forEach(driver => {
-        const driverRecords = assignableRecords.filter(r => clusterMap[r.id] === driver.id);
-        if (!driverRecords.length) return;
-        const lat = driverRecords.reduce((s, r) => s + r._lat, 0) / driverRecords.length;
-        const lng = driverRecords.reduce((s, r) => s + r._lng, 0) / driverRecords.length;
+      let bestDriver = null, bestDist = Infinity;
+      activeDrivers.forEach(driver => {
+        const driverRecs = assignableRecords.filter(r => clusterMap[r.id] === driver.id);
+        if (!driverRecs.length) return;
+        const lat = driverRecs.reduce((s, r) => s + r._lat, 0) / driverRecs.length;
+        const lng = driverRecs.reduce((s, r) => s + r._lng, 0) / driverRecs.length;
         const dist = haversine(record._lat, record._lng, lat, lng);
         if (dist < bestDist) { bestDist = dist; bestDriver = driver.id; }
       });
-      if (bestDriver) clusterMap[record.id] = bestDriver;
+      if (bestDriver) { clusterMap[record.id] = bestDriver; forcedCount++; }
     }
   });
 
+  // R-A: 완전 미배정 → 유효부담 최소 기사 강제 배정
   const currentLoads = {};
-  activeDrivers.forEach(driver => { currentLoads[driver.id] = 0; });
-  allSource.forEach(record => {
-    const driverId = clusterMap[record.id];
-    if (driverId) currentLoads[driverId] = (currentLoads[driverId] || 0) + getEffectiveLoad(record);
+  activeDrivers.forEach(d => { currentLoads[d.id] = 0; });
+  allSource.forEach(r => {
+    const did = clusterMap[r.id];
+    if (did) currentLoads[did] = (currentLoads[did] || 0) + getEffectiveLoad(r);
   });
-
   allSource.forEach(record => {
     if (record.좌표검증상태 === '지자체벗어남' || clusterMap[record.id]) return;
     const driver = [...activeDrivers].sort((a, b) => (currentLoads[a.id] || 0) - (currentLoads[b.id] || 0))[0];
     if (!driver) return;
     clusterMap[record.id] = driver.id;
     currentLoads[driver.id] = (currentLoads[driver.id] || 0) + getEffectiveLoad(record);
+    forcedCount++;
   });
+
+  return forcedCount;
+};
+
+// ── 핵심 배분 함수 ────────────────────────────────────────────────────────────
+const computeAutoSplit = ({ target, noCoordRecs = [], allRecords, activeDrivers, driverPins = {}, strategy = 'pca' }) => {
+  const safeStrategy = VALID_STRATEGIES.has(strategy) ? strategy : 'pca';
+  const assignableRecords = target.filter(r => r._lat && r._lng && r.좌표검증상태 !== '지자체벗어남');
+  const coordFailCount = target.length - assignableRecords.length + noCoordRecs.filter(r => r.좌표검증상태 === '지자체벗어남').length;
+
+  // 절대 원칙: 입력 단위는 항상 buildUnits() 출력
+  const units = buildUnits(assignableRecords);
+  const orderedDrivers = getDriverOrder(activeDrivers, driverPins);
+  const allSource = allRecords || assignableRecords;
+
+  const runStrategy = (strat) => {
+    const ordered = getOrderedUnits(units, orderedDrivers, driverPins, strat);
+    const unitAssignments = partitionContiguous(ordered, orderedDrivers);
+    const cm = {};
+    ordered.forEach(unit => {
+      const driverId = unitAssignments[unit.id];
+      unit.recordIds.forEach(id => { cm[id] = driverId; });
+    });
+    return { cm, ordered };
+  };
+
+  let chosenStrategy = safeStrategy;
+  let clusterMap, orderedUnits;
+
+  if (safeStrategy === 'bestOfPcaHilbert') {
+    // 두 전략 모두 실행 후 qualityScore 비교 — 에릭: 이 전략일 때만 두 번 계산
+    const pca = runStrategy('pca');
+    const hil = runStrategy('hilbert');
+
+    const tempMapPca = { ...pca.cm };
+    const tempMapHil = { ...hil.cm };
+    applyFallbackAssignments(assignableRecords, noCoordRecs, allSource, tempMapPca, activeDrivers);
+    applyFallbackAssignments(assignableRecords, noCoordRecs, allSource, tempMapHil, activeDrivers);
+
+    const statsPca = calculateStats(allSource.filter(r => tempMapPca[r.id]), tempMapPca, activeDrivers);
+    const statsHil = calculateStats(allSource.filter(r => tempMapHil[r.id]), tempMapHil, activeDrivers);
+
+    // 간이 비교: 부담 편차 기준 (diagnostics 없이 빠르게)
+    if (statsHil.maxAbsDiffPct < statsPca.maxAbsDiffPct) {
+      chosenStrategy = 'hilbert';
+      clusterMap = pca.cm; // 아직 fallback 미적용 상태 — 아래에서 다시 적용
+      orderedUnits = hil.ordered;
+      // hilbert 결과로 교체
+      Object.keys(clusterMap).forEach(k => delete clusterMap[k]);
+      hil.ordered.forEach(unit => {
+        const did = partitionContiguous(hil.ordered, orderedDrivers)[unit.id];
+        if (did) unit.recordIds.forEach(id => { clusterMap[id] = did; });
+      });
+      // 재실행이 중복되므로 hil.cm 사용
+      Object.assign(clusterMap, hil.cm);
+      orderedUnits = hil.ordered;
+    } else {
+      chosenStrategy = 'pca';
+      clusterMap = pca.cm;
+      orderedUnits = pca.ordered;
+    }
+  } else if (safeStrategy === 'seedVoronoi') {
+    const voronoiAssign = computeSeedVoronoi(units, orderedDrivers, driverPins);
+    clusterMap = {};
+    units.forEach(unit => {
+      const driverId = voronoiAssign[unit.id] || orderedDrivers[0].id;
+      unit.recordIds.forEach(id => { clusterMap[id] = driverId; });
+    });
+    orderedUnits = units; // 보로노이는 1D 정렬 불필요 — units 그대로 사용
+  } else {
+    const result = runStrategy(safeStrategy);
+    clusterMap = result.cm;
+    orderedUnits = result.ordered;
+  }
+
+  const forcedAssignCount = applyFallbackAssignments(
+    assignableRecords, noCoordRecs, allSource, clusterMap, activeDrivers
+  );
 
   const diagnostics = buildDiagnostics({
     records: allSource.filter(r => clusterMap[r.id]),
@@ -456,6 +953,9 @@ const computeAutoSplit = ({ target, noCoordRecs = [], allRecords, activeDrivers,
     clusterMap,
     activeDrivers,
     driverPins,
+    strategy: chosenStrategy,
+    forcedAssignCount,
+    coordFailCount,
   });
 
   return { clusterMap, diagnostics };

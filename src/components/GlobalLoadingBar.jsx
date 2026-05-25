@@ -34,10 +34,10 @@ export default function GlobalLoadingBar({ state }) {
           <div className="px-9 py-8">
             {/* 아이콘 + 제목 */}
             <div className="flex items-center gap-4 mb-6">
-              <div className={`p-3 rounded-2xl ${done ? 'bg-green-950/50' : 'bg-blue-950/50'}`}>
+              <div className={`p-3 rounded-2xl ${done ? 'bg-green-950/50' : 'bg-emerald-950/50'}`}>
                 {done
                   ? <CheckCircle2 size={26} className="text-green-400" />
-                  : <Database size={26} className={`text-blue-400 ${pct < 100 ? 'animate-pulse' : ''}`} />
+                  : <Database size={26} className={`text-emerald-400 ${pct < 100 ? 'animate-pulse' : ''}`} />
                 }
               </div>
               <div>

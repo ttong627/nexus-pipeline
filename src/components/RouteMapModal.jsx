@@ -15,6 +15,9 @@ const DRIVER_COLORS = [
   '#8b5cf6', '#06b6d4', '#f97316', '#ec4899',
 ];
 
+// DS-14: 배송 예상속도 (정차·엘리베이터·인터폰 포함 도심 평균)
+const SEQUENCE_ESTIMATED_SPEED_KMH = 10;
+
 const haversine = (lat1, lng1, lat2, lng2) => {
   const R = 6371000;
   const dLat = (lat2 - lat1) * Math.PI / 180;
@@ -33,6 +36,39 @@ const parseFloorHo = (addr) => {
   const floor = addr?.match(/(\d+)\s*층/)?.[1] || '0';
   const ho = addr?.match(/(\d+)\s*호/)?.[1] || '0';
   return { floor: parseInt(floor), ho: parseInt(ho) };
+};
+
+// DS-12: 호수에서 층 번호 추론 (양수=지상, 음수=지하, null=추론불가)
+const parseInferredFloor = (text) => {
+  const s = String(text || '');
+  if (!s) return null;
+  // 가/나/다... + digits + 호 → 건물동 표기, skip
+  if (/[가나다라마바사아자차카타파하]\d+호/.test(s)) return null;
+  // 상가 포함 → skip
+  if (/상가/.test(s)) return null;
+  // 지하 prefix → 음수 층
+  if (/지하/.test(s)) {
+    const m = s.match(/지하\s*(\d+)/);
+    return m ? -(parseInt(m[1])) : -1;
+  }
+  // B동이 있으면 B는 건물동 표기 → 지하 오인 금지, 호수 inference로 낙하
+  // B + digits + 호 (동 없음) → 지하
+  if (/B\d+호/.test(s) && !/B\s*동/.test(s)) {
+    const m = s.match(/B(\d)/);
+    return m ? -(parseInt(m[1])) : -1;
+  }
+  // 층 명시
+  const floorMatch = s.match(/(\d+)\s*층/);
+  if (floorMatch) return parseInt(floorMatch[1]);
+  // 호수에서 추론: 동 표기 제거 후 \d+호 추출
+  const stripped = s.replace(/[A-Za-z가-힣]\s*동\s*/g, '').replace(/\d+\s*동\s*/g, '');
+  const hoMatch = stripped.match(/(\d+)\s*호/);
+  if (!hoMatch) return null;
+  const n = hoMatch[1];
+  if (n.length === 3) return parseInt(n[0]);
+  if (n.length === 4) return parseInt(n.slice(0, 2));
+  if (n.length >= 5) return parseInt(n.slice(0, n.length - 2));
+  return null;
 };
 
 const escHtml = (s) => String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
@@ -488,10 +524,17 @@ const sortSequenceUnitRecords = (records) => {
       const dongA = parseAptDong([a._detailAddress, a.detailAddress, a.주소, a.특이사항].filter(Boolean).join(' ')) || 9999;
       const dongB = parseAptDong([b._detailAddress, b.detailAddress, b.주소, b.특이사항].filter(Boolean).join(' ')) || 9999;
       if (dongA !== dongB) return dongA - dongB;
-      const floorA = parseFloorHo([a._detailAddress, a.detailAddress, a.주소].filter(Boolean).join(' '));
-      const floorB = parseFloorHo([b._detailAddress, b.detailAddress, b.주소].filter(Boolean).join(' '));
-      if (floorA.ho !== floorB.ho) return floorA.ho - floorB.ho;
-      return floorA.floor - floorB.floor;
+      // DS-12: 호수에서 층 추론 → 층 오름차순 정렬
+      const addrA = [a._detailAddress, a.detailAddress, a.주소].filter(Boolean).join(' ');
+      const addrB = [b._detailAddress, b.detailAddress, b.주소].filter(Boolean).join(' ');
+      const iFloorA = parseInferredFloor(addrA);
+      const iFloorB = parseInferredFloor(addrB);
+      if (iFloorA !== null && iFloorB !== null && iFloorA !== iFloorB) return iFloorA - iFloorB;
+      // 층 추론 실패 시 기존 parseFloorHo fallback
+      const fA = parseFloorHo(addrA);
+      const fB = parseFloorHo(addrB);
+      if (fA.ho !== fB.ho) return fA.ho - fB.ho;
+      return fA.floor - fB.floor;
     }
     const rA = parseRoadInfo(getSequenceAddress(a));
     const rB = parseRoadInfo(getSequenceAddress(b));
@@ -676,7 +719,8 @@ const twoOptRoads = (roads) => {
   const n = roads.length;
   if (n < 4) return;
   let improved = true;
-  while (improved) {
+  let pass = 0;
+  while (improved && pass++ < 50) {
     improved = false;
     for (let i = 0; i < n - 1; i++) {
       for (let j = i + 2; j < n; j++) {
@@ -686,7 +730,7 @@ const twoOptRoads = (roads) => {
                    + (d ? haversine(c.lat, c.lng, d.lat, d.lng) : 0);
         const newD = haversine(a.lat, a.lng, c.lat, c.lng)
                    + (d ? haversine(b.lat, b.lng, d.lat, d.lng) : 0);
-        if (newD < oldD - 1) { // 1m 이상 개선될 때만 반전
+        if (newD < oldD - 1) {
           roads.splice(i + 1, j - i, ...roads.slice(i + 1, j + 1).reverse());
           improved = true;
         }
@@ -698,29 +742,26 @@ const twoOptRoads = (roads) => {
 // ── 도로 기반 TSP + 2-opt 교차 제거 + 진입 방향 최적화 ─────────────────────
 // ① 도로명 그룹화 → ② 건물번호 오름차순 → ③ 최근접 이웃 초기 순서
 // ④ 2-opt 교차 제거 → ⑤ 각 도로 진입 방향(정/역방향) 최소거리로 선택
-const roadAwareTSP = (points) => {
+const roadAwareTSP = (points, startPoint = null) => {
   if (!points.length) return [];
 
-  const withCoord = points.filter(p => p._lat && p._lng);
-  const noCoord   = points.filter(p => !p._lat || !p._lng);
-  if (!withCoord.length) return [...noCoord];
+  // buildSequenceUnits 1회만 호출 → coordUnits / noCoordUnits 분리
+  const allUnits = buildSequenceUnits(points);
+  const coordUnits = allUnits.filter(u => u.hasCoord).map(u => ({ ...u, group: u.records }));
+  const noCoordUnits = allUnits.filter(u => !u.hasCoord);
 
-  const unitNoCoord = buildSequenceUnits(points).filter(unit => !unit.hasCoord).flatMap(unit => unit.records);
-  const roads = buildSequenceUnits(withCoord)
-    .filter(unit => unit.hasCoord)
-    .map(unit => ({
-      ...unit,
-      group: unit.records,
-    }));
+  if (!coordUnits.length) return noCoordUnits.flatMap(u => u.records);
 
-  if (roads.length === 1) {
-    return [...roads[0].group, ...noCoord, ...unitNoCoord.filter(r => !noCoord.some(n => n.id === r.id))];
+  if (coordUnits.length === 1) {
+    return [...coordUnits[0].group, ...noCoordUnits.flatMap(u => u.records)];
   }
 
-  // ③ 최근접 이웃 초기 순서 (가장 북쪽 도로부터)
-  const rem = [...roads];
-  const startIdx = rem.reduce((mi, r, i) => r.lat > rem[mi].lat ? i : mi, 0);
-  const ordered  = [rem.splice(startIdx, 1)[0]];
+  // ③ 최근접 이웃 초기 순서 (출발점 지정 시 출발점 기준, 없으면 가장 북쪽)
+  const rem = [...coordUnits];
+  const startIdx = startPoint
+    ? rem.reduce((mi, r, i) => haversine(startPoint.lat, startPoint.lng, r.lat, r.lng) < haversine(startPoint.lat, startPoint.lng, rem[mi].lat, rem[mi].lng) ? i : mi, 0)
+    : rem.reduce((mi, r, i) => r.lat > rem[mi].lat ? i : mi, 0);
+  const ordered = [rem.splice(startIdx, 1)[0]];
   while (rem.length) {
     const last = ordered[ordered.length - 1];
     let minD = Infinity, minI = 0;
@@ -734,19 +775,44 @@ const roadAwareTSP = (points) => {
   // ④ 2-opt 교차 제거
   twoOptRoads(ordered);
 
-  // ⑤ 진입 방향 최적화: 이전 exit → 현재 도로 start vs end 중 가까운 쪽 선택
+  // ⑤ 진입 방향 최적화
   const result = [];
   let prevLat = ordered[0].lat, prevLng = ordered[0].lng;
   ordered.forEach(road => {
-    const fwdD = haversine(prevLat, prevLng, road.sLat, road.sLng);
-    const revD = haversine(prevLat, prevLng, road.eLat, road.eLng);
+    const fwdD = road.sLat && road.sLng ? haversine(prevLat, prevLng, road.sLat, road.sLng) : Infinity;
+    const revD = road.eLat && road.eLng ? haversine(prevLat, prevLng, road.eLat, road.eLng) : Infinity;
     const group = revD < fwdD ? [...road.group].reverse() : road.group;
     result.push(...group);
     const last = group[group.length - 1];
-    prevLat = last._lat; prevLng = last._lng;
+    prevLat = last._lat || road.lat;
+    prevLng = last._lng || road.lng;
   });
 
-  return [...result, ...noCoord, ...unitNoCoord.filter(r => !noCoord.some(n => n.id === r.id))];
+  // ⑥ 좌표 없는 레코드: 같은 도로/단지 그룹 직후 삽입 (없으면 맨 끝)
+  const resultIds = new Set(result.map(r => r.id));
+  const insertedIds = new Set();
+  noCoordUnits.forEach(noUnit => {
+    const key = noUnit.key;
+    // coordUnits 중 key의 앞부분이 일치하는 그룹 찾기 (같은 도로/아파트)
+    const matchIdx = result.findIndex(r => {
+      const rMeta = getSequenceUnitMeta(r);
+      return rMeta.key === key || rMeta.key.split(':').slice(0, 3).join(':') === key.split(':').slice(0, 3).join(':');
+    });
+    noUnit.records.forEach(r => {
+      if (insertedIds.has(r.id)) return;
+      insertedIds.add(r.id);
+      if (matchIdx !== -1) {
+        // 해당 그룹의 마지막 레코드 바로 뒤 삽입 위치 계산
+        let insertAt = matchIdx + 1;
+        while (insertAt < result.length && getSequenceUnitMeta(result[insertAt]).key === getSequenceUnitMeta(result[matchIdx]).key) insertAt++;
+        result.splice(insertAt, 0, r);
+      } else {
+        result.push(r);
+      }
+    });
+  });
+
+  return result;
 };
 
 const analyzeSequenceQuality = (records, drivers) => {
@@ -810,6 +876,8 @@ const analyzeSequenceQuality = (records, drivers) => {
         count: ordered.length,
         avgDist,
         maxDist,
+        totalDistKm: Math.round(totalDist / 100) / 10,
+        estimatedMinutes: Math.round((totalDist / 1000) / SEQUENCE_ESTIMATED_SPEED_KMH * 60),
         noCoordCount: noCoord.length,
         noRoadCount: noRoad.length,
         jumpCount: jumps.length,
@@ -836,48 +904,73 @@ const analyzeSequenceQuality = (records, drivers) => {
   };
 };
 
-// ── 좌표 기반 TSP + 2-opt 교차 제거 (도로 정보 없을 때 폴백) ────────────────
-const nearestNeighborTSP = (points) => {
+// ── 좌표 기반 그룹 TSP + 2-opt 교차 제거 (도로 정보 없을 때 폴백) ──────────
+// nearestNeighborTSP도 buildSequenceUnits 기반으로 아파트/동일좌표를 묶어 처리
+const nearestNeighborTSP = (points, startPoint = null) => {
   if (!points.length) return [];
-  const rem = [...points];
-  const startIdx = rem.reduce((mi, p, i) => p._lat > rem[mi]._lat ? i : mi, 0);
-  const result = [rem.splice(startIdx, 1)[0]];
+
+  const allUnits = buildSequenceUnits(points);
+  const coordUnits = allUnits.filter(u => u.hasCoord);
+  const noCoordUnits = allUnits.filter(u => !u.hasCoord);
+
+  if (!coordUnits.length) return noCoordUnits.flatMap(u => u.records);
+
+  // 출발점 지정 시 가장 가까운 그룹부터, 없으면 가장 북쪽부터
+  const rem = [...coordUnits];
+  const startIdx = startPoint
+    ? rem.reduce((mi, u, i) => haversine(startPoint.lat, startPoint.lng, u.lat, u.lng) < haversine(startPoint.lat, startPoint.lng, rem[mi].lat, rem[mi].lng) ? i : mi, 0)
+    : rem.reduce((mi, u, i) => u.lat > rem[mi].lat ? i : mi, 0);
+  const ordered = [rem.splice(startIdx, 1)[0]];
   while (rem.length) {
-    const last = result[result.length - 1];
+    const last = ordered[ordered.length - 1];
     let minD = Infinity, minI = 0;
-    rem.forEach((p, i) => {
-      const d = haversine(last._lat, last._lng, p._lat, p._lng);
+    rem.forEach((u, i) => {
+      const d = haversine(last.lat, last.lng, u.lat, u.lng);
       if (d < minD) { minD = d; minI = i; }
     });
-    result.push(rem.splice(minI, 1)[0]);
+    ordered.push(rem.splice(minI, 1)[0]);
   }
-  // 2-opt 교차 제거 (개별 포인트 단위)
-  const n = result.length;
-  let improved = true;
-  while (improved) {
-    improved = false;
-    for (let i = 0; i < n - 1; i++) {
-      for (let j = i + 2; j < n; j++) {
-        const a = result[i], b = result[i + 1], c = result[j];
-        const dd = j + 1 < n ? result[j + 1] : null;
-        const oldD = haversine(a._lat, a._lng, b._lat, b._lng)
-                   + (dd ? haversine(c._lat, c._lng, dd._lat, dd._lng) : 0);
-        const newD = haversine(a._lat, a._lng, c._lat, c._lng)
-                   + (dd ? haversine(b._lat, b._lng, dd._lat, dd._lng) : 0);
-        if (newD < oldD - 1) {
-          result.splice(i + 1, j - i, ...result.slice(i + 1, j + 1).reverse());
-          improved = true;
-        }
-      }
+
+  // 2-opt 교차 제거 (그룹 단위, 상한 50회)
+  twoOptRoads(ordered);
+
+  // 그룹 → 레코드 펼치기 (진입 방향 최적화)
+  const result = [];
+  let prevLat = ordered[0].lat, prevLng = ordered[0].lng;
+  ordered.forEach(unit => {
+    const fwdD = unit.sLat && unit.sLng ? haversine(prevLat, prevLng, unit.sLat, unit.sLng) : Infinity;
+    const revD = unit.eLat && unit.eLng ? haversine(prevLat, prevLng, unit.eLat, unit.eLng) : Infinity;
+    const group = revD < fwdD ? [...unit.records].reverse() : unit.records;
+    result.push(...group);
+    const last = group[group.length - 1];
+    prevLat = last._lat || unit.lat;
+    prevLng = last._lng || unit.lng;
+  });
+
+  // 좌표 없는 그룹: 같은 키 prefix 그룹 직후 삽입, 없으면 맨 끝
+  noCoordUnits.forEach(noUnit => {
+    const matchIdx = result.findIndex(r => {
+      const rMeta = getSequenceUnitMeta(r);
+      return rMeta.key.split(':').slice(0, 3).join(':') === noUnit.key.split(':').slice(0, 3).join(':');
+    });
+    const records = noUnit.records;
+    if (matchIdx !== -1) {
+      let insertAt = matchIdx + 1;
+      while (insertAt < result.length && getSequenceUnitMeta(result[insertAt]).key === getSequenceUnitMeta(result[matchIdx]).key) insertAt++;
+      result.splice(insertAt, 0, ...records);
+    } else {
+      result.push(...records);
     }
-  }
+  });
+
   return result;
 };
 
 export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, initialCloudCity = null, initialCloudMonthId = null, orgDongs = null, initialDrivers: initialDriversProp = null, selectedDongs: selectedDongsProp = null, baseDailyQty: baseDailyQtyProp = 40 }) {
+  const DEFAULT_START_ADDR = '경기도 수원시 장안구 정자천로188번길 39';
   const defaultDrivers = [
-    { id: 'd1', name: '기사1', color: DRIVER_COLORS[0] },
-    { id: 'd2', name: '기사2', color: DRIVER_COLORS[1] },
+    { id: 'd1', name: '기사1', color: DRIVER_COLORS[0], startAddr: DEFAULT_START_ADDR },
+    { id: 'd2', name: '기사2', color: DRIVER_COLORS[1], startAddr: DEFAULT_START_ADDR },
   ];
   const startDrivers = initialDriversProp || defaultDrivers;
 
@@ -893,13 +986,18 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
       _origSeqNo: r.배송순번 || '',
     }))
   );
-  const [selectedDong, setSelectedDong] = useState('전체');
+  // 초기값: gridData 기반 모드에서 고유 동 1개면 자동 선택
+  const [selectedDong, setSelectedDong] = useState(() => {
+    const dongs = [...new Set(gridData.map(r => getRouteDong(r)).filter(Boolean))];
+    return dongs.length >= 1 ? dongs[0] : '전체';
+  });
   const [driverCount, setDriverCount] = useState(startDrivers.length);
   const [overlapCount, setOverlapCount] = useState(0);
   const [isMapReady, setIsMapReady] = useState(false);
   // layoutMode: 'split' | 'map' | 'list' | 'mapfull' | 'listfull'
   const [layoutMode, setLayoutMode] = useState('split');
   const [isSplitting, setIsSplitting] = useState(false);
+  const [autoSplitStrategy, setAutoSplitStrategy] = useState('pca');
   const [routeAnalysis, setRouteAnalysis] = useState(null);
   const [showMapAnalysis, setShowMapAnalysis] = useState(false);
   const [selectedDriverFilter, setSelectedDriverFilter] = useState('all');
@@ -965,6 +1063,9 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
 
   // ── 소속사 기사 추가 피커
   const [showCompanyPicker, setShowCompanyPicker] = useState(false);
+  const [pickerSelectedName, setPickerSelectedName] = useState('');
+  // 모달이 열릴 때 지도에서 선택된 행정동을 캡처 (selectedDong '전체'면 첫 번째 동으로 대체)
+  const [pickerDong, setPickerDong] = useState('');
   const [showDriverSwapModal, setShowDriverSwapModal] = useState(false);
   const [swapFromDriverId, setSwapFromDriverId] = useState('');
   const [swapToDriverId, setSwapToDriverId] = useState('');
@@ -977,6 +1078,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
   const [showSequenceAnalysis, setShowSequenceAnalysis] = useState(false);
   const [sequenceAnalysis, setSequenceAnalysis] = useState(null);
   const [isAdvancedSequencing, setIsAdvancedSequencing] = useState(false);
+  const [autoPinConfirmModal, setAutoPinConfirmModal] = useState(null); // { clusterMap, pendingPins, diagnostics, affectedIds }
   const [dragOverId, setDragOverId] = useState(null);
   const dragSrcIdRef = useRef(null);
 
@@ -1009,8 +1111,18 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
   }, []);
 
   const baseForFilter = isCloudMode ? records : gridData;
-  const dongList = ['전체', ...[...new Set(baseForFilter.map(r => getRouteDong(r)).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'ko'))];
-  const filteredRecords = selectedDong === '전체' ? records : records.filter(r => getRouteDong(r) === selectedDong);
+  const dongList = [...new Set(baseForFilter.map(r => getRouteDong(r)).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'ko'));
+  // 행정동별 실제 레코드 건수 (select option 라벨에 표시)
+  const dongCounts = useMemo(() => {
+    const counts = {};
+    baseForFilter.forEach(r => {
+      const d = getRouteDong(r);
+      if (d) counts[d] = (counts[d] || 0) + 1;
+    });
+    return counts;
+  }, [baseForFilter]);
+  // '전체' 옵션 제거 — selectedDong이 비어있거나 '전체'면 전체 표시 (초기 로딩 과도기용)
+  const filteredRecords = (!selectedDong || selectedDong === '전체') ? records : records.filter(r => getRouteDong(r) === selectedDong);
   const [listFilterGubun, setListFilterGubun] = useState('');
   const displayRecords = (() => {
     let base = selectedDriverFilter === 'all' ? filteredRecords
@@ -1080,28 +1192,40 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
     return groups;
   }, [aptRecords]);
 
-  // ── 현재 행정동의 주기사 (가장 많은 레코드를 가진 기사 ID)
-  const dongPrimaryDriverId = useMemo(() => {
-    if (selectedDong === '전체') return null;
-    const votes = {};
-    records.filter(r => getRouteDong(r) === selectedDong && r._driverId)
-      .forEach(r => { votes[r._driverId] = (votes[r._driverId] || 0) + 1; });
-    return Object.entries(votes).sort((a, b) => b[1] - a[1])[0]?.[0] || null;
-  }, [records, selectedDong]);
-
-  // ── "+추가" 피커에 표시할 소속사 기사 목록 (세션에 없는 기사 + 현재 dong 주기사 제외)
+  // ── "+추가" 피커: 현재 행정동 기반 제외 (배정된 기사를 빼고 나머지 표시)
+  // 행정동 선택 시: 해당 동에 레코드가 배정된 기사 제외 → 다른 동 담당 기사는 표시
+  // 행정동 미선택('전체') 또는 배정 0건: 세션에 없는 기사만 표시 (fallback)
   const availableCompanyDrivers = useMemo(() => {
     if (!initialDriversProp?.length) return [];
+
+    const activeDong = selectedDong && selectedDong !== '전체' ? selectedDong : null;
+
+    if (activeDong) {
+      // 현재 행정동에 레코드가 배정된 기사 ID 수집
+      const dongDriverIds = new Set(
+        records
+          .filter(r => getRouteDong(r) === activeDong && r._driverId)
+          .map(r => r._driverId)
+      );
+      if (dongDriverIds.size > 0) {
+        // 해당 기사 이름 → 제외
+        const dongDriverNames = new Set(
+          drivers.filter(d => dongDriverIds.has(d.id)).map(d => (d.name || '').trim())
+        );
+        return initialDriversProp.filter(d => {
+          if (d.isExternal) return false;
+          return !dongDriverNames.has((d.name || '').trim());
+        });
+      }
+    }
+
+    // fallback: 배정 없거나 전체 보기 → 세션에 없는 기사
     const activeNames = new Set(drivers.filter(d => !d.isExternal).map(d => (d.name || '').trim()));
-    const primaryName = drivers.find(d => d.id === dongPrimaryDriverId)?.name?.trim();
     return initialDriversProp.filter(d => {
       if (d.isExternal) return false;
-      const name = (d.name || '').trim();
-      if (activeNames.has(name)) return false;         // 이미 세션에 있음
-      if (primaryName && name === primaryName) return false; // 현재 dong 주기사
-      return true;
+      return !activeNames.has((d.name || '').trim());
     });
-  }, [initialDriversProp, drivers, dongPrimaryDriverId]);
+  }, [initialDriversProp, drivers, records, selectedDong]);
 
   // ── 50포↑ 임대 대형 단지 목록 (좌측 패널 패널에 표시)
   const largeAptComplexes = useMemo(() => {
@@ -1297,6 +1421,9 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
           setIsCloudMode(true);
           setCloudCity(initialCloudCity);
           setCloudMonthId(initialCloudMonthId);
+          // 레코드의 고유 행정동이 1개면 자동 선택, 여러 개면 '전체' 유지
+          const loadedDongs = [...new Set(loaded.map(r => getRouteDong(r)).filter(Boolean))];
+          if (loadedDongs.length === 1) setSelectedDong(loadedDongs[0]);
         }
       } catch (e) {
         console.error('클라우드 자동 로드 실패:', e);
@@ -1436,7 +1563,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
             city: cloudCity, monthId: cloudMonthId,
             savedAt: serverTimestamp(),
             savedBy: auth.currentUser?.email || '',
-            drivers: d.map(dr => ({ id: dr.id, name: dr.name, color: dr.color, capacity: dr.capacity || 100, deliveryDate: dr.deliveryDate || '' })),
+            drivers: d.map(dr => ({ id: dr.id, name: dr.name, color: dr.color, capacity: dr.capacity || 100, deliveryDate: dr.deliveryDate || '', startAddr: dr.startAddr || '', startLat: dr.startLat || null, startLng: dr.startLng || null })),
             status: 'draft',
             totalRecords: r.length,
             assignedCount: r.filter(rec => rec._driverId).length,
@@ -1626,6 +1753,26 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
       setShowMapAnalysis(true);
       // 행정동 필터 밖의 수동 배정은 자동 배정이 덮어쓰지 않는다.
       const affectedIds = new Set(filteredRecords.map(r => r.id));
+
+      // ── 자동 핀 생성: 핀 없는 기사에 대해 배정 구역 무게중심을 핀으로 등록
+      const noPinDrivers = activeDrivers.filter(d => !driverPins[d.id]);
+      if (noPinDrivers.length > 0) {
+        const pendingPins = {};
+        noPinDrivers.forEach(d => {
+          const assigned = target.filter(r => clusterMap[r.id] === d.id && r._lat && r._lng);
+          if (!assigned.length) return;
+          const lat = assigned.reduce((s, r) => s + r._lat, 0) / assigned.length;
+          const lng = assigned.reduce((s, r) => s + r._lng, 0) / assigned.length;
+          pendingPins[d.id] = { lat, lng };
+        });
+        if (Object.keys(pendingPins).length > 0) {
+          setAutoPinConfirmModal({ clusterMap, pendingPins, diagnostics, affectedIds: [...affectedIds] });
+          setIsSplitting(false);
+          return; // 확인 모달에서 최종 적용
+        }
+      }
+
+      // 모든 기사에 이미 핀 있음 → 기존 흐름
       setRecords(prev => prev.map(r => affectedIds.has(r.id)
         ? { ...r, _driverId: clusterMap[r.id] || null }
         : r
@@ -1634,7 +1781,9 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
         const balanceMsg = diagnostics?.load?.maxAbsDiffPct !== undefined
           ? `최대 편차 ${diagnostics.load.maxAbsDiffPct}%`
           : '분석 완료';
-        showToast('success', `자동 배정 완료 — ${balanceMsg}. 분석 안내를 확인하세요.`, 5000);
+        const qScore = diagnostics?.qualityScore !== undefined ? ` · 품질 ${diagnostics.qualityScore}점` : '';
+        const stratLabel = { pca: 'PCA', hilbert: '힐베르트', bestOfPcaHilbert: '최적선택', seedVoronoi: 'N-seed보로노이' }[diagnostics?.strategy || 'pca'] || 'PCA';
+        showToast('success', `자동 배정 완료 [${stratLabel}] — ${balanceMsg}${qScore}. 분석 안내를 확인하세요.`, 5000);
       }, 500);
       setIsSplitting(false);
     };
@@ -1647,8 +1796,9 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
       allRecords: filteredRecords, // R-I, R-E 후처리도 현재 자동 배정 범위만 적용
       activeDrivers,
       driverPins,
+      strategy: autoSplitStrategy,
     });
-  }, [filteredRecords, drivers, driverCount, driverPins, showToast, isAssignmentLocked]);
+  }, [filteredRecords, drivers, driverCount, driverPins, showToast, isAssignmentLocked, autoSplitStrategy]);
 
   // ── 핀 DOM 색상 직접 업데이트 (React re-render 없이 즉시 시각 반영)
   const updatePinColorDOM = useCallback((recordId, color) => {
@@ -1854,6 +2004,33 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
   }, [drivers, records, selectedDong, swapFromDriverId, swapToDriverId, swapScope, showToast, isAssignmentLocked]);
 
 
+  // ── 기사 출발지 주소 지오코딩 ────────────────────────────────────────
+  const handleGeocodeStartAddr = useCallback(async (driverId, addr) => {
+    if (!addr?.trim() || !KAKAO_REST_KEY) return;
+    try {
+      const res = await fetch(
+        `https://dapi.kakao.com/v2/local/search/address.json?query=${encodeURIComponent(addr.trim())}&size=1`,
+        { headers: { Authorization: `KakaoAK ${KAKAO_REST_KEY}` } }
+      );
+      if (!res.ok) return;
+      const data = await res.json();
+      const d = data.documents?.[0];
+      if (d?.x && d?.y) {
+        setDrivers(prev => prev.map(dr =>
+          dr.id === driverId ? { ...dr, startLat: parseFloat(d.y), startLng: parseFloat(d.x) } : dr
+        ));
+      }
+    } catch { /* ignore */ }
+  }, []);
+
+  // 마운트 시 startAddr 있으면 자동 지오코딩
+  useEffect(() => {
+    if (!KAKAO_REST_KEY) return;
+    drivers.forEach(d => {
+      if (d.startAddr && !d.startLat) handleGeocodeStartAddr(d.id, d.startAddr);
+    });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   // ── 배송순번 자동 정렬 (도로명 기반 — 도로 그룹 → 건물번호 → 뱀 패턴) ───
   // ── 드래그 순번 재배정 ────────────────────────────────────────────────
   const handleSeqDrop = useCallback((dstId) => {
@@ -1877,44 +2054,51 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
   }, [records]);
 
   const handleAutoSequence = useCallback(() => {
-    // pendingPaintRef 잔류분을 먼저 state에 반영 (브러시 보정 직후 클릭 시 배치 유실 방지)
-    const snapshot = new Map(pendingPaintRef.current); // updater 실행 전 복사
+    // pendingPaintRef 잔류분을 먼저 반영 (브러시 보정 직후 클릭 시 배치 유실 방지)
+    const snapshot = new Map(pendingPaintRef.current);
     pendingPaintRef.current.clear();
-    let nextAnalysis = null;
-    setRecords(prev => {
-      const withPaint = snapshot.size > 0
-        ? prev.map(r => snapshot.has(r.id) ? { ...r, _driverId: snapshot.get(r.id) } : r)
-        : prev;
 
-      const updated = [...withPaint];
-      drivers.forEach(driver => {
-        const driverRecs = updated.filter(r => r._driverId === driver.id);
-        if (!driverRecs.length) return;
-        // 도로명 정보 있는 경우 roadAwareTSP, 전부 좌표 없으면 nearestNeighborTSP 폴백
-        const hasAnyAddr = driverRecs.some(r => parseRoadInfo(getSequenceAddress(r)).road || isApartmentLike(r));
-        const ordered = hasAnyAddr ? roadAwareTSP(driverRecs) : nearestNeighborTSP(driverRecs.filter(r => r._lat && r._lng));
-        ordered.forEach((r, i) => {
-          const idx = updated.findIndex(u => u.id === r.id);
-          if (idx !== -1) updated[idx] = { ...updated[idx], 배송순번: String(i + 1) };
-        });
+    // ① 순수 계산 — updater 밖에서 records 직접 읽어 처리
+    const current = snapshot.size > 0
+      ? records.map(r => snapshot.has(r.id) ? { ...r, _driverId: snapshot.get(r.id) } : r)
+      : records;
+
+    const updated = [...current];
+    const strategyUsed = { road: 0, coord: 0 };
+
+    drivers.forEach(driver => {
+      const driverRecs = updated.filter(r => r._driverId === driver.id);
+      if (!driverRecs.length) return;
+      const hasAnyAddr = driverRecs.some(r => parseRoadInfo(getSequenceAddress(r)).road || isApartmentLike(r));
+      if (hasAnyAddr) strategyUsed.road++;
+      else strategyUsed.coord++;
+      const startPoint = (driver.startLat && driver.startLng)
+        ? { lat: driver.startLat, lng: driver.startLng }
+        : null;
+      // nearestNeighborTSP에 전체 레코드를 넘겨야 noCoordUnits 스마트 삽입이 작동한다
+      const ordered = hasAnyAddr ? roadAwareTSP(driverRecs, startPoint) : nearestNeighborTSP(driverRecs, startPoint);
+      ordered.forEach((r, i) => {
+        const idx = updated.findIndex(u => u.id === r.id);
+        if (idx !== -1) updated[idx] = { ...updated[idx], 배송순번: String(i + 1) };
       });
-      nextAnalysis = analyzeSequenceQuality(updated, drivers);
-      return updated;
     });
-    setTimeout(() => {
-      if (nextAnalysis) {
-        setSequenceAnalysis(nextAnalysis);
-        setShowSequenceAnalysis(true);
-        showToast(
-          nextAnalysis.issueCount > 0 ? 'info' : 'success',
-          `도로망 순번 완료 — 예상 정확도 ${nextAnalysis.avgAccuracy || 0}% · 확인 ${nextAnalysis.issueCount.toLocaleString()}건`,
-          5000
-        );
-      } else {
-        showToast('success', '도로망 순번 적용 완료');
-      }
-    }, 0);
-  }, [drivers, showToast]);
+
+    const analysis = analyzeSequenceQuality(updated, drivers);
+    analysis.strategyUsed = strategyUsed;
+
+    // ② state 반영 — 모든 side effect를 updater 밖에서 한 번씩만 실행
+    setRecords(updated);
+    setSequenceAnalysis(analysis);
+    setShowSequenceAnalysis(true);
+    const stratMsg = strategyUsed.road > 0 && strategyUsed.coord > 0
+      ? `도로망 ${strategyUsed.road}명 · 좌표 ${strategyUsed.coord}명`
+      : strategyUsed.coord > 0 ? '좌표 fallback' : '도로망 TSP';
+    showToast(
+      analysis.issueCount > 0 ? 'info' : 'success',
+      `순번 완료 [${stratMsg}] — 정확도 ${analysis.avgAccuracy || 0}% · 확인 ${analysis.issueCount.toLocaleString()}건`,
+      5000
+    );
+  }, [records, drivers, showToast]);
 
   const handleAdvancedAutoSequence = useCallback(async () => {
     if (!isAdminUser) {
@@ -2054,7 +2238,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
         await setDoc(
           doc(db, 'driver_assignments', cloudCity, 'orgs', 'all'),
           {
-            drivers: drivers.map(d => ({ id: d.id, name: d.name, color: d.color, capacity: d.capacity || 100 })),
+            drivers: drivers.map(d => ({ id: d.id, name: d.name, color: d.color, capacity: d.capacity || 100, startAddr: d.startAddr || '' })),
             dongDriverMap,
             updatedAt: serverTimestamp(),
             updatedBy: auth.currentUser?.email || '',
@@ -2256,7 +2440,9 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
       setCloudCity(cloudPickerCity.trim());
       setCloudMonthId(cloudPickerMonth.trim());
       setShowCloudPicker(false);
-      setSelectedDong('전체');
+      // 고유 행정동 1개면 자동 선택, 여러 개면 '전체'
+      const pickerLoadedDongs = [...new Set(loaded.map(r => getRouteDong(r)).filter(Boolean))];
+      setSelectedDong(pickerLoadedDongs.length === 1 ? pickerLoadedDongs[0] : '전체');
       setSelectedDriverFilter('all');
       overlaysRef.current.forEach(o => o.setMap(null));
       overlaysRef.current = [];
@@ -3425,7 +3611,11 @@ ${folders}
             </div>
             <select value={selectedDong} onChange={e => setSelectedDong(e.target.value)}
               className="w-full bg-[#111] text-white text-xs border border-[#2a2a2a] rounded px-2 py-1 focus:outline-none focus:border-[#3b82f6]/40">
-              {dongList.map(d => <option key={d}>{d}</option>)}
+              {dongList.map(d => (
+                <option key={d} value={d}>
+                  {`${d} (${dongCounts[d] || 0}건)`}
+                </option>
+              ))}
             </select>
             <div className="mt-0.5 text-[8px] text-gray-700">{filteredRecords.length}건 · 좌표 {mapRecords.length}건</div>
           </div>
@@ -3465,6 +3655,19 @@ ${folders}
                 className="py-1 bg-[#111] border border-[#2a2a2a] text-gray-500 rounded text-[9px] font-bold hover:text-gray-300 hover:border-[#3a3a3a] flex items-center justify-center gap-1 transition-colors">
                 <Clock size={9} /> 지난달
               </button>
+            </div>
+            <div className="flex items-center gap-1 mt-1">
+              <span className="text-[8px] text-gray-600 shrink-0">배분 전략</span>
+              <select
+                value={autoSplitStrategy}
+                onChange={e => setAutoSplitStrategy(e.target.value)}
+                className="flex-1 h-5 bg-[#111] border border-[#2a2a2a] text-gray-400 rounded text-[8px] px-1 cursor-pointer"
+              >
+                <option value="pca">PCA (기본)</option>
+                <option value="hilbert">힐베르트 곡선</option>
+                <option value="bestOfPcaHilbert">최적 자동선택</option>
+                <option value="seedVoronoi">N-seed 보로노이</option>
+              </select>
             </div>
           </div>
 
@@ -3531,6 +3734,45 @@ ${folders}
                         <span className="text-amber-400 font-black shrink-0">{road.qty}포 · {road.driverCount}기사</span>
                       </button>
                     ))}
+                  </div>
+                )}
+
+                {routeAnalysis?.qualityScore !== undefined && (
+                  <div className="mb-1.5">
+                    <div className="flex items-center justify-between mb-1">
+                      <div className="text-[8px] text-gray-600 font-black tracking-widest">배정 품질</div>
+                      <span className="text-[8px] text-gray-500">
+                        {{ pca: 'PCA', hilbert: '힐베르트', bestOfPcaHilbert: '최적선택', seedVoronoi: '보로노이' }[routeAnalysis?.strategy] || 'PCA'}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2 mb-1">
+                      <div className={`text-[22px] font-black tabular-nums leading-none ${routeAnalysis.qualityScore >= 80 ? 'text-emerald-400' : routeAnalysis.qualityScore >= 60 ? 'text-amber-400' : 'text-red-400'}`}>
+                        {routeAnalysis.qualityScore}
+                      </div>
+                      <div className="flex-1">
+                        <div className="h-1.5 bg-black/40 rounded-full overflow-hidden">
+                          <div
+                            className={`h-full rounded-full ${routeAnalysis.qualityScore >= 80 ? 'bg-emerald-500' : routeAnalysis.qualityScore >= 60 ? 'bg-amber-500' : 'bg-red-500'}`}
+                            style={{ width: `${routeAnalysis.qualityScore}%` }}
+                          />
+                        </div>
+                        <div className="text-[7px] text-gray-600 mt-0.5">점 / 100점</div>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-3 gap-1">
+                      <div className="rounded bg-black/30 border border-gray-800/50 px-1 py-0.5 text-center">
+                        <div className={`text-[9px] font-black tabular-nums ${(routeAnalysis.splitUnitCount || 0) > 0 ? 'text-red-400' : 'text-emerald-400'}`}>{routeAnalysis.splitUnitCount ?? 0}</div>
+                        <div className="text-[7px] text-gray-600">분리단지</div>
+                      </div>
+                      <div className="rounded bg-black/30 border border-gray-800/50 px-1 py-0.5 text-center">
+                        <div className={`text-[9px] font-black tabular-nums ${(routeAnalysis.islandCount || 0) > 0 ? 'text-amber-400' : 'text-emerald-400'}`}>{routeAnalysis.islandCount ?? 0}</div>
+                        <div className="text-[7px] text-gray-600">고립구역</div>
+                      </div>
+                      <div className="rounded bg-black/30 border border-gray-800/50 px-1 py-0.5 text-center">
+                        <div className={`text-[9px] font-black tabular-nums ${(routeAnalysis.mixedUnitCount || 0) > 0 ? 'text-amber-400' : 'text-emerald-400'}`}>{routeAnalysis.mixedUnitCount ?? 0}</div>
+                        <div className="text-[7px] text-gray-600">혼재유닛</div>
+                      </div>
+                    </div>
                   </div>
                 )}
 
@@ -3627,8 +3869,15 @@ ${folders}
               </div>
             </div>
             {showSequenceAnalysis && (
-              <div className="max-h-24 overflow-y-auto pr-1 space-y-1">
-                {(sequenceAnalysis?.driverStats || []).slice(0, 3).map(stat => (
+              <div className="max-h-32 overflow-y-auto pr-1 space-y-1">
+                {sequenceAnalysis?.strategyUsed && (
+                  <div className="text-[7px] text-gray-600 pb-0.5">
+                    {sequenceAnalysis.strategyUsed.road > 0 && <span className="text-violet-400">도로망 {sequenceAnalysis.strategyUsed.road}명</span>}
+                    {sequenceAnalysis.strategyUsed.road > 0 && sequenceAnalysis.strategyUsed.coord > 0 && <span className="mx-1">·</span>}
+                    {sequenceAnalysis.strategyUsed.coord > 0 && <span className="text-amber-400">좌표 fallback {sequenceAnalysis.strategyUsed.coord}명</span>}
+                  </div>
+                )}
+                {(sequenceAnalysis?.driverStats || []).map(stat => (
                   <button
                     key={stat.driverId}
                     onClick={() => {
@@ -3640,16 +3889,21 @@ ${folders}
                     <div className="flex items-center gap-1.5">
                       <span className="w-2 h-2 rounded-full shrink-0" style={{ background: stat.color }} />
                       <span className="text-[9px] text-white font-bold truncate flex-1">{stat.driverName}</span>
-                      <span className={`text-[8px] font-black ${stat.accuracy >= 90 ? 'text-emerald-400' : 'text-amber-400'}`}>{stat.accuracy}%</span>
+                      <span className={`text-[8px] font-black tabular-nums ${
+                        stat.avgDist < 200 ? 'text-emerald-400' : stat.avgDist < 400 ? 'text-amber-400' : 'text-red-400'
+                      }`}>{stat.avgDist}m</span>
+                      <span className={`text-[8px] font-black tabular-nums ${stat.accuracy >= 90 ? 'text-emerald-400' : 'text-amber-400'}`}>{stat.accuracy}%</span>
                     </div>
-                    <div className="mt-0.5 text-[8px] text-gray-500 flex items-center justify-between">
-                      <span>평균 {stat.avgDist}m · 최대 {stat.maxDist}m</span>
-                      <span>점프 {stat.jumpCount} · 도보 {stat.walkCount}</span>
+                    <div className="mt-0.5 text-[8px] text-gray-600 flex items-center justify-between">
+                      <span>총 {stat.totalDistKm}km · 약 {stat.estimatedMinutes}분 · {stat.count}건</span>
+                      {(stat.jumpCount > 0 || stat.noCoordCount > 0) && (
+                        <span className="text-amber-500">점프 {stat.jumpCount}{stat.noCoordCount > 0 ? ` · 좌표없음 ${stat.noCoordCount}` : ''}</span>
+                      )}
                     </div>
                   </button>
                 ))}
                 {!(sequenceAnalysis?.driverStats || []).length && (
-                  <div className="text-[8px] text-gray-600 leading-relaxed">순번 실행 후 분석하면 기사별 점프·도보 후보가 표시됩니다.</div>
+                  <div className="text-[8px] text-gray-600 leading-relaxed">순번 실행 후 분석하면 기사별 이동거리·정확도가 표시됩니다.</div>
                 )}
               </div>
             )}
@@ -3760,7 +4014,15 @@ ${folders}
                   일정
                 </button>
                 <button
-                  onClick={() => setShowCompanyPicker(true)}
+                  onClick={() => {
+                    // 지도에서 선택된 동을 모달에 반영 ('전체'거나 비어있으면 첫 번째 동으로)
+                    const initDong = (selectedDong && selectedDong !== '전체')
+                      ? selectedDong
+                      : (dongList[0] || '');
+                    setPickerDong(initDong);
+                    setPickerSelectedName('');
+                    setShowCompanyPicker(true);
+                  }}
                   disabled={drivers.length >= 8}
                   title="소속사 기사 추가 — 이사·외곽 레코드를 다른 기사에게 배정할 때 사용"
                   className="text-[10px] text-[#3b82f6] hover:text-[#93c5fd] disabled:text-gray-700 flex items-center gap-0.5">
@@ -3858,6 +4120,25 @@ ${folders}
                         )}
                       </div>
                     )}
+                    {/* 출발지 */}
+                    <div className="mt-1 flex items-center gap-1" onClick={e => e.stopPropagation()}>
+                      <span className="text-[8px] text-gray-600 shrink-0 w-7">출발지</span>
+                      <input
+                        value={d.startAddr || ''}
+                        onChange={e => setDrivers(prev => prev.map(dr =>
+                          dr.id === d.id ? { ...dr, startAddr: e.target.value, startLat: null, startLng: null } : dr
+                        ))}
+                        onBlur={e => handleGeocodeStartAddr(d.id, e.target.value)}
+                        onClick={e => e.stopPropagation()}
+                        placeholder="출발 주소 입력"
+                        className="flex-1 bg-[#111] border border-[#2a2a2a] text-[8px] text-gray-300 rounded px-1 py-0.5 focus:outline-none focus:border-blue-500/40 min-w-0 truncate"
+                      />
+                      <span
+                        title={d.startLat ? `좌표확인 완료 (${d.startLat?.toFixed(4)}, ${d.startLng?.toFixed(4)})` : '주소 입력 후 포커스 이동 시 자동 변환'}
+                        className={`text-[9px] shrink-0 font-black ${d.startLat ? 'text-emerald-400' : 'text-gray-700'}`}>
+                        {d.startLat ? '✓' : '?'}
+                      </span>
+                    </div>
                     {/* 배송일 배정 */}
                     {scheduleMode && (
                       <div className="mt-1.5 flex items-center gap-1" onClick={e => e.stopPropagation()}>
@@ -4061,7 +4342,11 @@ ${folders}
                   onChange={e => setSelectedDong(e.target.value)}
                   className="bg-[#111] border border-[#222] rounded-lg px-2 py-0.5 text-[10px] text-white outline-none focus:border-[#3b82f6]/40 cursor-pointer"
                 >
-                  {dongList.map(d => <option key={d}>{d}</option>)}
+                  {dongList.map(d => (
+                    <option key={d} value={d}>
+                      {`${d} (${dongCounts[d] || 0}건)`}
+                    </option>
+                  ))}
                 </select>
                 {/* 순번 편집 버튼 그룹 */}
                 <div className="ml-auto flex gap-1 shrink-0">
@@ -4204,7 +4489,7 @@ ${folders}
       {toast && (
         <div
           className={`fixed bottom-8 left-1/2 -translate-x-1/2 z-[500] flex items-center gap-3 px-5 py-3 rounded-2xl shadow-[0_8px_32px_rgba(0,0,0,0.7)] font-bold text-sm border pointer-events-none
-            ${toast.type === 'success' ? 'bg-[#061a0a] border-[#3b82f6]/50 text-[#60a5fa]' :
+            ${toast.type === 'success' ? 'bg-[#051a0c] border-emerald-500/50 text-emerald-300' :
               toast.type === 'error'   ? 'bg-[#1a0606] border-red-600/50 text-red-400' :
                                          'bg-[#0d0d0d] border-[#333] text-gray-300'}`}
           style={{ animation: 'slideUpToast 0.25s ease-out' }}
@@ -4600,91 +4885,122 @@ ${folders}
       )}
 
       {/* ── 소속사 기사 추가 피커 ─────────────────────────────────────── */}
-      {showCompanyPicker && (
-        <div
-          className="absolute inset-0 z-[250] bg-black/70 flex items-start justify-center pt-24"
-          onClick={() => setShowCompanyPicker(false)}
-        >
-          <div
-            className="bg-[#0d0d0d] border border-[#2a2a2a] rounded-2xl w-72 shadow-2xl"
-            onClick={e => e.stopPropagation()}
-          >
-            {/* 헤더 */}
-            <div className="px-4 py-3 border-b border-[#1a1a1a] flex items-center justify-between">
-              <div>
-                <span className="text-white font-black text-sm">소속사 기사 추가</span>
-                {selectedDong !== '전체' && (
-                  <span className="ml-2 text-[10px] text-gray-600">{selectedDong} 주기사 제외</span>
-                )}
-              </div>
-              <button onClick={() => setShowCompanyPicker(false)} className="text-gray-600 hover:text-white transition-colors">
-                <X size={14} />
-              </button>
-            </div>
+      {showCompanyPicker && (() => {
+        const hasCompanyList = initialDriversProp?.length > 0;
+        const hasAvailable = availableCompanyDrivers.length > 0;
+        // 콤보박스 확정값: 선택된 기사 객체
+        const selectedDriver = hasAvailable
+          ? availableCompanyDrivers.find(d => d.name === pickerSelectedName) || availableCompanyDrivers[0]
+          : null;
 
-            {availableCompanyDrivers.length > 0 ? (
-              /* 소속사 기사 목록 */
-              <div className="py-1 max-h-64 overflow-y-auto">
-                {availableCompanyDrivers.map(d => (
-                  <button
-                    key={d.id || d.name}
-                    onClick={() => addCompanyDriver(d)}
-                    className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-[#1a1a1a] transition-colors text-left group"
-                  >
-                    <div className="w-3 h-3 rounded-full shrink-0 ring-2 ring-white/10 group-hover:ring-white/20"
-                      style={{ background: d.color || '#3b82f6' }} />
-                    <div className="min-w-0 flex-1">
-                      <div className="text-white text-[11px] font-bold">{d.name}</div>
-                      {d.assignedZones?.length > 0 && (
-                        <div className="text-gray-600 text-[9px] truncate">
-                          {d.assignedZones.flatMap(z => z.dongs || []).join(' · ')}
-                        </div>
-                      )}
-                    </div>
-                    {d.capacity && d.capacity !== 100 && (
-                      <span className="text-[9px] text-gray-600 shrink-0">{d.capacity}%</span>
+        return (
+          <div
+            className="absolute inset-0 z-[250] bg-black/70 flex items-start justify-center pt-24"
+            onClick={() => setShowCompanyPicker(false)}
+          >
+            <div
+              className="bg-[#0d0d0d] border border-[#2a2a2a] rounded-2xl w-72 shadow-2xl"
+              onClick={e => e.stopPropagation()}
+            >
+              {/* 헤더 */}
+              <div className="px-4 py-3 border-b border-[#1a1a1a] flex items-center justify-between">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-white font-black text-sm">소속사 기사 추가</span>
+                    {pickerDong && pickerDong !== '전체' && (
+                      <span className="text-[10px] bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 rounded px-1.5 py-0.5 font-bold">
+                        {pickerDong}
+                      </span>
                     )}
-                    <Plus size={10} className="text-gray-600 group-hover:text-blue-400 shrink-0 transition-colors" />
-                  </button>
-                ))}
-              </div>
-            ) : (
-              /* 소속사 기사 없음 → 직접 입력 */
-              <div className="px-4 py-4">
-                <div className="text-[10px] text-gray-600 mb-3 leading-relaxed">
-                  {initialDriversProp?.length
-                    ? '추가 가능한 소속사 기사가 없습니다.'
-                    : '소속사 기사 목록이 없습니다.'}
-                  <br />기사 이름을 직접 입력하세요.
+                  </div>
+                  <div className="text-[10px] text-gray-600 mt-0.5">
+                    세션 기사 제외 · 미배정 기사만 표시
+                  </div>
                 </div>
-                <input
-                  autoFocus
-                  id="company-driver-name-input"
-                  placeholder={`기사${drivers.length + 1}`}
-                  className="w-full bg-[#111] border border-[#2a2a2a] rounded-lg px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-blue-500/40"
-                  onKeyDown={e => {
-                    if (e.key === 'Enter') {
-                      const name = e.target.value.trim() || `기사${drivers.length + 1}`;
-                      addCompanyDriver({ name });
-                    } else if (e.key === 'Escape') {
-                      setShowCompanyPicker(false);
-                    }
-                  }}
-                />
-                <button
-                  onClick={() => {
-                    const input = document.getElementById('company-driver-name-input');
-                    addCompanyDriver({ name: (input?.value || '').trim() || `기사${drivers.length + 1}` });
-                  }}
-                  className="mt-2 w-full py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-black rounded-lg transition-colors"
-                >
-                  추가
+                <button onClick={() => setShowCompanyPicker(false)} className="text-gray-600 hover:text-white transition-colors">
+                  <X size={14} />
                 </button>
               </div>
-            )}
+
+              <div className="px-4 py-4 space-y-3">
+                {/* ── 소속사 콤보박스 (기사 목록이 있을 때) */}
+                {hasCompanyList && (
+                  <div>
+                    <div className="text-[10px] text-gray-500 mb-1.5 font-bold">소속사 기사 선택</div>
+                    {hasAvailable ? (
+                      <select
+                        value={pickerSelectedName || (availableCompanyDrivers[0]?.name ?? '')}
+                        onChange={e => setPickerSelectedName(e.target.value)}
+                        className="w-full bg-[#111] border border-[#2a2a2a] rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500/50 appearance-none cursor-pointer"
+                        style={{ backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E")`, backgroundRepeat: 'no-repeat', backgroundPosition: 'right 10px center' }}
+                      >
+                        {availableCompanyDrivers.map(d => (
+                          <option key={d.id || d.name} value={d.name}>
+                            {d.name}{d.capacity && d.capacity !== 100 ? ` (${d.capacity}%)` : ''}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <div className="w-full bg-[#111] border border-[#1a1a1a] rounded-lg px-3 py-2 text-[11px] text-gray-600">
+                        모든 소속사 기사가 이미 배정되어 있습니다
+                      </div>
+                    )}
+                    {hasAvailable && (
+                      <button
+                        onClick={() => addCompanyDriver(selectedDriver)}
+                        className="mt-2 w-full py-2 bg-emerald-700 hover:bg-emerald-600 text-white text-xs font-black rounded-lg transition-colors"
+                      >
+                        선택 기사 추가
+                      </button>
+                    )}
+                  </div>
+                )}
+
+                {/* ── 구분선 */}
+                {hasCompanyList && (
+                  <div className="flex items-center gap-2">
+                    <div className="flex-1 h-px bg-[#1a1a1a]" />
+                    <span className="text-[9px] text-gray-700">또는 직접 입력</span>
+                    <div className="flex-1 h-px bg-[#1a1a1a]" />
+                  </div>
+                )}
+
+                {/* ── 직접 입력 */}
+                <div>
+                  {!hasCompanyList && (
+                    <div className="text-[10px] text-gray-600 mb-2 leading-relaxed">
+                      소속사 기사 목록이 없습니다.<br />기사 이름을 직접 입력하세요.
+                    </div>
+                  )}
+                  <input
+                    autoFocus={!hasCompanyList}
+                    id="company-driver-name-input"
+                    placeholder={`기사${drivers.length + 1}`}
+                    className="w-full bg-[#111] border border-[#2a2a2a] rounded-lg px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-emerald-500/40"
+                    onKeyDown={e => {
+                      if (e.key === 'Enter') {
+                        const name = e.target.value.trim() || `기사${drivers.length + 1}`;
+                        addCompanyDriver({ name });
+                      } else if (e.key === 'Escape') {
+                        setShowCompanyPicker(false);
+                      }
+                    }}
+                  />
+                  <button
+                    onClick={() => {
+                      const input = document.getElementById('company-driver-name-input');
+                      addCompanyDriver({ name: (input?.value || '').trim() || `기사${drivers.length + 1}` });
+                    }}
+                    className="mt-2 w-full py-2 bg-[#1a1a1a] hover:bg-[#222] border border-[#2a2a2a] text-white text-xs font-black rounded-lg transition-colors"
+                  >
+                    추가
+                  </button>
+                </div>
+              </div>
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* ── 좌표 삭제 브러시 모달 ──────────────────────────────────── */}
       {showCoordBrush && (
@@ -4757,6 +5073,79 @@ ${folders}
               >
                 {isLoadingOrderRequests ? <RefreshCw size={12} className="animate-spin" /> : <RefreshCw size={12} />}
                 새로고침
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── 자동 핀 확인 모달 ──────────────────────────────────────────── */}
+      {autoPinConfirmModal && (
+        <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-[600] flex items-center justify-center p-4">
+          <div className="w-full max-w-xs bg-[#0a0a0a] border border-emerald-500/30 rounded-2xl p-5 shadow-[0_0_50px_rgba(16,185,129,0.15)]">
+            <div className="flex items-center gap-2 mb-1">
+              <MapPin size={14} className="text-emerald-400 shrink-0" />
+              <span className="text-sm font-black text-white">자동 핀 배치 완료</span>
+            </div>
+            <p className="text-[10px] text-gray-500 mb-3 leading-relaxed">기사별 배정 구역 중심에 핀을 자동 생성했습니다.<br/>이대로 확정하거나 핀을 조정 후 재배정할 수 있습니다.</p>
+            <div className="space-y-1.5 mb-4 bg-[#111] rounded-xl p-3">
+              {drivers.slice(0, driverCount).filter(d => !d.isExternal).map(d => {
+                const cnt = Object.values(autoPinConfirmModal.clusterMap).filter(id => id === d.id).length;
+                const isNew = !!autoPinConfirmModal.pendingPins[d.id];
+                return (
+                  <div key={d.id} className="flex items-center gap-2 text-[11px]">
+                    <div className="w-2 h-2 rounded-full shrink-0" style={{ background: d.color }} />
+                    <span className="text-gray-200 flex-1 font-medium">{d.name}</span>
+                    <span className="text-gray-500">{cnt.toLocaleString()}건</span>
+                    {isNew && <span className="text-[9px] text-emerald-400 font-black">📍신규</span>}
+                  </div>
+                );
+              })}
+              {autoPinConfirmModal.diagnostics?.qualityScore !== undefined && (
+                <div className="mt-2 pt-2 border-t border-[#1e1e1e] flex items-center justify-between text-[9px]">
+                  <span className="text-gray-600">품질 점수</span>
+                  <span className={`font-black ${autoPinConfirmModal.diagnostics.qualityScore >= 70 ? 'text-emerald-400' : autoPinConfirmModal.diagnostics.qualityScore >= 40 ? 'text-amber-400' : 'text-red-400'}`}>
+                    {autoPinConfirmModal.diagnostics.qualityScore}점
+                  </span>
+                </div>
+              )}
+            </div>
+            <div className="flex flex-col gap-2">
+              <button
+                onClick={() => {
+                  const { clusterMap, pendingPins, diagnostics, affectedIds } = autoPinConfirmModal;
+                  const idSet = new Set(affectedIds);
+                  setDriverPins(prev => ({ ...prev, ...pendingPins }));
+                  setRecords(prev => prev.map(r => idSet.has(r.id)
+                    ? { ...r, _driverId: clusterMap[r.id] || null }
+                    : r
+                  ));
+                  const balanceMsg = diagnostics?.load?.maxAbsDiffPct !== undefined
+                    ? `최대 편차 ${diagnostics.load.maxAbsDiffPct}%` : '분석 완료';
+                  const qScore = diagnostics?.qualityScore !== undefined ? ` · 품질 ${diagnostics.qualityScore}점` : '';
+                  const stratLabel = { pca: 'PCA', hilbert: '힐베르트', bestOfPcaHilbert: '최적선택', seedVoronoi: 'N-seed보로노이' }[diagnostics?.strategy || 'pca'] || 'PCA';
+                  setTimeout(() => showToast('success', `자동 배정 완료 [${stratLabel}] — ${balanceMsg}${qScore} · 핀 자동 설정`, 5000), 200);
+                  setAutoPinConfirmModal(null);
+                }}
+                className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-black rounded-xl text-xs transition-colors"
+              >
+                이대로 확정
+              </button>
+              <button
+                onClick={() => {
+                  const { clusterMap, pendingPins, affectedIds } = autoPinConfirmModal;
+                  const idSet = new Set(affectedIds);
+                  setDriverPins(prev => ({ ...prev, ...pendingPins }));
+                  setRecords(prev => prev.map(r => idSet.has(r.id)
+                    ? { ...r, _driverId: clusterMap[r.id] || null }
+                    : r
+                  ));
+                  showToast('info', '핀이 지도에 표시됩니다. [핀 꽂기]로 조정 후 [자동 N등분]을 다시 누르세요.', 7000);
+                  setAutoPinConfirmModal(null);
+                }}
+                className="w-full py-2 bg-[#111] border border-[#2a2a2a] text-gray-400 hover:text-white hover:border-emerald-500/40 font-bold rounded-xl text-xs transition-colors"
+              >
+                핀 조정 후 재배정
               </button>
             </div>
           </div>

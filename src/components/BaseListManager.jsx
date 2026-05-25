@@ -743,7 +743,7 @@ export default function BaseListManager({ user, onBack, initialCity = '' }) {
             )}
             <button onClick={handleSave} disabled={!hasChanges || saving}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-bold transition-all ${
-                hasChanges && !saving ? 'bg-blue-600 hover:bg-blue-500 text-white shadow-[0_0_14px_rgba(59,130,246,0.25)]' : 'bg-white/5 text-gray-600 cursor-not-allowed'
+                hasChanges && !saving ? 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-[0_0_14px_rgba(16,185,129,0.25)]' : 'bg-white/5 text-gray-600 cursor-not-allowed'
               }`}>
               <Save size={13} /> {saving ? '저장 중...' : '변경사항 저장'}
             </button>
@@ -759,7 +759,7 @@ export default function BaseListManager({ user, onBack, initialCity = '' }) {
             </button>
             <button onClick={() => setShowUpload(v => !v)}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-bold transition-colors border ${
-                showUpload ? 'bg-blue-900/30 text-blue-300 border-blue-500/30' : 'bg-white/5 hover:bg-white/10 text-gray-300 border-white/5'
+                showUpload ? 'bg-emerald-900/30 text-emerald-300 border-emerald-500/30' : 'bg-white/5 hover:bg-white/10 text-gray-300 border-white/5'
               }`}>
               <Upload size={13} /> 엑셀 업로드
             </button>
@@ -1047,7 +1047,7 @@ export default function BaseListManager({ user, onBack, initialCity = '' }) {
                 <p className="text-sm text-gray-700">이 지자체에 대한 접근 권한이 필요합니다</p>
               </div>
             ) : loading ? (
-              <div className="h-full flex items-center justify-center gap-2 text-blue-400 text-sm animate-pulse">
+              <div className="h-full flex items-center justify-center gap-2 text-emerald-400 text-sm animate-pulse">
                 <Database size={18} /> 명단 불러오는 중...
               </div>
             ) : records.length === 0 ? (

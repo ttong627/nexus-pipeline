@@ -1,4 +1,4 @@
-﻿import { useState, useRef } from 'react';
+﻿import { useState, useRef, useEffect } from 'react';
 import { Columns, ChevronLeft, Database, CheckCircle, Loader2, X } from 'lucide-react';
 
 const REQUIRED_KEYS = ['name', 'contact1', 'address', 'qty', 'admin'];
@@ -80,7 +80,7 @@ function SheetMappingPanel({ sheet, mapDef, setMapDef, worksheets, importNote, s
                   <label className={`text-xs font-black ${isMapped ? meta.color : 'text-red-400'}`}>{label}</label>
                   <span className={`text-[10px] font-black px-1.5 py-0.5 rounded ${isMapped ? 'bg-blue-900/50 text-blue-400' : 'bg-red-900/50 text-red-400'}`}>{isMapped ? '✓ 연결됨' : '✕ 누락'}</span>
                 </div>
-                <select value={mapDef[key]} onChange={e => updateMap(key, e.target.value)} className="w-full bg-black/60 border border-white/10 text-white font-bold p-2 rounded-lg outline-none text-xs cursor-pointer focus:border-[#3b82f6]">
+                <select value={mapDef[key]} onChange={e => updateMap(key, e.target.value)} className="w-full bg-black/60 border border-white/10 text-white font-bold p-2 rounded-lg outline-none text-xs cursor-pointer focus:border-emerald-500">
                   <option value="">-- 컬럼 선택 --</option>
                   {headers.map(h => {
                     const sv = previewData.map(r => String(r[h] ?? '').trim()).find(Boolean) || '';
@@ -101,8 +101,8 @@ function SheetMappingPanel({ sheet, mapDef, setMapDef, worksheets, importNote, s
           {/* 비고 자동포함 토글 */}
           <div className="mt-5 mb-3 p-3 rounded-xl border border-white/10 bg-black/30">
             <label className="flex items-center gap-2 cursor-pointer">
-              <input type="checkbox" checked={importNote} onChange={e => setImportNote(e.target.checked)} className="accent-[#3b82f6] w-4 h-4 cursor-pointer" />
-              <span className={`text-xs font-black ${importNote ? 'text-[#3b82f6]' : 'text-gray-500'}`}>비고 → 특이사항 자동 포함</span>
+              <input type="checkbox" checked={importNote} onChange={e => setImportNote(e.target.checked)} className="accent-emerald-500 w-4 h-4 cursor-pointer" />
+              <span className={`text-xs font-black ${importNote ? 'text-emerald-500' : 'text-gray-500'}`}>비고 → 특이사항 자동 포함</span>
             </label>
             <p className={`text-[10px] mt-1 ml-6 ${importNote ? 'text-gray-500' : 'text-gray-700'}`}>
               {importNote ? '비고 열 내용이 특이사항에 자동으로 포함됩니다.' : '비고 열을 가져오지 않습니다.'}
@@ -125,7 +125,7 @@ function SheetMappingPanel({ sheet, mapDef, setMapDef, worksheets, importNote, s
             return (
               <div key={key} className={`mb-3 p-2.5 rounded-xl border transition-all ${isMapped ? `${meta.bg} ${meta.border}` : 'bg-black/30 border-white/5'}`}>
                 <label className={`block text-[11px] font-bold mb-1.5 ${isMapped ? meta.color : 'text-gray-500'}`}>{label}</label>
-                <select value={mapDef[key]} onChange={e => updateMap(key, e.target.value)} className="w-full bg-black/60 border border-white/10 text-gray-300 p-2 rounded-lg outline-none text-xs cursor-pointer focus:border-[#3b82f6]">
+                <select value={mapDef[key]} onChange={e => updateMap(key, e.target.value)} className="w-full bg-black/60 border border-white/10 text-gray-300 p-2 rounded-lg outline-none text-xs cursor-pointer focus:border-emerald-500">
                   <option value="">-- 사용 안함 --</option>
                   {headers.map(h => {
                     const sv = previewData.map(r => String(r[h] ?? '').trim()).find(Boolean) || '';
@@ -181,10 +181,56 @@ function SheetMappingPanel({ sheet, mapDef, setMapDef, worksheets, importNote, s
 
 const sheetKey = (sheet) => sheet.fileSource ? `${sheet.fileSource}::${sheet.name}` : sheet.name;
 
-export default function Step3_Mapping({ step, setStep, mapDefs, setMapDefs, selectedSheets, worksheets, startProcessing, onHelp, importNote, setImportNote, baseFiles, baseCount, isBaseUploading, handleBaseUpload, handleRemoveBaseFile, handleAddTargetFile, handleRemoveTargetFile, isUploading, uploadFileName, isBasePurifyMode, setIsBasePurifyMode, onOpenDbImport, dbImportReady, onUserMapping }) {
+const COL_MAP_KEY = (city) => `nexus_col_map_v1_${city}`;
+
+export default function Step3_Mapping({ step, setStep, mapDefs, setMapDefs, selectedSheets, worksheets, startProcessing, onHelp, importNote, setImportNote, baseFiles, baseCount, isBaseUploading, handleBaseUpload, handleRemoveBaseFile, handleAddTargetFile, handleRemoveTargetFile, isUploading, uploadFileName, isBasePurifyMode, setIsBasePurifyMode, onOpenDbImport, dbImportReady, onUserMapping, city }) {
   const [activeTab, setActiveTab] = useState(0);
   const addTargetRef = useRef(null);
   const addBaseRef = useRef(null);
+
+  // 지자체별 저장된 칼럼 매핑 자동 불러오기 (마운트 시 1회)
+  useEffect(() => {
+    if (!city || !selectedSheets?.length) return;
+    try {
+      const saved = localStorage.getItem(COL_MAP_KEY(city));
+      if (!saved) return;
+      const savedMap = JSON.parse(saved); // { fieldKey: headerName }
+      setMapDefs(prev => {
+        const next = { ...prev };
+        for (const sheet of selectedSheets) {
+          const key = sheetKey(sheet);
+          const current = prev[key] || {};
+          const headers = Array.isArray(sheet.headers) ? sheet.headers : [];
+          const merged = { ...current };
+          for (const [fieldKey, headerName] of Object.entries(savedMap)) {
+            // 저장된 헤더가 이 시트에 존재하고, 아직 매핑되지 않은 필드만 적용
+            if (headerName && headers.includes(headerName) && !merged[fieldKey]) {
+              merged[fieldKey] = headerName;
+            }
+          }
+          next[key] = merged;
+        }
+        return next;
+      });
+    } catch { /* ignore */ }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [city]);
+
+  // mapDefs 변경 시 지자체별 자동 저장
+  useEffect(() => {
+    if (!city || !Object.keys(mapDefs).length) return;
+    const combined = {};
+    for (const sheetMap of Object.values(mapDefs)) {
+      for (const [fieldKey, headerName] of Object.entries(sheetMap)) {
+        if (headerName) combined[fieldKey] = headerName;
+      }
+    }
+    if (Object.keys(combined).length) {
+      try {
+        localStorage.setItem(COL_MAP_KEY(city), JSON.stringify(combined));
+      } catch { /* ignore */ }
+    }
+  }, [mapDefs, city]);
 
   if (step !== 3) return null;
   if (!selectedSheets || selectedSheets.length === 0) return null;
@@ -213,7 +259,7 @@ export default function Step3_Mapping({ step, setStep, mapDefs, setMapDefs, sele
       <div className="bg-gradient-to-b from-[#1a1710] to-[#0a0a0a] px-6 py-4 border-b border-[#333] flex justify-between items-center shrink-0 shadow-lg">
         <div>
           <h2 className="text-xl font-bold text-white flex items-center gap-3 drop-shadow-md">
-            <Columns size={24} className="text-[#3b82f6]"/> 3단계: AI 헤더 매핑
+            <Columns size={24} className="text-emerald-500"/> 3단계: AI 헤더 매핑
           </h2>
           <p className="text-gray-400 mt-1.5 font-medium">자동 매핑을 확인하고 누락된 항목을 지정하세요.</p>
         </div>
@@ -239,14 +285,13 @@ export default function Step3_Mapping({ step, setStep, mapDefs, setMapDefs, sele
           <button
             onClick={startProcessing}
             disabled={!allComplete}
-            className={`px-8 py-3 font-extrabold rounded-xl flex items-center gap-2 uppercase tracking-wide transition-all ${allComplete ? 'bg-[#3b82f6] text-black shadow-[0_0_15px_rgba(59,130,246,0.6)] hover:bg-[#93c5fd] hover:scale-105' : 'bg-gray-800 text-gray-500 border border-gray-700 cursor-not-allowed'}`}
+            className={`px-8 py-3 font-extrabold rounded-xl flex items-center gap-2 uppercase tracking-wide transition-all ${allComplete ? 'bg-emerald-500 text-black shadow-[0_0_15px_rgba(16,185,129,0.4)] hover:bg-emerald-400 hover:scale-105' : 'bg-gray-800 text-gray-500 border border-gray-700 cursor-not-allowed'}`}
           >
             {isBasePurifyMode ? '주소 정제 가동' : '12단계 정제 가동'} <Database size={18} strokeWidth={3}/>
           </button>
           <button
             onClick={onHelp}
-            className="w-10 h-10 rounded-full bg-[#060c18] border border-[#3b82f6]/40 text-[#3b82f6] font-black text-base hover:bg-[#3b82f6]/20 hover:scale-110 transition-all shrink-0"
-            style={{ animation: 'help-pulse 2.5s ease-in-out infinite' }}
+            className="w-10 h-10 rounded-full bg-emerald-950/30 border border-emerald-500/40 text-emerald-400 font-black text-base hover:bg-emerald-500/20 hover:scale-110 transition-all shrink-0"
             title="3단계 도움말"
           >?</button>
         </div>
@@ -264,20 +309,20 @@ export default function Step3_Mapping({ step, setStep, mapDefs, setMapDefs, sele
                 onClick={() => setActiveTab(i)}
                 className={`flex items-center gap-2 px-4 py-2.5 rounded-t-lg border border-b-0 text-xs font-bold shrink-0 transition-all ${
                   isActive
-                    ? 'bg-[#0a0a0a] border-[#3b82f6]/40 text-white'
+                    ? 'bg-[#0a0a0a] border-emerald-500/40 text-white'
                     : 'bg-black/40 border-[#333] text-gray-500 hover:text-gray-300 hover:bg-black/60'
                 }`}
               >
                 {done
-                  ? <CheckCircle size={13} className="text-[#3b82f6]"/>
+                  ? <CheckCircle size={13} className="text-emerald-500"/>
                   : <span className="w-3 h-3 rounded-full border-2 border-red-500 shrink-0"/>
                 }
                 <span className="max-w-[120px] truncate">{sheet.name}</span>
                 {sheet.fileSource && (
-                  <span className="text-[9px] font-black px-1 py-0.5 rounded bg-[#3b82f6]/20 text-[#93c5fd] border border-[#3b82f6]/30">2</span>
+                  <span className="text-[9px] font-black px-1 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">2</span>
                 )}
                 <span className={`text-[10px] px-1.5 py-0.5 rounded border font-black ${
-                  sheet.type === '차상위' ? 'bg-[#060c18] text-[#3b82f6] border-[#3b82f6]/30' : 'bg-[#111] text-gray-400 border-gray-700'
+                  sheet.type === '차상위' ? 'bg-emerald-950/40 text-emerald-400 border-emerald-500/30' : 'bg-[#111] text-gray-400 border-gray-700'
                 }`}>{sheet.type === '기초수급자' ? '수급' : sheet.type === '차상위' ? '차상위' : sheet.type === '혼합' ? '혼합' : '제외'}</span>
               </button>
             );
@@ -313,14 +358,14 @@ export default function Step3_Mapping({ step, setStep, mapDefs, setMapDefs, sele
               <div
                 key={sheet.name}
                 onClick={() => setActiveTab(i)}
-                className={`px-4 py-1.5 flex items-center gap-2 flex-wrap border-b border-white/5 last:border-0 cursor-pointer transition-colors ${isActive ? 'bg-[#3b82f6]/5' : 'hover:bg-white/[0.02]'}`}
+                className={`px-4 py-1.5 flex items-center gap-2 flex-wrap border-b border-white/5 last:border-0 cursor-pointer transition-colors ${isActive ? 'bg-emerald-500/5' : 'hover:bg-white/[0.02]'}`}
               >
                 <div className="flex items-center gap-1.5 mr-1 shrink-0">
                   {done
-                    ? <CheckCircle size={11} className="text-[#3b82f6]"/>
+                    ? <CheckCircle size={11} className="text-emerald-500"/>
                     : <span className="w-2.5 h-2.5 rounded-full border-2 border-red-500 inline-block"/>
                   }
-                  <span className={`text-[10px] font-black max-w-[100px] truncate ${isActive ? 'text-[#3b82f6]' : done ? 'text-gray-400' : 'text-red-400'}`}>
+                  <span className={`text-[10px] font-black max-w-[100px] truncate ${isActive ? 'text-emerald-500' : done ? 'text-gray-400' : 'text-red-400'}`}>
                     {sheet.name}
                   </span>
                 </div>
@@ -404,9 +449,9 @@ export default function Step3_Mapping({ step, setStep, mapDefs, setMapDefs, sele
           </div>
 
           {/* 이전 명단 이식 */}
-          <div className="bg-[#0a100c] border border-[#3b82f6]/25 rounded-xl p-4">
+          <div className="bg-[#0a100c] border border-emerald-500/25 rounded-xl p-4">
             <div className="flex items-center gap-2 mb-1">
-              <span className="text-[#3b82f6] text-[10px] font-black tracking-widest">👑 이전 명단 이식</span>
+              <span className="text-emerald-500 text-[10px] font-black tracking-widest">👑 이전 명단 이식</span>
               <span className="text-gray-700 text-[10px]">(선택)</span>
             </div>
             <p className="text-gray-500 text-[11px] leading-relaxed mb-3">
@@ -416,21 +461,21 @@ export default function Step3_Mapping({ step, setStep, mapDefs, setMapDefs, sele
             </p>
             {(baseFiles || []).map(f => (
               <div key={f.name} className="flex items-center gap-2 mb-1.5 bg-black/30 rounded-lg px-2.5 py-1.5">
-                <CheckCircle size={11} className="text-[#3b82f6] flex-shrink-0"/>
-                <span className="text-[#93c5fd] text-xs truncate">{f.name}</span>
+                <CheckCircle size={11} className="text-emerald-500 flex-shrink-0"/>
+                <span className="text-emerald-300 text-xs truncate">{f.name}</span>
                 <span className="text-gray-600 text-[10px] flex-shrink-0 ml-auto pl-2">{f.count.toLocaleString()}명</span>
                 <button type="button" onClick={() => handleRemoveBaseFile(f.name)} className="text-gray-700 hover:text-red-400 transition-colors flex-shrink-0 ml-1"><X size={11}/></button>
               </div>
             ))}
             {baseCount > 0 && (
-              <p className="text-[#3b82f6] text-[10px] font-bold mb-2 flex items-center gap-1">
+              <p className="text-emerald-500 text-[10px] font-bold mb-2 flex items-center gap-1">
                 <CheckCircle size={10}/> 총 {baseCount.toLocaleString()}건 이식 준비 완료
               </p>
             )}
             <input ref={addBaseRef} type="file" className="hidden" accept=".xlsx,.xls,.csv"
               onChange={e => { const f = e.target.files?.[0]; if (f) handleBaseUpload({ target: { files: [f] } }); }}/>
             {isBaseUploading ? (
-              <div className="flex items-center gap-1.5 text-[#3b82f6] text-xs font-bold mt-2">
+              <div className="flex items-center gap-1.5 text-emerald-500 text-xs font-bold mt-2">
                 <Loader2 size={12} className="animate-spin"/> 명단 분석 중...
               </div>
             ) : (
@@ -438,7 +483,7 @@ export default function Step3_Mapping({ step, setStep, mapDefs, setMapDefs, sele
                 <button
                   type="button"
                   onMouseDown={(e) => { e.preventDefault(); if (addBaseRef.current) { addBaseRef.current.value = ''; addBaseRef.current.click(); }}}
-                  className="w-full flex items-center justify-center gap-2 py-2 rounded-lg border border-[#3b82f6]/30 bg-[#3b82f6]/10 text-[#3b82f6] hover:bg-[#3b82f6]/20 hover:border-[#3b82f6]/60 text-xs font-bold transition-all cursor-pointer">
+                  className="w-full flex items-center justify-center gap-2 py-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20 hover:border-emerald-500/60 text-xs font-bold transition-all cursor-pointer">
                   <Database size={12}/> + 이전 명단 추가
                 </button>
                 <button

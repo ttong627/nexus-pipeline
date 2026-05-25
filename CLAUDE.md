@@ -1,4 +1,4 @@
-# NEXUS PIPELINE V4.0 — 프로젝트 룰 (운영 전체 규칙)
+# NEXUS PIPELINE V5.0 — 프로젝트 룰 (운영 전체 규칙)
 
 이 파일은 프로젝트의 모든 운영 규칙을 정의합니다.
 코드 수정 시 이 규칙들이 깨지지 않도록 반드시 준수해야 합니다.
@@ -227,7 +227,7 @@
 | 규칙 | 내용 |
 |------|------|
 | 관리자 이메일 | `ttong627@gmail.com` |
-| 관리자 강제 보정 | admin 이메일이면 role=admin, tier=vvip 강제 설정 (onAuthStateChanged 시 자동 복구) |
+| 관리자 강제 보정 | admin 이메일이면 role=admin, tier=sapphire 강제 설정 (onAuthStateChanged 시 자동 복구) |
 | 일반 유저 강등 | 비admin이 role=admin인 경우 role=user, tier=basic으로 강등 |
 
 ---
@@ -355,49 +355,230 @@
 ### 배분 알고리즘 적용 순서
 
 ```
-1. 동적 가중 보로노이 K-means++ (좌표 있는 레코드)
-   - 핀 있음: 핀 고정 + 반복 동적 보로노이 (최대 8회 수렴)
-   - 핀 없음: 가중 K-means++ (30회 이터레이션, 매 라운드 loadFactor 갱신)
-2. 좌표 없는 레코드 → 같은 행정동 최다배정 기사 자동 귀속
-3. 공간 다수결 필터 (Game-of-Life, 최대 15라운드) → 고립 핀 흡수
-4. R-I: 아파트 단지 동일 기사 통일 (후처리)
-5. R-E: 동일 주소 동일 기사 통일 (후처리)
-6. R-A: 미배정 전건 → 유효부담 최소 기사 강제 배정
-7. 배송순번 부여 (nearestNeighborTSP, 북서→동쪽)
+1. buildUnits() — 아파트/동일주소/좌표 기준 배송단위 묶기 (R-E·R-I 전제)
+   ※ 절대 원칙: 새 알고리즘의 입력 단위는 항상 buildUnits() 출력이어야 한다.
+      개별 레코드를 직접 배정하면 R-E·R-I·도로측면 규칙이 모두 깨진다.
+2. 전략 선택 (autoSplitStrategy)
+   - pca (기본값): PCA 주축 투영 → 1D 정렬 → DP 연속 분할
+   - hilbert (실험): 힐베르트 공간충전곡선 인덱스 정렬 → DP 연속 분할
+   - bestOfPcaHilbert (실험): pca·hilbert 둘 다 계산 → qualityScore 높은 쪽 채택
+   - seedVoronoi (예정): N-씨앗 보로노이 + 연속성 강제 (향후 구현)
+3. 좌표 없는 레코드 → 같은 행정동 최다배정 기사 자동 귀속
+4. 미배정 전건 → 좌표 가까운 기사 배정 → fallback: 유효부담 최소 기사 강제 배정 (R-A)
 ```
 
-구현 위치: `handleAutoSplit`
+구현 위치: `routeWorker.js computeAutoSplit()`
+
+### autoSplitStrategy 허용값 및 기본값
+
+| 값 | 설명 | 기본값 |
+|----|------|--------|
+| `pca` | PCA 주축 투영 정렬 (현재 운영 방식) | ✅ 기본값 |
+| `hilbert` | 힐베르트 공간충전곡선 정렬 (실험) | — |
+| `bestOfPcaHilbert` | pca·hilbert 비교 후 qualityScore 높은 쪽 자동 선택 | — |
+| `seedVoronoi` | N-씨앗 보로노이 (향후 구현) | — |
+
+허용값 외 입력 → `pca` 로 자동 fallback.
+
+### qualityScore 공식 (0–100점, 높을수록 좋음)
+
+```
+qualityScore = 100
+  - 25 × (splitUnitCount    / max(1, totalMandatoryUnits))  // 배송단위 분리 — 최우선 결함
+  - 20 × (islandCount       / max(1, totalDrivers))         // 구역 연속성
+  - 20 × (mixedUnitCount    / max(1, totalUnits))           // 섬 혼재 단위
+  - 15 × (maxAbsDiffPct     / 100)                          // 부담 편차
+  - 10 × (roadSideMixCount  / max(1, totalRoadUnits))       // 도로측면 순수성
+  - 10 × (forcedAssignCount / max(1, totalRecords))         // 강제배정 비율
+
+clamp(0, 100)
+
+splitUnitCount  : buildUnits()의 mandatory 단위가 2개 이상 기사로 분리된 수
+mixedUnitCount  : 인접 기사 구역에 고립된 배송단위 수 (splitUnitCount와 별개)
+islandCount     : 구역이 연속되지 않는(섬 포함) 기사 수
+roadSideMixCount: 같은 도로 홀수/짝수 측면이 다른 기사에 배정된 도로 수
+forcedAssignCount: 좌표·행정동 fallback으로 강제 배정된 레코드 수
+```
 
 ---
 
-## 17. 루트맵 UI 조작 규칙 (RouteMapModal)
+## 17. 배송순번 독립 규칙
+
+배송순번은 자동 기사배정의 일부가 아니라, 기사 배정이 끝난 뒤 별도 실행되는 독립 단계다.
+자동 N등분은 `_driverId` 배정까지만 책임지고, 배송순번은 `RouteMapModal` 의 순번 엔진이 기사별로 다시 계산한다.
+
+### DS-1. 실행 전제
+
+| 규칙 | 내용 |
+|------|------|
+| DS-1-1 | 배송순번은 기사 배정 후 실행한다. `_driverId` 가 없는 레코드는 자동 순번 대상이 아니다 |
+| DS-1-2 | 배송순번은 기사별로 독립 계산한다. 기사 A의 1번과 기사 B의 1번은 서로 충돌이 아니다 |
+| DS-1-3 | 브러시 보정 직후 순번을 실행하면 `pendingPaintRef` 의 임시 배정을 먼저 반영한 뒤 순번을 계산한다 |
+| DS-1-4 | 기존 순번이 있어도 일반 순번은 덮어쓸 수 있다. 관리자 AI 순번은 덮어쓰기 전 확인창을 띄운다 |
+
+### DS-2. 일반 자동 배송순번 로직
+
+구현 위치: `RouteMapModal.handleAutoSequence()`
+
+```text
+1. pendingPaintRef 임시 배정을 records 에 먼저 반영
+2. 기사별로 `_driverId === driver.id` 인 레코드만 추출
+3. 도로명 또는 아파트 정보가 하나라도 있으면 roadAwareTSP(driverRecs) 실행
+4. 도로명/아파트 정보가 없고 좌표만 있으면 nearestNeighborTSP(coordRecs) fallback
+5. 계산 결과를 해당 기사 안에서 1부터 순차 부여
+6. analyzeSequenceQuality() 실행 후 순번 분석 패널 표시
+```
+
+### DS-3. roadAwareTSP 기준
+
+| 단계 | 기준 |
+|------|------|
+| DS-3-1 | 도로명·아파트·동일주소를 배송순번 단위로 묶는다 |
+| DS-3-2 | 같은 도로 안에서는 건물번호 흐름을 우선한다 |
+| DS-3-3 | 시작 도로는 가장 북쪽 도로 그룹을 우선한다 |
+| DS-3-4 | 다음 도로 그룹은 최근접 이웃 방식으로 선택한다 |
+| DS-3-5 | 2-opt 로 교차 동선을 줄인다 |
+| DS-3-6 | 각 도로 그룹은 이전 도착점에서 더 가까운 진입 방향(정방향/역방향)을 선택한다 |
+| DS-3-7 | 좌표 없는 레코드는 거리 최적화에 직접 쓰지 않고 뒤쪽 확인 대상으로 붙인다 |
+
+### DS-4. nearestNeighborTSP fallback 기준
+
+| 단계 | 기준 |
+|------|------|
+| DS-4-1 | 도로명/아파트 정보가 부족한 기사 명단은 좌표 기반 최근접 이웃 순회로 계산한다 |
+| DS-4-2 | 시작점은 가장 북쪽 좌표를 우선한다 |
+| DS-4-3 | 매 단계에서 현재 지점과 가장 가까운 미방문 좌표를 다음 순번으로 선택한다 |
+| DS-4-4 | 2-opt 교차 제거로 총 이동거리를 줄인다 |
+| DS-4-5 | 좌표가 없는 레코드는 좌표 기반 fallback 순번 대상에서 제외하고 분석 경고로 남긴다 |
+
+### DS-5. 수동 순번 편집
+
+| 기능 | 규칙 |
+|------|------|
+| 클릭 순번 | 목록 행을 클릭하는 순서대로 현재 기사 안에서 1→2→3 순번을 부여한다 |
+| 드래그 순번 | 같은 기사 안에서만 드래그 재정렬을 허용하고, 재정렬 후 1부터 다시 번호를 매긴다 |
+| 직접 입력 | 목록의 배송순번 입력칸에서 수동 수정할 수 있다 |
+| 기사 간 이동 | 순번 드래그는 기사 간 이동을 허용하지 않는다. 기사 변경은 배정 기능으로 처리한다 |
+| 전체 초기화 | 배송순번 전체 초기화는 모든 `배송순번` 을 빈값으로 만든다 |
+
+### DS-6. 관리자 AI 순번
+
+| 규칙 | 내용 |
+|------|------|
+| DS-6-1 | 관리자 전용 기능이다 |
+| DS-6-2 | 기사 배정이 1건 이상 있어야 실행한다 |
+| DS-6-3 | 기존 배송순번이 있으면 덮어쓰기 확인창을 띄운다 |
+| DS-6-4 | Kakao REST 키가 있으면 차량 경로 후보를 활용하고, 없으면 로컬 거리 계산으로 fallback 한다 |
+| DS-6-5 | 실행 후 예상 정확도, 확인 필요 건수, Kakao/local 경로 계산 비율을 표시한다 |
+
+### DS-7. 순번 품질 분석
+
+구현 위치: `RouteMapModal.analyzeSequenceQuality()`
+
+| 분석 항목 | 기준 |
+|----------|------|
+| 점프 | 인접 배송순번 간 300m 이상 이동이며, 같은 아파트/같은 도로측면이면 경고를 완화한다 |
+| 도보 후보 | 인접 배송순번 간 120m 이하 이동 |
+| 좌표 없음 | 순번은 있으나 좌표가 없어 거리 검증이 불가능한 레코드 |
+| 도로 정보 없음 | 도로명 파싱이 불가능하고 아파트 후보도 아닌 레코드 |
+| 도로 재방문 | 이미 지나간 도로가 순번 뒤쪽에서 다시 등장하는 경우 |
+| 평균 이동거리 | 기사별 인접 순번 간 평균 이동거리 |
+| 최대 이동거리 | 기사별 인접 순번 간 최대 이동거리 |
+| 예상 정확도 | 점프·좌표없음·도로없음·도로재방문은 감점, 도보 후보는 소폭 가점 |
+
+품질 기준:
+
+```text
+평균 이동거리 200m 미만  → 좋음
+평균 이동거리 200~400m → 주의
+평균 이동거리 400m 이상 → 위험
+인접 순번 300m 이상 점프 → 확인 필요
+```
+
+### DS-8. 저장·이식·내보내기
+
+| 구분 | 규칙 |
+|------|------|
+| 기본명단 | `seqNo` 로 저장하고, 전체 이식 또는 `seqNo` 선택 이식 때만 가져온다 |
+| 월별 명단 | `cloud_lists/{city}/months/{YYYY-MM}/records` 에 `배송순번` 으로 저장한다 |
+| delivery_history | 전월 비교·복원용으로 `seqNo` 를 함께 저장한다 |
+| 이전달 승계 | 기사명이 같으면 이전달 기사·좌표·배송순번을 복원할 수 있다 |
+| 기사 요청 반영 | 기사 공유 링크의 순번 요청은 담당자 유선 확인 후 해당 기사 배송순번만 공식 반영한다 |
+| 내보내기 | 배송표는 `배송순번` 오름차순으로 정렬하고, 순번 없는 행은 원래 순서를 최대한 유지한다 |
+
+### DS-9. 기사별 출발점 (Driver Start Point)
+
+구현 위치: `RouteMapModal` 기사 카드 UI + `handleGeocodeStartAddr`
+
+| 규칙 | 내용 |
+|------|------|
+| DS-9-1 | 기사 카드에 `출발지` 주소 입력란을 표시한다 |
+| DS-9-2 | 기본 출발지: `경기도 수원시 장안구 정자천로188번길 39` (모달 마운트 시 자동 적용) |
+| DS-9-3 | Kakao REST API (`/v2/local/search/address.json`)로 입력 주소를 지오코딩하여 `startLat`, `startLng` 저장 |
+| DS-9-4 | `roadAwareTSP`, `nearestNeighborTSP` 모두 `startPoint` 파라미터를 받아 가장 가까운 배송단위부터 시작한다 |
+| DS-9-5 | `startAddr`, `startLat`, `startLng` 는 세션 저장·delivery_history·공유 링크 등 **외부 출력에 포함하지 않는다** (보안) |
+| DS-9-6 | 모달 마운트 시 모든 기사의 `startAddr` 가 있고 `startLat` 없으면 자동 지오코딩 실행 |
+
+### DS-12. 아파트·빌라 동→층 정렬
+
+구현 위치: `RouteMapModal.sortSequenceUnitRecords()` + `parseInferredFloor()`
+
+층수 파싱 기준 (`parseInferredFloor`):
+
+| 입력 예시 | 결과 | 비고 |
+| --- | --- | --- |
+| `503호` | 5층 | 3자리 → 첫 자리 |
+| `1503호` | 15층 | 4자리 → 앞 두 자리 |
+| `101호` | 1층 | 3자리 → 첫 자리 |
+| `1001호` | 10층 | 4자리 → 앞 두 자리 |
+| `B101호` (동 없음) | 지하 1층 (-1) | B + 첫 자리 = 지하 층 |
+| `지하101호` | 지하 1층 (-1) | 지하 prefix |
+| `B동 101호` | 1층 | B동 = 건물동명, 지하 오인 금지 |
+| `가101호` | skip (null) | 가·나·다... + 숫자 = 건물동 표기 |
+| `상가 203호` | skip (null) | 상가 키워드 |
+| `나동 503호` | 5층 | 동 표기 제거 후 503호 → 5층 |
+
+정렬 우선순위: 동(棟) → 추론 층 오름차순 → 호수 (층 추론 실패 시 기존 `parseFloorHo` fallback)
+
+### DS-14. 총거리·예상시간 표시
+
+구현 위치: `RouteMapModal.analyzeSequenceQuality()` + 순번 분석 카드 UI
+
+| 규칙 | 내용 |
+|------|------|
+| DS-14-1 | 기사별 인접 순번 간 haversine 거리 합산 → `totalDistKm` (소수 1자리, m→km) |
+| DS-14-2 | `SEQUENCE_ESTIMATED_SPEED_KMH = 10` 상수 (도심 배송 속도, 정차·엘리베이터 포함) — 모듈 상단에 분리 |
+| DS-14-3 | `estimatedMinutes = round((totalDistKm / SEQUENCE_ESTIMATED_SPEED_KMH) × 60)` |
+| DS-14-4 | 순번 분석 카드 하단에 `총 {N}km · 약 {M}분 · {count}건` 표시 |
+| DS-14-5 | `SEQUENCE_ESTIMATED_SPEED_KMH` 는 절대 하드코딩 금지 — 상수만 수정하여 전체 반영 |
+
+---
+
+## 18. 루트맵 UI 조작 규칙 (RouteMapModal)
 
 ### 자동 배정 버튼
 
-"자동 N등분" 단일 버튼. 동적 가중 보로노이 K-means++ + R-A~R-I 후처리 일괄 실행.
+"자동 N등분" 단일 버튼. `autoSplitStrategy` 기준 자동 기사배정 + R-A~R-I 후처리를 일괄 실행한다.
 좌표 미수신 > 0이고 좌표매칭 미실행 시 버튼 잠금 (R-B).
 
 ### 기사 핀 (거점 배치)
 
 - 기사 카드의 [핀 꽂기] 버튼 클릭 → 지도 클릭 1회로 거점 위치 확정 (이후 클릭 무시)
-- 핀 = 보로노이 원의 중심. 핀에서 멀어질수록 영향력 약해짐
-- 핀 전체 있으면 고정 중심 동적 보로노이, 없으면 K-means++ 자동 중심 계산
+- 핀 = 기사 구역의 좌우/상하 순서를 정하는 기준
+- 핀 전체 있으면 핀 주축 순서대로 연속 권역을 분할하고, 없으면 좌표 분포 주축으로 연속 권역 균형 분할
 - 핀 제거: [×] 버튼 클릭
 
-### 동적 가중 보로노이 영향력 공식
+### 연속 권역 균형 기준
 
 ```text
-inf = capacity × loadFactor / distance²
+targetLoad = 전체유효부담 × (capacity / 전체capacity)
 
-loadFactor = clamp(targetLoad / currentLoad, 0.2, 2.5)
-  targetLoad  = 전체유효부담 × (capacity / 전체capacity)
-  currentLoad = 현재 이 기사에게 배정된 유효부담 합계
-
-→ 포수 많이 쌓인 기사: loadFactor↓ → 원 약해짐 → 신규 배정 감소 (자동 균등화)
-→ 포수 적은 기사: loadFactor↑ → 원 강해짐 → 신규 배정 증가 (자동 균등화)
+아파트 도로명주소 그룹, 대로/로 좌우 측면, 같은좌표 묶음을 배정 단위로 만든 뒤
+지도 좌표의 PCA 주축 또는 선택된 autoSplitStrategy 기준으로 정렬하여 각 기사 targetLoad에 가까운 연속 구간을 배정한다.
+가까운 점을 하나씩 따라가는 TSP식 순회 경로는 자동배정 경계 산정에 사용하지 않는다.
+TSP식 순회는 밀집 지역에서 구역을 뱀처럼 왕복시켜 색이 섞일 수 있으므로 배송순번 계산에만 사용한다.
 ```
 
-별도 재조정 루프 없음 — K-means 이터레이션 자체가 균등 수렴.
 `getEffectiveLoad()` 가중치(임대 0.3×, 계단 층수 보정, 문앞 1.5× 등) 그대로 반영.
 
 ### 페인트 브러시 모드 (2차 수동 보정)
@@ -420,11 +601,117 @@ loadFactor = clamp(targetLoad / currentLoad, 0.2, 2.5)
 
 ---
 
-## 18. 코드 보호 원칙
+## 19. 코드 보호 원칙
 
 - 기존 작동 기능 임의 변경 금지
 - 배치 499 제한 절대 초과 금지
 - 3순위 매칭 시스템 구조 변경 시 전체 인덱스 재검토 필수
 - `getDocsFromServer` → `getDocs` 로 교체 금지 (캐시 오염 위험)
 - `pushHistory` 경유 없이 `setGridData` 직접 호출 금지 (Undo 파괴)
+- `SEQUENCE_ESTIMATED_SPEED_KMH` 상수 하드코딩 금지 — 모듈 상단 상수만 수정
+- `parseInferredFloor` 로직 변경 시 DS-12 전체 테스트 케이스 재검토 필수
+- `CityMonthPickerModal` 컴포넌트 수정 시 `nexus_city_prefs_v2` 키 구조 유지
+- 파일 업로드 후 Step2 직접 이동 금지 — 반드시 `pendingSetup` → `showCityPicker` → `handleCityMonthConfirm` 경로 경유
 - 작업 완료 후 항상 `npm run build && firebase deploy --only hosting` 실행
+
+---
+
+## 20. 업로드 워크플로우 (CityMonthPickerModal)
+
+### 흐름
+
+```text
+파일 업로드 (Web Worker 파싱 완료)
+  → setPendingSetup({ sheetsData, initialSel, detectedCity, detectedMonth })
+  → setShowCityPicker(true)          ← Step2 직접 이동 금지
+  ↓
+CityMonthPickerModal 표시
+  → 사용자가 지자체 · 적용 월 확인/수정
+  → onConfirm(city, month) 호출
+  ↓
+handleCityMonthConfirm(city, month)
+  → setFileInfo({ city, month })
+  → setWorksheets(pendingSetup.sheetsData)
+  → setMapDefs(pendingSetup.initialSel)
+  → setShowCityPicker(false)
+  → setPendingSetup(null)
+  → setStep(2)
+```
+
+### CityMonthPickerModal Props
+
+| Prop | 타입 | 설명 |
+| --- | --- | --- |
+| `userId` | string | Firebase Auth uid — 저장 키 분리용 |
+| `detectedCity` | string | Web Worker 파싱 결과 지자체명 (없으면 빈 문자열) |
+| `detectedMonth` | string | 파일 내 감지된 월 (없으면 빈 문자열) |
+| `userCities` | string[] | 현재 로그인 유저의 허용 지자체 목록 |
+| `isAdmin` | bool | 관리자이면 자유 입력(datalist), 일반이면 select |
+| `onConfirm` | func | `(city, month) => void` |
+| `onCancel` | func | `() => void` |
+
+### 지자체 감지 우선순위
+
+```text
+1. 파일명 / 시트 내용에서 지자체명 자동 감지 (Web Worker `detectedCity`)
+2. 감지 실패 → 저장된 마지막 사용 지자체 (`nexus_city_prefs_v2`)
+3. 저장 없음 → `userCities[0]` 첫 번째 허용 지자체
+```
+
+### 월 감지 우선순위
+
+```text
+1. 파일 내 감지된 월 (`detectedMonth` → toYYYYMM 변환)
+2. 해당 지자체 저장 이력 (`nexus_city_prefs_v2[userId][city].month`)
+3. 현재 월 (new Date() 기준 YYYY-MM)
+```
+
+---
+
+## 21. 설정 자동저장 (localStorage)
+
+### nexus_city_prefs_v2 (지자체별 월 저장)
+
+저장 키: `nexus_city_prefs_v2`
+
+구조:
+
+```json
+{
+  "{userId}": {
+    "{지자체명}": {
+      "month": "YYYY-MM",
+      "lastUsed": 1716800000000
+    }
+  }
+}
+```
+
+| 규칙 | 내용 |
+| --- | --- |
+| CP-1 | `onConfirm` 시 자동 저장 — 담당자가 확인 버튼을 누를 때만 저장 |
+| CP-2 | `userId` 최상위 키 — 동일 기기 다계정 혼용 방지 |
+| CP-3 | 지자체 변경 시 해당 지자체 저장 월로 자동 교체 (useEffect on city) |
+| CP-4 | `lastUsed` 타임스탬프 — 모달에서 "최근 작업: N월 N일" 표시용 |
+| CP-5 | 저장 실패 시 예외 무시 (try-catch) — localStorage 접근 불가 환경 대응 |
+
+### nexus_col_map_v1_{city} (컬럼 매핑 자동저장)
+
+저장 키: `nexus_col_map_v1_{지자체명}`
+
+구조:
+
+```json
+{
+  "이름": 2,
+  "주소": 3,
+  "수량(포수)": 5
+}
+```
+
+| 규칙 | 내용 |
+| --- | --- |
+| CM-1 | Step3 컬럼 매핑 확인 시 자동 저장 |
+| CM-2 | 같은 지자체 다음 업로드 시 저장된 매핑 자동 적용 |
+| CM-3 | 저장 키에 지자체명 포함 — 지자체마다 다른 엑셀 포맷 지원 |
+| CM-4 | 키 형식: `nexus_col_map_v1_${city}` (city는 공백 포함 원문 그대로) |

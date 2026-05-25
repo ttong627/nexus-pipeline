@@ -1,8 +1,18 @@
-export const APP_VERSION = 'V5.0.34';
-export const APP_BUILD = '2026.05.23';
-export const APP_BUILD_TIME = '2026.05.23 22:20';
+export const APP_VERSION = 'V5.5.58';
+export const APP_BUILD = '2026.05.26';
+export const APP_BUILD_TIME = '2026.05.26 00:43';
 
 export const CHANGELOG = [
+  { v: 'V5.5', date: '2026.05.25', items: [
+    '전체 UI/UX 디자인 개편 — 브랜드 컬러 에메랄드로 통일',
+    'AuthScreen · Step1 · LoadingScreen 파란색 계열 → 에메랄드 전환',
+    'IntroScreen 단계별 개별 컬러 부여 (데이터→스카이, 정제→에메랄드, 배정→앰버 등)',
+    'Dashboard CityCard 텍스트 크기 상향, 스켈레톤 로딩 추가',
+    'WorkflowGuide 단계 흐름 → 번호 스텝바 교체',
+    '에러 배지 빨간색 → 앰버 완화, 워크플로우 모드 localStorage 자동 기억',
+    'Step 진행 표시줄 헤더 통합 (1~3단계 파이프라인 진행 표시)',
+    'Step2/Step3 에메랄드 컬러 통일, animate-pulse 과다 사용 정리',
+  ]},
   { v: 'V5.0', date: '2026.05.22', items: [
     '전면 UI/UX 개편 — 좌측 사이드바 네비게이션 도입',
     '워크플로우 가이드 — 파이프라인 → 배송준비 → 루트맵 → 내보내기 단계별 안내',

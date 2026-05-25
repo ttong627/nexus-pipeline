@@ -241,17 +241,7 @@ export default function AdminPanel({ onClose, user }) {
   const [driverManageForm, setDriverManageForm] = useState(null); // null|{id,name,capacity,color,status,memo}
   const [driverManageSaving, setDriverManageSaving] = useState(false);
 
-  // AI Advisor States
-  const [aiLogs, setAiLogs] = useState([]);
-  const [aiLogsAll, setAiLogsAll] = useState([]); // applied/rejected 포함 전체
-  const [aiFilter, setAiFilter] = useState('applied'); // 'all' | 'applied' | 'pending'
-  const [aiLoading, setAiLoading] = useState(false);
-  const [aiRules, setAiRules] = useState(null);
-  const [userMappingStats, setUserMappingStats] = useState([]);
-
   const [inquiries, setInquiries] = useState([]);
-  const [editingAiRule, setEditingAiRule] = useState(null);
-  const [editingAiRuleNewField, setEditingAiRuleNewField] = useState('');
 
   // 소속사 글로벌 목록 (nexus_config/orgs)
   const [globalOrgs, setGlobalOrgs] = useState([]);
@@ -554,57 +544,9 @@ export default function AdminPanel({ onClose, user }) {
     }).finally(() => setLoading(false));
   };
 
-  const FIELD_LABELS = {
-    name: '성명', contact1: '연락처', address: '주소', qty: '포수', admin: '행정동',
-    contact2: '보조연락처', birth: '생년월일', note: '특이사항', sms: '문자수신',
-    type: '수급구분', driver: '기사', seqNo: '배송순번',
-  };
-
-  const fetchAiData = async () => {
-    setAiLoading(true);
-    try {
-      const [logsSnap, rulesSnap] = await Promise.all([
-        // 최근 1,000건만 — 전체 스캔 방지
-        getDocs(query(collection(db, 'nexus_ai_logs'), orderBy('createdAt', 'desc'), limit(1000))),
-        getDocs(collection(db, 'nexus_config'))
-      ]);
-      const allLogs = logsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
-
-      const nonMappingLogs = allLogs.filter(l => l.type !== 'user_mapping');
-      setAiLogsAll(nonMappingLogs);
-      const logs = nonMappingLogs.filter(l => l.status === 'pending');
-      setAiLogs(logs);
-
-      const mappingLogs = allLogs.filter(l => l.type === 'user_mapping' && l.columnName && l.mappedTo);
-      const grouped = {};
-      mappingLogs.forEach(l => {
-        const col = l.columnName;
-        if (!grouped[col]) grouped[col] = {};
-        grouped[col][l.mappedTo] = (grouped[col][l.mappedTo] || 0) + 1;
-      });
-      const stats = Object.entries(grouped).map(([col, counts]) => {
-        const total = Object.values(counts).reduce((s, n) => s + n, 0);
-        const [topField, topCount] = Object.entries(counts).sort((a, b) => b[1] - a[1])[0];
-        return {
-          col, topField, topCount, total,
-          confidence: Math.round((topCount / total) * 100),
-          fieldLabel: FIELD_LABELS[topField] || topField,
-        };
-      }).sort((a, b) => b.total - a.total);
-      setUserMappingStats(stats);
-
-      const ruleDoc = rulesSnap.docs.find(d => d.id === 'ai_rules');
-      if (ruleDoc) setAiRules(ruleDoc.data());
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setAiLoading(false);
-    }
-  };
 
   useEffect(() => {
     fetchUsers();
-    fetchAiData();
     fetchInquiries();
     fetchAuditLogs();
     loadGlobalOrgs();
@@ -629,135 +571,6 @@ export default function AdminPanel({ onClose, user }) {
     } catch (e) { alert('삭제 실패: ' + e.message); }
   };
 
-  const analyzeSuggestion = (colName) => {
-    const rules = [
-      { key: '이름', match: /명$|자$|성함|수령인/, score: 90 },
-      { key: '연락처', match: /번호|폰|휴대|연락|전화/, score: 95 },
-      { key: '주소', match: /거주지|소재지|배송지|위치/, score: 85 },
-      { key: '수량', match: /갯수|개수|지원량|지급량|포/, score: 80 }
-    ];
-    let best = { key: '알수없음', score: 0, reason: '패턴 불일치' };
-    for (const r of rules) {
-      if (r.match.test(colName) && r.score > best.score) {
-        best = { key: r.key, score: r.score, reason: `'${r.key}' 관련 키워드 감지됨` };
-      }
-    }
-    if (colName.length > 8 && best.score > 0) {
-      best.score -= 20;
-      best.reason += ' (단축 필요)';
-    }
-    return best;
-  };
-
-  const handleAcceptAiSuggestion = async (colName, targetKey) => {
-    setProcessing(true);
-    try {
-      const analysis = analyzeSuggestion(colName);
-      if (analysis.score < 50) {
-        if (!window.confirm(`AI 신뢰도가 ${analysis.score}%로 낮습니다. 정말 적용하시겠습니까?`)) {
-          setProcessing(false);
-          return;
-        }
-      }
-      const ref = doc(db, 'nexus_config', 'ai_rules');
-      let currentRules = aiRules?.reqKeys || [
-        { k: '이름', kws: ['이름', '성명', '대상자', '수령자명'] },
-        { k: '주소', kws: ['주소'] },
-        { k: '수량', kws: ['포수', '수량', '구입량', '가구원수', '포'] },
-        { k: '연락처', kws: ['휴대', '연락', '전화', '유선', '핸드폰', '핸드', '모바일', '휴폰'] }
-      ];
-      const targetRuleIdx = currentRules.findIndex(r => r.k === targetKey);
-      if (targetRuleIdx >= 0) {
-        if (!currentRules[targetRuleIdx].kws.includes(colName)) {
-          currentRules[targetRuleIdx].kws.push(colName);
-        }
-      } else {
-        currentRules.push({ k: targetKey, kws: [colName] });
-      }
-      const currentForced = aiRules?.forced || [];
-      await setDoc(ref, { reqKeys: currentRules, forced: [...new Set([...currentForced, colName])] }, { merge: true });
-      const logsToUpdate = aiLogs.filter(l => {
-        const colList = Array.isArray(l.cols) ? l.cols : (l.columnName ? [l.columnName] : []);
-        return colList.includes(colName);
-      });
-      for (const l of logsToUpdate) {
-        await updateDoc(doc(db, 'nexus_ai_logs', l.id), { status: 'applied', appliedKey: targetKey, appliedCol: colName });
-      }
-      fetchAiData();
-    } catch (err) {
-      console.error(err);
-      alert('규칙 업데이트 중 오류가 발생했습니다.');
-    } finally {
-      setProcessing(false);
-    }
-  };
-
-  const handleRejectAiSuggestion = async (colName) => {
-    setProcessing(true);
-    try {
-      const logsToUpdate = aiLogs.filter(l => {
-        const colList = Array.isArray(l.cols) ? l.cols : (l.columnName ? [l.columnName] : []);
-        return colList.includes(colName);
-      });
-      for (const l of logsToUpdate) {
-        await updateDoc(doc(db, 'nexus_ai_logs', l.id), { status: 'rejected', rejectedCol: colName });
-      }
-      fetchAiData();
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setProcessing(false);
-    }
-  };
-
-  const handleDeleteAiRuleKeyword = async (ruleKey, keyword) => {
-    if (!aiRules?.reqKeys) return;
-    const newReqKeys = aiRules.reqKeys.map(r =>
-      r.k === ruleKey ? { ...r, kws: r.kws.filter(kw => kw !== keyword) } : r
-    ).filter(r => r.kws.length > 0);
-    const newForced = (aiRules.forced || []).filter(f => f !== keyword);
-    try {
-      await setDoc(doc(db, 'nexus_config', 'ai_rules'), { reqKeys: newReqKeys, forced: newForced }, { merge: true });
-      setAiRules(prev => ({ ...prev, reqKeys: newReqKeys, forced: newForced }));
-    } catch (e) { alert('규칙 삭제 실패: ' + e.message); }
-  };
-
-  const handleDeleteAiLog = async (colName) => {
-    const logsToUpdate = aiLogsAll.filter(l => {
-      const colList = Array.isArray(l.cols) ? l.cols : (l.columnName ? [l.columnName] : []);
-      return colList.includes(colName) && l.status === 'pending';
-    });
-    try {
-      for (const l of logsToUpdate) {
-        await updateDoc(doc(db, 'nexus_ai_logs', l.id), { status: 'rejected', rejectedCol: colName });
-      }
-      setAiLogs(prev => prev.filter(l => {
-        const colList = Array.isArray(l.cols) ? l.cols : (l.columnName ? [l.columnName] : []);
-        return !colList.includes(colName);
-      }));
-    } catch (e) { alert('제안 삭제 실패: ' + e.message); }
-  };
-
-  const buildSuggestions = (logs) => {
-    const agg = {};
-    logs.forEach(l => {
-      const colList = Array.isArray(l.cols) ? l.cols : (l.columnName ? [l.columnName] : []);
-      const appliedKey = l.appliedKey || null;
-      colList.forEach(c => {
-        if (!agg[c]) agg[c] = { count: 0, files: new Set(), status: l.status || 'pending', appliedKey };
-        agg[c].count++;
-        agg[c].files.add(l.fileName);
-        if (l.status === 'applied') agg[c].status = 'applied';
-      });
-    });
-    return Object.entries(agg)
-      .map(([col, data]) => ({ col, count: data.count, files: [...data.files], status: data.status, appliedKey: data.appliedKey, analysis: analyzeSuggestion(col) }))
-      .sort((a, b) => b.count - a.count);
-  };
-
-  const pendingAiSuggestions = buildSuggestions(aiLogs);
-  const pendingSuggestionsCount = pendingAiSuggestions.length;
-  const appliedRulesCount = (aiRules?.reqKeys || []).reduce((s, r) => s + r.kws.length, 0);
 
   const tierCounts = Object.keys(TIERS).reduce((acc, k) => {
     acc[k] = users.filter(u => (u.tier || 'basic') === k).length;
@@ -974,7 +787,7 @@ export default function AdminPanel({ onClose, user }) {
         <div className="flex items-center justify-between px-8 py-5 border-b border-[#0f1a2e] shrink-0">
           <div>
             <h2 className="text-xl font-black text-[#3b82f6] flex items-center gap-3"><Users size={22}/> 관리자 대시보드</h2>
-            <p className="text-gray-500 text-xs mt-1">사용자 현황 · 등급·권한·소속사·지자체 관리 · AI Advisor</p>
+            <p className="text-gray-500 text-xs mt-1">사용자 현황 · 등급·권한·소속사·지자체 관리</p>
           </div>
           <div className="flex gap-2">
             <button
@@ -982,15 +795,6 @@ export default function AdminPanel({ onClose, user }) {
               className={`px-4 py-2 rounded-lg text-sm font-bold transition-colors ${activeTab === 'users' ? 'bg-[#3b82f6] text-black shadow-[0_0_15px_rgba(59,130,246,0.3)]' : 'bg-[#111] text-gray-400 border border-[#333] hover:text-white hover:bg-[#222]'}`}
             >
               사용자 관리
-            </button>
-            <button
-              onClick={() => setActiveTab('ai_advisor')}
-              className={`px-4 py-2 rounded-lg text-sm font-bold transition-colors flex items-center gap-2 ${activeTab === 'ai_advisor' ? 'bg-[#3b82f6] text-black shadow-[0_0_15px_rgba(59,130,246,0.3)]' : 'bg-[#111] text-gray-400 border border-[#333] hover:text-white hover:bg-[#222]'}`}
-            >
-              <Crown size={16} /> NEXUS AI Advisor
-              {pendingSuggestionsCount > 0 && (
-                <span className="bg-amber-500 text-white text-[10px] px-1.5 py-0.5 rounded-full ml-1">{pendingSuggestionsCount}</span>
-              )}
             </button>
             <button
               onClick={() => setActiveTab('inquiries')}
@@ -1352,139 +1156,6 @@ export default function AdminPanel({ onClose, user }) {
               )}
             </div>
           </>
-        )}
-
-        {activeTab === 'ai_advisor' && (
-          <div className="flex-1 p-6 overflow-y-auto scrollbar-thin scrollbar-thumb-[#2d4a35]">
-            {/* 헤더 */}
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-3">
-                <Crown size={18} className="text-[#3b82f6]"/>
-                <h3 className="text-base font-black text-[#3b82f6]">AI 자가 진화 분석</h3>
-                <span className="text-gray-600 text-[11px]">칼럼 매핑 학습 현황</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <button onClick={fetchAiData} disabled={aiLoading}
-                  className="flex items-center gap-1 px-2.5 py-1.5 bg-black/40 border border-[#333] text-gray-500 text-[11px] font-black rounded-lg hover:text-[#3b82f6] hover:border-[#3b82f6]/40 transition-colors disabled:opacity-40">
-                  <RefreshCw size={11} className={aiLoading ? 'animate-spin' : ''}/> 새로고침
-                </button>
-                <div className="flex items-center gap-0.5 bg-black/40 border border-[#1a1a2e] rounded-lg p-0.5">
-                  {[
-                    { key: 'applied', label: '반영됨', count: appliedRulesCount, color: 'text-emerald-400' },
-                    { key: 'pending', label: '미반영',  count: pendingSuggestionsCount, color: 'text-amber-400' },
-                    { key: 'all',     label: '전체',    count: appliedRulesCount + pendingSuggestionsCount, color: 'text-gray-400' },
-                  ].map(t => (
-                    <button key={t.key} onClick={() => setAiFilter(t.key)}
-                      className={`px-3 py-1.5 rounded text-xs font-black transition-colors flex items-center gap-1.5 ${aiFilter === t.key ? 'bg-[#3b82f6] text-black' : 'text-gray-500 hover:text-white'}`}>
-                      {t.label}
-                      <span className={`text-[10px] ${aiFilter === t.key ? 'text-black/70' : t.color}`}>{t.count}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>
-
-            {aiLoading ? (
-              <div className="flex items-center justify-center py-20 text-gray-500 text-sm">데이터를 불러오는 중...</div>
-            ) : (
-              <>
-                {/* 반영된 칼럼 매핑 규칙 */}
-                {(aiFilter === 'applied' || aiFilter === 'all') && (
-                  <div className={aiFilter === 'all' ? 'mb-7' : ''}>
-                    <div className="flex items-center gap-2 mb-3">
-                      <CheckCircle2 size={12} className="text-emerald-400"/>
-                      <p className="text-[11px] font-black text-gray-300">반영된 칼럼 매핑 규칙</p>
-                      <span className="text-gray-600 text-[10px]">— × 클릭으로 키워드 삭제</span>
-                      {appliedRulesCount > 0 && (
-                        <span className="bg-emerald-900/40 text-emerald-400 border border-emerald-700/30 text-[10px] px-1.5 py-0.5 rounded-full font-black ml-auto">{appliedRulesCount}개 키워드</span>
-                      )}
-                    </div>
-                    {!aiRules?.reqKeys?.length ? (
-                      <div className="bg-black/30 border border-[#0f1a2e] rounded-xl p-6 text-center">
-                        <p className="text-gray-600 text-sm">설정된 매핑 규칙이 없습니다.</p>
-                      </div>
-                    ) : (
-                      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2">
-                        {(aiRules.reqKeys || []).map(rule => (
-                          <div key={rule.k} className="bg-black/40 border border-[#0a2018] rounded-xl p-3 hover:border-emerald-800/40 transition-colors">
-                            <div className="flex items-center justify-between mb-2">
-                              <span className="text-emerald-400 font-black text-[11px]">{rule.k} 필드</span>
-                              <span className="text-[9px] text-gray-700">{rule.kws.length}개</span>
-                            </div>
-                            <div className="flex flex-wrap gap-1">
-                              {rule.kws.map(kw => {
-                                const isForced = (aiRules.forced || []).includes(kw);
-                                return (
-                                  <span key={kw} className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-bold border group transition-colors cursor-default ${
-                                    isForced ? 'bg-amber-950/40 text-amber-300 border-amber-700/40 hover:border-amber-500/60' : 'bg-[#071410] text-emerald-400/80 border-emerald-900/40 hover:border-emerald-700/50'
-                                  }`}>
-                                    {isForced && <span className="text-amber-400 text-[8px] mr-0.5">★</span>}
-                                    {kw}
-                                    <button onClick={() => handleDeleteAiRuleKeyword(rule.k, kw)}
-                                      className="ml-0.5 opacity-30 group-hover:opacity-100 hover:text-red-400 transition-all leading-none"
-                                      title="규칙에서 제거">×</button>
-                                  </span>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* 미반영 AI 제안 */}
-                {(aiFilter === 'pending' || aiFilter === 'all') && (
-                  <div>
-                    <div className="flex items-center gap-2 mb-3">
-                      <AlertCircle size={12} className="text-amber-400"/>
-                      <p className="text-[11px] font-black text-gray-300">미반영 AI 제안</p>
-                      <span className="text-gray-600 text-[10px]">— ★강력적용 시 칼럼 매핑 최우선 반영</span>
-                      {pendingSuggestionsCount > 0 && (
-                        <span className="bg-amber-900/40 text-amber-400 border border-amber-700/30 text-[10px] px-1.5 py-0.5 rounded-full font-black ml-auto">{pendingSuggestionsCount}건</span>
-                      )}
-                    </div>
-                    {pendingSuggestionsCount === 0 ? (
-                      <div className="bg-black/30 border border-[#0f1a2e] rounded-xl p-6 text-center">
-                        <p className="text-gray-600 text-sm">새로 제안된 미인식 칼럼이 없습니다.</p>
-                      </div>
-                    ) : (
-                      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2">
-                        {pendingAiSuggestions.map((s, idx) => (
-                          <div key={idx} className="bg-black/40 border border-[#1e1408] rounded-xl p-3 hover:border-amber-800/40 transition-colors">
-                            <div className="flex items-start justify-between gap-1 mb-1">
-                              <span className="text-white font-black text-sm leading-tight truncate flex-1" title={s.col}>{s.col}</span>
-                              <span className={`text-[10px] font-black shrink-0 px-1 py-0.5 rounded ${
-                                s.analysis.score >= 80 ? 'text-emerald-400 bg-emerald-950/40' : s.analysis.score >= 50 ? 'text-amber-400 bg-amber-950/40' : 'text-red-400 bg-red-950/40'
-                              }`}>{Math.max(0, s.analysis.score)}%</span>
-                            </div>
-                            <p className="text-gray-600 text-[10px] mb-2.5">
-                              → <span className="text-gray-300 font-bold">{s.analysis.key}</span>
-                              <span className="text-gray-700 ml-1">· {s.count}회</span>
-                            </p>
-                            <div className="flex gap-1">
-                              <button onClick={() => handleDeleteAiLog(s.col)} disabled={processing}
-                                className="flex-1 py-1 rounded bg-black/60 text-gray-600 text-[10px] font-bold border border-[#1a1a1a] hover:text-red-400 hover:border-red-900/50 transition-colors disabled:opacity-30">삭제</button>
-                              <button onClick={() => handleAcceptAiSuggestion(s.col, s.analysis.key)} disabled={processing || s.analysis.key === '알수없음'}
-                                className={`py-1 px-2 rounded text-[10px] font-black border transition-all disabled:opacity-30 ${
-                                  s.analysis.key === '알수없음'
-                                    ? 'bg-black/30 text-gray-700 border-[#1a1a1a] cursor-not-allowed'
-                                    : 'bg-amber-900/40 text-amber-300 border-amber-700/40 hover:bg-amber-800/50'
-                                }`}
-                                title={s.analysis.key !== '알수없음' ? `'${s.analysis.key}'로 강력 지침 적용` : '적용 불가'}>
-                                {s.analysis.key === '알수없음' ? '—' : '★ 강력적용'}
-                              </button>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </>
-            )}
-          </div>
         )}
 
         {activeTab === 'inquiries' && (

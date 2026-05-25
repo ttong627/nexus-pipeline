@@ -151,7 +151,7 @@ const VirtualTable = memo(function VirtualTable({ displayRecords, dirtyRecords, 
   const paddingBottom = vItems.length > 0 ? totalSize - vItems[vItems.length - 1].end : 0;
 
   if (loadingRecords) return (
-    <div className="flex-1 flex items-center justify-center gap-2 text-blue-400 text-sm animate-pulse">
+    <div className="flex-1 flex items-center justify-center gap-2 text-emerald-400 text-sm animate-pulse">
       <Cloud size={18} /> 데이터 불러오는 중...
     </div>
   );

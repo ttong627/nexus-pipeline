@@ -1,7 +1,169 @@
-﻿import { useState, useEffect, useRef, memo } from 'react';
-import { ChevronLeft, ChevronRight, AlertTriangle, CheckCircle, Columns, Download, Trash2, Edit3, Database, X, MapPin, Users, UserX, StickyNote, User, Phone, BookOpen, Sparkles, ArrowLeftRight } from 'lucide-react';
+﻿import { useState, useEffect, useRef, useCallback, memo } from 'react';
+import { ChevronLeft, ChevronRight, AlertTriangle, CheckCircle, Columns, Download, Trash2, Edit3, Database, X, MapPin, Users, UserX, StickyNote, User, Phone, BookOpen, Sparkles, ArrowLeftRight, GripVertical, RotateCcw, Eye, EyeOff } from 'lucide-react';
 import { formatPhoneInput } from '../utils/parsers.js';
 import { WORKFLOW_MODES } from '../utils/workflow.js';
+
+// ── 칼럼 순서 조정 패널 ────────────────────────────────────────────────────────
+const ColOrderPanel = memo(function ColOrderPanel({ cols, onChange, onReset, onClose, anchorRef }) {
+  const panelRef = useRef(null);
+  const dragIdx = useRef(null);
+  const dragOverIdx = useRef(null);
+
+  // 패널 외부 클릭 시 닫기
+  useEffect(() => {
+    const handler = (e) => {
+      if (panelRef.current && !panelRef.current.contains(e.target) &&
+          anchorRef.current && !anchorRef.current.contains(e.target)) {
+        onClose();
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [onClose, anchorRef]);
+
+  // Escape 닫기
+  useEffect(() => {
+    const handler = (e) => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  }, [onClose]);
+
+  const move = useCallback((from, to) => {
+    if (to < 0 || to >= cols.length) return;
+    const next = [...cols];
+    const [item] = next.splice(from, 1);
+    next.splice(to, 0, item);
+    onChange(next);
+  }, [cols, onChange]);
+
+  const toggle = useCallback((idx) => {
+    const next = cols.map((c, i) => i === idx ? { ...c, on: !c.on } : c);
+    onChange(next);
+  }, [cols, onChange]);
+
+  const onDragStart = (idx) => { dragIdx.current = idx; };
+  const onDragOver = (e, idx) => { e.preventDefault(); dragOverIdx.current = idx; };
+  const onDrop = (e, idx) => {
+    e.preventDefault();
+    if (dragIdx.current === null || dragIdx.current === idx) return;
+    move(dragIdx.current, idx);
+    dragIdx.current = null;
+    dragOverIdx.current = null;
+  };
+
+  const onCount = cols.filter(c => c.on).length;
+
+  return (
+    <div
+      ref={panelRef}
+      className="absolute right-0 top-full mt-1 z-50 w-72 rounded-xl border border-[#2a3a2a] bg-[#0a100a] shadow-2xl shadow-black/60 overflow-hidden"
+      style={{ boxShadow: '0 8px 32px rgba(0,0,0,0.7), 0 0 0 1px rgba(52,211,153,0.12)' }}
+    >
+      {/* 헤더 */}
+      <div className="flex items-center justify-between px-3 py-2.5 bg-[#0d1a0d] border-b border-[#1a2a1a]">
+        <div className="flex items-center gap-2">
+          <Columns size={12} className="text-emerald-400" />
+          <span className="text-[11px] font-black text-white tracking-wide">칼럼 순서 / 표시</span>
+          <span className="text-[9px] text-emerald-400 font-bold">{onCount}/{cols.length}</span>
+        </div>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={onReset}
+            title="기본값으로 초기화"
+            className="p-1 rounded text-gray-500 hover:text-amber-400 hover:bg-amber-400/10 transition-colors"
+          >
+            <RotateCcw size={11} />
+          </button>
+          <button
+            onClick={onClose}
+            className="p-1 rounded text-gray-500 hover:text-white hover:bg-white/10 transition-colors"
+          >
+            <X size={11} />
+          </button>
+        </div>
+      </div>
+
+      {/* 안내 */}
+      <div className="px-3 py-1.5 bg-[#080e08] border-b border-[#131a13]">
+        <p className="text-[9px] text-gray-600">드래그 또는 ← → 버튼으로 칼럼 순서를 조정하세요</p>
+      </div>
+
+      {/* 칼럼 목록 */}
+      <div className="max-h-80 overflow-y-auto py-1 scrollbar-thin scrollbar-thumb-[#2a2a2a]">
+        {cols.map((col, idx) => (
+          <div
+            key={col.key}
+            draggable
+            onDragStart={() => onDragStart(idx)}
+            onDragOver={(e) => onDragOver(e, idx)}
+            onDrop={(e) => onDrop(e, idx)}
+            className={`flex items-center gap-2 px-2 py-1.5 mx-1 rounded-lg cursor-grab active:cursor-grabbing transition-colors select-none
+              ${col.on ? 'hover:bg-emerald-500/8' : 'opacity-40 hover:bg-white/4'}`}
+          >
+            {/* 드래그 핸들 */}
+            <GripVertical size={12} className="text-gray-700 shrink-0 cursor-grab" />
+
+            {/* 순번 */}
+            <span className="text-[9px] text-gray-700 w-4 text-right shrink-0 tabular-nums">{idx + 1}</span>
+
+            {/* 칼럼명 */}
+            <span className={`flex-1 text-[11px] font-bold truncate ${col.on ? 'text-white' : 'text-gray-600'}`}>
+              {col.label}
+            </span>
+
+            {/* ← → 이동 버튼 */}
+            <div className="flex items-center gap-0.5 shrink-0">
+              <button
+                onClick={() => move(idx, idx - 1)}
+                disabled={idx === 0}
+                title="왼쪽으로 이동"
+                className="w-5 h-5 flex items-center justify-center rounded text-gray-600 hover:text-white hover:bg-white/10 disabled:opacity-20 disabled:cursor-not-allowed transition-colors"
+              >
+                <ChevronLeft size={11} />
+              </button>
+              <button
+                onClick={() => move(idx, idx + 1)}
+                disabled={idx === cols.length - 1}
+                title="오른쪽으로 이동"
+                className="w-5 h-5 flex items-center justify-center rounded text-gray-600 hover:text-white hover:bg-white/10 disabled:opacity-20 disabled:cursor-not-allowed transition-colors"
+              >
+                <ChevronRight size={11} />
+              </button>
+            </div>
+
+            {/* 표시/숨김 토글 */}
+            <button
+              onClick={() => toggle(idx)}
+              title={col.on ? '이 칼럼 숨기기' : '이 칼럼 표시'}
+              className={`w-5 h-5 flex items-center justify-center rounded transition-colors shrink-0 ${
+                col.on ? 'text-emerald-400 hover:bg-emerald-400/10' : 'text-gray-700 hover:text-gray-400 hover:bg-white/5'
+              }`}
+            >
+              {col.on ? <Eye size={11} /> : <EyeOff size={11} />}
+            </button>
+          </div>
+        ))}
+      </div>
+
+      {/* 전체 토글 푸터 */}
+      <div className="flex items-center justify-between px-3 py-2 bg-[#0d1a0d] border-t border-[#1a2a1a]">
+        <button
+          onClick={() => onChange(cols.map(c => ({ ...c, on: true })))}
+          className="text-[9px] text-gray-500 hover:text-emerald-400 transition-colors font-bold"
+        >
+          전체 표시
+        </button>
+        <span className="text-[9px] text-gray-700">드래그로 순서 변경</span>
+        <button
+          onClick={() => onChange(cols.map((c, i) => ({ ...c, on: i < cols.length - 1 })))}
+          className="text-[9px] text-gray-500 hover:text-amber-400 transition-colors font-bold"
+        >
+          사유 제외
+        </button>
+      </div>
+    </div>
+  );
+});
 
 const ResultGrid = memo(function ResultGrid({
   step, setStep, filter, setFilter, dongList = [], driverList = [], gridData, filteredData, paginatedData,
@@ -13,15 +175,18 @@ const ResultGrid = memo(function ResultGrid({
   onFetchBaseNotes, isFetchingNotes,
   workflowMode = 'cleaningOnly', onWorkflowModeChange,
   addressDisplayMode = 'parenBeforeDetail', onToggleAddressDisplayMode,
+  exportColOrder = [], setExportColOrder, defaultExportCols = [],
 }) {
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [batchNoteOpen, setBatchNoteOpen] = useState(false);
   const [batchNoteValue, setBatchNoteValue] = useState('');
   const [updateModalRow, setUpdateModalRow] = useState(null);
   const [showColSettings, setShowColSettings] = useState(false);
+  const [showColOrder, setShowColOrder] = useState(false);
   const [localColVis, setLocalColVis] = useState({ birth: false, contact2: false, sms: false, note: true, driver: true });
   const searchInputRef = useRef(null);
   const colSettingsRef = useRef(null);
+  const colOrderBtnRef = useRef(null);
 
   useEffect(() => {
     if (!showColSettings) return;
@@ -175,7 +340,7 @@ const ResultGrid = memo(function ResultGrid({
                 </button>
               )}
               <button onClick={onClosePurifyResult}
-                className="flex-1 py-3 bg-[#3b82f6] text-black font-black rounded-xl text-sm hover:bg-[#93c5fd] transition-colors">
+                className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-black rounded-xl text-sm transition-colors">
                 확인
               </button>
             </div>
@@ -351,11 +516,39 @@ const ResultGrid = memo(function ResultGrid({
             </div>
             <button
               onClick={onHelp}
-              className="w-8 h-8 rounded-full bg-[#060c18] border border-[#3b82f6]/40 text-[#3b82f6] font-black text-sm hover:bg-[#3b82f6]/20 hover:scale-110 transition-all shrink-0"
-              style={{ animation: 'help-pulse 2.5s ease-in-out infinite' }}
+              className="w-8 h-8 rounded-full bg-emerald-950/30 border border-emerald-500/40 text-emerald-400 font-black text-sm hover:bg-emerald-500/20 hover:scale-110 transition-all shrink-0"
               title="결과 화면 도움말"
             >?</button>
             <div className="h-5 w-px bg-[#2a2a2a]"/>
+            <div className="relative">
+              <button
+                ref={colOrderBtnRef}
+                onClick={() => setShowColOrder(v => !v)}
+                title="엑셀 칼럼 순서·표시 설정"
+                className={`px-3 py-2 rounded-lg border text-xs font-bold flex items-center gap-1.5 transition-all ${
+                  showColOrder
+                    ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-300'
+                    : 'bg-[#0d1a0d] border-[#1a3a1a] text-emerald-500/70 hover:text-emerald-300 hover:border-emerald-500/40'
+                }`}
+              >
+                <Columns size={13} />
+                <span className="hidden sm:inline">칼럼</span>
+                {exportColOrder.filter(c => !c.on).length > 0 && (
+                  <span className="w-4 h-4 bg-amber-500 text-black text-[9px] font-black rounded-full flex items-center justify-center">
+                    {exportColOrder.filter(c => !c.on).length}
+                  </span>
+                )}
+              </button>
+              {showColOrder && exportColOrder.length > 0 && (
+                <ColOrderPanel
+                  cols={exportColOrder}
+                  onChange={(next) => setExportColOrder(next)}
+                  onReset={() => setExportColOrder(defaultExportCols)}
+                  onClose={() => setShowColOrder(false)}
+                  anchorRef={colOrderBtnRef}
+                />
+              )}
+            </div>
             <button onClick={handleExport} className="px-5 py-2 bg-emerald-400 text-black font-black rounded-lg shadow-[0_0_12px_rgba(52,211,153,0.22)] hover:bg-emerald-300 transition-all flex items-center gap-2 text-xs">
               <Download size={14} strokeWidth={2.5}/> 표준 명단 패키징
             </button>
@@ -608,11 +801,11 @@ const ResultGrid = memo(function ResultGrid({
                 return (
                   <tr key={row.id} className={`border-b border-[#222] group h-10 transition-colors ${isSelected ? 'bg-amber-950/20' : row._에러 ? 'bg-red-950/20 hover:bg-red-900/40' : 'bg-transparent hover:bg-[#060c18]/60'}`}>
                     <td className={`px-2 py-1.5 border-r border-[#222] text-center sticky left-0 z-10 shadow-[2px_0_5px_rgba(0,0,0,0.3)] ${isSelected ? 'bg-amber-950/40' : row._에러 ? 'bg-[#1a0505]' : 'bg-[#0a0a0a] group-hover:bg-[#0f1f12]'}`}>
-                      <input type="checkbox" checked={isSelected} onChange={() => toggleRow(row.id)} className="accent-[#3b82f6] w-4 h-4 cursor-pointer" />
+                      <input type="checkbox" checked={isSelected} onChange={() => toggleRow(row.id)} className="accent-emerald-500 w-4 h-4 cursor-pointer" />
                     </td>
                     <td className={`px-4 py-1.5 border-r border-[#222] text-center sticky left-10 z-10 shadow-[2px_0_5px_rgba(0,0,0,0.3)] font-bold ${isSelected ? 'bg-amber-950/40 text-amber-300' : row._에러 ? 'bg-[#1a0505] text-red-400 border-l-4 border-l-red-500' : 'bg-[#0a0a0a] group-hover:bg-[#0f1f12] text-gray-500'}`}>
                       <div className="flex items-center justify-center gap-1">
-                        {row._이식됨 && <span title={`고객 노트 이식됨 (${row._매칭방식 || ''})`} className="text-[#3b82f6] text-xs drop-shadow-[0_0_5px_rgba(59,130,246,0.8)] animate-pulse">👑</span>}
+                        {row._이식됨 && <span title={`고객 노트 이식됨 (${row._매칭방식 || ''})`} className="text-emerald-400 text-xs drop-shadow-[0_0_5px_rgba(16,185,129,0.8)]">👑</span>}
                         {((currentPage - 1) * itemsPerPage + idx + 1).toLocaleString()}
                       </div>
                     </td>

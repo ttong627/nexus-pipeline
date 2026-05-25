@@ -196,7 +196,7 @@ export default function DbOverview({ onBack, onGoToBase, onGoToCloud }) {
 
             {/* 지자체 카드 그리드 */}
             {loading ? (
-              <div className="flex items-center justify-center h-40 gap-2 text-blue-400 text-sm animate-pulse">
+              <div className="flex items-center justify-center h-40 gap-2 text-emerald-400 text-sm animate-pulse">
                 <Database size={18} /> 데이터 불러오는 중...
               </div>
             ) : baseCities.length === 0 ? (

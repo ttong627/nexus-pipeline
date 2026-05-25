@@ -788,7 +788,7 @@ ${rows.map((r, i) => `<tr>
             </button>
           ))}
         </div>
-        {saving && <span className="text-[10px] text-[#3b82f6] animate-pulse ml-1">저장 중...</span>}
+        {saving && <span className="text-[10px] text-emerald-400 animate-pulse ml-1">저장 중...</span>}
       </div>
 
       {/* ── Selectors ── */}

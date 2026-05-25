@@ -1,7 +1,8 @@
-﻿import { useState, useEffect, useMemo, useRef, lazy, Suspense } from "react";
+import { useState, useEffect, useMemo, useRef, lazy, Suspense } from "react";
 import { auth, onAuthStateChanged, signOut, setDoc, getDoc, updateDoc, deleteDoc, doc, db, serverTimestamp, Timestamp, increment, addDoc, collection, getDocs, getDocsFromServer, writeBatch, query, where, onSnapshot, GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult } from "./config/firebase.js";
 const ttl90 = () => Timestamp.fromMillis(Date.now() + 90 * 24 * 60 * 60 * 1000);
 import { APP_VERSION } from "./version.js";
+import { cleanupExpiredCache } from "./engine/dbCache.js";
 
 // ── 즉시 로드 (초기 화면에 필요)
 import Dashboard from "./components/Dashboard.jsx";
@@ -10,6 +11,7 @@ import AuthScreen from "./components/AuthScreen.jsx";
 import Step1_Upload from "./components/Step1_Upload.jsx";
 import Step2_SheetSelect from "./components/Step2_SheetSelect.jsx";
 import Step3_Mapping from "./components/Step3_Mapping.jsx";
+import CityMonthPickerModal from "./components/CityMonthPickerModal.jsx";
 import LoadingScreen from "./components/LoadingScreen.jsx";
 import ResultGrid from "./components/ResultGrid.jsx";
 import ErrorBoundary from "./components/ErrorBoundary.jsx";
@@ -159,18 +161,20 @@ const ScheduleTab           = lazyWithChunkRecovery(() => import("./components/S
 
 import { processAddress, asyncPool, addTypoRecord, loadTypoDict } from "./engine/addressEngine.js";
 import { parsePhoneNumbers, parseSMS, parseBirthDate, normalizeBirth, extractPhoneNote, formatPhone } from "./utils/parsers.js";
-import { canUseRouteMap, canUseDbOverview, canUseDriverRegistry, getMonthlyLimit } from "./utils/tierUtils.js";
+import { canUseRouteMap, canUseDbOverview, getMonthlyLimit } from "./utils/tierUtils.js";
 import { buildStepStatus, getVisibleWorkflowSteps, getWorkflowMeta, getWorkflowMode, WORKFLOW_STEP_LABELS } from "./utils/workflow.js";
-import { LogOut, ShieldCheck, CheckCircle, Database, Crown, Layers, UserCircle, Undo2, BarChart3, MapPin, Truck, CalendarDays, FileSpreadsheet, Home, ChevronLeft, ChevronRight, BookOpen } from "lucide-react";
+import { LogOut, ShieldCheck, Database, Crown, Layers, UserCircle, Undo2, BarChart3, MapPin, Truck, CalendarDays, FileSpreadsheet, Home, ChevronLeft, ChevronRight, BookOpen } from "lucide-react";
 
 export default function App() {
   const [user, setUser] = useState(null);
   const [showAuth, setShowAuth] = useState(true);
   const [authStatus, setAuthStatus] = useState('checking');
   const [authLoading, setAuthLoading] = useState(false);
-  const [step, setStep] = useState(0); 
+  const [step, setStep] = useState(0);
   const [fileInfo, setFileInfo] = useState(null);
   const [worksheets, setWorksheets] = useState([]);
+  const [showCityPicker, setShowCityPicker] = useState(false);
+  const [pendingSetup, setPendingSetup] = useState(null); // { sheetsData, detectedCity, monthStr, initialSel }
   const [selectedSheets, setSelectedSheets] = useState([]);
   const [aiRules, setAiRules] = useState(null);
   const [mapDefs, setMapDefs] = useState({});
@@ -257,6 +261,11 @@ export default function App() {
 
   const [showExportSetting, setShowExportSetting] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
+
+  // exportColOrder 변경 시 localStorage 자동 저장
+  useEffect(() => {
+    try { localStorage.setItem('nexus_export_cols_v2', JSON.stringify(exportColOrder)); } catch { /* ignore */ }
+  }, [exportColOrder]);
   const [showUpgrade, setShowUpgrade] = useState(false);
   const [upgradeReason, setUpgradeReason] = useState('city_limit');
   const [showUtils, setShowUtils] = useState(false);
@@ -325,6 +334,9 @@ export default function App() {
     link.type = "image/png"; link.href = "ttongpa.png";
     document.title = `NEXUS PIPELINE ${APP_VERSION}`;
 
+    // 주소 캐시 만료 항목 백그라운드 정리 (비동기, 앱 동작과 무관)
+    cleanupExpiredCache();
+
     // 리다이렉트 로그인 복귀 처리 (모바일/팝업 차단 환경 fallback)
     if (localStorage.getItem('nexus_auth_redirect_v1')) {
       localStorage.removeItem('nexus_auth_redirect_v1');
@@ -359,10 +371,10 @@ export default function App() {
         const isAdminEmail = ADMIN_EMAILS.includes(u.email);
 
         // 1. 최고 관리자 계정이 일반 유저로 꼬여있다면 복구 (Root Cause Fix)
-        if (isAdminEmail && (userData.role !== 'admin' || userData.tier !== 'vvip' || (userData.maxCities ?? 0) < 999)) {
-          await setDoc(doc(db, "users", u.uid), { role: "admin", tier: "vvip", maxCities: 999 }, { merge: true });
+        if (isAdminEmail && (userData.role !== 'admin' || userData.tier !== 'sapphire' || (userData.maxCities ?? 0) < 999)) {
+          await setDoc(doc(db, "users", u.uid), { role: "admin", tier: "sapphire", maxCities: 999 }, { merge: true });
           userData.role = 'admin';
-          userData.tier = 'vvip';
+          userData.tier = 'sapphire';
           userData.maxCities = 999;
         }
 
@@ -376,7 +388,7 @@ export default function App() {
         // 3. 일반 사용자 회사코드 자동 생성 (없는 경우에만)
         if (!isAdminEmail && !userData.companyCode) {
           const ts = Date.now().toString(36).toUpperCase().slice(-5);
-          const rand = Math.random().toString(36).substr(2, 5).toUpperCase();
+          const rand = Math.random().toString(36).slice(2, 7).toUpperCase();
           const code = `NX-${ts}${rand}`;
           await setDoc(doc(db, 'users', u.uid), { companyCode: code }, { merge: true });
           await setDoc(doc(db, 'user_companies', code), {
@@ -389,6 +401,15 @@ export default function App() {
         }
 
         setUser({ ...u, ...userData });
+
+        // ── 세션 최초 진입 시 프리미엄 3D 인트로 강제 표출 ──
+        const sessionKey = 'nexus_session_intro_shown';
+        if (!sessionStorage.getItem(sessionKey)) {
+          sessionStorage.setItem(sessionKey, '1');
+          setIntroReason('new');
+          setIntroMeta({ region: userData.citiesApproved?.[0] || '' });
+          setShowIntro(true);
+        }
 
         // 사용자 문서 실시간 구독 — totalRowsProcessed 등 통계 즉시 반영
         if (userUnsubRef.current) userUnsubRef.current();
@@ -547,9 +568,7 @@ export default function App() {
         if (evt.data.ok && evt.data.action === "PARSE_TARGET") {
           gDone('파일 분석 완료!');
           const { sheetsData, detectedCity, monthStr } = evt.data;
-          setFileInfo(prev => ({ ...prev, city: detectedCity, month: monthStr }));
-          setWorksheets(sheetsData);
-          
+
           const initialSel = {};
           sheetsData.forEach(s => {
             const getHeader = (k) => {
@@ -571,7 +590,6 @@ export default function App() {
               type: (s.typeColIdx >= 0) ? s.headers[s.typeColIdx] : "",
             };
           });
-          setMapDefs(initialSel);
 
           // AI 자가 진화 서버 - 누락된 컬럼을 관리자 패널로 전송
           sheetsData.forEach(sheet => {
@@ -593,7 +611,9 @@ export default function App() {
             }
           });
 
-          setStep(2);
+          // 지자체·적용월 확인 모달 표시
+          setPendingSetup({ sheetsData, detectedCity, monthStr, initialSel });
+          setShowCityPicker(true);
         } else if (!evt.data.ok) {
           setGLoad({ show: false });
         alert("파일 분석 중 오류가 발생했습니다: " + evt.data.error);
@@ -604,6 +624,22 @@ export default function App() {
       setGLoad({ show: false });
       alert("파일을 읽는 중 오류가 발생했습니다.");
     }
+  };
+
+  const handleCityMonthConfirm = (city, monthYYYYMM) => {
+    const { sheetsData, initialSel } = pendingSetup || {};
+    if (!sheetsData) return;
+    setFileInfo(prev => ({ ...prev, city, month: monthYYYYMM }));
+    setWorksheets(sheetsData);
+    setMapDefs(initialSel);
+    setShowCityPicker(false);
+    setPendingSetup(null);
+    setStep(2);
+  };
+
+  const handleCityMonthCancel = () => {
+    setShowCityPicker(false);
+    setPendingSetup(null);
   };
 
   const handleSecondFileUpload = async (file) => {
@@ -1270,6 +1306,7 @@ export default function App() {
     const rawMonth = fileInfo?.month || '';
     const mMatch = rawMonth.match(/(\d{1,2})월/);
     if (mMatch) initMonth = `${now.getFullYear()}-${String(mMatch[1]).padStart(2, '0')}`;
+    else if (/^\d{4}-\d{2}$/.test(rawMonth)) initMonth = rawMonth;
 
     const monthStr = window.prompt(
       `[${city}] 저장할 년월을 입력하세요 (예: ${initMonth})\n\n전체 ${allData.length}건을 저장합니다.\n정상 ${validData.length}건 / 확인필요 ${errorData.length}건`,
@@ -1486,20 +1523,34 @@ export default function App() {
       } catch { /* sync 실패는 무시 — 핵심 저장은 완료됨 */ }
 
       // [6단계] 구월 자동 정리 — 동일 지자체의 최신 1개월만 유지
+      // ※ cloud_lists는 "현재 월 작업 공간"이며, 이력은 delivery_history에 보존됨
       try {
         const allMonthsSnap = await getDocs(collection(db, 'cloud_lists', city, 'months'));
         const oldMonths = allMonthsSnap.docs.filter(d => d.id !== monthStr);
-        for (const oldMonth of oldMonths) {
-          const rSnap = await getDocs(collection(db, 'cloud_lists', city, 'months', oldMonth.id, 'records'));
-          for (let i = 0; i < rSnap.docs.length; i += 499) {
-            const b = writeBatch(db);
-            rSnap.docs.slice(i, i + 499).forEach(d => b.delete(d.ref));
-            await b.commit();
+        if (oldMonths.length > 0) {
+          const oldMonthNames = oldMonths.map(d => d.id).join(', ');
+          const confirmDelete = window.confirm(
+            `[${city}] 구월 데이터 정리\n\n이전 월 데이터: ${oldMonthNames}\n\n이 데이터를 삭제하시겠습니까?\n\n✅ 배송 이력은 별도 delivery_history에 보존됩니다.\n⚠️ 삭제 후 cloud_lists에서는 복구할 수 없습니다.`
+          );
+          if (!confirmDelete) {
+            gDone(`${city} ${monthStr} · 전체 ${allData.length.toLocaleString()}건 저장 완료 (구월 유지)`);
+            setTimeout(() => {
+              runSavedListBackgroundCoords({ city, monthId: monthStr, records: savedRecordsForBgCoords });
+            }, 300);
+            alert(`✅ ${city} ${monthStr} 월별 명단 전체 ${allData.length}건이 클라우드에 저장되었습니다.\n정상 ${validData.length}건 / 확인필요 ${errorData.length}건\n\n이전 월 데이터(${oldMonthNames})는 유지됩니다.`);
+            return;
           }
-          await deleteDoc(doc(db, 'cloud_lists', city, 'months', oldMonth.id));
+          for (const oldMonth of oldMonths) {
+            const rSnap = await getDocs(collection(db, 'cloud_lists', city, 'months', oldMonth.id, 'records'));
+            for (let i = 0; i < rSnap.docs.length; i += 499) {
+              const b = writeBatch(db);
+              rSnap.docs.slice(i, i + 499).forEach(d => b.delete(d.ref));
+              await b.commit();
+            }
+            await deleteDoc(doc(db, 'cloud_lists', city, 'months', oldMonth.id));
+          }
         }
-        if (oldMonths.length > 0) console.log(`[구월 자동 정리] ${city}: ${oldMonths.map(d => d.id).join(', ')} 삭제 완료`);
-      } catch (e) { console.warn('[구월 자동 정리 실패 — 저장은 정상]', e.message); }
+      } catch { /* 구월 정리 실패는 무시 — 핵심 저장은 완료됨 */ }
 
       gDone(`${city} ${monthStr} · 전체 ${allData.length.toLocaleString()}건 저장 완료`);
       setTimeout(() => {
@@ -1999,11 +2050,11 @@ export default function App() {
       className={`relative flex items-center rounded-xl transition-all group text-left w-full
         ${sidebarCollapsed ? 'justify-center h-9 w-9 mx-auto px-0' : 'gap-2.5 px-3 py-2.5'}
         ${active
-          ? 'bg-[#3b82f6]/15 text-[#3b82f6] border border-[#3b82f6]/25 shadow-[0_0_12px_rgba(59,130,246,0.08)]'
+          ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/25 shadow-[0_0_12px_rgba(16,185,129,0.08)]'
           : locked
           ? 'text-gray-700 cursor-default border border-transparent'
           : recommended
-          ? 'text-[#60a5fa] bg-[#3b82f6]/8 border border-[#3b82f6]/15 hover:bg-[#3b82f6]/12 animate-pulse-subtle'
+          ? 'text-emerald-300 bg-emerald-500/8 border border-emerald-500/15 hover:bg-emerald-500/12'
           : 'text-gray-500 hover:bg-white/5 hover:text-gray-200 border border-transparent'}
       `}
     >
@@ -2011,9 +2062,9 @@ export default function App() {
       {!sidebarCollapsed && (
         <>
           <span className="text-[11.5px] font-bold flex-1 truncate leading-none">{label}</span>
-          {badge && <span className={`text-[9px] min-w-[16px] px-1 py-0.5 rounded-full font-black text-center ${badge.type === 'error' ? 'bg-red-500 text-white' : 'bg-[#3b82f6]/30 text-[#3b82f6]'}`}>{badge.count}</span>}
+          {badge && <span className={`text-[9px] min-w-[16px] px-1 py-0.5 rounded-full font-black text-center ${badge.type === 'error' ? 'bg-amber-500 text-black' : 'bg-emerald-500/25 text-emerald-300'}`}>{badge.count}</span>}
           {locked && <span className="text-[8px] bg-purple-900/30 text-purple-500 border border-purple-800/30 px-1 py-0.5 rounded font-black">PRO</span>}
-          {recommended && <span className="text-[8px] bg-[#3b82f6]/20 text-[#3b82f6] border border-[#3b82f6]/25 px-1 py-0.5 rounded font-black">추천</span>}
+          {recommended && <span className="text-[8px] bg-emerald-500/15 text-emerald-400 border border-emerald-500/25 px-1 py-0.5 rounded font-black">추천</span>}
         </>
       )}
       {sidebarCollapsed && badge && badge.count > 0 && (
@@ -2036,9 +2087,41 @@ export default function App() {
             <img src="/ttlogo1.png" alt="NEXUS PIPELINE" className="h-9 object-contain" />
           </button>
 
-          {/* 가운데: 현재 작업 파일 정보 */}
-          <div className="flex-1 flex items-center justify-center">
-            {step >= 1 && step <= 5 && fileInfo && (
+          {/* 가운데: 파이프라인 Step 1~3 진행 표시줄 또는 파일 정보 */}
+          <div className="flex-1 flex items-center justify-center gap-3">
+            {step >= 1 && step <= 3 ? (
+              /* Step 1~3: 진행 표시줄 */
+              <div className="flex items-center gap-1.5">
+                {[
+                  { n: 1, label: '업로드', active: step === 1, done: step > 1 },
+                  { n: 2, label: '시트 분류', active: step === 2, done: step > 2 },
+                  { n: 3, label: '컬럼 매핑', active: step === 3, done: false },
+                ].map((s, i) => (
+                  <div key={s.n} className="flex items-center gap-1.5">
+                    {i > 0 && <div className={`w-6 h-px ${s.done || step > s.n ? 'bg-emerald-500/60' : 'bg-[#1e2d2b]'}`} />}
+                    <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-bold transition-colors ${
+                      s.active ? 'bg-emerald-500/15 border border-emerald-500/40 text-emerald-300'
+                      : s.done  ? 'text-emerald-500/70'
+                      : 'text-gray-700'
+                    }`}>
+                      <span className={`w-4 h-4 rounded-full flex items-center justify-center text-[9px] font-black shrink-0 ${
+                        s.done   ? 'bg-emerald-500 text-black'
+                        : s.active ? 'border border-emerald-400 text-emerald-300'
+                        : 'border border-[#2a2a2a] text-gray-700'
+                      }`}>{s.done ? '✓' : s.n}</span>
+                      <span className="hidden sm:block">{s.label}</span>
+                    </div>
+                  </div>
+                ))}
+                {fileInfo?.city && (
+                  <div className="ml-2 flex items-center gap-1.5 text-xs text-gray-500 border-l border-[#1e2d2b] pl-3">
+                    <span className="text-white font-bold">{fileInfo.city}</span>
+                    {fileInfo.month && <span className="text-gray-600">{fileInfo.month}</span>}
+                  </div>
+                )}
+              </div>
+            ) : step >= 4 && step <= 5 && fileInfo ? (
+              /* Step 4~5: 파일 정보 칩 */
               <div className="flex items-center gap-2 text-xs bg-[#0d1413]/90 px-3 py-1.5 rounded-lg border border-[#1c2b29]">
                 <span className="text-emerald-300 font-black">{workflow.shortTitle}</span>
                 <span className="text-[#253534]">·</span>
@@ -2052,22 +2135,22 @@ export default function App() {
                 {step === 5 && gridData.length > 0 && (
                   <>
                     <span className="text-[#1a2a3a]">·</span>
-                    <span className="text-cyan-300 font-black">{gridData.length.toLocaleString()}건</span>
+                    <span className="text-emerald-300 font-black">{gridData.length.toLocaleString()}건</span>
                     {gridData.filter(r => r._에러).length > 0 && (
-                      <span className="text-red-400 font-bold">· 오류 {gridData.filter(r => r._에러).length}건</span>
+                      <span className="text-amber-400 font-bold">· 확인필요 {gridData.filter(r => r._에러).length}건</span>
                     )}
                   </>
                 )}
               </div>
-            )}
+            ) : null}
           </div>
 
           {/* 오른쪽: 액션 버튼 */}
           <div className="flex items-center gap-2 shrink-0">
             {gridData.some(r => r._에러) && (
-              <button onClick={() => setStep(10)} className="px-3 py-1.5 bg-red-950/40 text-red-400 border border-red-500/40 hover:bg-red-900/50 font-bold rounded-lg text-xs flex items-center gap-1.5 transition-colors">
-                <span className="inline-flex items-center justify-center w-4 h-4 bg-red-500 text-white text-[9px] font-black rounded-full">{gridData.filter(r => r._에러).length}</span>
-                오류
+              <button onClick={() => setStep(10)} className="px-3 py-1.5 bg-amber-950/40 text-amber-400 border border-amber-600/40 hover:bg-amber-900/40 font-bold rounded-lg text-xs flex items-center gap-1.5 transition-colors">
+                <span className="inline-flex items-center justify-center w-4 h-4 bg-amber-500 text-black text-[9px] font-black rounded-full">{gridData.filter(r => r._에러).length}</span>
+                확인필요
               </button>
             )}
             <button onClick={handleUndo} disabled={history.length === 0} className="px-3 py-1.5 bg-[#0d1520] hover:bg-[#111c2d] disabled:opacity-30 text-gray-400 hover:text-white text-xs font-bold rounded-lg transition-all flex items-center gap-1.5 border border-[#1a2a3a]">
@@ -2218,7 +2301,7 @@ export default function App() {
             <span className="text-gray-700">|</span>
             {step === 5 ? (
               <>
-                <span className="text-blue-300 font-black">
+                <span className="text-emerald-300 font-black">
                   수급자 {gridData.filter(d => d.구분 === '기초수급자').reduce((s, d) => s + (parseInt(d.포수) || 1), 0).toLocaleString()}포
                 </span>
                 <span className="text-gray-700">|</span>
@@ -2226,7 +2309,7 @@ export default function App() {
                   차상위 {gridData.filter(d => d.구분 === '차상위').reduce((s, d) => s + (parseInt(d.포수) || 1), 0).toLocaleString()}포
                 </span>
                 <span className="text-gray-700">|</span>
-                <span className="text-[#3b82f6] font-black">
+                <span className="text-emerald-400 font-black">
                   전체 {gridData.reduce((s, d) => s + (parseInt(d.포수) || 1), 0).toLocaleString()}포
                 </span>
                 <span className="ml-1 text-[10px] text-gray-600">({gridData.length.toLocaleString()}명)</span>
@@ -2241,11 +2324,11 @@ export default function App() {
                   const total = su + cha + mix;
                   return (
                     <>
-                      <span className="text-blue-300 font-black">수급자 {su.toLocaleString()}포</span>
+                      <span className="text-emerald-300 font-black">수급자 {su.toLocaleString()}포</span>
                       <span className="text-gray-700">|</span>
                       <span className="text-amber-300 font-black">차상위 {cha.toLocaleString()}포</span>
                       <span className="text-gray-700">|</span>
-                      <span className="text-[#3b82f6] font-black">전체 {total.toLocaleString()}포</span>
+                      <span className="text-emerald-400 font-black">전체 {total.toLocaleString()}포</span>
                       <span className="ml-1 text-[10px] text-gray-600 italic">(예상)</span>
                     </>
                   );
@@ -2256,12 +2339,12 @@ export default function App() {
         )}
 
         <main className="flex-1 relative overflow-hidden bg-[#070807] flex flex-col">
-          {step === 0 && <Dashboard user={user} onLogout={onLogout} onStart={(s) => setStep(typeof s === 'number' ? s : 1)} onHelp={onHelp} setFileInfo={setFileInfo} setWorksheets={setWorksheets} setBaseCount={setBaseCount} gridData={gridData} setGridData={setGridData} fileInfo={fileInfo} onCloudCard={(city) => { setDbNavCity(city); setStep(8); }} onBaseCard={(city) => { setDbNavCity(city); setStep(6); }} onOpenRouteMap={() => { if (!canUseRouteMap(user)) { setUpgradeReason('routeMap'); setShowUpgrade(true); } else setShowRouteQuick(true); }} workflowMode={workflowMode} onWorkflowModeChange={changeWorkflowMode} stepStatus={stepStatus} />}
+          {step === 0 && <Dashboard user={user} onLogout={onLogout} onStart={(s) => setStep(typeof s === 'number' ? s : 1)} onHelp={onHelp} setFileInfo={setFileInfo} setWorksheets={setWorksheets} setBaseCount={setBaseCount} gridData={gridData} setGridData={setGridData} fileInfo={fileInfo} onCloudCard={(city) => { setDbNavCity(city); setStep(8); }} onBaseCard={(city) => { setDbNavCity(city); setStep(6); }} onOpenRouteMap={() => { if (!canUseRouteMap(user)) { setUpgradeReason('routeMap'); setShowUpgrade(true); } else setShowRouteQuick(true); }} workflowMode={workflowMode} onWorkflowModeChange={changeWorkflowMode} stepStatus={stepStatus} onOpenIntro={() => { setIntroReason('new'); setShowIntro(true); }} />}
           {step === 1 && <Step1_Upload handleDragOver={handleDragOver} handleDrop={handleDrop} handleFileUpload={handleFileUpload} handleUnifiedDrop={handleUnifiedDrop} isBaseUploading={isBaseUploading} step={step} onHelp={onHelp} onCloudFetch={() => setShowCloudBase(true)} />}
           {step === 2 && <Step2_SheetSelect step={step} setStep={setStep} fileInfo={fileInfo} setFileInfo={setFileInfo} worksheets={worksheets} setWorksheets={setWorksheets} setSelectedSheets={setSelectedSheets} onHelp={onHelp} handleSecondFileUpload={handleSecondFileUpload} />}
-          {step === 3 && <Step3_Mapping step={step} setStep={setStep} selectedSheets={selectedSheets} worksheets={worksheets} mapDefs={mapDefs} setMapDefs={setMapDefs} startProcessing={handleAnalyzeAll} onHelp={onHelp} isBasePurifyMode={isBasePurifyMode} setIsBasePurifyMode={setIsBasePurifyMode} onOpenDbImport={() => setShowDbImport(true)} dbImportReady={dbImportReady} onUserMapping={handleUserMapping} />}
+          {step === 3 && <Step3_Mapping step={step} setStep={setStep} selectedSheets={selectedSheets} worksheets={worksheets} mapDefs={mapDefs} setMapDefs={setMapDefs} startProcessing={handleAnalyzeAll} onHelp={onHelp} isBasePurifyMode={isBasePurifyMode} setIsBasePurifyMode={setIsBasePurifyMode} onOpenDbImport={() => setShowDbImport(true)} dbImportReady={dbImportReady} onUserMapping={handleUserMapping} city={fileInfo?.city || ''} />}
           {step === 4 && <LoadingScreen progress={engineProgress} logs={progressLogs} />}
-          {step === 5 && <ResultGrid step={step} setStep={setStep} fileInfo={fileInfo} filter={filter} setFilter={setFilter} dongList={gridDongList} driverList={gridDriverList} gridData={gridData} filteredData={filteredData} paginatedData={paginatedData} currentPage={currentPage} setCurrentPage={setCurrentPage} itemsPerPage={itemsPerPage} colVis={colVis} sortConfig={sortConfig} setSortConfig={setSortConfig} handleCellEdit={handleCellEdit} handleAddressKeyDown={handleAddressKeyDown} handleUpdateBaseList={handleUpdateBaseList} handleBatchSaveBaseList={handleBatchSaveBaseList} isSavingBaseList={isSavingBaseList} handleSaveMonthlyList={handleSaveMonthlyList} setShowExportSetting={setShowExportSetting} handleExport={handleExport} handleExportErrors={handleExportErrors} handleExportDongSummary={handleExportDongSummary} handleExportByDriver={handleExportByDriver} handleDeleteRows={handleDeleteRows} handleBatchSetNote={handleBatchSetNote} onHelp={onHelp} purifyResult={purifyResult} onClosePurifyResult={() => setPurifyResult(null)} onMovePhones={handleMovePhones} onRepurifyErrors={handleRepurifyErrors} onOpenRouteMap={openRouteFlow} onFetchBaseNotes={handleFetchBaseNotes} isFetchingNotes={isFetchingNotes} workflowMode={workflowMode} onWorkflowModeChange={changeWorkflowMode} stepStatus={stepStatus} addressDisplayMode={addressDisplayMode} onToggleAddressDisplayMode={handleToggleAddressDisplayMode} />}
+          {step === 5 && <ResultGrid step={step} setStep={setStep} fileInfo={fileInfo} filter={filter} setFilter={setFilter} dongList={gridDongList} driverList={gridDriverList} gridData={gridData} filteredData={filteredData} paginatedData={paginatedData} currentPage={currentPage} setCurrentPage={setCurrentPage} itemsPerPage={itemsPerPage} colVis={colVis} sortConfig={sortConfig} setSortConfig={setSortConfig} handleCellEdit={handleCellEdit} handleAddressKeyDown={handleAddressKeyDown} handleUpdateBaseList={handleUpdateBaseList} handleBatchSaveBaseList={handleBatchSaveBaseList} isSavingBaseList={isSavingBaseList} handleSaveMonthlyList={handleSaveMonthlyList} setShowExportSetting={setShowExportSetting} handleExport={handleExport} handleExportErrors={handleExportErrors} handleExportDongSummary={handleExportDongSummary} handleExportByDriver={handleExportByDriver} handleDeleteRows={handleDeleteRows} handleBatchSetNote={handleBatchSetNote} onHelp={onHelp} purifyResult={purifyResult} onClosePurifyResult={() => setPurifyResult(null)} onMovePhones={handleMovePhones} onRepurifyErrors={handleRepurifyErrors} onOpenRouteMap={openRouteFlow} onFetchBaseNotes={handleFetchBaseNotes} isFetchingNotes={isFetchingNotes} workflowMode={workflowMode} onWorkflowModeChange={changeWorkflowMode} stepStatus={stepStatus} addressDisplayMode={addressDisplayMode} onToggleAddressDisplayMode={handleToggleAddressDisplayMode} exportColOrder={exportColOrder} setExportColOrder={setExportColOrder} defaultExportCols={DEFAULT_EXPORT_COLS} />}
           {step === 10 && <ErrorListManager gridData={gridData} onBack={() => setStep(gridData.length ? 5 : 0)} handleCellEdit={handleCellEdit} handleAddressKeyDown={handleAddressKeyDown} handleExportErrors={handleExportErrors} onRepurifyErrors={handleRepurifyErrors} />}
           {step === 11 && <ScheduleTab user={user} onBack={() => setStep(0)} />}
           {step === 6 && <BaseListManager user={user} initialCity={dbNavCity} onBack={() => { setStep(0); setDbNavCity(''); }} />}
@@ -2281,11 +2364,24 @@ export default function App() {
 
         </div>{/* end V5.0 BODY */}
 
+        {/* 지자체·적용월 확인 모달 */}
+        {showCityPicker && (
+          <CityMonthPickerModal
+            userId={user?.uid || ''}
+            detectedCity={pendingSetup?.detectedCity || ''}
+            detectedMonth={pendingSetup?.monthStr || ''}
+            userCities={user?.citiesApproved || []}
+            isAdmin={user?.role === 'admin'}
+            onConfirm={handleCityMonthConfirm}
+            onCancel={handleCityMonthCancel}
+          />
+        )}
+
         {/* RESTORED MODAL RENDERS */}
         {showHelp && <HelpModal onClose={() => setShowHelp(false)} />}
         {showUtils && <UtilsModal user={user} onClose={() => setShowUtils(false)} />}
         {showUpgrade && <UpgradeModal user={user} userTier={user?.tier || 'basic'} usedCount={baseCount} userMaxCities={user?.maxCities || 1} reason={upgradeReason} onClose={() => setShowUpgrade(false)} />}
-        {showCloudBase && <CloudBaseModal user={user} onClose={() => setShowCloudBase(false)} onImport={(newBaseMap, city, count) => { setBaseMap(newBaseMap); setBaseCount(count); setImportFields(null); setDbImportReady(null); setShowCloudBase(false); }} />}
+        {showCloudBase && <CloudBaseModal user={user} onClose={() => setShowCloudBase(false)} onImport={(newBaseMap, _city, count) => { setBaseMap(newBaseMap); setBaseCount(count); setImportFields(null); setDbImportReady(null); setShowCloudBase(false); }} />}
         {showDbImport && <DbImportModal defaultCity={fileInfo?.city || ''} onClose={() => setShowDbImport(false)} onImport={(newBaseMap, fields, _city, count) => { setBaseMap(newBaseMap); setImportFields(fields); setDbImportReady({ count, fields }); setShowDbImport(false); }} />}
         {showRouteQuick && (
           <RouteQuickModal
@@ -2368,7 +2464,7 @@ export default function App() {
             ) : (
               <>
                 <div className="mb-2 flex items-center gap-3">
-                  <span className="h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-blue-400 border-t-transparent" />
+                  <span className="h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-emerald-400 border-t-transparent" />
                   <div className="min-w-0 flex-1">
                     <div className="truncate font-black text-white">저장 후 좌표를 천천히 받는 중</div>
                     <div className="mt-0.5 text-[11px] text-gray-500">
@@ -2384,11 +2480,11 @@ export default function App() {
                 </div>
                 <div className="mb-1 flex items-center justify-between text-[11px] font-bold">
                   <span className="text-gray-500">진행 {bgSaveCoordState.done.toLocaleString()} / {bgSaveCoordState.total.toLocaleString()}</span>
-                  <span className="text-blue-300">성공 {bgSaveCoordState.success.toLocaleString()}</span>
+                  <span className="text-emerald-300">성공 {bgSaveCoordState.success.toLocaleString()}</span>
                 </div>
                 <div className="h-1.5 overflow-hidden rounded-full bg-white/10">
                   <div
-                    className="h-full rounded-full bg-blue-500 transition-all duration-500"
+                    className="h-full rounded-full bg-emerald-500 transition-all duration-500"
                     style={{ width: `${bgSaveCoordState.total ? Math.round(bgSaveCoordState.done / bgSaveCoordState.total * 100) : 0}%` }}
                   />
                 </div>

@@ -25,10 +25,10 @@ service firebase.storage {
       allow write: if isAdmin();
     }
 
-    // ── 배송 루트 KML: 공개 읽기·쓰기 (shareId가 capability token 역할) ──────────
+    // ── 배송 루트 KML: 공개 읽기, 쓰기는 인증 사용자만 (기사 공유는 읽기만 필요) ──
     match /route_kml/{fileName} {
       allow read: if true;
-      allow write: if true;
+      allow write: if request.auth != null;
     }
 
     // 기타 모든 경로 접근 거부

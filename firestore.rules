@@ -52,9 +52,13 @@ service cloud.firestore {
       allow read, update, delete: if isAdmin();
     }
 
-    // ── AI 로그: 생성은 인증 사용자, 나머지는 관리자 ─────────────────────────
+    // ── AI 로그: 생성은 인증 사용자 (허용 필드 제한), 나머지는 관리자 ──────────
     match /nexus_ai_logs/{document=**} {
-      allow create: if isAuthenticated();
+      allow create: if isAuthenticated() &&
+        request.resource.data.keys().hasOnly([
+          'columnName', 'status', 'detectedAt', 'fileName', 'sheetName', 'expireAt',
+          'type', 'mappedTo', 'loggedAt', 'userEmail', 'city'
+        ]);
       allow read, update, delete: if isAdmin();
     }
 
@@ -64,9 +68,15 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
-    // ── 감사 로그: 생성은 모든 인증 사용자, 조회·수정·삭제는 관리자만 (#7) ───
+    // ── 감사 로그: 생성은 모든 인증 사용자 (허용 필드 제한), 조회·수정·삭제는 관리자만 (#7) ───
     match /audit_logs/{document=**} {
-      allow create: if isAuthenticated();
+      allow create: if isAuthenticated() &&
+        request.resource.data.keys().hasOnly([
+          'action', 'targetName', 'updates', 'city', 'monthId',
+          'count', 'validCount', 'errorCount', 'workflowMeta',
+          'addCount', 'updateCount', 'successCount',
+          'timestamp', 'adminEmail', 'expireAt', 'uid'
+        ]);
       allow read, update, delete: if isAdmin();
     }
 
@@ -153,23 +163,40 @@ service cloud.firestore {
     }
 
     // ── 배송 루트 공유: 생성은 인증 사용자, 읽기는 누구나 (기사 접근) ──────────
+    function isRouteOwner() {
+      return isAuthenticated() &&
+        'createdBy' in resource.data &&
+        resource.data.createdBy == request.auth.token.email;
+    }
+
+    function isShareWithinTTL() {
+      return ('expiresAt' in resource.data && resource.data.expiresAt > request.time) ||
+        (!('expiresAt' in resource.data) && 'createdAt' in resource.data &&
+         resource.data.createdAt + duration.value(45, 'd') > request.time);
+    }
+
     match /route_shares/{shareId} {
-      allow read: if
-        ('expiresAt' in resource.data && resource.data.expiresAt > request.time) ||
-        (!('expiresAt' in resource.data) && 'createdAt' in resource.data && resource.data.createdAt + duration.value(45, 'd') > request.time);
+      allow read: if isShareWithinTTL();
+
       allow create: if isAuthenticated();
-      allow update: if isAuthenticated() ||
+
+      // 생성자·관리자: 전체 수정 허용
+      // 기사(미인증 포함): 유효 공유 링크 범위 내에서 liveGps·driverOrder·orderApplyRequests만 수정
+      allow update: if isRouteOwner() || isAdmin() ||
         (
-          (
-            ('expiresAt' in resource.data && resource.data.expiresAt > request.time) ||
-            (!('expiresAt' in resource.data) && 'createdAt' in resource.data && resource.data.createdAt + duration.value(45, 'd') > request.time)
-          ) &&
-          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['liveGps', 'driverOrder', 'orderApplyRequests']) &&
-          (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['liveGps']) || request.resource.data.liveGps is map) &&
-          (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['driverOrder']) || request.resource.data.driverOrder is map) &&
-          (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['orderApplyRequests']) || request.resource.data.orderApplyRequests is map)
+          isShareWithinTTL() &&
+          request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['liveGps', 'driverOrder', 'orderApplyRequests']) &&
+          (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['liveGps'])
+            || request.resource.data.liveGps is map) &&
+          (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['driverOrder'])
+            || request.resource.data.driverOrder is map) &&
+          (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['orderApplyRequests'])
+            || request.resource.data.orderApplyRequests is map)
         );
-      allow delete: if isAuthenticated();
+
+      // 삭제는 생성자·관리자만
+      allow delete: if isRouteOwner() || isAdmin();
     }
 
     // ── 배송 세션: 기사구성·구역배정 영구저장 (승인 사용자) ─────────────────────
