@@ -102,7 +102,9 @@ const extractRoadAddress = (addr) => {
   return addr.trim();
 };
 
-const normalizeRegionKey = (value) => String(value || '').replace(/\s+/g, '').trim();
+// 시도 비교 시 '경기도'↔'경기', '서울특별시'↔'서울' 등 접미어 불일치 무시
+const normalizeRegionKey = (value) =>
+  String(value || '').replace(/\s+/g, '').replace(/(특별자치도|특별자치시|특별시|광역시|도|시)$/, '').trim();
 
 const getRouteDong = (record) =>
   String(record?.배정행정동 || record?.routeDong || record?.행정동 || '').trim();
