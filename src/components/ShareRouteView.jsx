@@ -665,56 +665,52 @@ export default function ShareRouteView({ shareId, driverId }) {
       <div className="shrink-0 bg-[#060606] border-b border-[#181818]"
         style={{ paddingTop: 'env(safe-area-inset-top,0)' }}>
 
-        {/* ── 1행: 기사명 · 통계 · GPS · 버튼 ─────────── */}
-        <div className="flex items-center gap-2 px-3 pt-2 pb-2">
+        {/* ── 1행: 이름 · 건수 · 포수 · GPS (모두 1줄) ─── */}
+        <div className="flex items-center gap-2 px-3 pt-2 pb-1.5">
 
-          {/* 기사명 */}
-          <div className="flex items-center gap-2 flex-1 min-w-0">
-            <div className="w-3 h-3 rounded-full shrink-0" style={{ background: driverColor }} />
-            <span className="text-white font-black text-[15px] leading-none truncate">
+          {/* 컬러 닷 + 이름 */}
+          <div className="flex items-center gap-1.5 flex-1 min-w-0">
+            <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: driverColor }} />
+            <span className="text-white font-black text-[13px] leading-none truncate">
               {driver?.name || '기사'}
             </span>
           </div>
 
-          {/* 건수/포수 pill */}
-          <div className="flex items-center gap-1 bg-[#111] border border-[#1e1e1e] rounded-full px-2.5 py-1 shrink-0">
-            <span className="text-white font-black text-[12px]">{allRecords.length}</span>
-            <span className="text-gray-500 text-[11px]">건</span>
-            <span className="text-gray-700 mx-0.5 text-[11px]">·</span>
-            <span className="text-emerald-400 font-black text-[12px]">{totalQty}</span>
-            <span className="text-gray-500 text-[11px]">포</span>
+          {/* 건수 · 포수 */}
+          <div className="flex items-center gap-0.5 shrink-0">
+            <span className="text-white font-black text-[13px]">{allRecords.length}</span>
+            <span className="text-gray-500 text-[11px] ml-0.5">건</span>
+            <span className="text-gray-700 mx-1.5 text-[11px]">·</span>
+            <span className="text-emerald-400 font-black text-[13px]">{totalQty}</span>
+            <span className="text-gray-500 text-[11px] ml-0.5">포</span>
           </div>
 
           {/* GPS 상태 */}
           <div className="shrink-0">
             {gpsStatus === 'ok' && (
-              <div className="flex items-center gap-1 bg-emerald-900/20 border border-emerald-700/30 rounded-full px-2 py-1">
+              <div className="flex items-center gap-1">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0"></span>
                 <span className="text-emerald-400 text-[11px] font-black">GPS</span>
               </div>
             )}
             {gpsStatus === 'loading' && (
-              <div className="flex items-center gap-1 bg-yellow-900/20 border border-yellow-700/30 rounded-full px-2 py-1 animate-pulse">
-                <span className="text-yellow-500 text-[11px] font-black">GPS</span>
-              </div>
+              <span className="text-yellow-500 text-[11px] font-black animate-pulse">GPS</span>
             )}
             {gpsStatus === 'denied' && (
               <button onClick={() => setShowGpsGuide(true)}
                 aria-label="GPS 허용 방법 보기"
-                className="flex items-center gap-1 bg-orange-900/20 border border-orange-700/30 rounded-full px-2.5 py-1 active:scale-95 transition-all">
-                <span className="text-orange-400 text-[11px] font-black">GPS 허용</span>
+                className="flex items-center gap-1 px-2 py-0.5 bg-orange-900/20 border border-orange-700/30 rounded-full active:scale-95 transition-all">
+                <span className="text-orange-400 text-[11px] font-black">GPS!</span>
               </button>
             )}
             {gpsStatus === 'error' && (
-              <div className="flex items-center gap-1 bg-red-900/20 border border-red-700/30 rounded-full px-2 py-1">
-                <span className="text-red-500 text-[11px] font-black">GPS ✕</span>
-              </div>
+              <span className="text-red-500 text-[11px] font-black">GPS✕</span>
             )}
           </div>
 
           {/* LIVE 뱃지 */}
           {isLiveActive && (
-            <span className="shrink-0 flex items-center gap-1 text-emerald-400 bg-emerald-900/25 px-2 py-1 rounded-full text-[10px] font-black border border-emerald-700/30">
+            <span className="shrink-0 flex items-center gap-1 text-emerald-400 bg-emerald-900/25 px-1.5 py-0.5 rounded-full text-[10px] font-black border border-emerald-700/30">
               <span className="relative flex h-1.5 w-1.5">
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
                 <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-500"></span>
@@ -722,75 +718,76 @@ export default function ShareRouteView({ shareId, driverId }) {
               LIVE
             </span>
           )}
+        </div>
 
-          {/* 버튼 그룹 */}
-          <div className="flex items-center gap-1.5 shrink-0">
-            {/* 공유 */}
-            <button onClick={handleCopyLink}
-              title={copiedLink ? '복사됨!' : '공유 링크 복사'}
-              aria-label={copiedLink ? '링크 복사됨' : '공유 링크 복사'}
-              className={`w-8 h-8 rounded-lg flex items-center justify-center border transition-all active:scale-95 ${
-                copiedLink
-                  ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-400'
-                  : 'bg-[#141414] border-[#242424] text-gray-400'
-              }`}>
-              <Share2 size={14} />
-            </button>
+        {/* ── 2행: 버튼 (공유·순번·반영요청·레이아웃) ─── */}
+        <div className="flex items-center gap-1.5 px-3 pb-2">
 
-            {/* 순번 편집 */}
-            <button onClick={() => setOrderEditMode(v => !v)}
-              title="순번 편집 모드"
-              aria-label="순번 편집 모드"
-              aria-pressed={orderEditMode}
-              className={`w-8 h-8 rounded-lg flex items-center justify-center border transition-all active:scale-95 ${
-                orderEditMode
-                  ? 'bg-blue-500/20 border-blue-500/40 text-blue-300'
-                  : 'bg-[#141414] border-[#242424] text-gray-400'
-              }`}>
-              <ChevronUp size={14} />
-            </button>
+          {/* 공유 */}
+          <button onClick={handleCopyLink}
+            aria-label={copiedLink ? '링크 복사됨' : '공유 링크 복사'}
+            className={`flex-1 h-8 rounded-lg flex items-center justify-center gap-1.5 border transition-all active:scale-95 text-[11px] font-black ${
+              copiedLink
+                ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-400'
+                : 'bg-[#141414] border-[#242424] text-gray-400'
+            }`}>
+            <Share2 size={12} />
+            <span>공유</span>
+          </button>
 
-            {/* 반영 요청 */}
-            <button onClick={requestOrderApply}
-              disabled={isRequestingOrderApply || !allRecords.length}
-              title="현재 순번을 담당자에게 반영 요청"
-              aria-label="배송 순번 반영 요청"
-              className={`px-2.5 h-8 rounded-lg text-[11px] font-black border transition-all active:scale-95 disabled:opacity-40 ${
-                isOrderApplyRequested
-                  ? 'bg-amber-500/20 border-amber-500/40 text-amber-300'
-                  : 'bg-[#141414] border-[#242424] text-gray-400'
-              }`}>
-              {isOrderApplyRequested ? '✓반영' : '반영'}
-            </button>
+          {/* 순번 편집 */}
+          <button onClick={() => setOrderEditMode(v => !v)}
+            aria-label="순번 편집 모드"
+            aria-pressed={orderEditMode}
+            className={`flex-1 h-8 rounded-lg flex items-center justify-center gap-1.5 border transition-all active:scale-95 text-[11px] font-black ${
+              orderEditMode
+                ? 'bg-blue-500/20 border-blue-500/40 text-blue-300'
+                : 'bg-[#141414] border-[#242424] text-gray-400'
+            }`}>
+            <ChevronUp size={12} />
+            <span>순번</span>
+          </button>
 
-            {/* 레이아웃 토글 */}
-            <div className="flex rounded-lg overflow-hidden border border-[#242424] h-8">
-              {[
-                ['map',   <MapIcon size={12} key="map" />,   '지도 보기'],
-                ['split', <span key="split" className="flex flex-col items-center gap-px"><ChevronDown size={8}/><ChevronUp size={8}/></span>, '분할 보기'],
-                ['list',  <List size={12} key="list" />,    '목록 보기'],
-              ].map(([mode, icon, label]) => (
-                <button key={mode}
-                  onClick={() => setLayoutMode(mode)}
-                  aria-label={label}
-                  aria-pressed={layoutMode === mode}
-                  className={`w-8 flex items-center justify-center transition-colors ${mode !== 'map' ? 'border-l border-[#242424]' : ''} ${layoutMode === mode ? 'bg-emerald-900/30 text-emerald-400' : 'bg-[#111] text-gray-600'}`}>
-                  {icon}
-                </button>
-              ))}
-            </div>
+          {/* 반영 요청 */}
+          <button onClick={requestOrderApply}
+            disabled={isRequestingOrderApply || !allRecords.length}
+            aria-label="배송 순번 반영 요청"
+            className={`flex-1 h-8 rounded-lg flex items-center justify-center gap-1 border transition-all active:scale-95 text-[11px] font-black disabled:opacity-40 ${
+              isOrderApplyRequested
+                ? 'bg-amber-500/20 border-amber-500/40 text-amber-300'
+                : 'bg-[#141414] border-[#242424] text-gray-400'
+            }`}>
+            <Save size={12} />
+            <span>{isOrderApplyRequested ? '✓반영' : '반영요청'}</span>
+          </button>
+
+          {/* 레이아웃 토글 */}
+          <div className="flex rounded-lg overflow-hidden border border-[#242424] h-8 shrink-0">
+            {[
+              ['map',   <MapIcon size={12} key="map" />,   '지도 보기'],
+              ['split', <span key="split" className="flex flex-col items-center gap-px"><ChevronDown size={7}/><ChevronUp size={7}/></span>, '분할 보기'],
+              ['list',  <List size={12} key="list" />,    '목록 보기'],
+            ].map(([mode, icon, label]) => (
+              <button key={mode}
+                onClick={() => setLayoutMode(mode)}
+                aria-label={label}
+                aria-pressed={layoutMode === mode}
+                className={`w-8 flex items-center justify-center transition-colors ${mode !== 'map' ? 'border-l border-[#242424]' : ''} ${layoutMode === mode ? 'bg-emerald-900/30 text-emerald-400' : 'bg-[#111] text-gray-600'}`}>
+                {icon}
+              </button>
+            ))}
           </div>
         </div>
 
-        {/* ── 2행: 다음 배송지 ─────────────────────────── */}
+        {/* ── 3행: 다음 배송지 ─────────────────────────── */}
         {nextRecord && (
-          <div className="flex items-center gap-2 px-3 pt-1.5 pb-2 border-t border-[#111]">
-            <div className="w-6 h-6 rounded-full shrink-0 flex items-center justify-center text-[11px] font-black border"
+          <div className="flex items-center gap-2 px-3 pt-1 pb-2 border-t border-[#111]">
+            <div className="w-5 h-5 rounded-full shrink-0 flex items-center justify-center text-[10px] font-black border"
               style={{ background: `${driverColor}22`, color: driverColor, borderColor: `${driverColor}44` }}>
               {nextRecord._displaySeq || nextRecord.배송순번 || 1}
             </div>
-            <span className="text-[11px] text-gray-500 shrink-0 font-medium">다음</span>
-            <span className="text-[13px] font-black text-white shrink-0 leading-none">{nextRecord.이름}</span>
+            <span className="text-[11px] text-gray-500 shrink-0">다음</span>
+            <span className="text-[12px] font-black text-white shrink-0 leading-none">{nextRecord.이름}</span>
             <span className="text-[11px] text-gray-500 truncate flex-1 min-w-0 leading-none">{nextRecord.주소}</span>
           </div>
         )}
