@@ -1790,14 +1790,22 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
     };
     worker._pendingAutoSplit = onMessage;
     worker.addEventListener('message', onMessage);
+
+    // angular 기본값 사용 중일 때:
+    // 모든 활성 기사에 핀이 있으면 핀 근접 기준(seedVoronoi), 없으면 각도 분할(angular)
+    const allHavePins = activeDrivers.every(d => !!driverPins[d.id]);
+    const effectiveStrategy = (autoSplitStrategy === 'angular' && allHavePins)
+      ? 'seedVoronoi'
+      : autoSplitStrategy;
+
     worker.postMessage({
       type: 'autoSplit',
       target,
       noCoordRecs,
-      allRecords: filteredRecords, // R-I, R-E 후처리도 현재 자동 배정 범위만 적용
+      allRecords: filteredRecords,
       activeDrivers,
       driverPins,
-      strategy: autoSplitStrategy,
+      strategy: effectiveStrategy,
     });
   }, [filteredRecords, drivers, driverCount, driverPins, showToast, isAssignmentLocked, autoSplitStrategy]);
 
@@ -3673,7 +3681,7 @@ ${folders}
                 onChange={e => setAutoSplitStrategy(e.target.value)}
                 className="flex-1 h-5 bg-[#111] border border-[#2a2a2a] text-gray-400 rounded text-[8px] px-1 cursor-pointer"
               >
-                <option value="angular">각도 분할 — 기본값</option>
+                <option value="angular">자동 (핀 없으면 등분 / 핀 있으면 핀 기준)</option>
                 <option value="pca">PCA</option>
                 <option value="hilbert">힐베르트 곡선</option>
                 <option value="bestOfPcaHilbert">최적 자동선택</option>
