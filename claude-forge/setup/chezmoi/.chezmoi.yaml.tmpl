@@ -1,0 +1,14 @@
+{{- $osid := .chezmoi.os -}}
+{{- if eq .chezmoi.os "linux" -}}
+{{-   if (.chezmoi.kernel.osrelease | lower | contains "microsoft") -}}
+{{-     $osid = "wsl" -}}
+{{-   end -}}
+{{- end -}}
+
+data:
+  platform: {{ $osid }}
+  arch: {{ .chezmoi.arch }}
+  name: {{ promptStringOnce . "name" "Your name" }}
+  email: {{ promptStringOnce . "email" "Your email" }}
+  mac_server: {{ promptStringOnce . "mac_server" "Mac server hostname (e.g., mac-mini.tailscale.com)" }}
+  role: {{ promptChoiceOnce . "role" "Your role" (list "developer" "lead" "server") }}

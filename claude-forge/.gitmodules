@@ -1,0 +1,3 @@
+[submodule "cc-chips"]
+	path = cc-chips
+	url = https://github.com/roger-me/CC-CHIPS.git

@@ -1,0 +1,49 @@
+{
+  "entries": [
+    {
+      "id": "2026-02-10-building-effective-agents",
+      "title": "Building Effective Agents",
+      "source_type": "web",
+      "source_url": "https://www.anthropic.com/engineering/building-effective-agents",
+      "date": "2026-02-10",
+      "tags": ["ai-agents", "llm", "workflow-patterns", "anthropic", "system-design"],
+      "file": "summaries/2026-02-10-building-effective-agents.md"
+    },
+    {
+      "id": "2026-02-10-claude-character",
+      "title": "The Claude Model Spec",
+      "source_type": "web",
+      "source_url": "https://www.anthropic.com/research/claude-character",
+      "date": "2026-02-10",
+      "tags": ["AI-alignment", "character-training", "Constitutional-AI", "Claude-personality", "Anthropic"],
+      "file": "summaries/2026-02-10-claude-character.md"
+    },
+    {
+      "id": "2026-02-10-prompting-guide-claude-code",
+      "title": "Prompting Guide for Claude Code",
+      "source_type": "web",
+      "source_url": "https://www.anthropic.com/engineering/prompting-guide-for-claude-code",
+      "date": "2026-02-10",
+      "tags": ["prompt-engineering", "claude-code", "best-practices", "anthropic", "LLM-prompting"],
+      "file": "summaries/2026-02-10-prompting-guide-claude-code.md"
+    },
+    {
+      "id": "2026-02-10-swe-bench-sonnet",
+      "title": "SWE-bench Sonnet",
+      "source_type": "web",
+      "source_url": "https://www.anthropic.com/engineering/swe-bench-sonnet",
+      "date": "2026-02-10",
+      "tags": ["swe-bench", "claude-sonnet", "ai-agent", "software-engineering", "benchmark"],
+      "file": "summaries/2026-02-10-swe-bench-sonnet.md"
+    },
+    {
+      "id": "2026-02-14-pattern-verification-design",
+      "title": "패턴 검증 시스템 설계 문서 (manage-skills + verify-implementation)",
+      "source_type": "internal",
+      "source_url": "internal",
+      "date": "2026-02-14",
+      "tags": ["verification", "skills", "design-doc", "pattern-checking"],
+      "file": "summaries/2026-02-14-pattern-verification-design.md"
+    }
+  ]
+}

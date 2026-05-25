@@ -1,0 +1,24 @@
+{
+  "context7": {
+    "type": "stdio",
+    "command": "npx",
+    "args": ["-y", "@upstash/context7-mcp@2.1.8"]
+  },
+  "exa": {
+    "type": "http",
+    "url": "https://mcp.exa.ai/mcp"
+  },
+  "github": {
+    "type": "stdio",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-github@2025.4.8"],
+    "env": {
+      "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_PERSONAL_ACCESS_TOKEN}"
+    }
+  },
+  "jina-reader": {
+    "type": "stdio",
+    "command": "npx",
+    "args": ["-y", "jina-mcp-tools@1.2.3"]
+  }
+}

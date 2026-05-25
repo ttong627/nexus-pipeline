@@ -1,0 +1,78 @@
+{
+  "env": {
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
+  },
+  "teammateMode": "in-process",
+{{- if eq .platform "darwin" }}
+  "statusLine": {
+    "type": "command",
+    "command": "~/.claude/cc-chips/engine.sh"
+  },
+{{- end }}
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/remote-command-guard.sh",
+            "timeout": 5000
+          }
+        ]
+      }
+    ]
+  },
+  "permissions": {
+    "allow": [
+      "Bash(*)",
+      "Read(*)",
+      "Write(*)",
+      "Edit(*)",
+      "Task(*)",
+      "Glob(*)",
+      "Grep(*)",
+      "Search(*)",
+      "Skill(*)",
+      "ToolSearch(*)",
+      "NotebookEdit(*)",
+      "WebSearch",
+      "WebSearch(*)",
+      "WebFetch(*)",
+      "SendMessage(*)",
+      "TeamCreate(*)",
+      "TeamDelete(*)",
+      "TaskCreate(*)",
+      "TaskUpdate(*)",
+      "TaskGet(*)",
+      "TaskList(*)",
+      "TaskOutput(*)",
+      "TaskStop(*)",
+      "EnterPlanMode(*)",
+      "ExitPlanMode(*)",
+      "AskUserQuestion(*)",
+      "ListMcpResourcesTool(*)",
+      "ReadMcpResourceTool(*)",
+      "mcp__*",
+      "mcp__*__*"
+    ],
+    "deny": [
+      "Bash(rm -rf /)*",
+      "Bash(rm -rf ~)*",
+      "Bash(sudo:*)",
+      "Bash(chmod 777:*)",
+      "Bash(>/dev/*)",
+      "Bash(curl*|*sh)*",
+      "Bash(wget*|*sh)*",
+      "Bash(*>~/.ssh/*)",
+      "Bash(*>~/.zshrc)*",
+      "Bash(*>~/.bashrc)*",
+      "Bash(*>~/.profile)*",
+      "Bash(git push --force*main)*",
+      "Bash(git push -f*main)*",
+      "Bash(git reset --hard origin/*)*",
+      "Bash(npm publish)*",
+      "Bash(pnpm publish)*"
+    ]
+  }
+}

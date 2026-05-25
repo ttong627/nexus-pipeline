@@ -1,0 +1,10 @@
+{{- if ne .platform "darwin" }}
+# Claude Code Mac Server
+Host claude-mac
+    HostName {{ .mac_server }}
+    User {{ .name }}
+    IdentityFile ~/.ssh/id_ed25519
+    ServerAliveInterval 60
+    ServerAliveCountMax 3
+    ForwardAgent yes
+{{- end }}

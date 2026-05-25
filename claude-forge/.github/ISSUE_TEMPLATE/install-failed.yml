@@ -1,0 +1,49 @@
+name: 🐛 Install failed (when Claude Code tried to install claude-forge)
+description: Use this when you asked Claude Code (or any LLM agent) to install claude-forge from this repo URL and the install failed or chose the wrong path.
+title: "[install-failed] "
+labels: ["install", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! This template captures everything we need to fix LLM-install paper cuts.
+  - type: input
+    id: prompt
+    attributes:
+      label: What you said to the LLM agent
+      description: e.g. "install https://github.com/sangrokjung/claude-forge for me"
+      placeholder: install <repo URL> for me
+    validations:
+      required: true
+  - type: input
+    id: chosen-command
+    attributes:
+      label: Which command did the LLM actually run?
+      description: Paste the exact command. e.g. `/plugin marketplace add sangrokjung/claude-forge`
+    validations:
+      required: true
+  - type: textarea
+    id: error
+    attributes:
+      label: Error or wrong-result output
+      render: shell
+    validations:
+      required: true
+  - type: input
+    id: agent
+    attributes:
+      label: Which LLM agent / surface
+      description: e.g. Claude Code 2.1.110 / Cursor / Codex / Gemini CLI
+    validations:
+      required: true
+  - type: dropdown
+    id: install-method
+    attributes:
+      label: Which method should have been chosen?
+      options:
+        - "Method A (curl install.sh — full)"
+        - "Method B (/plugin install — lightweight)"
+        - "Method C (manual clone)"
+        - "Don't know"
+    validations:
+      required: true
