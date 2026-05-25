@@ -6,12 +6,6 @@ import { MapPin, List, Map as MapIcon, RefreshCw, Building2, Phone, ChevronUp, C
 const KAKAO_JS_KEY = import.meta.env.VITE_KAKAO_JS_KEY;
 
 // ── 외부 지도 열기 함수들 ──────────────────────────────────────────────────
-const openGoogleMaps = (r) => {
-  const url = r.lat && r.lng
-    ? `https://maps.google.com/maps?daddr=${r.lat},${r.lng}`
-    : `https://maps.google.com/maps?q=${encodeURIComponent(r.주소 || '')}`;
-  window.open(url, '_blank');
-};
 const openKakaoMapFavorite = (r) => {
   const name = encodeURIComponent((r.이름 || '배송지') + ' ' + (r.주소 || ''));
   window.open(`https://map.kakao.com/link/map/${name},${r.lat},${r.lng}`, '_blank');
@@ -659,6 +653,7 @@ export default function ShareRouteView({ shareId, driverId }) {
   const gpsAgeLabel = gpsAgeSec == null ? '' : gpsAgeSec < 60 ? `${gpsAgeSec}s ago` : `${Math.floor(gpsAgeSec / 60)}m ago`;
   const orderApplyRequest = driver?.id ? shareData?.orderApplyRequests?.[driver.id] : null;
   const isOrderApplyRequested = orderApplyRequest?.status === 'requested';
+  const nextRecord = selectedRecord || allRecords[0];
 
   return (
     <div className="fixed inset-0 bg-[#050505] flex flex-col" style={{ fontFamily: 'inherit' }}>
@@ -667,13 +662,11 @@ export default function ShareRouteView({ shareId, driverId }) {
       {showGpsGuide && <GpsGuideModal onClose={() => setShowGpsGuide(false)} />}
 
       {/* ── 헤더 ─────────────────────────────────────────────────────── */}
-      <div className="shrink-0 bg-[#0a0a0a] border-b border-[#222] px-3 py-2.5 flex items-center gap-2">
-        <div className="w-3 h-3 rounded-full shrink-0" style={{ background: driverColor }} />
+      <div className="shrink-0 bg-[#070707]/98 border-b border-[#1b1b1b] px-2.5 py-1.5 flex items-center gap-1.5 overflow-x-auto">
+        <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: driverColor }} />
         <div className="flex-1 min-w-0">
-          <div className="text-white font-black text-sm truncate">{driver?.name || '기사'} 배송 루트</div>
-          <div className="text-gray-600 text-[10px] flex flex-wrap items-center gap-1.5 mt-0.5">
-            <span>{shareData.city} {shareData.monthId || shareData.month}</span>
-            <span>·</span>
+          <div className="text-white font-black text-[13px] truncate">{driver?.name || '기사'}</div>
+          <div className="text-gray-600 text-[10px] flex flex-nowrap items-center gap-1.5 mt-0.5 overflow-hidden">
             <span className="text-white font-bold">{allRecords.length}건</span>
             <span className="text-blue-400 font-bold">{totalQty}포</span>
             
@@ -692,6 +685,11 @@ export default function ShareRouteView({ shareId, driverId }) {
               </span>
             )}
           </div>
+          {nextRecord && (
+            <div className="mt-0.5 text-[10px] text-gray-500 truncate">
+              다음 {nextRecord._displaySeq || nextRecord.배송순번 || 1}번 · <span className="text-gray-300 font-bold">{nextRecord.이름}</span> · {nextRecord.주소}
+            </div>
+          )}
         </div>
 
         {/* 링크 복사 버튼 */}
@@ -750,7 +748,7 @@ export default function ShareRouteView({ shareId, driverId }) {
 
         {/* 지도 영역 */}
         <div className={`relative flex flex-col transition-all ${
-          layoutMode === 'map' ? 'flex-1' : layoutMode === 'split' ? 'h-[68%] shrink-0' : 'h-0 overflow-hidden'
+          layoutMode === 'map' ? 'flex-1' : layoutMode === 'split' ? 'h-[74%] shrink-0' : 'h-0 overflow-hidden'
         }`}>
           {!isMapReady && (
             <div className="absolute inset-0 flex items-center justify-center bg-[#080808] z-10">
@@ -843,10 +841,6 @@ export default function ShareRouteView({ shareId, driverId }) {
                 className="flex items-center gap-1.5 px-3 py-2 rounded-full bg-[#FEE500] text-[#1a1a1a] font-black text-xs shadow-lg hover:brightness-95 active:scale-95 transition-all">
                 <Navigation size={12} /> 카카오
               </button>
-              <button onClick={() => openGoogleMaps(selectedRecord)}
-                className="flex items-center gap-1.5 px-3 py-2 rounded-full bg-white text-[#1a1a1a] font-black text-xs shadow-lg hover:brightness-95 active:scale-95 transition-all">
-                <Navigation size={12} /> 구글맵
-              </button>
             </div>
           )}
         </div>
@@ -877,10 +871,16 @@ export default function ShareRouteView({ shareId, driverId }) {
 
           {allRecords.map((r, idx) => {
             const isSelected = r._uid === selectedId;
+            const qty = parseInt(r.포수) || 1;
+            const isMultiQty = qty > 1;
             return (
               <div key={r._uid} id={`share-rec-${r._uid}`} onClick={() => handleRecordClick(r)}
                 className={`flex items-center gap-2 px-3 py-2 border-b cursor-pointer transition-colors ${
-                  isSelected ? 'bg-[#0d1e0d] border-[#1a3a1a]' : 'border-[#111] hover:bg-[#0f0f0f]'
+                  isSelected
+                    ? 'bg-[#0d1e0d] border-[#1a3a1a]'
+                    : isMultiQty
+                      ? 'bg-amber-950/10 border-amber-500/20 hover:bg-amber-950/20'
+                      : 'border-[#111] hover:bg-[#0f0f0f]'
                 }`}
               >
                 {orderEditMode && (
@@ -913,9 +913,10 @@ export default function ShareRouteView({ shareId, driverId }) {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-0.5">
                     <span className={`font-bold text-xs ${isSelected ? 'text-white' : 'text-gray-200'}`}>{r.이름}</span>
-                    {r.포수 > 1 && (
-                      <span className="text-[9px] px-1.5 py-0.5 rounded-full font-bold"
-                        style={{ background: `${driverColor}20`, color: driverColor }}>{r.포수}포</span>
+                    {isMultiQty && (
+                      <span className="text-[10px] px-2 py-0.5 rounded-full font-black bg-amber-500/20 text-amber-300 border border-amber-400/35 shadow-[0_0_10px_rgba(245,158,11,0.18)]">
+                        {qty}포
+                      </span>
                     )}
                     {r.isApt && (
                       <span className="text-[9px] px-1.5 py-0.5 bg-orange-900/30 text-orange-600 rounded-full font-bold">
@@ -927,13 +928,6 @@ export default function ShareRouteView({ shareId, driverId }) {
                   {r.특이사항 && <div className="text-amber-700 text-[10px] truncate mt-0.5">⚠ {r.특이사항}</div>}
                 </div>
                 <div className="shrink-0 flex flex-col items-end gap-1.5">
-                  {/* 구글맵 내비 */}
-                  {(r.lat && r.lng || r.주소) && isSelected && (
-                    <button onClick={(e) => { e.stopPropagation(); openGoogleMaps(r); }}
-                      className="flex items-center gap-1 text-[10px] font-black px-2 py-1 rounded-full bg-white text-[#1a1a1a] hover:brightness-90 active:scale-95 transition-all">
-                      <Navigation size={9} /> 구글맵
-                    </button>
-                  )}
                   {/* 카카오 내비 */}
                   {r.lat && r.lng && isSelected && (
                     <button onClick={(e) => { e.stopPropagation(); openKakaoNavi(r); }}

@@ -545,7 +545,8 @@ export default function RouteSetupModal({
       { id: 'd1', name: '기사1', phone: '', capacity: 100, color: DRIVER_COLORS[0] },
       { id: 'd2', name: '기사2', phone: '', capacity: 100, color: DRIVER_COLORS[1] },
     ];
-    onStart({ selectedDongs, drivers: finalDrivers, dongDriverMap: map, baseDailyQty });
+    const companyDrivers = drivers.filter(d => d.name.trim());
+    onStart({ selectedDongs, drivers: finalDrivers, companyDrivers, dongDriverMap: map, baseDailyQty });
   };
 
   // ── 기사 마스터에서 불러오기 (소속사 또는 개인기사)
@@ -663,11 +664,12 @@ export default function RouteSetupModal({
   // 행정동별 시작 (다중 선택)
   const handleStartForSelectedDongs = () => {
     if (!dongSelection.size) return;
-    const dongs = [...dongSelection];
-    const allIds = new Set(dongs.flatMap(dong => dongDriverMap[dong] || []));
-    const dongDrivers = drivers.filter(d => allIds.has(d.id));
-    const map = Object.fromEntries(dongs.map(dong => [dong, dongDriverMap[dong] || []]));
-    doStart({ selectedDongs: new Set(dongs), startDrivers: dongDrivers, map });
+    const orderedSelection = dongList.filter(dong => dongSelection.has(dong));
+    const firstDong = orderedSelection[0];
+    if (!firstDong) return;
+    const ids = dongDriverMap[firstDong] || [];
+    const dongDrivers = drivers.filter(d => ids.includes(d.id));
+    doStart({ selectedDongs: new Set([firstDong]), startDrivers: dongDrivers, map: { [firstDong]: ids } });
   };
 
   // 행정동 선택 토글

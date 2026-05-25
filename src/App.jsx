@@ -2409,8 +2409,8 @@ export default function App() {
             cloudMonthId={cloudRouteConfig?.monthId}
             orgDongs={cloudRouteConfig?.orgDongs || null}
             user={user}
-            onStart={({ selectedDongs, drivers, dongDriverMap, baseDailyQty }) => {
-              setRouteSetupResult({ selectedDongs, drivers, dongDriverMap, baseDailyQty });
+            onStart={({ selectedDongs, drivers, companyDrivers, dongDriverMap, baseDailyQty }) => {
+              setRouteSetupResult({ selectedDongs, drivers, companyDrivers, dongDriverMap, baseDailyQty });
               setShowRouteSetup(false);
               setShowRouteMap(true);
             }}
@@ -2427,6 +2427,8 @@ export default function App() {
             initialCloudMonthId={cloudRouteConfig?.monthId || null}
             orgDongs={cloudRouteConfig?.orgDongs || null}
             initialDrivers={routeSetupResult?.drivers || null}
+            companyDrivers={routeSetupResult?.companyDrivers || routeSetupResult?.drivers || null}
+            setupDongDriverMap={routeSetupResult?.dongDriverMap || null}
             selectedDongs={routeSetupResult?.selectedDongs || null}
             baseDailyQty={routeSetupResult?.baseDailyQty || 40}
           />

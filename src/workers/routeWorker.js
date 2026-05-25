@@ -279,41 +279,28 @@ const partitionContiguous = (orderedUnits, orderedDrivers) => {
   if (k === 1) return Object.fromEntries(orderedUnits.map(u => [u.id, orderedDrivers[0].id]));
   if (k >= n) return Object.fromEntries(orderedUnits.map((u, idx) => [u.id, orderedDrivers[idx].id]));
 
-  const loads = orderedUnits.map(u => u.load || 1);
-  const prefix = [0];
-  loads.forEach(v => prefix.push(prefix[prefix.length - 1] + v));
-  const totalLoad = prefix[n] || 1;
-  const caps = orderedDrivers.map(d => parseFloat(d.capacity) || 100);
-  const totalCap = caps.reduce((s, c) => s + c, 0) || 1;
-  const targets = caps.map(c => totalLoad * c / totalCap);
-  const INF = 1e18;
-  const dp = Array.from({ length: k + 1 }, () => Array(n + 1).fill(INF));
-  const prev = Array.from({ length: k + 1 }, () => Array(n + 1).fill(-1));
-  dp[0][0] = 0;
-
-  for (let d = 1; d <= k; d++) {
-    for (let i = d; i <= n; i++) {
-      for (let j = d - 1; j < i; j++) {
-        const segmentLoad = prefix[i] - prefix[j];
-        const target = targets[d - 1] || 1;
-        const loadCost = Math.pow((segmentLoad - target) / target, 2);
-        const sizeCost = Math.pow((i - j) / Math.max(1, n / k), 2) * 0.015;
-        const cost = dp[d - 1][j] + loadCost + sizeCost;
-        if (cost < dp[d][i]) {
-          dp[d][i] = cost;
-          prev[d][i] = j;
-        }
-      }
-    }
+  // 포수, 배송건수, capacity를 모두 무시하고 지도상 자연 간격이 가장 큰 곳을 경계로 삼는다.
+  const gaps = [];
+  for (let i = 1; i < n; i++) {
+    const prev = orderedUnits[i - 1];
+    const next = orderedUnits[i];
+    gaps.push({
+      index: i,
+      distance: haversine(prev.lat, prev.lng, next.lat, next.lng),
+    });
   }
+  const cuts = gaps
+    .sort((a, b) => b.distance - a.distance)
+    .slice(0, k - 1)
+    .map(g => g.index)
+    .sort((a, b) => a - b);
 
   const ranges = [];
-  let end = n;
-  for (let d = k; d >= 1; d--) {
-    const start = prev[d][end];
-    ranges.unshift({ driver: orderedDrivers[d - 1], start, end });
-    end = start;
-  }
+  let start = 0;
+  [...cuts, n].forEach((end, idx) => {
+    ranges.push({ driver: orderedDrivers[Math.min(idx, k - 1)], start, end });
+    start = end;
+  });
 
   const unitToDriver = {};
   ranges.forEach(({ driver, start, end }) => {
@@ -571,6 +558,57 @@ const calculateStats = (records, clusterMap, drivers) => {
   return { totalLoad: Math.round(totalLoad * 10) / 10, totalQty, stats, maxAbsDiffPct };
 };
 
+const buildBoundaryGuides = (orderedUnits, clusterMap, activeDrivers) => {
+  const driverNameById = Object.fromEntries(activeDrivers.map(d => [d.id, d.name || d.id]));
+  const lats = orderedUnits.map(u => u.lat).filter(Boolean);
+  const lngs = orderedUnits.map(u => u.lng).filter(Boolean);
+  if (!lats.length || !lngs.length) return [];
+  const minLat = Math.min(...lats);
+  const maxLat = Math.max(...lats);
+  const minLng = Math.min(...lngs);
+  const maxLng = Math.max(...lngs);
+  const span = Math.max(maxLat - minLat, maxLng - minLng, 0.002) * 0.8;
+  const guideByPair = new Map();
+  for (let i = 1; i < orderedUnits.length; i++) {
+    const prev = orderedUnits[i - 1];
+    const next = orderedUnits[i];
+    const prevDriverId = clusterMap[prev.recordIds[0]];
+    const nextDriverId = clusterMap[next.recordIds[0]];
+    if (!prevDriverId || !nextDriverId || prevDriverId === nextDriverId) continue;
+    if (!prev.lat || !prev.lng || !next.lat || !next.lng) continue;
+    const mid = { lat: (prev.lat + next.lat) / 2, lng: (prev.lng + next.lng) / 2 };
+    const dx = next.lng - prev.lng;
+    const dy = next.lat - prev.lat;
+    let px = -dy;
+    let py = dx;
+    const normLen = Math.sqrt(px * px + py * py) || 1;
+    px /= normLen;
+    py /= normLen;
+    const distance = haversine(prev.lat, prev.lng, next.lat, next.lng);
+    const pairKey = [prevDriverId, nextDriverId].sort().join('__');
+    const guide = {
+      id: `boundary_${pairKey}`,
+      fromDriverId: prevDriverId,
+      toDriverId: nextDriverId,
+      fromDriverName: driverNameById[prevDriverId] || prevDriverId,
+      toDriverName: driverNameById[nextDriverId] || nextDriverId,
+      from: { lat: prev.lat, lng: prev.lng },
+      to: { lat: next.lat, lng: next.lng },
+      mid,
+      lineStart: { lat: mid.lat - py * span, lng: mid.lng - px * span },
+      lineEnd: { lat: mid.lat + py * span, lng: mid.lng + px * span },
+      fromLoad: Math.round((prev.load || 0) * 10) / 10,
+      toLoad: Math.round((next.load || 0) * 10) / 10,
+      distance,
+    };
+    const old = guideByPair.get(pairKey);
+    if (!old || distance > old.distance) guideByPair.set(pairKey, guide);
+  }
+  return [...guideByPair.values()]
+    .sort((a, b) => b.distance - a.distance)
+    .slice(0, Math.max(0, activeDrivers.length - 1));
+};
+
 // ── qualityScore 계산 (0–100, 높을수록 좋음) ─────────────────────────────
 const calcQualityScore = ({
   splitUnitCount, totalMandatoryUnits,
@@ -594,6 +632,7 @@ const calcQualityScore = ({
 // ── 14개 진단 항목 ────────────────────────────────────────────────────────
 const buildDiagnostics = ({ records, units, orderedUnits, clusterMap, activeDrivers, driverPins, strategy = 'pca', forcedAssignCount = 0, coordFailCount = 0 }) => {
   const load = calculateStats(records, clusterMap, activeDrivers);
+  const boundaryGuides = buildBoundaryGuides(orderedUnits, clusterMap, activeDrivers);
 
   // ── 도로 통계 (기존 8개 + 도로측면 순수도) ───────────────────────────────
   const roadMap = {};
@@ -779,6 +818,7 @@ const buildDiagnostics = ({ records, units, orderedUnits, clusterMap, activeDriv
     islandCount,
     roadSideMixCount,
     boundaryUnitCount,
+    boundaryGuides,
     forcedAssignCount,
     coordFailCount,
     dongPurity,
@@ -853,6 +893,9 @@ const computeDongGroupSplit = (units, orderedDrivers) => {
 
   // dong 그룹이 없으면(전 레코드 dong 없음) angular fallback
   if (!dongMap.size) return computeAngularSplit(units, orderedDrivers);
+  // 선택된 행정동 수가 기사 수보다 적으면 동 단위 배정만으로 일부 기사가 0건이 된다.
+  // 이 경우 같은 동 안에서 공간 기준으로 다시 나눠 capacity/건수 분산을 보장한다.
+  if (dongMap.size < orderedDrivers.length) return computeAngularSplit(units, orderedDrivers);
 
   // 동 그룹 중심점 및 각도 계산
   dongMap.forEach(g => {

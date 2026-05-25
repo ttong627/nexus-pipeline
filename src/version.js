@@ -1,9 +1,15 @@
-export const APP_VERSION = 'V5.5.71';
+export const APP_VERSION = 'V5.5.84';
 export const APP_BUILD = '2026.05.26';
-export const APP_BUILD_TIME = '2026.05.26 01:50';
+export const APP_BUILD_TIME = '2026.05.26 03:39';
 
 export const CHANGELOG = [
-  { v: 'V5.5', date: '2026.05.25', items: [
+  { v: 'V5.5', date: '2026.05.26', items: [
+    '루트맵 행정동 작업 큐 — 동별 순차 작업 워크플로우 (‹ › 이동, 저장 완료 표시)',
+    '미저장 변경 경고 — 동 이동 시 미저장 배정 있으면 [저장 후 이동/그냥 이동/취소] 확인',
+    '행정동 분할 전략 개선 — 로드 필터 행정동 필드 고정, 배정 완료 동 ✓ 표시',
+    '핀 없을 때 자동핀 확인 모달 제거 (dongGroup·hilbert 전략에서 핀 불필요)',
+  ]},
+  { v: 'V5.5 (이전)', date: '2026.05.25', items: [
     '전체 UI/UX 디자인 개편 — 브랜드 컬러 에메랄드로 통일',
     'AuthScreen · Step1 · LoadingScreen 파란색 계열 → 에메랄드 전환',
     'IntroScreen 단계별 개별 컬러 부여 (데이터→스카이, 정제→에메랄드, 배정→앰버 등)',

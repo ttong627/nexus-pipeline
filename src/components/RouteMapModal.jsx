@@ -27,6 +27,17 @@ const haversine = (lat1, lng1, lat2, lng2) => {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 };
 
+const getLineSide = (lineStart, lineEnd, point) => {
+  const ax = Number(lineStart?.lng);
+  const ay = Number(lineStart?.lat);
+  const bx = Number(lineEnd?.lng);
+  const by = Number(lineEnd?.lat);
+  const px = Number(point?.lng);
+  const py = Number(point?.lat);
+  if (![ax, ay, bx, by, px, py].every(Number.isFinite)) return 0;
+  return (bx - ax) * (py - ay) - (by - ay) * (px - ax);
+};
+
 const parseAptDong = (addr) => {
   const text = String(addr || '');
   const m = text.match(/(?:^|[\s,(])(\d{1,4})\s*동(?:[\s,)]|$)/) || text.match(/(?:^|[\s,(])(\d{3,4})\s*[-]\s*\d{1,4}\s*호?/);
@@ -987,11 +998,6 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
       _origSeqNo: r.배송순번 || '',
     }))
   );
-  // 초기값: gridData 기반 모드에서 고유 동 1개면 자동 선택
-  const [selectedDong, setSelectedDong] = useState(() => {
-    const dongs = [...new Set(gridData.map(r => getRouteDong(r)).filter(Boolean))];
-    return dongs.length >= 1 ? dongs[0] : '전체';
-  });
   const [driverCount, setDriverCount] = useState(startDrivers.length);
   const [overlapCount, setOverlapCount] = useState(0);
   const [isMapReady, setIsMapReady] = useState(false);
@@ -1001,6 +1007,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
   const [autoSplitStrategy, setAutoSplitStrategy] = useState('dongGroup');
   const [routeAnalysis, setRouteAnalysis] = useState(null);
   const [showMapAnalysis, setShowMapAnalysis] = useState(false);
+  const [manualBoundaryAdjustments, setManualBoundaryAdjustments] = useState({});
   const [selectedDriverFilter, setSelectedDriverFilter] = useState('all');
   const [aptListExpanded, setAptListExpanded] = useState(true);
   const [aptMultiModal, setAptMultiModal] = useState(null); // { aptName, dongs: [{dong, records, assignedDriverId}] }
@@ -1067,6 +1074,14 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
   const [pickerSelectedName, setPickerSelectedName] = useState('');
   // 모달이 열릴 때 지도에서 선택된 행정동을 캡처 (selectedDong '전체'면 첫 번째 동으로 대체)
   const [pickerDong, setPickerDong] = useState('');
+
+  // ── 행정동 작업 큐 ─────────────────────────────────────────────────────────
+  const [dongQueue, setDongQueue] = useState([]); // 작업 순서 행정동 배열
+  const [activeDongIndex, setActiveDongIndex] = useState(0); // 현재 작업 중인 인덱스
+  const [completedDongs, setCompletedDongs] = useState(new Set()); // 저장 완료된 동
+  const [isDirty, setIsDirty] = useState(false); // 현재 동 미저장 변경 여부
+  const [showDongNavConfirm, setShowDongNavConfirm] = useState(null); // { targetIndex }
+
   const [showDriverSwapModal, setShowDriverSwapModal] = useState(false);
   const [swapFromDriverId, setSwapFromDriverId] = useState('');
   const [swapToDriverId, setSwapToDriverId] = useState('');
@@ -1099,6 +1114,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
   const kakaoMapRef = useRef(null);
   const overlaysRef = useRef([]);
   const polylinesRef = useRef([]);
+  const boundaryOverlaysRef = useRef([]);
   const listPanelRef = useRef(null);
   const driverPinOverlaysRef = useRef([]);
   const mapClickListenerRef = useRef(null);
@@ -1122,8 +1138,10 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
     });
     return counts;
   }, [baseForFilter]);
-  // '전체' 옵션 제거 — selectedDong이 비어있거나 '전체'면 전체 표시 (초기 로딩 과도기용)
-  const filteredRecords = (!selectedDong || selectedDong === '전체') ? records : records.filter(r => getRouteDong(r) === selectedDong);
+  // 작업 큐 기반 — activeDong이 있으면 해당 동만, 없으면 전체
+  const activeDong = dongQueue[activeDongIndex] ?? null;
+  const selectedDong = activeDong ?? '전체'; // 기존 코드 호환 alias (setSelectedDong 없음)
+  const filteredRecords = activeDong ? records.filter(r => getRouteDong(r) === activeDong) : records;
   const [listFilterGubun, setListFilterGubun] = useState('');
   const displayRecords = (() => {
     let base = selectedDriverFilter === 'all' ? filteredRecords
@@ -1411,19 +1429,22 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
           }));
           // 조직 필터
           if (orgDongs) {
-            loaded = loaded.filter(r => orgDongs.has(getRouteDong(r)));
+            loaded = loaded.filter(r => orgDongs.has(String(r.행정동 || '').trim()));
           }
-          // 설정 화면에서 선택한 행정동만 로드
+          // 설정 화면에서 선택한 행정동만 로드 — 원본 행정동 기준 (배정행정동 무시)
           if (selectedDongsProp) {
-            loaded = loaded.filter(r => selectedDongsProp.has(getRouteDong(r)));
+            loaded = loaded.filter(r => selectedDongsProp.has(String(r.행정동 || '').trim()));
           }
           setRecords(loaded);
           setIsCloudMode(true);
           setCloudCity(initialCloudCity);
           setCloudMonthId(initialCloudMonthId);
-          // 레코드의 고유 행정동이 1개면 자동 선택, 여러 개면 '전체' 유지
-          const loadedDongs = [...new Set(loaded.map(r => getRouteDong(r)).filter(Boolean))];
-          if (loadedDongs.length === 1) setSelectedDong(loadedDongs[0]);
+          // dongQueue 초기화 — 행정동 가나다 정렬, 첫 번째 동부터 시작
+          const loadedDongs = [...new Set(loaded.map(r => getRouteDong(r)).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'ko'));
+          setDongQueue(loadedDongs);
+          setActiveDongIndex(0);
+          setCompletedDongs(new Set());
+          setIsDirty(false);
         }
       } catch (e) {
         console.error('클라우드 자동 로드 실패:', e);
@@ -1433,6 +1454,27 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
     }, 200);
     return () => clearTimeout(timer);
   }, [initialCloudCity, initialCloudMonthId]);
+
+  // ── activeDongIndex 변경 시 동별 임시 상태 초기화 ────────────────────────
+  useEffect(() => {
+    if (!dongQueue.length) return;
+    setDriverPins({});
+    setSequenceAnalysis(null);
+    setHasRunGeocoding(false);
+    setSelectedDriverFilter('all');
+    setIsDirty(false);
+  }, [activeDongIndex]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── 행정동 큐 이동 — 미저장 변경 있으면 확인 모달 표시 ──────────────────
+  const handleDongNavigate = useCallback((targetIndex) => {
+    if (targetIndex < 0 || targetIndex >= dongQueue.length) return;
+    if (targetIndex === activeDongIndex) return;
+    if (isDirty) {
+      setShowDongNavConfirm({ targetIndex });
+      return;
+    }
+    setActiveDongIndex(targetIndex);
+  }, [activeDongIndex, dongQueue.length, isDirty]);
 
   // ── Kakao Maps SDK 로딩 ─────────────────────────────────────────────
   useEffect(() => {
@@ -1544,9 +1586,282 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
     });
   }, [driverPins, drivers]);
 
+  const applyBoundaryGuide = useCallback((guide, adjusted) => {
+    if (isAssignmentLocked) {
+      showToast('error', '🔒 기사 배치가 잠겨 있습니다. 잠금을 해제하세요.');
+      return;
+    }
+    const lineStart = adjusted?.lineStart || guide.lineStart || guide.from;
+    const lineEnd = adjusted?.lineEnd || guide.lineEnd || guide.to;
+    const fromProbe = getLineSide(lineStart, lineEnd, guide.from);
+    if (!fromProbe) return;
+    const pair = new Set([guide.fromDriverId, guide.toDriverId]);
+    const scopeIds = new Set(filteredRecords.map(r => r.id));
+    let changed = 0;
+    setRecords(prev => {
+      const sourceUnits = buildAssignedRouteUnits(
+        prev.filter(r => scopeIds.has(r.id) && pair.has(r._driverId)),
+        drivers
+      );
+      const updates = new Map();
+      sourceUnits.forEach(unit => {
+        const side = getLineSide(lineStart, lineEnd, { lat: unit.lat, lng: unit.lng });
+        if (!side) return;
+        const targetDriverId = Math.sign(side) === Math.sign(fromProbe)
+          ? guide.fromDriverId
+          : guide.toDriverId;
+        unit.ids.forEach(id => updates.set(id, targetDriverId));
+      });
+      if (!updates.size) return prev;
+      return prev.map(record => {
+        const nextDriverId = updates.get(record.id);
+        if (!nextDriverId || record._driverId === nextDriverId) return record;
+        changed++;
+        return { ...record, _driverId: nextDriverId };
+      });
+    });
+    setTimeout(() => {
+      showToast(changed ? 'success' : 'info', changed
+        ? `경계 이동 적용 — ${changed.toLocaleString()}건 재배정`
+        : '경계 이동 완료 — 변경된 배송지가 없습니다.');
+    }, 0);
+  }, [drivers, filteredRecords, isAssignmentLocked, showToast]);
+
+  const startBoundaryDrag = useCallback((event, guide) => {
+    if (!mapRef.current || !window.kakao?.maps || !guide?.id) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const rect = mapRef.current.getBoundingClientRect();
+    const base = manualBoundaryAdjustments[guide.id] || {};
+    const startLineStart = base.lineStart || guide.lineStart || guide.from;
+    const startLineEnd = base.lineEnd || guide.lineEnd || guide.to;
+    const startMid = base.mid || guide.mid;
+    const startClient = { x: event.clientX, y: event.clientY };
+    let latest = { lineStart: startLineStart, lineEnd: startLineEnd, mid: startMid };
+
+    const pointToLatLng = (clientX, clientY) => {
+      const projection = kakaoMapRef.current?.getProjection?.();
+      if (projection?.coordsFromContainerPoint) {
+        const point = new window.kakao.maps.Point(clientX - rect.left, clientY - rect.top);
+        const coord = projection.coordsFromContainerPoint(point);
+        return { lat: coord.getLat(), lng: coord.getLng() };
+      }
+      const bounds = kakaoMapRef.current.getBounds();
+      const sw = bounds.getSouthWest();
+      const ne = bounds.getNorthEast();
+      const x = (clientX - rect.left) / Math.max(1, rect.width);
+      const y = (clientY - rect.top) / Math.max(1, rect.height);
+      return {
+        lat: ne.getLat() + y * (sw.getLat() - ne.getLat()),
+        lng: sw.getLng() + x * (ne.getLng() - sw.getLng()),
+      };
+    };
+
+    const onMove = (moveEvent) => {
+      const from = pointToLatLng(startClient.x, startClient.y);
+      const to = pointToLatLng(moveEvent.clientX, moveEvent.clientY);
+      const delta = { lat: to.lat - from.lat, lng: to.lng - from.lng };
+      latest = {
+        lineStart: { lat: startLineStart.lat + delta.lat, lng: startLineStart.lng + delta.lng },
+        lineEnd: { lat: startLineEnd.lat + delta.lat, lng: startLineEnd.lng + delta.lng },
+        mid: { lat: startMid.lat + delta.lat, lng: startMid.lng + delta.lng },
+      };
+      setManualBoundaryAdjustments(prev => ({ ...prev, [guide.id]: latest }));
+    };
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      applyBoundaryGuide(guide, latest);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  }, [applyBoundaryGuide, manualBoundaryAdjustments]);
+
+  const startBoundaryEndpointDrag = useCallback((event, guide, endpoint) => {
+    if (!mapRef.current || !window.kakao?.maps || !guide?.id) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const rect = mapRef.current.getBoundingClientRect();
+    let latest = manualBoundaryAdjustments[guide.id] || {};
+
+    const pointToLatLng = (clientX, clientY) => {
+      const projection = kakaoMapRef.current?.getProjection?.();
+      if (projection?.coordsFromContainerPoint) {
+        const point = new window.kakao.maps.Point(clientX - rect.left, clientY - rect.top);
+        const coord = projection.coordsFromContainerPoint(point);
+        return { lat: coord.getLat(), lng: coord.getLng() };
+      }
+      const bounds = kakaoMapRef.current.getBounds();
+      const sw = bounds.getSouthWest();
+      const ne = bounds.getNorthEast();
+      const x = (clientX - rect.left) / Math.max(1, rect.width);
+      const y = (clientY - rect.top) / Math.max(1, rect.height);
+      return {
+        lat: ne.getLat() + y * (sw.getLat() - ne.getLat()),
+        lng: sw.getLng() + x * (ne.getLng() - sw.getLng()),
+      };
+    };
+
+    const onMove = (moveEvent) => {
+      const lineStart = latest.lineStart || guide.lineStart || guide.from;
+      const lineEnd = latest.lineEnd || guide.lineEnd || guide.to;
+      const movedPoint = pointToLatLng(moveEvent.clientX, moveEvent.clientY);
+      const next = endpoint === 'start'
+        ? { lineStart: movedPoint, lineEnd }
+        : { lineStart, lineEnd: movedPoint };
+      next.mid = {
+        lat: (next.lineStart.lat + next.lineEnd.lat) / 2,
+        lng: (next.lineStart.lng + next.lineEnd.lng) / 2,
+      };
+      latest = next;
+      setManualBoundaryAdjustments(prev => ({ ...prev, [guide.id]: next }));
+    };
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      applyBoundaryGuide(guide, latest);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  }, [applyBoundaryGuide, manualBoundaryAdjustments]);
+
+  // ── 자동배정 경계선 오버레이: 실제 배정이 바뀌는 배송단위 사이를 표시
+  useEffect(() => {
+    if (!kakaoMapRef.current || !window.kakao?.maps) return;
+    boundaryOverlaysRef.current.forEach(o => o.setMap(null));
+    boundaryOverlaysRef.current = [];
+    const canEditBoundaries = routeAnalysis?.strategy === 'dongGroup' || routeAnalysis?.strategy === 'seedVoronoi';
+    const guides = showMapAnalysis && canEditBoundaries ? (routeAnalysis?.boundaryGuides || []) : [];
+    if (!guides.length) return;
+
+    guides.forEach((guide, idx) => {
+      const fromDriver = drivers.find(d => d.id === guide.fromDriverId);
+      const toDriver = drivers.find(d => d.id === guide.toDriverId);
+      const fromColor = fromDriver?.color || '#f59e0b';
+      const toColor = toDriver?.color || '#38bdf8';
+      const adjusted = manualBoundaryAdjustments[guide.id] || {};
+      const lineStart = adjusted.lineStart || guide.lineStart || guide.from;
+      const lineEnd = adjusted.lineEnd || guide.lineEnd || guide.to;
+      const mid = adjusted.mid || guide.mid;
+      const path = [
+        new window.kakao.maps.LatLng(lineStart.lat, lineStart.lng),
+        new window.kakao.maps.LatLng(lineEnd.lat, lineEnd.lng),
+      ];
+      const line = new window.kakao.maps.Polyline({
+        path,
+        strokeWeight: 14,
+        strokeColor: '#000000',
+        strokeOpacity: 0.82,
+        strokeStyle: 'solid',
+        zIndex: 90,
+      });
+      line.setMap(kakaoMapRef.current);
+      boundaryOverlaysRef.current.push(line);
+
+      const core = new window.kakao.maps.Polyline({
+        path,
+        strokeWeight: 9,
+        strokeColor: '#ffffff',
+        strokeOpacity: 1,
+        strokeStyle: 'shortdash',
+        zIndex: 91,
+      });
+      core.setMap(kakaoMapRef.current);
+      boundaryOverlaysRef.current.push(core);
+
+      const accent = new window.kakao.maps.Polyline({
+        path,
+        strokeWeight: 4,
+        strokeColor: idx % 2 ? toColor : fromColor,
+        strokeOpacity: 1,
+        strokeStyle: 'solid',
+        zIndex: 92,
+      });
+      accent.setMap(kakaoMapRef.current);
+      boundaryOverlaysRef.current.push(accent);
+
+      const label = document.createElement('div');
+      label.style.cssText = [
+        'background:rgba(0,0,0,0.86)',
+        'border:1px solid rgba(255,255,255,0.42)',
+        'box-shadow:0 6px 18px rgba(0,0,0,0.45)',
+        'border-radius:8px',
+        'padding:7px 10px',
+        'font-size:12px',
+        'font-weight:900',
+        'color:white',
+        'white-space:nowrap',
+        'cursor:grab',
+        'user-select:none',
+        'pointer-events:auto',
+      ].join(';');
+      label.title = '드래그해서 경계를 이동합니다. 놓으면 선 양쪽 배송지가 다시 배정됩니다.';
+      label.innerHTML = `<span style="color:#facc15">이동 경계</span><span style="color:#94a3b8"> · </span><span style="color:${fromColor}">${escHtml(guide.fromDriverName)}</span><span style="color:#94a3b8"> ↔ </span><span style="color:${toColor}">${escHtml(guide.toDriverName)}</span>`;
+      label.addEventListener('mousedown', (event) => startBoundaryDrag(event, guide));
+      const labelOverlay = new window.kakao.maps.CustomOverlay({
+        position: new window.kakao.maps.LatLng(mid.lat, mid.lng),
+        content: label,
+        yAnchor: 0.5,
+        xAnchor: 0.5,
+        zIndex: 50,
+      });
+      labelOverlay.setMap(kakaoMapRef.current);
+      boundaryOverlaysRef.current.push(labelOverlay);
+
+      [
+        {
+          endpoint: 'start',
+          point: {
+            lat: mid.lat + (lineStart.lat - mid.lat) * 0.38,
+            lng: mid.lng + (lineStart.lng - mid.lng) * 0.38,
+          },
+        },
+        {
+          endpoint: 'end',
+          point: {
+            lat: mid.lat + (lineEnd.lat - mid.lat) * 0.38,
+            lng: mid.lng + (lineEnd.lng - mid.lng) * 0.38,
+          },
+        },
+      ].forEach(({ endpoint, point }) => {
+        const handle = document.createElement('div');
+        handle.style.cssText = [
+          `width:18px`,
+          `height:18px`,
+          `border-radius:999px`,
+          `background:${endpoint === 'start' ? fromColor : toColor}`,
+          `border:3px solid white`,
+          `box-shadow:0 0 0 3px rgba(0,0,0,0.8),0 4px 14px rgba(0,0,0,0.55)`,
+          `cursor:grab`,
+          `pointer-events:auto`,
+        ].join(';');
+        handle.title = '드래그해서 경계선 기울기를 조정합니다.';
+        handle.addEventListener('mousedown', (event) => startBoundaryEndpointDrag(event, guide, endpoint));
+        const handleOverlay = new window.kakao.maps.CustomOverlay({
+          position: new window.kakao.maps.LatLng(point.lat, point.lng),
+          content: handle,
+          yAnchor: 0.5,
+          xAnchor: 0.5,
+          zIndex: 95,
+        });
+        handleOverlay.setMap(kakaoMapRef.current);
+        boundaryOverlaysRef.current.push(handleOverlay);
+      });
+    });
+
+    return () => {
+      boundaryOverlaysRef.current.forEach(o => o.setMap(null));
+      boundaryOverlaysRef.current = [];
+    };
+  }, [showMapAnalysis, routeAnalysis, drivers, manualBoundaryAdjustments, startBoundaryDrag, startBoundaryEndpointDrag]);
+
   // ── 변경 감지 ─────────────────────────────────────────────────────
   useEffect(() => { setHasUnsaved(true); }, [records, drivers]);
   useEffect(() => { recordsRef.current = records; }, [records]);
+  useEffect(() => { setManualBoundaryAdjustments({}); }, [routeAnalysis]);
+  useEffect(() => {
+    if (!['dongGroup', 'hilbert'].includes(autoSplitStrategy)) setAutoSplitStrategy('dongGroup');
+  }, [autoSplitStrategy]);
   useEffect(() => { autoSaveDataRef.current = { records, drivers }; }, [records, drivers]);
 
   // ── 5분 자동 임시저장 (클라우드 모드만) ──────────────────────────────
@@ -1722,6 +2037,16 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
     const activeDrivers = drivers.slice(0, Math.min(driverCount, drivers.length)).filter(d => !d.isExternal);
     const target = filteredRecords.filter(r => r._lat && r._lng && isCoordAssignable(r));
     if (!target.length || !activeDrivers.length) return;
+    const safeAutoSplitStrategy = ['dongGroup', 'hilbert'].includes(autoSplitStrategy) ? autoSplitStrategy : 'dongGroup';
+    const placedPinCount = activeDrivers.filter(d => !!driverPins[d.id]).length;
+    const hasPartialPins = placedPinCount > 0 && placedPinCount < activeDrivers.length;
+    if (hasPartialPins) {
+      showToast('error', `핀 기준 배정은 기사 ${activeDrivers.length}명 전원의 핀이 필요합니다. 현재 ${placedPinCount}개입니다.`, 6000);
+      return;
+    }
+    const effectiveStrategy = safeAutoSplitStrategy === 'dongGroup' && placedPinCount === activeDrivers.length
+      ? 'seedVoronoi'
+      : safeAutoSplitStrategy;
     setIsSplitting(true);
 
     const worker = routeWorkerRef.current;
@@ -1754,11 +2079,11 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
       // 행정동 필터 밖의 수동 배정은 자동 배정이 덮어쓰지 않는다.
       const affectedIds = new Set(filteredRecords.map(r => r.id));
 
-      // ── 자동 핀 생성: 핀 불필요 전략(angular·dongGroup)은 즉시 적용
-      // 나머지 전략: 핀 없는 기사가 있으면 무게중심을 핀으로 등록 후 확인
-      const PIN_FREE_STRATEGIES = new Set(['angular', 'dongGroup']);
+      // 핀은 사용자가 기사 수만큼 직접 꽂은 경우에만 사용한다.
+      // 핀이 없으면 경계/힐베르트 기준으로 바로 배정하고, 자동 핀 생성은 하지 않는다.
+      const PIN_FREE_STRATEGIES = new Set(['dongGroup', 'hilbert']);
       const noPinDrivers = activeDrivers.filter(d => !driverPins[d.id]);
-      if (noPinDrivers.length > 0 && !PIN_FREE_STRATEGIES.has(autoSplitStrategy)) {
+      if (noPinDrivers.length > 0 && !PIN_FREE_STRATEGIES.has(effectiveStrategy)) {
         const pendingPins = {};
         noPinDrivers.forEach(d => {
           const assigned = target.filter(r => clusterMap[r.id] === d.id && r._lat && r._lng);
@@ -1779,25 +2104,19 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
         ? { ...r, _driverId: clusterMap[r.id] || null }
         : r
       ));
+      setIsDirty(true);
       setTimeout(() => {
         const balanceMsg = diagnostics?.load?.maxAbsDiffPct !== undefined
           ? `최대 편차 ${diagnostics.load.maxAbsDiffPct}%`
           : '분석 완료';
         const qScore = diagnostics?.qualityScore !== undefined ? ` · 품질 ${diagnostics.qualityScore}점` : '';
-        const stratLabel = { pca: 'PCA', hilbert: '힐베르트', bestOfPcaHilbert: '최적선택', seedVoronoi: 'N-seed보로노이', angular: '각도분할', dongGroup: '행정동분할' }[diagnostics?.strategy || 'dongGroup'] || '행정동분할';
+        const stratLabel = { hilbert: '힐베르트 곡선', seedVoronoi: '핀 전체 기준', dongGroup: '자동 경계' }[diagnostics?.strategy || 'dongGroup'] || '자동 경계';
         showToast('success', `자동 배정 완료 [${stratLabel}] — ${balanceMsg}${qScore}. 분석 안내를 확인하세요.`, 5000);
       }, 500);
       setIsSplitting(false);
     };
     worker._pendingAutoSplit = onMessage;
     worker.addEventListener('message', onMessage);
-
-    // 자동 전략(dongGroup) 사용 중일 때:
-    // 모든 활성 기사에 핀이 있으면 핀 근접 기준(seedVoronoi), 없으면 행정동 그룹 분할(dongGroup)
-    const allHavePins = activeDrivers.every(d => !!driverPins[d.id]);
-    const effectiveStrategy = (autoSplitStrategy === 'dongGroup' && allHavePins)
-      ? 'seedVoronoi'
-      : autoSplitStrategy;
 
     worker.postMessage({
       type: 'autoSplit',
@@ -1940,12 +2259,62 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
   }, [selectedRecordId]);
 
   // ── 전체 배정 초기화 ─────────────────────────────────────────────────
-  const handleResetAssignments = useCallback(() => {
+  const handleResetAssignments = useCallback(async () => {
     if (isAssignmentLocked) { showToast('error', '🔒 기사 배치가 잠겨 있습니다. 잠금을 해제하세요.'); return; }
-    if (!window.confirm('⚠️ 기사 배치를 전부 초기화합니다.\n\n브러시로 조정한 배치 내역까지 모두 사라집니다.\n정말 계속하시겠습니까?')) return;
-    setRecords(prev => prev.map(r => ({ ...r, _driverId: null })));
-    showToast('success', '배정 전체 초기화 완료');
-  }, [showToast, isAssignmentLocked]);
+    if (!window.confirm('⚠️ 기사 배치와 배송순번을 전부 초기화합니다.\n\n클라우드 저장본의 기사/순번도 같이 비웁니다.\n정말 계속하시겠습니까?')) return;
+
+    const resetRecords = records.map(r => ({ ...r, _driverId: null, 배송순번: '' }));
+    setRecords(resetRecords);
+    setRouteAnalysis(null);
+    setShowMapAnalysis(false);
+    setSequenceAnalysis(null);
+    setShowSequenceAnalysis(false);
+    setOverlapCount(0);
+
+    if (isCloudMode && cloudCity && cloudMonthId) {
+      try {
+        const CHUNK = 499;
+        for (let i = 0; i < resetRecords.length; i += CHUNK) {
+          const batch = writeBatch(db);
+          let hasOps = false;
+          resetRecords.slice(i, i + CHUNK).forEach(r => {
+            if (!r._cloudDocId) return;
+            batch.set(
+              doc(db, 'cloud_lists', cloudCity, 'months', cloudMonthId, 'records', r._cloudDocId),
+              { 기사: '', 배송순번: '' },
+              { merge: true }
+            );
+            hasOps = true;
+          });
+          if (hasOps) await batch.commit();
+        }
+        await setDoc(
+          doc(db, 'route_sessions', cloudCity, 'months', cloudMonthId),
+          {
+            city: cloudCity,
+            monthId: cloudMonthId,
+            savedAt: serverTimestamp(),
+            savedBy: auth.currentUser?.email || '',
+            drivers: drivers.map(d => ({ id: d.id, name: d.name, color: d.color, capacity: d.capacity || 100, deliveryDate: d.deliveryDate || '', startAddr: d.startAddr || '' })),
+            status: 'draft',
+            totalRecords: resetRecords.length,
+            assignedCount: 0,
+            selectedDongs: selectedDongsProp ? [...selectedDongsProp] : (orgDongs ? [...orgDongs] : null),
+          },
+          { merge: true }
+        );
+        setSessionStatus('draft');
+        setLastAutoSave(new Date());
+        setHasUnsaved(false);
+        showToast('success', '배정/순번 초기화 완료 — 클라우드 저장본까지 비웠습니다.');
+      } catch (error) {
+        showToast('error', `초기화 저장 실패: ${error.message}`);
+      }
+      return;
+    }
+
+    showToast('success', '배정/순번 초기화 완료');
+  }, [records, drivers, isCloudMode, cloudCity, cloudMonthId, selectedDongsProp, orgDongs, showToast, isAssignmentLocked]);
 
   const openDriverSwapModal = useCallback(() => {
     if (isAssignmentLocked) {
@@ -2216,6 +2585,8 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
           totalRecords: records.length,
           assignedCount: records.filter(r => r._driverId).length,
           selectedDongs: selectedDongsProp ? [...selectedDongsProp] : (orgDongs ? [...orgDongs] : null),
+          activeDong: activeDong || null,
+          completedDongs: [...completedDongs, ...(activeDong ? [activeDong] : [])],
         },
         { merge: true }
       );
@@ -2261,6 +2632,9 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
       setSessionStatus(isFinal ? 'final' : 'draft');
       setLastAutoSave(new Date());
       setHasUnsaved(false);
+      // 동 작업 완료 처리
+      if (activeDong) setCompletedDongs(prev => new Set([...prev, activeDong]));
+      setIsDirty(false);
       if (isFinal) {
         await syncToBaseList();
         // delivery_history 자동 적재 (기사별 실적 집계)
@@ -2297,7 +2671,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
     } finally {
       setIsSavingSession(false);
     }
-  }, [isCloudMode, cloudCity, cloudMonthId, drivers, records, showToast, overlapCount]);
+  }, [isCloudMode, cloudCity, cloudMonthId, drivers, records, showToast, overlapCount, activeDong, completedDongs]);
 
   // ── 1단계: 세션 불러오기 (이어서 작업) ──────────────────────────────
   const handleLoadSession = useCallback(async () => {
@@ -2321,8 +2695,8 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
         const driver = data.drivers?.find(d => d.name === fd.기사);
         return {
           ...r,
-          _driverId: driver?.id || r._driverId,
-          배송순번: fd.배송순번 || r.배송순번,
+          _driverId: fd.기사 ? (driver?.id || null) : null,
+          배송순번: fd.배송순번 || '',
           _lat: fd.lat || r._lat,
           _lng: fd.lng || r._lng,
           _isApt: fd.isApt ?? r._isApt,
@@ -2450,9 +2824,12 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
       setCloudCity(cloudPickerCity.trim());
       setCloudMonthId(cloudPickerMonth.trim());
       setShowCloudPicker(false);
-      // 고유 행정동 1개면 자동 선택, 여러 개면 '전체'
-      const pickerLoadedDongs = [...new Set(loaded.map(r => getRouteDong(r)).filter(Boolean))];
-      setSelectedDong(pickerLoadedDongs.length === 1 ? pickerLoadedDongs[0] : '전체');
+      // dongQueue 초기화
+      const pickerLoadedDongs = [...new Set(loaded.map(r => getRouteDong(r)).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'ko'));
+      setDongQueue(pickerLoadedDongs);
+      setActiveDongIndex(0);
+      setCompletedDongs(new Set());
+      setIsDirty(false);
       setSelectedDriverFilter('all');
       overlaysRef.current.forEach(o => o.setMap(null));
       overlaysRef.current = [];
@@ -3620,22 +3997,53 @@ ${folders}
         {/* 좌측 패널 — mapfull / listfull 모드에서 숨김 */}
         <div className={`w-56 shrink-0 bg-[#070707] border-r border-[#1a1a1a] flex flex-col overflow-hidden ${layoutMode === 'mapfull' || layoutMode === 'listfull' ? 'hidden' : ''}`}>
 
-          {/* 행정동 필터 */}
+          {/* 행정동 큐 네비게이터 */}
           <div className="p-2 border-b border-[#1a1a1a]">
             <div className="flex items-center justify-between mb-1">
-              <div className="text-[8px] text-gray-600 font-black tracking-widest uppercase">행정동</div>
+              <div className="text-[8px] text-gray-600 font-black tracking-widest uppercase">행정동 작업 큐</div>
               <div className="text-[8px] text-gray-700">
-                <span className="text-blue-400 font-black">{filteredQty}포</span> · 미배정 <span className={unassigned > 0 ? 'text-amber-500' : 'text-[#3b82f6]'}>{unassigned}</span>
+                <span className="text-emerald-400 font-black">{filteredQty}포</span> · 미배정 <span className={unassigned > 0 ? 'text-amber-500' : 'text-emerald-400'}>{unassigned}</span>
               </div>
             </div>
-            <select value={selectedDong} onChange={e => setSelectedDong(e.target.value)}
-              className="w-full bg-[#111] text-white text-xs border border-[#2a2a2a] rounded px-2 py-1 focus:outline-none focus:border-[#3b82f6]/40">
-              {dongList.map(d => (
-                <option key={d} value={d}>
-                  {`${d} (${dongCounts[d] || 0}건)`}
-                </option>
-              ))}
-            </select>
+            <div className="flex items-center gap-1 mb-1">
+              <button
+                onClick={() => handleDongNavigate(activeDongIndex - 1)}
+                disabled={activeDongIndex === 0}
+                className="w-6 h-6 flex items-center justify-center bg-[#111] border border-[#2a2a2a] rounded text-gray-400 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed text-xs"
+              >‹</button>
+              <div className="flex-1 text-center px-1">
+                <div className="text-white text-[11px] font-black leading-tight truncate">
+                  {activeDong || (dongQueue.length ? dongQueue[0] : '—')}
+                  {isDirty && <span className="ml-1 text-amber-400 text-[8px]">●</span>}
+                </div>
+                <div className="text-[8px] text-gray-600">
+                  {dongQueue.length ? `${activeDongIndex + 1} / ${dongQueue.length} 동` : '로드 전'}
+                  {completedDongs.size > 0 && <span className="ml-1 text-emerald-500">{completedDongs.size}완료</span>}
+                </div>
+              </div>
+              <button
+                onClick={() => handleDongNavigate(activeDongIndex + 1)}
+                disabled={!dongQueue.length || activeDongIndex >= dongQueue.length - 1}
+                className="w-6 h-6 flex items-center justify-center bg-[#111] border border-[#2a2a2a] rounded text-gray-400 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed text-xs"
+              >›</button>
+            </div>
+            {/* 동 목록 드롭다운 — 직접 이동 */}
+            {dongQueue.length > 1 && (
+              <select
+                value={activeDong || ''}
+                onChange={e => {
+                  const idx = dongQueue.indexOf(e.target.value);
+                  if (idx >= 0) handleDongNavigate(idx);
+                }}
+                className="w-full bg-[#111] text-white text-[10px] border border-[#2a2a2a] rounded px-2 py-1 focus:outline-none focus:border-emerald-500/40"
+              >
+                {dongQueue.map((d, i) => (
+                  <option key={d} value={d}>
+                    {completedDongs.has(d) ? '✓ ' : ''}{d} ({dongCounts[d] || 0}건){i === activeDongIndex ? ' ◀' : ''}
+                  </option>
+                ))}
+              </select>
+            )}
             <div className="mt-0.5 text-[8px] text-gray-700">{filteredRecords.length}건 · 좌표 {mapRecords.length}건</div>
           </div>
 
@@ -3678,16 +4086,12 @@ ${folders}
             <div className="flex items-center gap-1 mt-1">
               <span className="text-[8px] text-gray-600 shrink-0">배분 전략</span>
               <select
-                value={autoSplitStrategy}
+                value={['dongGroup', 'hilbert'].includes(autoSplitStrategy) ? autoSplitStrategy : 'dongGroup'}
                 onChange={e => setAutoSplitStrategy(e.target.value)}
                 className="flex-1 h-5 bg-[#111] border border-[#2a2a2a] text-gray-400 rounded text-[8px] px-1 cursor-pointer"
               >
-                <option value="dongGroup">자동 (행정동 / 핀 있으면 핀 기준)</option>
-                <option value="angular">각도 분할</option>
-                <option value="pca">PCA</option>
+                <option value="dongGroup">자동 (핀 전체 / 없으면 경계)</option>
                 <option value="hilbert">힐베르트 곡선</option>
-                <option value="bestOfPcaHilbert">최적 자동선택</option>
-                <option value="seedVoronoi">N-seed 보로노이</option>
               </select>
             </div>
           </div>
@@ -3763,7 +4167,7 @@ ${folders}
                     <div className="flex items-center justify-between mb-1">
                       <div className="text-[8px] text-gray-600 font-black tracking-widest">배정 품질</div>
                       <span className="text-[8px] text-gray-500">
-                        {{ pca: 'PCA', hilbert: '힐베르트', bestOfPcaHilbert: '최적선택', seedVoronoi: '보로노이' }[routeAnalysis?.strategy] || 'PCA'}
+                        {{ hilbert: '힐베르트 곡선', seedVoronoi: '핀 전체 기준', dongGroup: '자동 경계' }[routeAnalysis?.strategy] || '자동 경계'}
                       </span>
                     </div>
                     <div className="flex items-center gap-2 mb-1">
@@ -4359,13 +4763,16 @@ ${folders}
                   <option value="차상위">차상위</option>
                 </select>
                 <select
-                  value={selectedDong}
-                  onChange={e => setSelectedDong(e.target.value)}
-                  className="bg-[#111] border border-[#222] rounded-lg px-2 py-0.5 text-[10px] text-white outline-none focus:border-[#3b82f6]/40 cursor-pointer"
+                  value={activeDong || ''}
+                  onChange={e => {
+                    const idx = dongQueue.indexOf(e.target.value);
+                    if (idx >= 0) handleDongNavigate(idx);
+                  }}
+                  className="bg-[#111] border border-[#222] rounded-lg px-2 py-0.5 text-[10px] text-white outline-none focus:border-emerald-500/40 cursor-pointer"
                 >
-                  {dongList.map(d => (
+                  {dongQueue.map(d => (
                     <option key={d} value={d}>
-                      {`${d} (${dongCounts[d] || 0}건)`}
+                      {`${completedDongs.has(d) ? '✓ ' : ''}${d} (${dongCounts[d] || 0}건)`}
                     </option>
                   ))}
                 </select>
@@ -5100,6 +5507,51 @@ ${folders}
         </div>
       )}
 
+      {/* ── 행정동 이동 미저장 확인 모달 ────────────────────────────────── */}
+      {showDongNavConfirm && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[700] flex items-center justify-center p-4">
+          <div className="w-full max-w-xs bg-[#0d0d0d] border border-amber-500/40 rounded-2xl p-5 shadow-[0_0_40px_rgba(245,158,11,0.15)]">
+            <div className="flex items-center gap-2 mb-2">
+              <AlertCircle size={16} className="text-amber-400 shrink-0" />
+              <span className="text-sm font-black text-white">미저장 변경이 있습니다</span>
+            </div>
+            <p className="text-[10px] text-gray-400 mb-4 leading-relaxed">
+              <span className="text-amber-300 font-bold">{activeDong}</span> 배정 결과가 저장되지 않았습니다.<br/>
+              다음 행정동(<span className="text-white font-bold">{dongQueue[showDongNavConfirm.targetIndex]}</span>)으로 이동하면 현재 배정이 유실됩니다.
+            </p>
+            <div className="space-y-2">
+              <button
+                onClick={async () => {
+                  await handleSaveSession(false);
+                  setShowDongNavConfirm(null);
+                  setActiveDongIndex(showDongNavConfirm.targetIndex);
+                }}
+                className="w-full py-2 bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/30 font-black rounded-xl text-xs transition-colors"
+              >
+                저장 후 이동
+              </button>
+              <button
+                onClick={() => {
+                  const { targetIndex } = showDongNavConfirm;
+                  setShowDongNavConfirm(null);
+                  setIsDirty(false);
+                  setActiveDongIndex(targetIndex);
+                }}
+                className="w-full py-2 bg-[#111] border border-[#2a2a2a] text-gray-400 hover:text-white hover:border-[#3a3a3a] font-bold rounded-xl text-xs transition-colors"
+              >
+                저장 안 하고 이동
+              </button>
+              <button
+                onClick={() => setShowDongNavConfirm(null)}
+                className="w-full py-1.5 text-gray-600 hover:text-gray-400 text-xs transition-colors"
+              >
+                취소
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── 자동 핀 확인 모달 ──────────────────────────────────────────── */}
       {autoPinConfirmModal && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-[600] flex items-center justify-center p-4">
@@ -5144,7 +5596,7 @@ ${folders}
                   const balanceMsg = diagnostics?.load?.maxAbsDiffPct !== undefined
                     ? `최대 편차 ${diagnostics.load.maxAbsDiffPct}%` : '분석 완료';
                   const qScore = diagnostics?.qualityScore !== undefined ? ` · 품질 ${diagnostics.qualityScore}점` : '';
-                  const stratLabel = { pca: 'PCA', hilbert: '힐베르트', bestOfPcaHilbert: '최적선택', seedVoronoi: 'N-seed보로노이' }[diagnostics?.strategy || 'pca'] || 'PCA';
+                  const stratLabel = { hilbert: '힐베르트 곡선', seedVoronoi: '핀 전체 기준', dongGroup: '자동 경계' }[diagnostics?.strategy || 'dongGroup'] || '자동 경계';
                   setTimeout(() => showToast('success', `자동 배정 완료 [${stratLabel}] — ${balanceMsg}${qScore} · 핀 자동 설정`, 5000), 200);
                   setAutoPinConfirmModal(null);
                 }}
