@@ -1,7 +1,7 @@
 {
   "name": "nexus-pipeline",
   "private": true,
-  "version": "5.5.89",
+  "version": "5.5.91",
   "type": "module",
   "scripts": {
     "dev": "vite",

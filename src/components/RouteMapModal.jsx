@@ -1172,6 +1172,8 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
   const aptNoCoord = records.filter(r => r._isApt && (!r._lat || !r._lng)).length;
   const totalWithCoord = withCoordCount + aptWithCoord;
   const totalNoCoord = noCoordCount + aptNoCoord;
+  // 지자체벗어남: 좌표는 있어서 지도에 표시되지만 지자체가 다른 건
+  const outCityCount = records.filter(r => r.좌표검증상태 === '지자체벗어남' && r._lat && r._lng).length;
   const totalAll = records.length;
   const noCoordPct = totalAll > 0 ? Math.round(totalNoCoord / totalAll * 100) : 0;
   const withCoordPct = totalAll > 0 ? Math.round(totalWithCoord / totalAll * 100) : 0;
@@ -3752,7 +3754,16 @@ ${folders}
               onClick={() => setShowErrorPanel(true)}
               className="flex items-center gap-1 px-2 py-0.5 bg-red-900/40 border border-red-600/50 rounded text-red-400 text-[10px] font-bold hover:bg-red-800/50 transition-colors animate-pulse"
             >
-              <AlertCircle size={10} /> 미확인 {totalNoCoord.toLocaleString()}건
+              <AlertCircle size={10} /> 좌표없음 {totalNoCoord.toLocaleString()}건
+            </button>
+          )}
+          {outCityCount > 0 && (
+            <button
+              onClick={() => setShowErrorPanel(true)}
+              title="좌표는 지도에 표시 중 — 지자체가 다른 주소입니다. 클릭하여 확인하세요."
+              className="flex items-center gap-1 px-2 py-0.5 bg-amber-900/40 border border-amber-600/50 rounded text-amber-400 text-[10px] font-bold hover:bg-amber-800/50 transition-colors"
+            >
+              <AlertTriangle size={10} /> 지자체이탈 {outCityCount.toLocaleString()}건
             </button>
           )}
         </div>
@@ -4990,7 +5001,10 @@ ${folders}
 
       {/* ── 미확인 건 패널 ─────────────────────────────────────────── */}
       {showErrorPanel && (() => {
-        const errorRecords = records.filter(r => !r._lat || !r._lng || r.좌표검증상태 === '지자체벗어남');
+        // 좌표없음: 진짜 좌표 미수신 / 지자체이탈: 좌표는 있고 지도에 표시 중이나 지자체 불일치
+        const noCoordRecords = records.filter(r => !r._lat || !r._lng);
+        const outCityRecords = records.filter(r => r.좌표검증상태 === '지자체벗어남' && r._lat && r._lng);
+        const errorRecords = [...noCoordRecords, ...outCityRecords];
 
         const handleReprocess = async (r) => {
           const addrToUse = errorAddrOverrides[r.id]?.trim() || r.주소 || '';
@@ -5080,10 +5094,19 @@ ${folders}
             <div className="w-full max-w-lg bg-[#0d1117] border border-red-700/40 rounded-t-2xl sm:rounded-2xl shadow-[0_-20px_60px_rgba(0,0,0,0.8)] flex flex-col max-h-[80vh]">
               {/* 패널 헤더 */}
               <div className="flex items-center justify-between px-5 py-4 border-b border-[#1a1a1a] shrink-0">
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                   <AlertCircle size={16} className="text-red-400" />
-                  <span className="text-white font-black text-sm">미확인 {errorRecords.length}건</span>
-                  <span className="text-gray-500 text-xs">— 좌표를 찾지 못한 주소</span>
+                  <span className="text-white font-black text-sm">좌표 문제 {errorRecords.length}건</span>
+                  {noCoordRecords.length > 0 && (
+                    <span className="text-[10px] text-red-400 bg-red-900/30 px-2 py-0.5 rounded-full">
+                      좌표없음 {noCoordRecords.length}건
+                    </span>
+                  )}
+                  {outCityRecords.length > 0 && (
+                    <span className="text-[10px] text-amber-400 bg-amber-900/30 px-2 py-0.5 rounded-full" title="좌표는 지도에 표시 중입니다">
+                      지자체이탈 {outCityRecords.length}건 (지도표시 ✓)
+                    </span>
+                  )}
                 </div>
                 <button onClick={() => setShowErrorPanel(false)} className="text-gray-500 hover:text-white transition-colors">
                   <X size={18} />
@@ -5097,13 +5120,19 @@ ${folders}
                 ) : errorRecords.map(r => {
                   const isFixing = errorFixingId === r.id;
                   const overrideAddr = errorAddrOverrides[r.id] ?? '';
+                  const isOutCity = r.좌표검증상태 === '지자체벗어남' && r._lat && r._lng;
                   return (
-                    <div key={r.id} className="bg-[#111] border border-[#222] rounded-xl p-4 space-y-3">
-                      {/* 이름 · 행정동 · 오류사유 */}
+                    <div key={r.id} className={`bg-[#111] border rounded-xl p-4 space-y-3 ${isOutCity ? 'border-amber-700/40' : 'border-[#222]'}`}>
+                      {/* 이름 · 행정동 · 타입 뱃지 · 오류사유 */}
                       <div className="flex items-start justify-between gap-2">
                         <div>
                           <span className="text-white font-black text-sm">{r.이름 || r.name || '—'}</span>
                           {r.행정동 && <span className="ml-2 text-[10px] text-purple-400 bg-purple-900/30 px-1.5 py-0.5 rounded">{r.행정동}</span>}
+                          {isOutCity
+                            ? <span className="ml-2 text-[10px] text-amber-400 bg-amber-900/30 px-1.5 py-0.5 rounded">지자체이탈 · 지도표시 ✓</span>
+                            : <span className="ml-2 text-[10px] text-red-400 bg-red-900/30 px-1.5 py-0.5 rounded">좌표없음</span>
+                          }
+                          {r.좌표확인지자체 && <span className="ml-1 text-[10px] text-gray-500">({r.좌표확인지자체})</span>}
                           {r._사유 && <div className="mt-1 text-[10px] text-red-400">{r._사유}</div>}
                         </div>
                         <button
@@ -5120,25 +5149,49 @@ ${folders}
                         {r.주소 || <span className="text-gray-600 italic">주소 없음</span>}
                       </div>
 
-                      {/* 주소 수정 입력 */}
-                      <div className="flex gap-2">
-                        <input
-                          type="text"
-                          value={overrideAddr}
-                          onChange={e => setErrorAddrOverrides(prev => ({ ...prev, [r.id]: e.target.value }))}
-                          placeholder="주소 수정 (비우면 원본 주소로 재처리)"
-                          className="flex-1 bg-[#1a1a1a] border border-[#333] focus:border-red-600/60 rounded-lg px-3 py-2 text-white text-xs focus:outline-none placeholder-gray-600 transition-colors"
-                          onKeyDown={e => { if (e.key === 'Enter' && !isFixing) handleReprocess(r); }}
-                          disabled={isFixing}
-                        />
-                        <button
-                          onClick={() => handleReprocess(r)}
-                          disabled={isFixing}
-                          className="shrink-0 px-4 py-2 bg-red-700 hover:bg-red-600 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-black rounded-lg transition-colors flex items-center gap-1.5"
-                        >
-                          {isFixing ? <><Search size={12} className="animate-spin" />처리중</> : <><Search size={12} />재처리</>}
-                        </button>
-                      </div>
+                      {/* 지자체이탈: 안내 / 좌표없음: 주소수정 재처리 */}
+                      {isOutCity ? (
+                        <div className="text-[11px] text-amber-400/80 bg-amber-900/20 rounded-lg px-3 py-2 border border-amber-700/30">
+                          좌표는 지도에 이미 표시 중입니다. 주소를 수정하여 재처리하면 올바른 지자체 좌표로 교체됩니다.
+                          <div className="flex gap-2 mt-2">
+                            <input
+                              type="text"
+                              value={overrideAddr}
+                              onChange={e => setErrorAddrOverrides(prev => ({ ...prev, [r.id]: e.target.value }))}
+                              placeholder="주소 수정 후 재처리 (선택사항)"
+                              className="flex-1 bg-[#1a1a1a] border border-amber-700/40 focus:border-amber-500/60 rounded-lg px-3 py-1.5 text-white text-xs focus:outline-none placeholder-gray-600 transition-colors"
+                              onKeyDown={e => { if (e.key === 'Enter' && !isFixing) handleReprocess(r); }}
+                              disabled={isFixing}
+                            />
+                            <button
+                              onClick={() => handleReprocess(r)}
+                              disabled={isFixing}
+                              className="shrink-0 px-3 py-1.5 bg-amber-700 hover:bg-amber-600 disabled:opacity-50 text-white text-xs font-black rounded-lg transition-colors flex items-center gap-1"
+                            >
+                              {isFixing ? <><Search size={11} className="animate-spin" />처리중</> : <><Search size={11} />재처리</>}
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="flex gap-2">
+                          <input
+                            type="text"
+                            value={overrideAddr}
+                            onChange={e => setErrorAddrOverrides(prev => ({ ...prev, [r.id]: e.target.value }))}
+                            placeholder="주소 수정 (비우면 원본 주소로 재처리)"
+                            className="flex-1 bg-[#1a1a1a] border border-[#333] focus:border-red-600/60 rounded-lg px-3 py-2 text-white text-xs focus:outline-none placeholder-gray-600 transition-colors"
+                            onKeyDown={e => { if (e.key === 'Enter' && !isFixing) handleReprocess(r); }}
+                            disabled={isFixing}
+                          />
+                          <button
+                            onClick={() => handleReprocess(r)}
+                            disabled={isFixing}
+                            className="shrink-0 px-4 py-2 bg-red-700 hover:bg-red-600 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-black rounded-lg transition-colors flex items-center gap-1.5"
+                          >
+                            {isFixing ? <><Search size={12} className="animate-spin" />처리중</> : <><Search size={12} />재처리</>}
+                          </button>
+                        </div>
+                      )}
                     </div>
                   );
                 })}

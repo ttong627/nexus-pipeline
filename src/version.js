@@ -1,9 +1,10 @@
-export const APP_VERSION = 'V5.5.89';
+export const APP_VERSION = 'V5.5.91';
 export const APP_BUILD = '2026.05.26';
-export const APP_BUILD_TIME = '2026.05.26 04:06';
+export const APP_BUILD_TIME = '2026.05.26 04:17';
 
 export const CHANGELOG = [
   { v: 'V5.5', date: '2026.05.26', items: [
+    '지자체이탈 좌표 분리 표시 — 좌표없음(빨강)과 지자체이탈(앰버) 구분, 이탈 좌표는 지도에 항상 표시',
     '루트맵 행정동 작업 큐 — 동별 순차 작업 워크플로우 (‹ › 이동, 저장 완료 표시)',
     '미저장 변경 경고 — 동 이동 시 미저장 배정 있으면 [저장 후 이동/그냥 이동/취소] 확인',
     '행정동 분할 전략 개선 — 로드 필터 행정동 필드 고정, 배정 완료 동 ✓ 표시',
