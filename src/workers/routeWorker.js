@@ -823,8 +823,90 @@ const computeAngularSplit = (units, orderedDrivers) => {
   return { cm, ordered: sorted };
 };
 
+// ── 행정동 그룹 분할 (포수 무관, 건수 균등, 동 경계 보존) ────────────────────
+// 같은 행정동의 모든 배송단위는 반드시 같은 기사에게 배정.
+// 동 그룹을 중심점 기준 각도 순으로 정렬 → 건수 균등하게 기사에게 배분.
+// 포수(getEffectiveLoad)는 일절 사용하지 않음 — 포수 조정은 브러시 수동 조정으로.
+const computeDongGroupSplit = (units, orderedDrivers) => {
+  if (!units.length || !orderedDrivers.length) return { cm: {}, ordered: units };
+  if (orderedDrivers.length === 1) {
+    const cm = {};
+    units.forEach(u => u.recordIds.forEach(id => { cm[id] = orderedDrivers[0].id; }));
+    return { cm, ordered: units };
+  }
+
+  const center = weightedCenter(units);
+  const cosLat = Math.cos(center.lat * Math.PI / 180);
+
+  // 행정동별 그룹 생성 (dong 없는 unit은 unknownUnits로 분리)
+  const dongMap = new Map();
+  const unknownUnits = [];
+  units.forEach(u => {
+    const dong = u.dong;
+    if (!dong) { unknownUnits.push(u); return; }
+    if (!dongMap.has(dong)) dongMap.set(dong, { dong, units: [], totalCount: 0, totalLoad: 0 });
+    const g = dongMap.get(dong);
+    g.units.push(u);
+    g.totalCount += u.count;
+    g.totalLoad += u.load;
+  });
+
+  // dong 그룹이 없으면(전 레코드 dong 없음) angular fallback
+  if (!dongMap.size) return computeAngularSplit(units, orderedDrivers);
+
+  // 동 그룹 중심점 및 각도 계산
+  dongMap.forEach(g => {
+    const tl = g.totalLoad || 1;
+    g.lat = g.units.reduce((s, u) => s + u.lat * u.load, 0) / tl;
+    g.lng = g.units.reduce((s, u) => s + u.lng * u.load, 0) / tl;
+    g.angle = Math.atan2(g.lat - center.lat, (g.lng - center.lng) * cosLat);
+  });
+
+  // 각도 순 정렬 — 인접 동끼리 같은 기사에게 배정되도록
+  const sortedDongs = [...dongMap.values()].sort((a, b) => a.angle - b.angle);
+
+  // 건수 균등 분할 (포수/capacity 무관)
+  const totalCount = sortedDongs.reduce((s, g) => s + g.totalCount, 0);
+  const N = orderedDrivers.length;
+  const targetPerDriver = totalCount / N;
+  const cm = {};
+  let driverIdx = 0;
+  let accumulated = 0;
+
+  sortedDongs.forEach(g => {
+    const driver = orderedDrivers[Math.min(driverIdx, N - 1)];
+    g.units.forEach(u => u.recordIds.forEach(id => { cm[id] = driver.id; }));
+    accumulated += g.totalCount;
+    if (accumulated >= targetPerDriver * (driverIdx + 1) && driverIdx < N - 1) {
+      driverIdx++;
+    }
+  });
+
+  // dong 없는 unit → 각도가 가장 가까운 동 그룹의 기사에게 배정
+  if (unknownUnits.length > 0) {
+    const dongAngleDriverMap = sortedDongs.map(g => ({
+      angle: g.angle,
+      driverId: cm[g.units[0].recordIds[0]],
+    }));
+    unknownUnits.forEach(u => {
+      const uAngle = Math.atan2(u.lat - center.lat, (u.lng - center.lng) * cosLat);
+      let best = dongAngleDriverMap[0]?.driverId || orderedDrivers[0].id;
+      let bestDiff = Infinity;
+      dongAngleDriverMap.forEach(({ angle, driverId }) => {
+        const diff = Math.abs(uAngle - angle);
+        const wrapped = Math.min(diff, 2 * Math.PI - diff);
+        if (wrapped < bestDiff) { bestDiff = wrapped; best = driverId; }
+      });
+      u.recordIds.forEach(id => { cm[id] = best; });
+    });
+  }
+
+  const ordered = [...sortedDongs.flatMap(g => g.units), ...unknownUnits];
+  return { cm, ordered };
+};
+
 // ── 전략별 단위 정렬 ─────────────────────────────────────────────────────────
-const VALID_STRATEGIES = new Set(['pca', 'hilbert', 'bestOfPcaHilbert', 'seedVoronoi', 'angular']);
+const VALID_STRATEGIES = new Set(['pca', 'hilbert', 'bestOfPcaHilbert', 'seedVoronoi', 'angular', 'dongGroup']);
 
 const getOrderedUnits = (units, orderedDrivers, driverPins, strategy) => {
   const safeStrategy = VALID_STRATEGIES.has(strategy) ? strategy : 'pca';
@@ -965,6 +1047,10 @@ const computeAutoSplit = ({ target, noCoordRecs = [], allRecords, activeDrivers,
     orderedUnits = units; // 보로노이는 1D 정렬 불필요 — units 그대로 사용
   } else if (safeStrategy === 'angular') {
     const { cm, ordered } = computeAngularSplit(units, orderedDrivers);
+    clusterMap = cm;
+    orderedUnits = ordered;
+  } else if (safeStrategy === 'dongGroup') {
+    const { cm, ordered } = computeDongGroupSplit(units, orderedDrivers);
     clusterMap = cm;
     orderedUnits = ordered;
   } else {
