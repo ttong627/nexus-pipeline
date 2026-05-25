@@ -1456,7 +1456,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
     return () => clearTimeout(timer);
   }, [initialCloudCity, initialCloudMonthId]);
 
-  // ── activeDongIndex 변경 시 동별 임시 상태 초기화 ────────────────────────
+  // ── activeDongIndex 변경 시 동별 임시 상태 초기화 + 지도 자동 이동 ────────
   useEffect(() => {
     if (!dongQueue.length) return;
     setDriverPins({});
@@ -1464,6 +1464,8 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
     setHasRunGeocoding(false);
     setSelectedDriverFilter('all');
     setIsDirty(false);
+    // 새 동의 핀 범위로 지도 자동 이동 (오버레이 useEffect에서 setBounds 실행)
+    shouldFitBoundsRef.current = true;
   }, [activeDongIndex]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── 행정동 큐 이동 — 미저장 변경 있으면 확인 모달 표시 ──────────────────
