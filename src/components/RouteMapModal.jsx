@@ -1754,10 +1754,11 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
       // 행정동 필터 밖의 수동 배정은 자동 배정이 덮어쓰지 않는다.
       const affectedIds = new Set(filteredRecords.map(r => r.id));
 
-      // ── 자동 핀 생성: angular 전략은 핀 불필요 → 즉시 적용
+      // ── 자동 핀 생성: 핀 불필요 전략(angular·dongGroup)은 즉시 적용
       // 나머지 전략: 핀 없는 기사가 있으면 무게중심을 핀으로 등록 후 확인
+      const PIN_FREE_STRATEGIES = new Set(['angular', 'dongGroup']);
       const noPinDrivers = activeDrivers.filter(d => !driverPins[d.id]);
-      if (noPinDrivers.length > 0 && autoSplitStrategy !== 'angular') {
+      if (noPinDrivers.length > 0 && !PIN_FREE_STRATEGIES.has(autoSplitStrategy)) {
         const pendingPins = {};
         noPinDrivers.forEach(d => {
           const assigned = target.filter(r => clusterMap[r.id] === d.id && r._lat && r._lng);
