@@ -796,8 +796,35 @@ const buildDiagnostics = ({ records, units, orderedUnits, clusterMap, activeDriv
   };
 };
 
+// ── 각도 기반 구역 분할 (섞임 없음 보장) ────────────────────────────────────
+// 중심점 기준 각도 정렬 후 capacity 비례 파이 섹터로 분할.
+// partitionContiguous 재사용 → mandatory 단위 보호·부담 비례 동일 적용.
+const computeAngularSplit = (units, orderedDrivers) => {
+  if (!units.length || !orderedDrivers.length) return { cm: {}, ordered: units };
+  if (orderedDrivers.length === 1) {
+    const cm = {};
+    units.forEach(u => u.recordIds.forEach(id => { cm[id] = orderedDrivers[0].id; }));
+    return { cm, ordered: units };
+  }
+
+  const center = weightedCenter(units);
+  const cosLat = Math.cos(center.lat * Math.PI / 180);
+  const sorted = [...units].sort((a, b) =>
+    Math.atan2(a.lat - center.lat, (a.lng - center.lng) * cosLat) -
+    Math.atan2(b.lat - center.lat, (b.lng - center.lng) * cosLat)
+  );
+
+  const unitAssignments = partitionContiguous(sorted, orderedDrivers);
+  const cm = {};
+  sorted.forEach(unit => {
+    const driverId = unitAssignments[unit.id];
+    if (driverId) unit.recordIds.forEach(id => { cm[id] = driverId; });
+  });
+  return { cm, ordered: sorted };
+};
+
 // ── 전략별 단위 정렬 ─────────────────────────────────────────────────────────
-const VALID_STRATEGIES = new Set(['pca', 'hilbert', 'bestOfPcaHilbert', 'seedVoronoi']);
+const VALID_STRATEGIES = new Set(['pca', 'hilbert', 'bestOfPcaHilbert', 'seedVoronoi', 'angular']);
 
 const getOrderedUnits = (units, orderedDrivers, driverPins, strategy) => {
   const safeStrategy = VALID_STRATEGIES.has(strategy) ? strategy : 'pca';
@@ -936,6 +963,10 @@ const computeAutoSplit = ({ target, noCoordRecs = [], allRecords, activeDrivers,
       unit.recordIds.forEach(id => { clusterMap[id] = driverId; });
     });
     orderedUnits = units; // 보로노이는 1D 정렬 불필요 — units 그대로 사용
+  } else if (safeStrategy === 'angular') {
+    const { cm, ordered } = computeAngularSplit(units, orderedDrivers);
+    clusterMap = cm;
+    orderedUnits = ordered;
   } else {
     const result = runStrategy(safeStrategy);
     clusterMap = result.cm;

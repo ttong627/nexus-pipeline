@@ -966,13 +966,14 @@ const nearestNeighborTSP = (points, startPoint = null) => {
   return result;
 };
 
-export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, initialCloudCity = null, initialCloudMonthId = null, orgDongs = null, initialDrivers: initialDriversProp = null, selectedDongs: selectedDongsProp = null, baseDailyQty: baseDailyQtyProp = 40 }) {
+export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, initialCloudCity = null, initialCloudMonthId = null, orgDongs = null, initialDrivers: initialDriversProp = null, companyDrivers: companyDriversProp = null, setupDongDriverMap: setupDongDriverMapProp = null, selectedDongs: selectedDongsProp = null, baseDailyQty: baseDailyQtyProp = 40 }) {
   const DEFAULT_START_ADDR = '경기도 수원시 장안구 정자천로188번길 39';
   const defaultDrivers = [
     { id: 'd1', name: '기사1', color: DRIVER_COLORS[0], startAddr: DEFAULT_START_ADDR },
     { id: 'd2', name: '기사2', color: DRIVER_COLORS[1], startAddr: DEFAULT_START_ADDR },
   ];
   const startDrivers = initialDriversProp || defaultDrivers;
+  const companyDriverPool = companyDriversProp?.length ? companyDriversProp : initialDriversProp;
 
   const [drivers, setDrivers] = useState(startDrivers);
   const [records, setRecords] = useState(() =>
@@ -1192,40 +1193,39 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
     return groups;
   }, [aptRecords]);
 
-  // ── "+추가" 피커: 현재 행정동 기반 제외 (배정된 기사를 빼고 나머지 표시)
-  // 행정동 선택 시: 해당 동에 레코드가 배정된 기사 제외 → 다른 동 담당 기사는 표시
+  // ── "+추가" 피커: 모달이 열린 행정동 소속 기사 제외
+  // 행정동 선택 시: 해당 동 담당 기사와 이미 해당 동 레코드에 배정된 기사 제외 → 다른 동 담당 기사는 표시
   // 행정동 미선택('전체') 또는 배정 0건: 세션에 없는 기사만 표시 (fallback)
   const availableCompanyDrivers = useMemo(() => {
-    if (!initialDriversProp?.length) return [];
+    if (!companyDriverPool?.length) return [];
 
-    const activeDong = selectedDong && selectedDong !== '전체' ? selectedDong : null;
+    const activeDong = pickerDong && pickerDong !== '전체' ? pickerDong : null;
+    const validCompanyDrivers = companyDriverPool.filter(d => !d.isExternal && (d.name || '').trim());
 
     if (activeDong) {
-      // 현재 행정동에 레코드가 배정된 기사 ID 수집
+      // 현재 행정동에 소속된 기사 ID와 레코드가 배정된 기사 ID를 함께 제외
       const dongDriverIds = new Set(
         records
           .filter(r => getRouteDong(r) === activeDong && r._driverId)
           .map(r => r._driverId)
       );
-      if (dongDriverIds.size > 0) {
-        // 해당 기사 이름 → 제외
-        const dongDriverNames = new Set(
-          drivers.filter(d => dongDriverIds.has(d.id)).map(d => (d.name || '').trim())
-        );
-        return initialDriversProp.filter(d => {
-          if (d.isExternal) return false;
-          return !dongDriverNames.has((d.name || '').trim());
-        });
-      }
+      (setupDongDriverMapProp?.[activeDong] || []).forEach(id => dongDriverIds.add(id));
+      const dongDriverNames = new Set(
+        [...drivers, ...validCompanyDrivers]
+          .filter(d => dongDriverIds.has(d.id))
+          .map(d => (d.name || '').trim())
+          .filter(Boolean)
+      );
+      return validCompanyDrivers.filter(d =>
+        !dongDriverIds.has(d.id) &&
+        !dongDriverNames.has((d.name || '').trim())
+      );
     }
 
     // fallback: 배정 없거나 전체 보기 → 세션에 없는 기사
     const activeNames = new Set(drivers.filter(d => !d.isExternal).map(d => (d.name || '').trim()));
-    return initialDriversProp.filter(d => {
-      if (d.isExternal) return false;
-      return !activeNames.has((d.name || '').trim());
-    });
-  }, [initialDriversProp, drivers, records, selectedDong]);
+    return validCompanyDrivers.filter(d => !activeNames.has((d.name || '').trim()));
+  }, [companyDriverPool, drivers, records, pickerDong, setupDongDriverMapProp]);
 
   // ── 50포↑ 임대 대형 단지 목록 (좌측 패널 패널에 표시)
   const largeAptComplexes = useMemo(() => {
@@ -3235,11 +3235,20 @@ ${folders}
 
   // ── 소속사 기사 추가 (피커에서 선택하거나 직접 입력)
   const addCompanyDriver = useCallback((driverInfo) => {
+    if (!driverInfo) return;
+    const driverName = (driverInfo.name || '').trim();
+    const existing = drivers.find(d => d.id === driverInfo.id || ((d.name || '').trim() && (d.name || '').trim() === driverName));
+    if (existing) {
+      setSelectedDriverFilter(existing.id);
+      setShowCompanyPicker(false);
+      return;
+    }
     if (drivers.length >= 8) return;
     const idx = drivers.length;
     setDrivers(prev => [...prev, {
-      id: `d${Date.now()}`,
-      name: driverInfo.name || `기사${idx + 1}`,
+      id: driverInfo.id || `d${Date.now()}`,
+      name: driverName || `기사${idx + 1}`,
+      phone: driverInfo.phone || '',
       color: driverInfo.color || DRIVER_COLORS[idx % DRIVER_COLORS.length],
       capacity: driverInfo.capacity || 100,
     }]);
@@ -3667,6 +3676,7 @@ ${folders}
                 <option value="hilbert">힐베르트 곡선</option>
                 <option value="bestOfPcaHilbert">최적 자동선택</option>
                 <option value="seedVoronoi">N-seed 보로노이</option>
+                <option value="angular">각도 분할 (섞임없음)</option>
               </select>
             </div>
           </div>
@@ -4886,7 +4896,7 @@ ${folders}
 
       {/* ── 소속사 기사 추가 피커 ─────────────────────────────────────── */}
       {showCompanyPicker && (() => {
-        const hasCompanyList = initialDriversProp?.length > 0;
+        const hasCompanyList = companyDriverPool?.length > 0;
         const hasAvailable = availableCompanyDrivers.length > 0;
         // 콤보박스 확정값: 선택된 기사 객체
         const selectedDriver = hasAvailable
