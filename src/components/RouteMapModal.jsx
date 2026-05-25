@@ -998,7 +998,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
   // layoutMode: 'split' | 'map' | 'list' | 'mapfull' | 'listfull'
   const [layoutMode, setLayoutMode] = useState('split');
   const [isSplitting, setIsSplitting] = useState(false);
-  const [autoSplitStrategy, setAutoSplitStrategy] = useState('pca');
+  const [autoSplitStrategy, setAutoSplitStrategy] = useState('angular');
   const [routeAnalysis, setRouteAnalysis] = useState(null);
   const [showMapAnalysis, setShowMapAnalysis] = useState(false);
   const [selectedDriverFilter, setSelectedDriverFilter] = useState('all');
@@ -1754,9 +1754,10 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
       // 행정동 필터 밖의 수동 배정은 자동 배정이 덮어쓰지 않는다.
       const affectedIds = new Set(filteredRecords.map(r => r.id));
 
-      // ── 자동 핀 생성: 핀 없는 기사에 대해 배정 구역 무게중심을 핀으로 등록
+      // ── 자동 핀 생성: angular 전략은 핀 불필요 → 즉시 적용
+      // 나머지 전략: 핀 없는 기사가 있으면 무게중심을 핀으로 등록 후 확인
       const noPinDrivers = activeDrivers.filter(d => !driverPins[d.id]);
-      if (noPinDrivers.length > 0) {
+      if (noPinDrivers.length > 0 && autoSplitStrategy !== 'angular') {
         const pendingPins = {};
         noPinDrivers.forEach(d => {
           const assigned = target.filter(r => clusterMap[r.id] === d.id && r._lat && r._lng);
@@ -1772,7 +1773,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
         }
       }
 
-      // 모든 기사에 이미 핀 있음 → 기존 흐름
+      // 각도 분할 또는 모든 기사에 이미 핀 있음 → 즉시 적용
       setRecords(prev => prev.map(r => affectedIds.has(r.id)
         ? { ...r, _driverId: clusterMap[r.id] || null }
         : r
@@ -1782,7 +1783,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
           ? `최대 편차 ${diagnostics.load.maxAbsDiffPct}%`
           : '분석 완료';
         const qScore = diagnostics?.qualityScore !== undefined ? ` · 품질 ${diagnostics.qualityScore}점` : '';
-        const stratLabel = { pca: 'PCA', hilbert: '힐베르트', bestOfPcaHilbert: '최적선택', seedVoronoi: 'N-seed보로노이' }[diagnostics?.strategy || 'pca'] || 'PCA';
+        const stratLabel = { pca: 'PCA', hilbert: '힐베르트', bestOfPcaHilbert: '최적선택', seedVoronoi: 'N-seed보로노이', angular: '각도분할' }[diagnostics?.strategy || 'angular'] || '각도분할';
         showToast('success', `자동 배정 완료 [${stratLabel}] — ${balanceMsg}${qScore}. 분석 안내를 확인하세요.`, 5000);
       }, 500);
       setIsSplitting(false);
@@ -3672,11 +3673,11 @@ ${folders}
                 onChange={e => setAutoSplitStrategy(e.target.value)}
                 className="flex-1 h-5 bg-[#111] border border-[#2a2a2a] text-gray-400 rounded text-[8px] px-1 cursor-pointer"
               >
-                <option value="pca">PCA (기본)</option>
+                <option value="angular">각도 분할 — 기본값</option>
+                <option value="pca">PCA</option>
                 <option value="hilbert">힐베르트 곡선</option>
                 <option value="bestOfPcaHilbert">최적 자동선택</option>
                 <option value="seedVoronoi">N-seed 보로노이</option>
-                <option value="angular">각도 분할 (섞임없음)</option>
               </select>
             </div>
           </div>
