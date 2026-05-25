@@ -685,37 +685,33 @@ export default function ShareRouteView({ shareId, driverId }) {
             <span className="text-gray-500 text-[11px] ml-0.5">포</span>
           </div>
 
-          {/* GPS 상태 */}
-          <div className="shrink-0">
-            {gpsStatus === 'ok' && (
-              <div className="flex items-center gap-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0"></span>
-                <span className="text-emerald-400 text-[11px] font-black">GPS</span>
-              </div>
-            )}
-            {gpsStatus === 'loading' && (
-              <span className="text-yellow-500 text-[11px] font-black animate-pulse">GPS</span>
-            )}
-            {gpsStatus === 'denied' && (
-              <button onClick={() => setShowGpsGuide(true)}
-                aria-label="GPS 허용 방법 보기"
-                className="flex items-center gap-1 px-2 py-0.5 bg-orange-900/20 border border-orange-700/30 rounded-full active:scale-95 transition-all">
-                <span className="text-orange-400 text-[11px] font-black">GPS!</span>
-              </button>
-            )}
-            {gpsStatus === 'error' && (
-              <span className="text-red-500 text-[11px] font-black">GPS✕</span>
-            )}
-          </div>
+          {/* GPS 상태 — 최소 표시 */}
+          {gpsStatus === 'ok' && (
+            <span className="flex items-center gap-0.5 shrink-0">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+              <span className="text-emerald-500 text-[10px] font-bold">GPS</span>
+            </span>
+          )}
+          {gpsStatus === 'loading' && (
+            <span className="text-yellow-600 text-[10px] font-bold animate-pulse shrink-0">GPS</span>
+          )}
+          {gpsStatus === 'denied' && (
+            <button onClick={() => setShowGpsGuide(true)}
+              aria-label="GPS 허용 방법 보기"
+              className="text-orange-400 text-[10px] font-bold underline underline-offset-2 shrink-0 active:opacity-70">GPS!</button>
+          )}
+          {gpsStatus === 'error' && (
+            <span className="text-red-500 text-[10px] font-bold shrink-0">GPS✕</span>
+          )}
 
-          {/* LIVE 뱃지 */}
+          {/* LIVE — 최소 표시 */}
           {isLiveActive && (
-            <span className="shrink-0 flex items-center gap-1 text-emerald-400 bg-emerald-900/25 px-1.5 py-0.5 rounded-full text-[10px] font-black border border-emerald-700/30">
+            <span className="flex items-center gap-0.5 shrink-0">
               <span className="relative flex h-1.5 w-1.5">
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
                 <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-500"></span>
               </span>
-              LIVE
+              <span className="text-emerald-500 text-[10px] font-bold">LIVE</span>
             </span>
           )}
         </div>
@@ -748,17 +744,18 @@ export default function ShareRouteView({ shareId, driverId }) {
             <span>순번</span>
           </button>
 
-          {/* 반영 요청 */}
+          {/* 반영 요청 — 온/오프 토글 */}
           <button onClick={requestOrderApply}
             disabled={isRequestingOrderApply || !allRecords.length}
             aria-label="배송 순번 반영 요청"
-            className={`flex-1 h-8 rounded-lg flex items-center justify-center gap-1 border transition-all active:scale-95 text-[11px] font-black disabled:opacity-40 ${
+            aria-pressed={isOrderApplyRequested}
+            className={`flex-1 h-8 rounded-lg flex items-center justify-center gap-1.5 border transition-all active:scale-95 text-[11px] font-black disabled:opacity-40 ${
               isOrderApplyRequested
-                ? 'bg-amber-500/20 border-amber-500/40 text-amber-300'
+                ? 'bg-amber-500/25 border-amber-400/50 text-amber-300'
                 : 'bg-[#141414] border-[#242424] text-gray-400'
             }`}>
-            <Save size={12} />
-            <span>{isOrderApplyRequested ? '✓반영' : '반영요청'}</span>
+            <span className={`w-2 h-2 rounded-full shrink-0 transition-colors ${isOrderApplyRequested ? 'bg-amber-400' : 'bg-gray-600'}`} />
+            <span>{isOrderApplyRequested ? '반영됨' : '반영요청'}</span>
           </button>
 
           {/* 레이아웃 토글 */}
