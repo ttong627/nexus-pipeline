@@ -4762,8 +4762,15 @@ ${folders}
               {/* 중심 이동 버튼 */}
               <button
                 onClick={() => {
-                  if (!kakaoMapRef.current || !initialBoundsRef.current) return;
-                  kakaoMapRef.current.setBounds(initialBoundsRef.current, 60, 60, 60, 60);
+                  if (!kakaoMapRef.current) return;
+                  const recs = mapRecords.length ? mapRecords : (initialBoundsRef.current ? null : null);
+                  if (recs && recs.length) {
+                    const b = new window.kakao.maps.LatLngBounds();
+                    recs.forEach(r => b.extend(new window.kakao.maps.LatLng(r._lat, r._lng)));
+                    kakaoMapRef.current.setBounds(b, 60, 60, 60, 60);
+                  } else if (initialBoundsRef.current) {
+                    kakaoMapRef.current.setBounds(initialBoundsRef.current, 60, 60, 60, 60);
+                  }
                 }}
                 title="배송구역 전체 보기 (중심으로 이동)"
                 className="px-2.5 py-1.5 bg-black/70 hover:bg-black/95 text-white/80 hover:text-white border border-white/15 rounded-lg text-[10px] font-bold flex items-center gap-1.5 backdrop-blur-sm shadow-lg transition-all"
