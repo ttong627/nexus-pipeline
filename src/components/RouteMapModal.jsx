@@ -1427,21 +1427,22 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
             _origDriver: d.data().기사 || '',
             _origSeqNo: d.data().배송순번 || '',
           }));
-          // 조직 필터
+          // 조직 필터 (접근 권한)
           if (orgDongs) {
             loaded = loaded.filter(r => orgDongs.has(String(r.행정동 || '').trim()));
           }
-          // 설정 화면에서 선택한 행정동만 로드 — 원본 행정동 기준 (배정행정동 무시)
-          if (selectedDongsProp) {
-            loaded = loaded.filter(r => selectedDongsProp.has(String(r.행정동 || '').trim()));
-          }
+          // selectedDongsProp은 레코드 로드 필터가 아닌 큐 정의에만 사용
+          // → 전체 레코드를 메모리에 올려두고 activeDong으로 뷰 필터
           setRecords(loaded);
           setIsCloudMode(true);
           setCloudCity(initialCloudCity);
           setCloudMonthId(initialCloudMonthId);
-          // dongQueue 초기화 — 행정동 가나다 정렬, 첫 번째 동부터 시작
-          const loadedDongs = [...new Set(loaded.map(r => getRouteDong(r)).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'ko'));
-          setDongQueue(loadedDongs);
+          // dongQueue: 설정에서 선택한 동 순서 (없으면 전체 동)
+          const allDongs = [...new Set(loaded.map(r => getRouteDong(r)).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'ko'));
+          const queueDongs = selectedDongsProp
+            ? allDongs.filter(d => selectedDongsProp.has(d))
+            : allDongs;
+          setDongQueue(queueDongs.length ? queueDongs : allDongs);
           setActiveDongIndex(0);
           setCompletedDongs(new Set());
           setIsDirty(false);
@@ -1475,6 +1476,29 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
     }
     setActiveDongIndex(targetIndex);
   }, [activeDongIndex, dongQueue.length, isDirty]);
+
+  // ── 큐에서 동 제외 ────────────────────────────────────────────────────
+  const handleRemoveDongFromQueue = useCallback((dongToRemove) => {
+    setDongQueue(prev => {
+      const newQueue = prev.filter(d => d !== dongToRemove);
+      const removedIdx = prev.indexOf(dongToRemove);
+      const newIdx = Math.max(0, Math.min(removedIdx, newQueue.length - 1));
+      setActiveDongIndex(newIdx);
+      setIsDirty(false);
+      return newQueue;
+    });
+  }, []);
+
+  // ── 큐에 동 추가 ─────────────────────────────────────────────────────
+  const handleAddDongToQueue = useCallback((dongToAdd) => {
+    setDongQueue(prev => {
+      if (prev.includes(dongToAdd)) return prev;
+      const newQueue = [...prev, dongToAdd].sort((a, b) => a.localeCompare(b, 'ko'));
+      const newIdx = newQueue.indexOf(dongToAdd);
+      setActiveDongIndex(newIdx);
+      return newQueue;
+    });
+  }, []);
 
   // ── Kakao Maps SDK 로딩 ─────────────────────────────────────────────
   useEffect(() => {
@@ -4026,16 +4050,24 @@ ${folders}
                 disabled={!dongQueue.length || activeDongIndex >= dongQueue.length - 1}
                 className="w-6 h-6 flex items-center justify-center bg-[#111] border border-[#2a2a2a] rounded text-gray-400 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed text-xs"
               >›</button>
+              {/* 현재 동 큐에서 제외 */}
+              {activeDong && dongQueue.length > 1 && (
+                <button
+                  onClick={() => handleRemoveDongFromQueue(activeDong)}
+                  title={`${activeDong} 큐에서 제외`}
+                  className="w-6 h-6 flex items-center justify-center bg-[#111] border border-[#2a2a2a] rounded text-gray-600 hover:text-red-400 hover:border-red-800/50 disabled:opacity-30 text-xs transition-colors"
+                >✕</button>
+              )}
             </div>
             {/* 동 목록 드롭다운 — 직접 이동 */}
-            {dongQueue.length > 1 && (
+            {dongQueue.length > 0 && (
               <select
                 value={activeDong || ''}
                 onChange={e => {
                   const idx = dongQueue.indexOf(e.target.value);
                   if (idx >= 0) handleDongNavigate(idx);
                 }}
-                className="w-full bg-[#111] text-white text-[10px] border border-[#2a2a2a] rounded px-2 py-1 focus:outline-none focus:border-emerald-500/40"
+                className="w-full bg-[#111] text-white text-[10px] border border-[#2a2a2a] rounded px-2 py-1 focus:outline-none focus:border-emerald-500/40 mb-1"
               >
                 {dongQueue.map((d, i) => (
                   <option key={d} value={d}>
@@ -4044,6 +4076,24 @@ ${folders}
                 ))}
               </select>
             )}
+            {/* 제외된 동 다시 추가 */}
+            {(() => {
+              const allDongs = [...new Set(records.map(r => getRouteDong(r)).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'ko'));
+              const excluded = allDongs.filter(d => !dongQueue.includes(d));
+              if (!excluded.length) return null;
+              return (
+                <select
+                  value=""
+                  onChange={e => { if (e.target.value) handleAddDongToQueue(e.target.value); }}
+                  className="w-full bg-[#0a1a0a] text-emerald-400 text-[10px] border border-emerald-900/40 rounded px-2 py-1 focus:outline-none focus:border-emerald-500/40 mb-1"
+                >
+                  <option value="">+ 제외된 동 추가…</option>
+                  {excluded.map(d => (
+                    <option key={d} value={d}>{d} ({dongCounts[d] || 0}건)</option>
+                  ))}
+                </select>
+              );
+            })()}
             <div className="mt-0.5 text-[8px] text-gray-700">{filteredRecords.length}건 · 좌표 {mapRecords.length}건</div>
           </div>
 
