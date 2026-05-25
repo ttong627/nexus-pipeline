@@ -106,6 +106,20 @@ const extractRoadAddress = (addr) => {
 const normalizeRegionKey = (value) =>
   String(value || '').replace(/\s+/g, '').replace(/(특별자치도|특별자치시|특별시|광역시|도|시)$/, '').trim();
 
+// Firestore 에 이미 저장된 '지자체벗어남' 레코드를 현재 normalizeRegionKey 로 재검증
+// 좌표확인지자체("경기 안양시 동안구") ↔ cityLabel("경기도 안양시 동안구") 비교
+const revalidateAreaMatch = (confirmedArea, cityLabel) => {
+  if (!confirmedArea || !cityLabel) return false;
+  const cityParts = String(cityLabel).trim().split(/\s+/).filter(Boolean);
+  const confirmedParts = String(confirmedArea).trim().split(/\s+/).filter(Boolean);
+  if (!cityParts.length || !confirmedParts.length) return false;
+  const selSido = normalizeRegionKey(cityParts[0]);
+  const selSigungu = cityParts.length > 1 ? normalizeRegionKey(cityParts.slice(1).join('')) : '';
+  const cfmSido = normalizeRegionKey(confirmedParts[0]);
+  const cfmSigungu = confirmedParts.length > 1 ? normalizeRegionKey(confirmedParts.slice(1).join('')) : '';
+  return selSido === cfmSido && (!selSigungu || selSigungu === cfmSigungu);
+};
+
 const getRouteDong = (record) =>
   String(record?.배정행정동 || record?.routeDong || record?.행정동 || '').trim();
 
@@ -1435,6 +1449,52 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
           if (orgDongs) {
             loaded = loaded.filter(r => orgDongs.has(String(r.행정동 || '').trim()));
           }
+
+          // ── 오탐 자동 보정: 이전 geocoding에서 경기↔경기도 등 접미어 불일치로
+          //   잘못 저장된 '지자체벗어남' 레코드를 현재 normalizeRegionKey로 재검증
+          const falsePositiveDocIds = [];
+          loaded = loaded.map(r => {
+            if (r.좌표검증상태 !== '지자체벗어남' || !r._lat || !r._lng) return r;
+            if (!revalidateAreaMatch(r.좌표확인지자체, initialCloudCity)) return r;
+            falsePositiveDocIds.push(r._cloudDocId);
+            const wasCityOnly = r.배송상태 === '타지자체확인필요';
+            return {
+              ...r,
+              좌표검증상태: '정상',
+              ...(wasCityOnly ? {
+                확인필요: false,
+                _에러: false,
+                배송상태: '배송준비',
+                _사유: '',
+              } : {}),
+            };
+          });
+
+          if (falsePositiveDocIds.length > 0) {
+            // Firestore 백그라운드 일괄 수정
+            (async () => {
+              try {
+                for (let i = 0; i < falsePositiveDocIds.length; i += 499) {
+                  const batch = writeBatch(db);
+                  falsePositiveDocIds.slice(i, i + 499).forEach(docId => {
+                    if (!docId) return;
+                    batch.update(doc(db, 'cloud_lists', initialCloudCity, 'months', initialCloudMonthId, 'records', docId), {
+                      좌표검증상태: '정상',
+                      확인필요: false,
+                      _에러: false,
+                      배송상태: '배송준비',
+                      _사유: '',
+                    });
+                  });
+                  await batch.commit();
+                }
+                showToast('success', `지자체이탈 오탐 ${falsePositiveDocIds.length}건 자동 보정 완료`);
+              } catch (e) {
+                console.error('오탐 자동 보정 실패:', e);
+              }
+            })();
+          }
+
           // selectedDongsProp은 레코드 로드 필터가 아닌 큐 정의에만 사용
           // → 전체 레코드를 메모리에 올려두고 activeDong으로 뷰 필터
           setRecords(loaded);
