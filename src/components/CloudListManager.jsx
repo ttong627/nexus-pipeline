@@ -1036,6 +1036,7 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
 
   // ── 주소 정제 ───────────────────────────────────────────────────────
   const [isRefiningAddr, setIsRefiningAddr] = useState(false);
+  const [isFillingRi, setIsFillingRi] = useState(false); // 리(里) 채우기
   const [refineProgress, setRefineProgress] = useState(null); // null | {current, total}
   const [addrChanges, setAddrChanges] = useState([]);         // 변경된 주소 목록
   const [showAddrChanges, setShowAddrChanges] = useState(false);
@@ -1226,6 +1227,35 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
     }
   };
 
+  // ── 리(里) 채우기 — 읍/면 주소에서 리만 추출해 채움 (주소·다른 항목 불변) ────
+  const handleFillRi = async () => {
+    if (!records.length || isFillingRi) return;
+    const targets = records.filter(r =>
+      !deletedRecordIds.has(r.id) && !String(dirtyRecords[r.id]?.리 ?? r.리 ?? '').trim()
+    );
+    if (!targets.length) { alert('리(里)가 비어있는 레코드가 없습니다.\n(이미 채워졌거나 동 단위 지역입니다)'); return; }
+    if (!confirm(`${targets.length.toLocaleString()}건에서 리(里)를 추출해 채웁니다.\n주소·다른 항목은 변경하지 않습니다. 계속할까요?`)) return;
+    setIsFillingRi(true);
+    setRefineProgress({ current: 0, total: targets.length });
+    const dirtyUpdates = {};
+    let filled = 0, current = 0;
+    await asyncPool(10, targets, async (rec) => {
+      try {
+        const refined = await processAddress(rec.주소 || '', rec.이름 || '', rec.행정동 || '', selectedCity, rec.특이사항 || '', { includeCoords: false });
+        const ri = (refined.리 || '').trim();
+        if (ri) { dirtyUpdates[rec.id] = { ...(dirtyUpdates[rec.id] || {}), 리: ri }; filled++; }
+      } catch { /* skip */ }
+      current++;
+      setRefineProgress({ current, total: targets.length });
+    });
+    if (Object.keys(dirtyUpdates).length) setDirtyRecords(prev => ({ ...prev, ...dirtyUpdates }));
+    setIsFillingRi(false);
+    setRefineProgress(null);
+    alert(filled > 0
+      ? `리(里) ${filled}건을 채웠습니다.\n[변경사항 저장]으로 확정하세요.`
+      : '추출된 리(里)가 없습니다.\n(읍/면 지역만 리가 있습니다)');
+  };
+
   // 개별 변경 원복 (dirtyRecords에서 주소 제거)
   const handleRevertAddrChange = (rowId) => {
     setAddrChanges(prev => prev.map(c => c.rowId === rowId ? { ...c, status: 'reverted' } : c));
@@ -1409,6 +1439,16 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
                 title="저장된 명단의 주소를 정제합니다"
               >
                 <Wand2 size={13} /> {isRefiningAddr ? '정제 중...' : '주소 정제'}
+              </button>
+            )}
+            {records.length > 0 && (
+              <button
+                onClick={handleFillRi}
+                disabled={isFillingRi || isRefiningAddr}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-bold bg-emerald-950/40 hover:bg-emerald-900/50 text-emerald-400 border border-emerald-500/30 transition-colors disabled:opacity-40"
+                title="읍/면 주소에서 리(里)를 추출해 리 컬럼을 채웁니다 (주소 불변)"
+              >
+                <MapPin size={13} /> {isFillingRi ? '리 채우는 중...' : '리 채우기'}
               </button>
             )}
             {addrChanges.length > 0 && (
