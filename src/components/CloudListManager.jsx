@@ -1161,11 +1161,18 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
         // 리(里) 백필: 주소가 안 바뀌어도 리가 비어있거나 다르면 채운다 (읍/면 배정 매칭용)
         const riNeedsUpdate = !!refined.리 && refined.리 !== (rec.리 || '');
         const addrChanged = !!newAddr && (newAddr !== oldAddr || refined.확인필요);
-        // 휴대폰/유선 스왑: 휴대폰칸이 휴대폰형식 아니고 유선칸에 휴대폰형식 있으면 맞바꿈
+        // 전화번호 교정: 휴대폰칸은 휴대폰형식만 유지.
+        //  ① 휴대폰칸이 비휴대폰/빈값 + 유선칸 휴대폰형식 → 맞바꿈(휴대폰←유선, 유선←기존 휴대폰칸값)
+        //  ② 유선에 휴대폰 없고 휴대폰칸에 비휴대폰 값 있고 유선 비었으면 → 유선으로 이동(휴대폰 비움)
         const curMob = String(rec.휴대폰 || '');
         const curLand = String(rec.유선전화 || '');
         const landAsMobile = detectMobile(curLand);
-        const phoneSwap = !detectMobile(curMob) && !!landAsMobile;
+        let phoneUpdate = null;
+        if (!detectMobile(curMob)) {
+          if (landAsMobile) phoneUpdate = { 휴대폰: fmtMobile(landAsMobile), 유선전화: curMob };
+          else if (curMob && !curLand) phoneUpdate = { 휴대폰: '', 유선전화: curMob };
+        }
+        const phoneSwap = !!phoneUpdate;
         if (!addrChanged && !riNeedsUpdate && !phoneSwap) return;
 
         if (addrChanged) {
@@ -1200,7 +1207,7 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
           ...(dirtyUpdates[rec.id] || {}),
           ...(addrChanged ? { 주소: newAddr } : {}),
           ...(riNeedsUpdate ? { 리: refined.리 } : {}),
-          ...(phoneSwap ? { 휴대폰: fmtMobile(landAsMobile), 유선전화: curMob } : {}),
+          ...(phoneUpdate || {}),
           ...(refined.확인필요 ? { 확인필요: true, 확인사유: refined.확인사유 || '' } : {}),
         };
       } catch {
