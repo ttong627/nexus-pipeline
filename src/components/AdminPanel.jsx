@@ -168,7 +168,7 @@ function CompanySelect({ value, companies, onChange }) {
               </button>
             ))}
             {companies.length === 0 && (
-              <p className="px-4 py-3 text-gray-600 text-[11px]">등록된 회사 없음 — 소속사·회사 관리에서 추가하세요</p>
+              <p className="px-4 py-3 text-gray-600 text-[11px]">등록된 기업 없음 — 기업 관리에서 추가하세요</p>
             )}
           </div>
         </div>,
@@ -250,7 +250,7 @@ export default function AdminPanel({ onClose, user }) {
   const [orgCities, setOrgCities] = useState({}); // { orgName: string[] }
   const [newOrgInput, setNewOrgInput] = useState('');
   const [showOrgMgr, setShowOrgMgr] = useState(false);
-  const [orgMgrTab, setOrgMgrTab] = useState('org'); // 'org' | 'company'
+  const [orgMgrTab, setOrgMgrTab] = useState('company'); // 'company'(기업) | 'org'(소속사)
 
   // 소속사 지자체 picker (org manager modal)
   const [orgCityPicker, setOrgCityPicker] = useState(null); // orgName
@@ -915,10 +915,10 @@ export default function AdminPanel({ onClose, user }) {
                     <RefreshCw size={12} className={loading ? 'animate-spin' : ''}/> 새로고침
                   </button>
                   <button
-                    onClick={() => setShowOrgMgr(true)}
-                    className="flex items-center gap-2 px-4 py-2 bg-purple-950/40 border border-purple-700/40 text-purple-300 text-xs font-black rounded-xl hover:bg-purple-900/50 transition-colors"
+                    onClick={() => { setShowOrgMgr(true); setOrgMgrTab('company'); if (!userCompanies.length) loadAllCompanies(); }}
+                    className="flex items-center gap-2 px-4 py-2 bg-blue-600 border border-blue-400/60 text-white text-xs font-black rounded-xl hover:bg-blue-500 transition-colors shadow-[0_0_14px_rgba(59,130,246,0.35)]"
                   >
-                    <Building2 size={14}/> 소속사·회사 관리
+                    <Building2 size={14}/> 기업 관리
                   </button>
                 </div>
               </div>
@@ -1485,18 +1485,18 @@ export default function AdminPanel({ onClose, user }) {
               <div className="flex items-center justify-between px-6 py-4 border-b border-[#1a1a2e] shrink-0">
                 <div className="flex items-center gap-2">
                   <Building2 size={18} className="text-purple-400"/>
-                  <h3 className="text-white font-black">소속사·회사 관리</h3>
+                  <h3 className="text-white font-black">기업 관리</h3>
                 </div>
                 <div className="flex items-center gap-3">
                   <div className="flex gap-0.5 bg-black/40 border border-[#333] rounded-lg p-0.5">
                     <button
+                      onClick={() => { setOrgMgrTab('company'); if (!userCompanies.length) loadAllCompanies(); }}
+                      className={`px-3 py-1.5 rounded text-xs font-black transition-colors ${orgMgrTab === 'company' ? 'bg-blue-900/70 text-blue-300' : 'text-gray-500 hover:text-white'}`}
+                    >기업 <span className="text-[10px] opacity-70">({userCompanies.length})</span></button>
+                    <button
                       onClick={() => setOrgMgrTab('org')}
                       className={`px-3 py-1.5 rounded text-xs font-black transition-colors ${orgMgrTab === 'org' ? 'bg-purple-900/70 text-purple-300' : 'text-gray-500 hover:text-white'}`}
                     >소속사</button>
-                    <button
-                      onClick={() => { setOrgMgrTab('company'); if (!userCompanies.length) loadAllCompanies(); }}
-                      className={`px-3 py-1.5 rounded text-xs font-black transition-colors ${orgMgrTab === 'company' ? 'bg-blue-900/70 text-blue-300' : 'text-gray-500 hover:text-white'}`}
-                    >회사 <span className="text-[10px] opacity-70">({userCompanies.length})</span></button>
                   </div>
                   <button onClick={() => setShowOrgMgr(false)} className="text-gray-600 hover:text-white transition-colors"><X size={18}/></button>
                 </div>
@@ -1570,11 +1570,11 @@ export default function AdminPanel({ onClose, user }) {
                     <p className="text-gray-700 text-[10px] mt-3 text-center">제거해도 기존 배정된 유저의 소속은 유지됩니다</p>
                   </div>
                 ) : (
-                  /* ─── 회사 탭 ─── */
+                  /* ─── 기업 탭 ─── */
                   <div>
                     <div className="flex gap-2 mb-4">
                       <input value={newCompanyName} onChange={e => setNewCompanyName(e.target.value)} onKeyDown={e => e.key === 'Enter' && addCompany()}
-                        placeholder="회사명 입력 (코드 자동 생성)"
+                        placeholder="기업명 입력 (코드 자동 생성)"
                         className="flex-1 bg-black/60 border border-[#333] focus:border-blue-500/60 text-white placeholder-gray-700 px-3 py-2 rounded-xl outline-none text-sm"
                       />
                       <button onClick={addCompany} disabled={!newCompanyName.trim()}
@@ -1583,7 +1583,7 @@ export default function AdminPanel({ onClose, user }) {
                       </button>
                     </div>
                     <div className="space-y-2">
-                      {userCompanies.length === 0 && <p className="text-center text-gray-700 text-sm py-6">등록된 회사가 없습니다</p>}
+                      {userCompanies.length === 0 && <p className="text-center text-gray-700 text-sm py-6">등록된 기업이 없습니다</p>}
                       {userCompanies.map(c => (
                         <div key={c.id} className="bg-black/40 border border-[#0f1a2e] rounded-xl p-3 hover:border-blue-700/30 transition-colors">
                           <div className="flex items-center justify-between mb-2">
@@ -1603,7 +1603,7 @@ export default function AdminPanel({ onClose, user }) {
                               ) : (
                                 <>
                                   <span className="text-white font-black">{c.name}</span>
-                                  <button onClick={() => setEditingCompany({ id: c.id, name: c.name })} className="text-gray-600 hover:text-blue-400 transition-colors shrink-0" title="회사명 수정">
+                                  <button onClick={() => setEditingCompany({ id: c.id, name: c.name })} className="text-gray-600 hover:text-blue-400 transition-colors shrink-0" title="기업명 수정">
                                     <Edit2 size={11}/>
                                   </button>
                                 </>
@@ -1611,7 +1611,7 @@ export default function AdminPanel({ onClose, user }) {
                               <span className="font-mono text-[10px] text-blue-400/70 ml-1 bg-blue-950/30 px-1.5 py-0.5 rounded shrink-0">{c.id}</span>
                               <span className="text-gray-700 text-[10px] ml-1 shrink-0">{users.filter(u => u.companyCode === c.id).length}명 배정</span>
                             </div>
-                            <button onClick={() => deleteCompany(c.id)} className="text-gray-600 hover:text-red-400 transition-colors ml-2" title="회사 삭제">
+                            <button onClick={() => deleteCompany(c.id)} className="text-gray-600 hover:text-red-400 transition-colors ml-2" title="기업 삭제">
                               <Trash2 size={13}/>
                             </button>
                           </div>
@@ -1647,10 +1647,31 @@ export default function AdminPanel({ onClose, user }) {
                               </button>
                             )}
                           </div>
+                          {/* 담당자(사용자) — 한 기업에 여러 명 배정 가능 (소속사와 동일) */}
+                          <div className="mt-2 pt-2 border-t border-[#141414]">
+                            <p className="text-gray-600 text-[10px] font-bold mb-1 flex items-center gap-1">
+                              <UserCheck size={10}/> 담당자 ({users.filter(u => u.companyCode === c.id).length}명)
+                            </p>
+                            <div className="flex flex-wrap items-center gap-1">
+                              {users.filter(u => u.companyCode === c.id).map(u => (
+                                <span key={u.id} className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-emerald-900/30 text-emerald-300 border border-emerald-700/30">
+                                  {u.realName || u.email}
+                                  <button onClick={() => saveUserCompany(u.id, '')} className="opacity-60 hover:opacity-100 hover:text-red-400" title="담당자 해제">×</button>
+                                </span>
+                              ))}
+                              <select value="" onChange={e => { if (e.target.value) saveUserCompany(e.target.value, c.id); }}
+                                className="bg-black/60 border border-emerald-800/40 text-emerald-300 text-[10px] px-1.5 py-0.5 rounded outline-none focus:border-emerald-500 cursor-pointer">
+                                <option value="">+ 담당자 추가</option>
+                                {users.filter(u => u.companyCode !== c.id && u.role !== 'admin').map(u => (
+                                  <option key={u.id} value={u.id}>{u.realName || u.email}</option>
+                                ))}
+                              </select>
+                            </div>
+                          </div>
                         </div>
                       ))}
                     </div>
-                    <p className="text-gray-700 text-[10px] mt-3 text-center">회사 지자체 변경 시 배정된 모든 사용자의 승인 지자체가 즉시 동기화됩니다</p>
+                    <p className="text-gray-700 text-[10px] mt-3 text-center">한 기업에 담당자 여러 명 배정 가능 · 기업 지자체 변경 시 배정된 모든 담당자의 승인 지자체가 즉시 동기화됩니다</p>
                   </div>
                 )}
               </div>
