@@ -1076,6 +1076,12 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
   result.legalDong = apiResult?.legalDong || apiResult?.emdNm || '';
   // 리(里): 읍/면 법정리 — 기사 배정 리 단위 매칭용. API liNm 우선, 없으면 지번주소(도로명 없음)에서 "OO리" 추출.
   result.리 = (apiResult?.liNm || apiResult?.legalRi || '').trim();
+  // 지번주소(jibunAddr)에서 OO리 추출 — 도로명주소여도 지번주소엔 리가 포함됨(읍/면). 가장 확실한 소스.
+  if (!result.리 && apiResult?.jibunAddr) {
+    const m = String(apiResult.jibunAddr).match(/([가-힣]{2,5}리)(?=\s|\d|,|$)/);
+    if (m) result.리 = m[1];
+  }
+  // 입력 지번주소(도로명 없음) 폴백
   if (!result.리 && !/(대로|로|길)\s*\d/.test(inputAddr || '')) {
     const liMatch = (inputAddr || '').match(/([가-힣]{2,4}리)\s*\d/);
     if (liMatch) result.리 = liMatch[1];
