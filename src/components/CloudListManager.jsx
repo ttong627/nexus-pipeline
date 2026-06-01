@@ -1127,6 +1127,16 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
     const dirtyUpdates = {};
     let current = 0;
 
+    // 휴대폰/유선 스왑 판별 — 휴대폰칸이 휴대폰형식 아니고 유선칸이 휴대폰형식이면 맞바꿈
+    const detectMobile = (phone) => {
+      const d = String(phone || '').replace(/[^0-9]/g, '');
+      if (/^01[016789]\d{7,8}$/.test(d)) return d;
+      if (/^1[016789]\d{7,8}$/.test(d)) return '0' + d;
+      return null;
+    };
+    const fmtMobile = (d) => d.length === 11 ? `${d.slice(0,3)}-${d.slice(3,7)}-${d.slice(7)}`
+      : d.length === 10 ? `${d.slice(0,3)}-${d.slice(3,6)}-${d.slice(6)}` : d;
+
     await asyncPool(20, records, async (rec) => {
       try {
         // A-21: 주소·특이사항 내 동사무소/읍사무소/면사무소 → 주민센터 정규화
@@ -1151,7 +1161,12 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
         // 리(里) 백필: 주소가 안 바뀌어도 리가 비어있거나 다르면 채운다 (읍/면 배정 매칭용)
         const riNeedsUpdate = !!refined.리 && refined.리 !== (rec.리 || '');
         const addrChanged = !!newAddr && (newAddr !== oldAddr || refined.확인필요);
-        if (!addrChanged && !riNeedsUpdate) return;
+        // 휴대폰/유선 스왑: 휴대폰칸이 휴대폰형식 아니고 유선칸에 휴대폰형식 있으면 맞바꿈
+        const curMob = String(rec.휴대폰 || '');
+        const curLand = String(rec.유선전화 || '');
+        const landAsMobile = detectMobile(curLand);
+        const phoneSwap = !detectMobile(curMob) && !!landAsMobile;
+        if (!addrChanged && !riNeedsUpdate && !phoneSwap) return;
 
         if (addrChanged) {
           // 저번달 주소 매칭
@@ -1185,6 +1200,7 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
           ...(dirtyUpdates[rec.id] || {}),
           ...(addrChanged ? { 주소: newAddr } : {}),
           ...(riNeedsUpdate ? { 리: refined.리 } : {}),
+          ...(phoneSwap ? { 휴대폰: fmtMobile(landAsMobile), 유선전화: curMob } : {}),
           ...(refined.확인필요 ? { 확인필요: true, 확인사유: refined.확인사유 || '' } : {}),
         };
       } catch {
@@ -1224,8 +1240,12 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
       setShowAddrChanges(true);
     } else {
       const riCount = Object.values(dirtyUpdates).filter(u => u.리 !== undefined).length;
-      alert(riCount > 0
-        ? `주소 변경은 없으나 리(里) 데이터 ${riCount}건을 채웠습니다.\n[변경사항 저장]으로 확정하세요.`
+      const phCount = Object.values(dirtyUpdates).filter(u => u.휴대폰 !== undefined).length;
+      const msgs = [];
+      if (riCount > 0) msgs.push(`리(里) ${riCount}건`);
+      if (phCount > 0) msgs.push(`전화번호 교정 ${phCount}건`);
+      alert(msgs.length
+        ? `주소 변경은 없으나 ${msgs.join(', ')}을 처리했습니다.\n[변경사항 저장]으로 확정하세요.`
         : '변경된 주소가 없습니다. 이미 모두 정제된 상태입니다.');
     }
   };
