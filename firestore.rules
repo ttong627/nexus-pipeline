@@ -303,14 +303,20 @@ service cloud.firestore {
     // ── 사용자 회사(companyCode 기반): 본인 생성·수정, 관리자 전체 ───────────────
     match /user_companies/{companyCode} {
       allow read: if isAuthenticated();
-      allow create: if isAuthenticated() && request.resource.data.ownerUid == request.auth.uid;
+      // 관리자는 기업을 직접 생성(ownerUid 없이). 일반 사용자는 자기 소유 기업만.
+      allow create: if isAuthenticated() &&
+        (request.resource.data.ownerUid == request.auth.uid || isAdmin() || isAdminEmail());
       allow update: if isAuthenticated() &&
-        (resource.data.ownerUid == request.auth.uid || isAdmin());
-      allow delete: if isAdmin();
+        (resource.data.ownerUid == request.auth.uid || isAdmin() || isAdminEmail());
+      allow delete: if isAdmin() || isAdminEmail();
 
+      // 기업소속 기사: 관리자 / 기업 소유자 / 해당 기업 담당자(companyCode 일치) 접근
       match /drivers/{driverId} {
-        allow read, write: if isAuthenticated() &&
-          (get(/databases/$(database)/documents/user_companies/$(companyCode)).data.ownerUid == request.auth.uid || isAdmin());
+        allow read, write: if isAuthenticated() && (
+          isAdmin() || isAdminEmail() ||
+          get(/databases/$(database)/documents/user_companies/$(companyCode)).data.ownerUid == request.auth.uid ||
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.companyCode == companyCode
+        );
       }
     }
 

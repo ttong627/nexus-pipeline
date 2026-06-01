@@ -470,6 +470,8 @@ export default function AdminPanel({ onClose, user }) {
     try {
       const snap = await getDocs(collection(db, 'user_companies'));
       setUserCompanies(snap.docs.map(d => ({ id: d.id, ...d.data() }))
+        // 개인 자동생성 기업(createdBy·migratedFrom 없음) 제외 — 관리자 생성/소속사 통합본만 표시
+        .filter(c => c.createdBy || c.migratedFrom)
         .sort((a, b) => (a.name || '').localeCompare(b.name || '')));
     } catch (e) { console.error(e); }
   };
@@ -482,9 +484,9 @@ export default function AdminPanel({ onClose, user }) {
     const code = `NX-${ts}${rand}`;
     try {
       await setDoc(doc(db, 'user_companies', code), {
-        code, name, welshareMember: false, cities: [], createdAt: serverTimestamp(), createdBy: user?.email || 'admin',
+        code, name, welshareMember: false, tier: 'basic', cities: [], createdAt: serverTimestamp(), createdBy: user?.email || 'admin',
       });
-      setUserCompanies(prev => [...prev, { id: code, code, name, welshareMember: false, cities: [] }]
+      setUserCompanies(prev => [...prev, { id: code, code, name, welshareMember: false, tier: 'basic', cities: [] }]
         .sort((a, b) => (a.name || '').localeCompare(b.name || '')));
       setNewCompanyName('');
     } catch (e) { alert('회사 추가 실패: ' + e.message); }
@@ -517,18 +519,26 @@ export default function AdminPanel({ onClose, user }) {
     } catch (e) { alert('회사명 수정 실패: ' + e.message); }
   };
 
+  // 사용자↔기업 매칭: 매칭되면 기업의 등급·지역·한도를 그대로 상속(모든 권한은 기업에서),
+  // 매칭 해제하면 일반(basic) 1개만 허용.
   const saveUserCompany = async (uid, code) => {
-    const company = userCompanies.find(c => c.id === code);
-    const cities = company?.cities || [];
+    const company = code ? userCompanies.find(c => c.id === code) : null;
     try {
-      await updateDoc(doc(db, 'users', uid), {
-        companyCode: code || null,
-        ...(code && cities.length > 0 ? { citiesApproved: cities } : {}),
-      });
-      setUsers(prev => prev.map(u => u.id === uid
-        ? { ...u, companyCode: code || null, ...(code && cities.length > 0 ? { citiesApproved: cities } : {}) }
-        : u));
-    } catch (e) { alert('회사 배정 실패: ' + e.message); }
+      let payload;
+      if (company) {
+        const tier = company.tier || 'basic';
+        payload = {
+          companyCode: code,
+          tier,
+          maxCities: TIER_DEFAULT_CITIES[tier] ?? 1,
+          citiesApproved: company.cities || [],
+        };
+      } else {
+        payload = { companyCode: null, tier: 'basic', maxCities: 1, citiesApproved: [] };
+      }
+      await updateDoc(doc(db, 'users', uid), payload);
+      setUsers(prev => prev.map(u => u.id === uid ? { ...u, ...payload } : u));
+    } catch (e) { alert('기업 배정 실패: ' + e.message); }
   };
 
   const updateCompanyCities = async (code, cities) => {
@@ -542,7 +552,23 @@ export default function AdminPanel({ onClose, user }) {
         await batch.commit();
         setUsers(prev => prev.map(u => u.companyCode === code ? { ...u, citiesApproved: cities } : u));
       }
-    } catch (e) { alert('회사 지자체 업데이트 실패: ' + e.message); }
+    } catch (e) { alert('기업 지자체 업데이트 실패: ' + e.message); }
+  };
+
+  // 기업 등급 변경 → 해당 기업 담당자 전원의 등급·지역한도 즉시 동기화 (모든 권한은 기업에서)
+  const updateCompanyTier = async (code, tier) => {
+    const maxC = TIER_DEFAULT_CITIES[tier] ?? 1;
+    try {
+      await updateDoc(doc(db, 'user_companies', code), { tier });
+      setUserCompanies(prev => prev.map(c => c.id === code ? { ...c, tier } : c));
+      const affected = users.filter(u => u.companyCode === code);
+      if (affected.length > 0) {
+        const batch = writeBatch(db);
+        affected.forEach(u => batch.update(doc(db, 'users', u.id), { tier, maxCities: maxC }));
+        await batch.commit();
+        setUsers(prev => prev.map(u => u.companyCode === code ? { ...u, tier, maxCities: maxC } : u));
+      }
+    } catch (e) { alert('기업 등급 변경 실패: ' + e.message); }
   };
 
   const addCityToCompany = async (code, cityId) => {
@@ -1610,6 +1636,14 @@ export default function AdminPanel({ onClose, user }) {
                               )}
                               <span className="font-mono text-[10px] text-blue-400/70 ml-1 bg-blue-950/30 px-1.5 py-0.5 rounded shrink-0">{c.id}</span>
                               <span className="text-gray-700 text-[10px] ml-1 shrink-0">{users.filter(u => u.companyCode === c.id).length}명 배정</span>
+                              <select value={c.tier || 'basic'} onChange={e => updateCompanyTier(c.id, e.target.value)}
+                                title="기업 등급 (담당자 전원에게 상속)"
+                                className="ml-1 bg-black/60 border border-blue-800/40 text-blue-300 text-[10px] px-1 py-0.5 rounded outline-none focus:border-blue-500 cursor-pointer shrink-0">
+                                <option value="basic">일반</option>
+                                <option value="vip">VIP</option>
+                                <option value="vvip">VVIP</option>
+                                <option value="sapphire">사파이어</option>
+                              </select>
                             </div>
                             <button onClick={() => deleteCompany(c.id)} className="text-gray-600 hover:text-red-400 transition-colors ml-2" title="기업 삭제">
                               <Trash2 size={13}/>

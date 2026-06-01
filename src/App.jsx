@@ -385,20 +385,10 @@ export default function App() {
           userData.tier = 'basic';
         }
 
-        // 3. 일반 사용자 회사코드 자동 생성 (없는 경우에만)
-        if (!isAdminEmail && !userData.companyCode) {
-          const ts = Date.now().toString(36).toUpperCase().slice(-5);
-          const rand = Math.random().toString(36).slice(2, 7).toUpperCase();
-          const code = `NX-${ts}${rand}`;
-          await setDoc(doc(db, 'users', u.uid), { companyCode: code }, { merge: true });
-          await setDoc(doc(db, 'user_companies', code), {
-            ownerUid: u.uid, email: u.email,
-            name: userData.realName || u.displayName || '',
-            cities: userData.citiesApproved || [],
-            createdAt: serverTimestamp(),
-          }, { merge: true });
-          userData.companyCode = code;
-        }
+        // 3. 미매칭 사용자: 기업 자동생성 안 함.
+        //    관리자가 기업에 매칭하기 전까지는 일반(basic) 1개만 허용하며, 매칭 시
+        //    기업의 등급·지역·한도를 상속한다(모든 권한은 기업에서). 기사 데이터는
+        //    companyCode 없으면 user_drivers/{uid} 폴백으로 정상 동작.
 
         setUser({ ...u, ...userData });
 
