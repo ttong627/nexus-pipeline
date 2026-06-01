@@ -499,6 +499,9 @@ export default function App() {
       result.sort((a, b) => {
         let cmp = String(a.행정동 || "").localeCompare(String(b.행정동 || ""), undefined, { numeric: true, sensitivity: 'base' });
         if (cmp !== 0) return cmp;
+        // 리(里): 읍/면 하위 단위. 리 없으면 빈값으로 자연 통과(다음 키로 정렬)
+        cmp = String(a.리 || "").localeCompare(String(b.리 || ""), undefined, { numeric: true, sensitivity: 'base' });
+        if (cmp !== 0) return cmp;
         cmp = String(a.주소 || "").localeCompare(String(b.주소 || ""), undefined, { numeric: true, sensitivity: 'base' });
         if (cmp !== 0) return cmp;
         return String(a.이름 || "").localeCompare(String(b.이름 || ""), undefined, { numeric: true, sensitivity: 'base' });

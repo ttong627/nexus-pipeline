@@ -355,6 +355,9 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
       .sort((a, b) => {
         let cmp = (a.행정동 ?? '').localeCompare(b.행정동 ?? '', 'ko', { numeric: true });
         if (cmp !== 0) return cmp;
+        // 리(里): 읍/면 하위 단위. 리 없으면 빈값으로 자연 통과
+        cmp = (a.리 ?? '').localeCompare(b.리 ?? '', 'ko', { numeric: true });
+        if (cmp !== 0) return cmp;
         cmp = (a.주소 ?? '').localeCompare(b.주소 ?? '', 'ko', { numeric: true });
         if (cmp !== 0) return cmp;
         return (a.이름 ?? '').localeCompare(b.이름 ?? '', 'ko', { numeric: true });
