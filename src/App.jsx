@@ -990,6 +990,25 @@ export default function App() {
             if (k.length > 3) prevMap.set(k, r);
           });
 
+          // 주소 변경 판정: 도로명+번호가 다르면 변경(이사), 같으면 상세(동·호·층 숫자) 유사성 비교.
+          // 괄호 내용·공백·쉼표·호/층 위치 등 포맷 차이는 무시 → 정제만 된 건은 변경으로 치지 않음.
+          const roadCompareKey = (addr) => {
+            const clean = String(addr || '').replace(/\([^)]*\)/g, ' ').replace(/\s+/g, '');
+            const m = clean.match(/[가-힣A-Za-z0-9]+(?:대로|로|길)\d+(?:-\d+)?/);
+            return m ? m[0] : clean.slice(0, 12);
+          };
+          const detailCompareKey = (addr) => {
+            const afterRoad = String(addr || '')
+              .replace(/\([^)]*\)/g, ' ')
+              .replace(/[가-힣A-Za-z0-9]+(?:대로|로|길)\s*\d+(?:-\d+)?/, ' ');
+            return (afterRoad.match(/\d+/g) || []).join('-');
+          };
+          const isRealAddrChange = (prevAddr, curAddr) => {
+            if (!prevAddr || !curAddr) return false;
+            if (roadCompareKey(prevAddr) !== roadCompareKey(curAddr)) return true; // 도로명+번호 다름 → 이사
+            return detailCompareKey(prevAddr) !== detailCompareKey(curAddr);          // 도로명 같음 → 상세 숫자 비교
+          };
+
           const currentKeys = new Set();
           const changes = [];
           let dongStats = {};
@@ -1005,7 +1024,7 @@ export default function App() {
             if (prev) {
               const prevAddr = (prev.address || '').trim();
               const curAddr = (r.주소 || '').trim();
-              const addrChanged = prevAddr && curAddr && prevAddr !== curAddr && prevAddr.slice(0, 10) !== curAddr.slice(0, 10);
+              const addrChanged = isRealAddrChange(prevAddr, curAddr);
               if (addrChanged) {
                 dongStats[dong].changed++;
                 changes.push({ type: 'address', name: r.이름, dong, prevAddr, curAddr });
