@@ -7,7 +7,7 @@ const PLANS = [
     tier: 'basic',
     emoji: '⚪', label: '일반', price: '무료',
     cities: 1,
-    features: ['주소 정제 (도로명주소 API)', '고객 노트 저장/조회', '이번달 배송명단 저장/조회', '부가 서비스', '월 500건 처리'],
+    features: ['주소 정제 (도로명주소 API)', '고객 노트 저장/조회', '이번달 배송명단 저장/조회', '부가 서비스', '지자체당 월 1만건 처리'],
     border: 'border-gray-600/40', bg: 'bg-gray-800/20', badge: 'text-gray-400',
     btn: 'bg-gray-700/60 text-gray-500 cursor-default',
     btnLabel: '현재 플랜',
@@ -16,7 +16,7 @@ const PLANS = [
     tier: 'vip',
     emoji: '🔵', label: 'VIP', price: '월 1만원',
     cities: 5,
-    features: ['일반 기능 전체', '지자체 5개 관리', '좌표 매칭 (Kakao API)', '기사 배정 / 루트맵', '월 3,000건 처리'],
+    features: ['일반 기능 전체', '지자체 5개 관리', '좌표 매칭 (Kakao API)', '기사 배정 / 루트맵', '지자체당 월 1만건 처리'],
     border: 'border-blue-500/50', bg: 'bg-blue-950/30', badge: 'text-blue-300',
     btn: 'bg-blue-600 hover:bg-blue-500 text-white shadow-[0_0_16px_rgba(59,130,246,0.4)]',
     btnLabel: '업그레이드 문의',
@@ -25,7 +25,7 @@ const PLANS = [
     tier: 'vvip',
     emoji: '🟣', label: 'VVIP', price: '협의',
     cities: 20,
-    features: ['VIP 기능 전체', '지자체 20개 관리', 'AI 배송 최적화', 'DB 현황 (전체 조회)', '월 10,000건 처리'],
+    features: ['VIP 기능 전체', '지자체 20개 관리', 'AI 배송 최적화', 'DB 현황 (전체 조회)', '지자체당 월 1만건 처리'],
     border: 'border-purple-500/50', bg: 'bg-purple-950/30', badge: 'text-purple-300',
     btn: 'bg-purple-600 hover:bg-purple-500 text-white shadow-[0_0_16px_rgba(168,85,247,0.4)]',
     btnLabel: '업그레이드 문의',
@@ -34,7 +34,7 @@ const PLANS = [
     tier: 'sapphire',
     emoji: '💎', label: '사파이어', price: '협의',
     cities: '무제한',
-    features: ['VVIP 기능 전체', '지자체 무제한', '전담 고객지원', '월 무제한 처리', '커스텀 설정'],
+    features: ['VVIP 기능 전체', '지자체 무제한', '전담 고객지원', '지자체당 월 1만건 처리', '커스텀 설정'],
     border: 'border-cyan-400/50', bg: 'bg-cyan-950/30', badge: 'text-cyan-300',
     btn: 'bg-cyan-600 hover:bg-cyan-500 text-white shadow-[0_0_16px_rgba(6,182,212,0.4)]',
     btnLabel: '업그레이드 문의',
@@ -165,7 +165,7 @@ export default function UpgradeModal({ onClose, user, userTier, usedCount = 0, u
             )}
             {reason === 'monthlyLimit' && (
               <p className="text-gray-500 text-sm mt-1">
-                현재 등급(<span className="text-white font-bold">{userTier || 'basic'}</span>)의 월 처리 한도를 초과했습니다. 업그레이드하세요.
+                처리 한도(지자체 1개당 월 <span className="text-white font-bold">1만건</span>)를 초과했습니다. 지자체를 추가하거나 명단을 나눠 올려주세요.
               </p>
             )}
           </div>

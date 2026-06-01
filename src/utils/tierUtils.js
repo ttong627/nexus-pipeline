@@ -25,8 +25,16 @@ export function getMaxCities(u) {
   if (isAdmin) return Infinity;
   return ({ basic: 1, vip: 5, vvip: 20, sapphire: Infinity }[tier || 'basic'] ?? 1);
 }
+// 월 처리한도 = 권한지역(지자체) 1개당 1만건. 등급 무관, 관리자만 무제한.
+export const PER_CITY_MONTHLY_LIMIT = 10000;
+
+export function getApprovedCityCount(u) {
+  if (!u || typeof u === 'string') return 1;
+  return Math.max(1, Array.isArray(u.citiesApproved) ? u.citiesApproved.length : 0);
+}
+
 export function getMonthlyLimit(u) {
-  const { tier, isAdmin } = _resolve(u);
+  const { isAdmin } = _resolve(u);
   if (isAdmin) return Infinity;
-  return ({ basic: 500, vip: 3000, vvip: 10000, sapphire: Infinity }[tier || 'basic'] ?? 500);
+  return getApprovedCityCount(u) * PER_CITY_MONTHLY_LIMIT;
 }
