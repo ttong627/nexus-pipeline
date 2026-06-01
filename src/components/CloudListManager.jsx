@@ -1144,37 +1144,43 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
 
         const oldAddr = (rec.주소 || '').trim();
         const newAddr = (refined.주소 || '').trim();
-        if (!newAddr || (newAddr === oldAddr && !refined.확인필요)) return;
+        // 리(里) 백필: 주소가 안 바뀌어도 리가 비어있거나 다르면 채운다 (읍/면 배정 매칭용)
+        const riNeedsUpdate = !!refined.리 && refined.리 !== (rec.리 || '');
+        const addrChanged = !!newAddr && (newAddr !== oldAddr || refined.확인필요);
+        if (!addrChanged && !riNeedsUpdate) return;
 
-        // 저번달 주소 매칭
-        const digits = v => String(v || '').replace(/[^\d]/g, '');
-        const ph = digits(rec.휴대폰 || '').slice(-7);
-        const k1 = rec.생년월일 ? `${rec.이름}__${rec.생년월일}` : null;
-        const k2 = ph.length >= 7 ? `${rec.이름}__${ph}` : null;
-        const prevAddr = (k1 && prevMap.get(k1)) || (k2 && prevMap.get(k2)) || null;
+        if (addrChanged) {
+          // 저번달 주소 매칭
+          const digits = v => String(v || '').replace(/[^\d]/g, '');
+          const ph = digits(rec.휴대폰 || '').slice(-7);
+          const k1 = rec.생년월일 ? `${rec.이름}__${rec.생년월일}` : null;
+          const k2 = ph.length >= 7 ? `${rec.이름}__${ph}` : null;
+          const prevAddr = (k1 && prevMap.get(k1)) || (k2 && prevMap.get(k2)) || null;
 
-        // 변경 유형 자동 감지 — 도로명+번호 기준 유사값 비교
-        // 도로명+건물번호가 둘 다 잡힌 경우에만 이사로 본다. 상세주소/괄호/띄어쓰기는 무시.
-        let changeType = '정제';
-        if (refined.확인필요) changeType = '오류';
-        else if (prevAddr && hasRoadAddressChanged(prevAddr, newAddr)) changeType = '이사';
+          // 변경 유형 자동 감지 — 도로명+번호 기준 유사값 비교
+          // 도로명+건물번호가 둘 다 잡힌 경우에만 이사로 본다. 상세주소/괄호/띄어쓰기는 무시.
+          let changeType = '정제';
+          if (refined.확인필요) changeType = '오류';
+          else if (prevAddr && hasRoadAddressChanged(prevAddr, newAddr)) changeType = '이사';
 
-        changes.push({
-          rowId: rec.id,
-          이름: rec.이름 || '',
-          생년월일: rec.생년월일 || '',
-          행정동: rec.행정동 || '미분류',
-          oldAddr,
-          newAddr,
-          prevAddr: prevAddr || null,
-          changeType,
-          status: 'pending',   // pending | reverted
-          _에러: !!refined.확인필요,
-        });
+          changes.push({
+            rowId: rec.id,
+            이름: rec.이름 || '',
+            생년월일: rec.생년월일 || '',
+            행정동: rec.행정동 || '미분류',
+            oldAddr,
+            newAddr,
+            prevAddr: prevAddr || null,
+            changeType,
+            status: 'pending',   // pending | reverted
+            _에러: !!refined.확인필요,
+          });
+        }
 
         dirtyUpdates[rec.id] = {
           ...(dirtyUpdates[rec.id] || {}),
-          주소: newAddr,
+          ...(addrChanged ? { 주소: newAddr } : {}),
+          ...(riNeedsUpdate ? { 리: refined.리 } : {}),
           ...(refined.확인필요 ? { 확인필요: true, 확인사유: refined.확인사유 || '' } : {}),
         };
       } catch {
@@ -1213,7 +1219,10 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
     if (changes.length > 0) {
       setShowAddrChanges(true);
     } else {
-      alert('변경된 주소가 없습니다. 이미 모두 정제된 상태입니다.');
+      const riCount = Object.values(dirtyUpdates).filter(u => u.리 !== undefined).length;
+      alert(riCount > 0
+        ? `주소 변경은 없으나 리(里) 데이터 ${riCount}건을 채웠습니다.\n[변경사항 저장]으로 확정하세요.`
+        : '변경된 주소가 없습니다. 이미 모두 정제된 상태입니다.');
     }
   };
 
