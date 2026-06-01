@@ -187,6 +187,7 @@ export default function Step3_Mapping({ step, setStep, mapDefs, setMapDefs, sele
   const [activeTab, setActiveTab] = useState(0);
   const addTargetRef = useRef(null);
   const addBaseRef = useRef(null);
+  const skipFirstSaveRef = useRef(true); // 마운트 직후 자동매핑값이 저장값을 덮어쓰는 것 방지
 
   // 지자체별 저장된 칼럼 매핑 자동 불러오기 (마운트 시 1회)
   useEffect(() => {
@@ -203,8 +204,10 @@ export default function Step3_Mapping({ step, setStep, mapDefs, setMapDefs, sele
           const headers = Array.isArray(sheet.headers) ? sheet.headers : [];
           const merged = { ...current };
           for (const [fieldKey, headerName] of Object.entries(savedMap)) {
-            // 저장된 헤더가 이 시트에 존재하고, 아직 매핑되지 않은 필드만 적용
-            if (headerName && headers.includes(headerName) && !merged[fieldKey]) {
+            // 저장된 헤더가 이 시트에 존재하면 자동 적용(저장값 우선).
+            // 자동매핑이 다르게 잡아도 사용자가 저장해 둔 매핑이 이김 → 같은 지자체
+            // 재업로드 시 재수정 불필요. (CLAUDE.md CM-1~CM-4)
+            if (headerName && headers.includes(headerName)) {
               merged[fieldKey] = headerName;
             }
           }
@@ -218,6 +221,9 @@ export default function Step3_Mapping({ step, setStep, mapDefs, setMapDefs, sele
 
   // mapDefs 변경 시 지자체별 자동 저장
   useEffect(() => {
+    // 마운트 첫 실행은 스킵 — 저장값 로드(override)가 반영되기 전 자동매핑값으로
+    // 덮어쓰는 것을 방지. 이후 사용자 편집·로드 반영 시점부터 저장.
+    if (skipFirstSaveRef.current) { skipFirstSaveRef.current = false; return; }
     if (!city || !Object.keys(mapDefs).length) return;
     const combined = {};
     for (const sheetMap of Object.values(mapDefs)) {
