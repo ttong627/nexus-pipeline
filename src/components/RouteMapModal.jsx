@@ -3494,14 +3494,19 @@ ${folders}
       reason = 'missing',
     } = options;
     const idSet = recordIds ? new Set(recordIds) : null;
+    // 선택된 읍/면/동만 매칭 — 전체 매칭은 오래 걸려 작업이 끊기므로 현재 작업 동으로 한정.
+    // activeDong 없거나(전체 보기) options.scope==='all'이면 전체 대상.
+    const scopeDong = (!idSet && options.scope !== 'all' && activeDong) ? activeDong : null;
     const targets = records.filter(r =>
       (idSet ? idSet.has(r.id) : (!r._lat || !r._lng)) &&
+      (scopeDong ? getRouteDong(r) === scopeDong : true) &&
       (r.주소 || r.원본주소 || r.지번주소 || r.jibunAddr || r.확인사유 || r._사유)
     );
-    if (!targets.length) { alert('좌표 미수신 데이터가 없습니다.'); return; }
+    if (!targets.length) { alert(scopeDong ? `[${scopeDong}] 좌표 미수신 데이터가 없습니다.` : '좌표 미수신 데이터가 없습니다.'); return; }
+    const scopeLabel = scopeDong ? `[${scopeDong}] ` : '[전체] ';
     const confirmText = force
-      ? `선택한 ${targets.length}건의 기존 좌표를 버리고 다시 조회합니다.\n도로명·지번·원본주소·행정동 조합으로 재매칭합니다.\n계속하시겠습니까?`
-      : `좌표 없는 ${targets.length}건을 카카오 API로 조회합니다.\n도로명·지번·원본주소·행정동 조합으로 조회합니다.\n계속하시겠습니까?`;
+      ? `${scopeLabel}선택한 ${targets.length}건의 기존 좌표를 버리고 다시 조회합니다.\n도로명·지번·원본주소·행정동 조합으로 재매칭합니다.\n계속하시겠습니까?`
+      : `${scopeLabel}좌표 없는 ${targets.length}건을 카카오 API로 조회합니다.\n도로명·지번·원본주소·행정동 조합으로 조회합니다.\n계속하시겠습니까?`;
     if (!skipConfirm && !window.confirm(confirmText)) return;
     setIsFetchingCoords(true);
     const updates = {};
