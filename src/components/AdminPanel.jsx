@@ -1022,6 +1022,8 @@ export default function AdminPanel({ onClose, user }) {
                       const currentTier = u.tier || 'basic';
                       const approvedCities = u.citiesApproved || [];
                       const isPickingCity = cityPickerUid === u.id;
+                      const matchedCompany = u.companyCode ? userCompanies.find(c => c.id === u.companyCode) : null;
+                      const isMatched = !!matchedCompany; // 기업 매칭 시 권한은 기업에서 상속(읽기전용)
 
                       return (
                         <tr key={u.id} className={`hover:bg-white/5 transition-colors ${isBanned ? 'opacity-50' : ''}`}>
@@ -1082,15 +1084,19 @@ export default function AdminPanel({ onClose, user }) {
 
                           {/* 지자체 수량 */}
                           <td className="px-4 py-3 text-center">
-                            <input
-                              type="number"
-                              min={1} max={999}
-                              value={editingCity[u.id] ?? (u.maxCities ?? TIER_DEFAULT_CITIES[currentTier] ?? 1)}
-                              onChange={e => setEditingCity(prev => ({ ...prev, [u.id]: e.target.value }))}
-                              onBlur={e => saveCityLimit(u.id, e.target.value)}
-                              onKeyDown={e => e.key === 'Enter' && saveCityLimit(u.id, e.target.value)}
-                              className="w-14 text-center bg-black/60 border border-[#333] text-[#3b82f6] font-black text-sm rounded-lg px-1 py-1 outline-none focus:border-[#3b82f6] hover:border-[#555] transition-colors"
-                            />
+                            {isMatched ? (
+                              <span className="text-[#3b82f6] font-black text-sm" title="기업에서 상속">{u.maxCities ?? TIER_DEFAULT_CITIES[currentTier] ?? 1}</span>
+                            ) : (
+                              <input
+                                type="number"
+                                min={1} max={999}
+                                value={editingCity[u.id] ?? (u.maxCities ?? TIER_DEFAULT_CITIES[currentTier] ?? 1)}
+                                onChange={e => setEditingCity(prev => ({ ...prev, [u.id]: e.target.value }))}
+                                onBlur={e => saveCityLimit(u.id, e.target.value)}
+                                onKeyDown={e => e.key === 'Enter' && saveCityLimit(u.id, e.target.value)}
+                                className="w-14 text-center bg-black/60 border border-[#333] text-[#3b82f6] font-black text-sm rounded-lg px-1 py-1 outline-none focus:border-[#3b82f6] hover:border-[#555] transition-colors"
+                              />
+                            )}
                           </td>
 
                           {/* 소속사/회사 */}
@@ -1143,11 +1149,13 @@ export default function AdminPanel({ onClose, user }) {
                                 {approvedCities.map(city => (
                                   <span key={city} className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] bg-[#3b82f6]/10 border border-[#3b82f6]/30 text-[#3b82f6] font-bold">
                                     {city}
-                                    <button
-                                      onClick={() => removeCityFromUser(u.id, city)}
-                                      className="ml-0.5 text-[#3b82f6]/60 hover:text-red-400 transition-colors leading-none"
-                                      title="제거"
-                                    >×</button>
+                                    {!isMatched && (
+                                      <button
+                                        onClick={() => removeCityFromUser(u.id, city)}
+                                        className="ml-0.5 text-[#3b82f6]/60 hover:text-red-400 transition-colors leading-none"
+                                        title="제거"
+                                      >×</button>
+                                    )}
                                   </span>
                                 ))}
                               </div>
@@ -1189,6 +1197,8 @@ export default function AdminPanel({ onClose, user }) {
                                     className="px-1.5 py-0.5 bg-black/50 text-gray-500 border border-[#333] rounded text-[10px] hover:text-white shrink-0"
                                   >✕</button>
                                 </div>
+                              ) : isMatched ? (
+                                <span className="self-start text-[10px] text-gray-600">🔒 {matchedCompany.name} 기업에서 상속</span>
                               ) : (
                                 <button
                                   onClick={() => { setCityPickerUid(u.id); setCityPickerSido(''); setCityPickerSigungu(''); }}
@@ -1202,16 +1212,20 @@ export default function AdminPanel({ onClose, user }) {
 
                           {/* 등급변경 */}
                           <td className="px-4 py-3 text-center">
-                            <select
-                              value={currentTier}
-                              onChange={e => setTierTarget({ user: u, newTier: e.target.value })}
-                              disabled={processing}
-                              className="bg-black/60 border border-[#333] text-gray-300 text-[11px] font-bold px-2 py-1 rounded-lg outline-none cursor-pointer focus:border-[#3b82f6] hover:border-[#555] transition-colors"
-                            >
-                              {Object.entries(TIERS).map(([key, t]) => (
-                                <option key={key} value={key}>{t.emoji} {t.label}</option>
-                              ))}
-                            </select>
+                            {isMatched ? (
+                              <span className="text-[10px] text-gray-500" title={`${matchedCompany.name} 기업에서 상속 — 변경하려면 기업 관리에서`}>🔒 기업 상속</span>
+                            ) : (
+                              <select
+                                value={currentTier}
+                                onChange={e => setTierTarget({ user: u, newTier: e.target.value })}
+                                disabled={processing}
+                                className="bg-black/60 border border-[#333] text-gray-300 text-[11px] font-bold px-2 py-1 rounded-lg outline-none cursor-pointer focus:border-[#3b82f6] hover:border-[#555] transition-colors"
+                              >
+                                {Object.entries(TIERS).map(([key, t]) => (
+                                  <option key={key} value={key}>{t.emoji} {t.label}</option>
+                                ))}
+                              </select>
+                            )}
                           </td>
 
                           {/* 권한 */}
