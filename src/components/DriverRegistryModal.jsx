@@ -5,6 +5,7 @@ import { db, auth } from '../config/firebase.js';
 import { getDocs, getDoc, setDoc, addDoc, updateDoc, collection, doc, serverTimestamp, writeBatch } from 'firebase/firestore';
 import * as XLSX from 'xlsx';
 import { formatPhoneInput } from '../utils/parsers.js';
+import { getDriversCollection, getDriverDoc } from '../utils/company.js';
 
 const DRIVER_COLORS = [
   '#3b82f6','#10b981','#f59e0b','#ef4444',
@@ -84,20 +85,18 @@ export default function DriverRegistryModal({ user, onClose }) {
     }).catch(() => {});
   }, [isAdmin]);
 
-  // 개인 모드 저장 경로: companyCode 있으면 user_companies/{code}/drivers, 없으면 uid 기반 fallback
-  const personalColKey = user?.companyCode || uid;
-  const personalColBase = user?.companyCode ? 'user_companies' : 'user_drivers';
-
-  // ── 컬렉션 경로 헬퍼
+  // ── 컬렉션 경로 헬퍼 (utils/company.js 단일 헬퍼로 통합)
+  //   개인 모드: 기업(companyCode) 있으면 user_companies/{code}/drivers, 없으면 user_drivers/{uid}
+  //   소속사 모드: org_drivers/{selectedOrg}/drivers — 기존 동작 100% 보존
   const getDriversCol = useCallback(() => {
-    if (isPersonalMode) return collection(db, personalColBase, personalColKey, 'drivers');
-    return collection(db, 'org_drivers', selectedOrg, 'drivers');
-  }, [isPersonalMode, personalColBase, personalColKey, selectedOrg]);
+    if (isPersonalMode) return getDriversCollection({ companyCode: user?.companyCode, uid });
+    return getDriversCollection({ orgId: selectedOrg });
+  }, [isPersonalMode, user?.companyCode, uid, selectedOrg]);
 
   const getDriverDocRef = useCallback((driverId) => {
-    if (isPersonalMode) return doc(db, personalColBase, personalColKey, 'drivers', driverId);
-    return doc(db, 'org_drivers', selectedOrg, 'drivers', driverId);
-  }, [isPersonalMode, personalColBase, personalColKey, selectedOrg]);
+    if (isPersonalMode) return getDriverDoc({ companyCode: user?.companyCode, uid }, driverId);
+    return getDriverDoc({ orgId: selectedOrg }, driverId);
+  }, [isPersonalMode, user?.companyCode, uid, selectedOrg]);
 
   // ── 기사 목록 로드 (개인 모드: companyCode 신경로 우선, 구경로 자동 이전)
   const loadDrivers = useCallback(async () => {

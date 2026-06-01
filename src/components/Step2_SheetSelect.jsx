@@ -13,24 +13,27 @@ export default function Step2_SheetSelect({ step, setStep, fileInfo, setFileInfo
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
   });
 
-  // fileInfo.city가 바뀌면 드롭다운 초기값 세팅 시도
+  // fileInfo.city가 감지되면 시/도·시/군/구 드롭다운 초기값 세팅
+  // 검증 기준은 드롭다운과 동일한 getSigunguOptions — "천안시"처럼 구로 분리된 시의
+  // 단독명(부모명)도 인식해야 자동 감지값이 드롭다운에 정상 반영된다.
   useEffect(() => {
     if (!fileInfo?.city) return;
-    const city = fileInfo.city;
-    // "시/도 시/군/구" 형식이면 분리
+    const city = fileInfo.city.trim();
     for (const sido of Object.keys(REGIONS)) {
+      const options = getSigunguOptions(sido);
+      // "시/도 시/군/구" 형식이면 분리
       if (city.startsWith(sido + ' ')) {
-        const sigungu = city.slice(sido.length + 1);
-        if (REGIONS[sido]?.includes(sigungu)) {
+        const sigungu = city.slice(sido.length + 1).trim();
+        if (options.includes(sigungu)) {
           setSelectedSido(sido);
           setSelectedSigungu(sigungu);
           return;
         }
       }
-      // 시/군/구만 있는 경우
-      if (REGIONS[sido]?.includes(city)) {
-        setSelectedSigungu(city);
+      // 시/도 생략, 시/군/구만 있는 경우
+      if (options.includes(city)) {
         setSelectedSido(sido);
+        setSelectedSigungu(city);
         return;
       }
     }

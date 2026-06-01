@@ -335,32 +335,30 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
   }, [selectedCity, user?.orgId, isAdmin]);
 
   // ── Derived display records — 행정동>주소>이름 정렬 + 구분·행정동 콤보 필터
+  //   ★ Phase 5(무리프레시 편집): dirtyRecords(편집 버퍼)를 의존성에서 제외.
+  //   정렬·필터·검색을 "확정된 레코드 값" 기준으로 고정해 편집 중 행이 점프/소멸하지
+  //   않게 한다(끊김 제거). 편집값은 renderCell이 셀에만 즉시 반영하고, [변경사항 저장]
+  //   으로 records가 갱신되는 순간 자연스럽게 재정렬된다.
   const displayRecords = useMemo(() => {
     const q = searchText.trim().toLowerCase();
     return records
       .filter(r => {
         if (deletedRecordIds.has(r.id)) return false;
         if (orgDongs && !orgDongs.has((r.행정동 || '').trim())) return false;
-        const dirty = dirtyRecords[r.id] || {};
-        const gubun = dirty.구분 ?? r.구분 ?? '';
-        const dong = dirty.행정동 ?? r.행정동 ?? '';
-        if (filterGubun && gubun !== filterGubun) return false;
-        if (filterDong && dong !== filterDong) return false;
+        if (filterGubun && (r.구분 ?? '') !== filterGubun) return false;
+        if (filterDong && (r.행정동 ?? '') !== filterDong) return false;
         if (!q) return true;
-        return [
-          dirty.이름 ?? r.이름, dirty.행정동 ?? r.행정동,
-          dirty.주소 ?? r.주소, dirty.휴대폰 ?? r.휴대폰, dirty.특이사항 ?? r.특이사항,
-        ].some(v => String(v || '').toLowerCase().includes(q));
+        return [r.이름, r.행정동, r.주소, r.휴대폰, r.특이사항]
+          .some(v => String(v || '').toLowerCase().includes(q));
       })
       .sort((a, b) => {
-        const da = dirtyRecords[a.id] || {}, db_ = dirtyRecords[b.id] || {};
-        let cmp = (da.행정동 ?? a.행정동 ?? '').localeCompare(db_.행정동 ?? b.행정동 ?? '', 'ko', { numeric: true });
+        let cmp = (a.행정동 ?? '').localeCompare(b.행정동 ?? '', 'ko', { numeric: true });
         if (cmp !== 0) return cmp;
-        cmp = (da.주소 ?? a.주소 ?? '').localeCompare(db_.주소 ?? b.주소 ?? '', 'ko', { numeric: true });
+        cmp = (a.주소 ?? '').localeCompare(b.주소 ?? '', 'ko', { numeric: true });
         if (cmp !== 0) return cmp;
-        return (da.이름 ?? a.이름 ?? '').localeCompare(db_.이름 ?? b.이름 ?? '', 'ko', { numeric: true });
+        return (a.이름 ?? '').localeCompare(b.이름 ?? '', 'ko', { numeric: true });
       });
-  }, [records, deletedRecordIds, searchText, orgDongs, dirtyRecords, filterGubun, filterDong]);
+  }, [records, deletedRecordIds, searchText, orgDongs, filterGubun, filterDong]);
 
   // 시도별 그룹
   const citiesBySido = useMemo(() => {

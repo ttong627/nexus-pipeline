@@ -4,6 +4,7 @@ import { getDocs, getDoc, updateDoc, setDoc, deleteDoc, doc, collection, db, ser
 const ttl90 = () => Timestamp.fromMillis(Date.now() + 90 * 24 * 60 * 60 * 1000);
 import { X, Users, BarChart2, Clock, ShieldOff, ShieldCheck, AlertTriangle, Crown, MessageSquare, CheckCircle2, MapPin, XCircle, Building2, ShieldAlert, Plus, ChevronDown, TrendingUp, AlertCircle, UserX, Activity, Zap, Trash2, Truck, Edit2, RefreshCw, UserCheck, ChevronRight } from 'lucide-react';
 import { REGIONS, getSigunguOptions } from '../utils/regions.js';
+import { getDriversCollection, getDriverScopeLabel } from '../utils/company.js';
 
 const getProcessedRows = (u) => Number(u?.totalRowsProcessed || u?.processedRows || u?.totalProcessedRows || 0);
 const getProcessedFiles = (u) => Number(u?.totalFilesProcessed || u?.processedFiles || u?.totalProcessedFiles || 0);
@@ -220,6 +221,7 @@ export default function AdminPanel({ onClose, user }) {
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [migrationStatus, setMigrationStatus] = useState(null); // null | 'running' | { done, total, updated }
+  const [companyMigStatus, setCompanyMigStatus] = useState(null); // 소속사→기업 통합 마이그레이션
   const [banTarget, setBanTarget] = useState(null);
   const [banReason, setBanReason] = useState('');
   const [deleteTarget, setDeleteTarget] = useState(null);
@@ -327,6 +329,66 @@ export default function AdminPanel({ onClose, user }) {
     }
   };
 
+  // ── Phase 0: 소속사·기업 단일 모델 통합 (추가 전용·멱등·재실행 안전) ────────
+  //   · 기존 user_companies: welshareMember 미설정 → false 백필
+  //   · 소속사(nexus_config/orgs) → welshareMember=true 기업 문서로 생성
+  //   ※ 사용자·기사·기존 컬렉션은 일절 변경 안 함(orgId 폴백 유지 → 무중단)
+  const runCompanyUnifyMigration = async () => {
+    if (companyMigStatus === 'running') return;
+    if (!window.confirm(
+      '소속사·기업을 단일 기업 모델로 통합합니다.\n\n'
+      + '· 기존 기업(user_companies)에 welshareMember=false 백필\n'
+      + '· 각 소속사를 welshareMember=true 기업 문서로 생성\n\n'
+      + '기존 데이터·사용자·기사는 그대로 보존됩니다(추가 전용, 재실행 안전).\n\n계속하시겠습니까?'
+    )) return;
+    setCompanyMigStatus('running');
+    let backfilled = 0, orgCreated = 0, orgSkipped = 0;
+    try {
+      // 1) 기존 기업 welshareMember 백필
+      const compSnap = await getDocs(collection(db, 'user_companies'));
+      const existing = compSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+      const migratedOrgNames = new Set(
+        existing.filter(c => c.welshareMember === true && c.legacyOrgName).map(c => c.legacyOrgName)
+      );
+      const backfillTargets = existing.filter(c => c.welshareMember === undefined);
+      for (let i = 0; i < backfillTargets.length; i += 499) {
+        const batch = writeBatch(db);
+        backfillTargets.slice(i, i + 499).forEach(c => {
+          batch.set(doc(db, 'user_companies', c.id), { welshareMember: false }, { merge: true });
+        });
+        await batch.commit();
+        backfilled += backfillTargets.slice(i, i + 499).length;
+      }
+
+      // 2) 소속사 → welshareMember=true 기업 문서 생성 (legacyOrgName으로 멱등)
+      const orgsDoc = await getDoc(doc(db, 'nexus_config', 'orgs'));
+      const orgList = orgsDoc.exists() ? (orgsDoc.data().list || []) : [];
+      const orgCitiesMap = orgsDoc.exists() ? (orgsDoc.data().cities || {}) : {};
+      for (const orgName of orgList) {
+        if (migratedOrgNames.has(orgName)) { orgSkipped++; continue; }
+        const ts = Date.now().toString(36).toUpperCase().slice(-5);
+        const rand = Math.random().toString(36).substr(2, 4).toUpperCase();
+        const code = `NX-ORG-${ts}${rand}`;
+        const cities = orgCitiesMap[orgName] || [];
+        await setDoc(doc(db, 'user_companies', code), {
+          code, name: orgName,
+          welshareMember: true,
+          legacyOrgName: orgName,
+          cities, citiesApproved: cities,
+          createdAt: serverTimestamp(),
+          createdBy: user?.email || 'admin',
+          migratedFrom: 'nexus_config/orgs',
+        }, { merge: true });
+        orgCreated++;
+      }
+      setCompanyMigStatus({ backfilled, orgCreated, orgSkipped, finished: true });
+      await loadAllCompanies();
+    } catch (e) {
+      console.error('[CompanyUnifyMigration]', e);
+      setCompanyMigStatus({ error: e.message || '오류 발생' });
+    }
+  };
+
   const handleTierUpgradeInquiry = async () => {
     if (!tierUpgradeTarget) return;
     const { inq, matchedUser, newTier } = tierUpgradeTarget;
@@ -420,9 +482,9 @@ export default function AdminPanel({ onClose, user }) {
     const code = `NX-${ts}${rand}`;
     try {
       await setDoc(doc(db, 'user_companies', code), {
-        code, name, cities: [], createdAt: serverTimestamp(), createdBy: user?.email || 'admin',
+        code, name, welshareMember: false, cities: [], createdAt: serverTimestamp(), createdBy: user?.email || 'admin',
       });
-      setUserCompanies(prev => [...prev, { id: code, code, name, cities: [] }]
+      setUserCompanies(prev => [...prev, { id: code, code, name, welshareMember: false, cities: [] }]
         .sort((a, b) => (a.name || '').localeCompare(b.name || '')));
       setNewCompanyName('');
     } catch (e) { alert('회사 추가 실패: ' + e.message); }
@@ -648,18 +710,11 @@ export default function AdminPanel({ onClose, user }) {
   };
 
   // ── 사용자 기사 관리 ──────────────────────────────────────────────────────
-  const getTargetDriversCol = (u) => {
-    if (!u) return null;
-    if (u.orgId) return collection(db, 'org_drivers', u.orgId, 'drivers');
-    if (u.companyCode) return collection(db, 'user_companies', u.companyCode, 'drivers');
-    return collection(db, 'user_drivers', u.id, 'drivers');
-  };
-  const getTargetDriverPath = (u) => {
-    if (!u) return '';
-    if (u.orgId) return `소속사: ${u.orgId}`;
-    if (u.companyCode) return `회사: ${u.companyCode}`;
-    return '개인';
-  };
+  // 기사 경로 해석은 utils/company.js 단일 헬퍼로 통합 (소속사>기업>개인 우선순위 보존)
+  const getTargetDriversCol = (u) =>
+    u ? getDriversCollection({ orgId: u.orgId, companyCode: u.companyCode, uid: u.id }) : null;
+  const getTargetDriverPath = (u) =>
+    u ? getDriverScopeLabel({ orgId: u.orgId, companyCode: u.companyCode }) : '';
 
   const openDriverManage = async (u) => {
     setDriverManageTarget(u);
@@ -1366,6 +1421,31 @@ export default function AdminPanel({ onClose, user }) {
                   className="px-4 py-2 bg-orange-900/60 border border-orange-600/50 text-orange-300 font-black rounded-xl hover:bg-orange-800/60 transition-colors disabled:opacity-40 flex items-center gap-2 text-sm"
                 >
                   <RefreshCw size={14} className={migrationStatus === 'running' ? 'animate-spin' : ''}/> 마이그레이션 실행
+                </button>
+              </div>
+
+              {/* 소속사·기업 단일 모델 통합 (Phase 0 — 추가 전용·재실행 안전) */}
+              <div className="bg-sky-950/20 border border-sky-700/30 rounded-xl p-4 mt-3">
+                <p className="text-sky-200/80 text-sm mb-1 font-bold">소속사 · 기업 단일 모델 통합</p>
+                <p className="text-gray-500 text-xs mb-4">기존 기업에 welshareMember 백필 + 소속사를 기업 문서로 생성합니다. 사용자·기사·기존 데이터는 보존되며 재실행해도 안전합니다.</p>
+                {companyMigStatus === 'running' && (
+                  <div className="flex items-center gap-2 text-sky-400 text-sm mb-3">
+                    <RefreshCw size={14} className="animate-spin"/> 통합 진행 중...
+                  </div>
+                )}
+                {companyMigStatus && companyMigStatus !== 'running' && typeof companyMigStatus === 'object' && (
+                  <div className={`text-sm mb-3 font-bold ${companyMigStatus.error ? 'text-red-400' : 'text-emerald-400'}`}>
+                    {companyMigStatus.error
+                      ? `오류: ${companyMigStatus.error}`
+                      : `완료 — 백필 ${companyMigStatus.backfilled}건 / 소속사 기업화 ${companyMigStatus.orgCreated}건 (스킵 ${companyMigStatus.orgSkipped})`}
+                  </div>
+                )}
+                <button
+                  onClick={runCompanyUnifyMigration}
+                  disabled={companyMigStatus === 'running'}
+                  className="px-4 py-2 bg-sky-900/60 border border-sky-600/50 text-sky-300 font-black rounded-xl hover:bg-sky-800/60 transition-colors disabled:opacity-40 flex items-center gap-2 text-sm"
+                >
+                  <RefreshCw size={14} className={companyMigStatus === 'running' ? 'animate-spin' : ''}/> 소속사·기업 통합 실행
                 </button>
               </div>
             </div>
