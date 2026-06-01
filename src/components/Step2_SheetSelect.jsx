@@ -2,7 +2,7 @@
 import { FileSpreadsheet, ChevronLeft, ArrowRight, AlertTriangle, FilePlus } from 'lucide-react';
 import { REGIONS, getSigunguOptions } from '../utils/regions.js';
 
-export default function Step2_SheetSelect({ step, setStep, fileInfo, setFileInfo, worksheets, setWorksheets, setSelectedSheets, onHelp, handleSecondFileUpload }) {
+export default function Step2_SheetSelect({ step, setStep, fileInfo, setFileInfo, worksheets, setWorksheets, setSelectedSheets, onHelp, handleSecondFileUpload, userCities = [], isAdmin = false }) {
   // 지자체 선택 상태
   const [selectedSido, setSelectedSido] = useState('');
   const [selectedSigungu, setSelectedSigungu] = useState('');
@@ -83,6 +83,17 @@ export default function Step2_SheetSelect({ step, setStep, fileInfo, setFileInfo
     }
     if (!selectedMonth) {
       alert('해당 월을 반드시 선택해주세요.');
+      return;
+    }
+    // 지자체 정합성 하드 검증: 권한 지자체 목록이 있으면 정확히 일치해야 진행.
+    // 표현 흔들림("천안시" vs "충청남도 천안시")·권한 외 지자체 오저장 방지.
+    // 관리자/권한목록 없음은 표준값(시/도 시/군/구) 강제만 적용(드롭다운이 보장).
+    if (!isAdmin && userCities.length > 0 && !userCities.includes(city)) {
+      alert(
+        `권한 지자체가 아닙니다: "${city}"\n\n`
+        + `허용된 지자체:\n${userCities.join('\n')}\n\n`
+        + `위 목록에서 정확히 선택해주세요. (다르면 명단·매핑이 엉뚱한 지자체로 저장됩니다)`
+      );
       return;
     }
     setSelectedSheets(worksheets.filter(s => s.selected));
