@@ -874,6 +874,7 @@ export default function App() {
                 })()
               : sheet.type,
             행정동: getVal(row, 'admin') || "",
+            리: processedRow.리 || "",
             이름: processedRow.정제된이름 || name,
             생년월일: birthKey,
             품명: getVal(row, 'itemName') || "",
@@ -1402,6 +1403,7 @@ export default function App() {
               이름: r.이름 || '',
               생년월일: r.생년월일 || '',
               행정동: r.행정동 || '',
+              리: r.리 || '',
               주소: r.주소 || '',
               휴대폰: r.휴대폰 || '',
               유선전화: r.유선전화 || '',

@@ -1074,6 +1074,12 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
   result.buildingSubNo = apiResult?.buildingSubNo ?? apiResult?.buldSlno ?? '';
   result.buildingName = apiResult?.buildingName || apiResult?.bdNm || '';
   result.legalDong = apiResult?.legalDong || apiResult?.emdNm || '';
+  // 리(里): 읍/면 법정리 — 기사 배정 리 단위 매칭용. API liNm 우선, 없으면 지번주소(도로명 없음)에서 "OO리" 추출.
+  result.리 = (apiResult?.liNm || apiResult?.legalRi || '').trim();
+  if (!result.리 && !/(대로|로|길)\s*\d/.test(inputAddr || '')) {
+    const liMatch = (inputAddr || '').match(/([가-힣]{2,4}리)\s*\d/);
+    if (liMatch) result.리 = liMatch[1];
+  }
   result.matchedSido = apiResult?.matchedSido || apiResult?.siNm || '';
   result.matchedSigungu = apiResult?.matchedSigungu || apiResult?.sggNm || '';
   result.detailAddress = finalDetail || '';
