@@ -222,6 +222,7 @@ export default function AdminPanel({ onClose, user }) {
   const [loading, setLoading] = useState(true);
   const [migrationStatus, setMigrationStatus] = useState(null); // null | 'running' | { done, total, updated }
   const [companyMigStatus, setCompanyMigStatus] = useState(null); // 소속사→기업 통합 마이그레이션
+  const [promoteMigStatus, setPromoteMigStatus] = useState(null); // 개인 자동기업→정식 기업 승격
   const [banTarget, setBanTarget] = useState(null);
   const [banReason, setBanReason] = useState('');
   const [deleteTarget, setDeleteTarget] = useState(null);
@@ -386,6 +387,45 @@ export default function AdminPanel({ onClose, user }) {
     } catch (e) {
       console.error('[CompanyUnifyMigration]', e);
       setCompanyMigStatus({ error: e.message || '오류 발생' });
+    }
+  };
+
+  // ── 개인 자동생성 기업 → 정식 기업 무손실 승격 (추가 전용·멱등) ──────────────
+  //   현재 등급·지역·담당자 그대로 보존하면서 createdBy 부여 → 기업 목록에 노출.
+  const runPromotePersonalCompanies = async () => {
+    if (promoteMigStatus === 'running') return;
+    if (!window.confirm(
+      '개인에게 자동 생성됐던 기업을 정식 기업으로 승격합니다.\n\n'
+      + '· 현재 등급·지역·담당자 그대로 보존 (접근 안 끊김)\n'
+      + '· 승격 후 기업 목록에 표시되어 병합·정리 가능\n\n'
+      + '추가 전용·재실행 안전입니다. 계속하시겠습니까?'
+    )) return;
+    setPromoteMigStatus('running');
+    let promoted = 0;
+    try {
+      const userSnap = await getDocs(collection(db, 'users'));
+      const allUsers = userSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+      const compSnap = await getDocs(collection(db, 'user_companies'));
+      const personals = compSnap.docs
+        .map(d => ({ id: d.id, ...d.data() }))
+        .filter(c => !c.createdBy && !c.migratedFrom); // 개인 자동생성 기업만
+      for (const c of personals) {
+        const owner = allUsers.find(u => u.id === c.ownerUid) || allUsers.find(u => u.companyCode === c.id);
+        const tier = c.tier || owner?.tier || 'basic';
+        await setDoc(doc(db, 'user_companies', c.id), {
+          createdBy: 'promote-migration',
+          name: c.name || owner?.realName || owner?.email || `기업-${c.id}`,
+          tier,
+          welshareMember: c.welshareMember === true,
+          cities: (c.cities && c.cities.length) ? c.cities : (owner?.citiesApproved || []),
+        }, { merge: true });
+        promoted++;
+      }
+      setPromoteMigStatus({ promoted, finished: true });
+      await loadAllCompanies();
+    } catch (e) {
+      console.error('[PromotePersonal]', e);
+      setPromoteMigStatus({ error: e.message || '오류 발생' });
     }
   };
 
@@ -1472,6 +1512,29 @@ export default function AdminPanel({ onClose, user }) {
                   className="px-4 py-2 bg-sky-900/60 border border-sky-600/50 text-sky-300 font-black rounded-xl hover:bg-sky-800/60 transition-colors disabled:opacity-40 flex items-center gap-2 text-sm"
                 >
                   <RefreshCw size={14} className={companyMigStatus === 'running' ? 'animate-spin' : ''}/> 소속사·기업 통합 실행
+                </button>
+              </div>
+
+              {/* 개인 권한 → 정식 기업 무손실 승격 */}
+              <div className="bg-emerald-950/20 border border-emerald-700/30 rounded-xl p-4 mt-3">
+                <p className="text-emerald-200/80 text-sm mb-1 font-bold">개인 권한 → 정식 기업 승격 (무손실)</p>
+                <p className="text-gray-500 text-xs mb-4">개인에게 자동 생성됐던 기업을 정식 기업으로 올려 목록에 표시합니다. 현재 등급·지역·담당자 그대로 보존되며 재실행해도 안전합니다.</p>
+                {promoteMigStatus === 'running' && (
+                  <div className="flex items-center gap-2 text-emerald-400 text-sm mb-3">
+                    <RefreshCw size={14} className="animate-spin"/> 승격 진행 중...
+                  </div>
+                )}
+                {promoteMigStatus && promoteMigStatus !== 'running' && typeof promoteMigStatus === 'object' && (
+                  <div className={`text-sm mb-3 font-bold ${promoteMigStatus.error ? 'text-red-400' : 'text-emerald-400'}`}>
+                    {promoteMigStatus.error ? `오류: ${promoteMigStatus.error}` : `완료 — 정식 기업으로 승격 ${promoteMigStatus.promoted}건`}
+                  </div>
+                )}
+                <button
+                  onClick={runPromotePersonalCompanies}
+                  disabled={promoteMigStatus === 'running'}
+                  className="px-4 py-2 bg-emerald-900/60 border border-emerald-600/50 text-emerald-300 font-black rounded-xl hover:bg-emerald-800/60 transition-colors disabled:opacity-40 flex items-center gap-2 text-sm"
+                >
+                  <RefreshCw size={14} className={promoteMigStatus === 'running' ? 'animate-spin' : ''}/> 개인 기업 승격 실행
                 </button>
               </div>
             </div>
