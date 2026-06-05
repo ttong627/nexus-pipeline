@@ -40,8 +40,13 @@ export const formatPhoneInput = (raw) => {
   return `${digits.slice(0,3)}-${digits.slice(3,7)}-${digits.slice(7)}`;
 };
 
+// 엑셀이 앞자리 0을 숫자로 떼어낸 휴대폰 복원: 10자리 + 휴대폰접두어(10/11/16~19) → 앞에 0 붙여 11자리.
+// 예: 1080986080 → 01080986080(010-8098-6080). 유선(02/0XX)은 0으로 시작하므로 영향 없음.
+export const restoreMobileLeadingZero = (d) =>
+  (d.length === 10 && /^1[016789]/.test(d)) ? `0${d}` : d;
+
 export const formatPhone = (s) => {
-  const d = String(s || '').replace(/[^\d]/g, '');
+  const d = restoreMobileLeadingZero(String(s || '').replace(/[^\d]/g, ''));
   if (d.length === 11) return `${d.slice(0,3)}-${d.slice(3,7)}-${d.slice(7)}`;
   if (d.length === 10) {
     if (d.startsWith('02')) return `${d.slice(0,2)}-${d.slice(2,6)}-${d.slice(6)}`;
@@ -52,8 +57,9 @@ export const formatPhone = (s) => {
 };
 
 export const parsePhoneNumbers = (p1, p2) => {
-  let str1 = String(p1 || '').replace(/[^\d]/g, '');
-  let str2 = String(p2 || '').replace(/[^\d]/g, '');
+  // 엑셀이 0을 떼어낸 휴대폰(1080986080)도 휴대폰으로 인식되도록 앞자리 0 복원 후 판별.
+  let str1 = restoreMobileLeadingZero(String(p1 || '').replace(/[^\d]/g, ''));
+  let str2 = restoreMobileLeadingZero(String(p2 || '').replace(/[^\d]/g, ''));
   let mobile = ''; let landline = '';
 
   const isMobile = (s) => /^(010|011|016|017|018|019)/.test(s);
