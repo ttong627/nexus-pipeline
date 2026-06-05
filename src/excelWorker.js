@@ -1,5 +1,6 @@
 import * as XLSX from 'xlsx';
 import * as cptable from 'xlsx/dist/cpexcel.full.mjs';
+import { HOUSEHOLD_EXCL, HOUSEHOLD_RE } from './columnRules.js';
 XLSX.set_cptable(cptable); // .xls BIFF8 CP949(한글) 인코딩 지원
 
 const KOREA_REGION_MAP = {
@@ -24,11 +25,7 @@ const normalizeBirth = (raw) => {
   return raw;
 };
 
-// 포수(수량)로 절대 매칭하면 안 되는 '가구원수/인원' 계열 헤더. CLAUDE.md §5.
-// '가구'·'세대'가 들어간 칼럼은 무조건 인원(가구원수) 계열 → 포수 매칭 절대 금지(부분일치 전면 차단).
-// 따라서 '가구'·'세대'만 남기면 가구원·가구수·가구당·세대원·세대수·세대당 등을 모두 포함한다.
-const HOUSEHOLD_EXCL = ['가구', '세대', '인원', '구성원', '동거인', '식구', '명수'];
-const HOUSEHOLD_RE = new RegExp(HOUSEHOLD_EXCL.join('|'));
+// 포수(수량) 제외 규칙(HOUSEHOLD_EXCL/RE)은 src/columnRules.js 공용 모듈에서 import. CLAUDE.md §5.
 
 // 파일명·요약·주소 텍스트에서 매칭되는 모든 시·군·구 후보(전체 정식명)를 반환.
 // 첫 후보 = detectedCity, 전체 후보 = App에서 userCities(허가지역) 대조용(§5-2).

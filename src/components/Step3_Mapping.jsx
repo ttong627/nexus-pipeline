@@ -1,7 +1,10 @@
 ﻿import { useState, useRef, useEffect } from 'react';
 import { Columns, ChevronLeft, Database, CheckCircle, Loader2, X } from 'lucide-react';
+import { isHouseholdHeader } from '../columnRules.js';
 
-const REQUIRED_KEYS = ['name', 'contact1', 'address', 'qty', 'admin'];
+// 수량(포수)은 진행을 막지 않는다 — 수급자 명단은 포수 칼럼이 없으면 전원 1포 처리(CLAUDE.md C-4).
+// 가구원수 같은 인원 칼럼을 억지로 포수로 잡지 않도록 '수량 미설정'을 허용한다.
+const REQUIRED_KEYS = ['name', 'contact1', 'address', 'admin'];
 const FIELD_META = {
   name:     { label: '성명',       short: '[성명]',   color: 'text-blue-300',   bg: 'bg-blue-950/40',   border: 'border-blue-700/50' },
   contact1: { label: '연락처',     short: '[연락처]', color: 'text-blue-300',  bg: 'bg-blue-950/40',  border: 'border-blue-700/50' },
@@ -69,16 +72,22 @@ function SheetMappingPanel({ sheet, mapDef, setMapDef, worksheets, importNote, s
             { key: 'name',     label: '성명 (이름)' },
             { key: 'contact1', label: '연락처 (휴대폰)' },
             { key: 'address',  label: '주소' },
-            { key: 'qty',      label: '수량 (포수)' },
+            { key: 'qty',      label: '수량 (포수)', optional: true },
             { key: 'admin',    label: '행정구역 (읍면동)' },
-          ].map(({ key, label }) => {
+          ].map(({ key, label, optional }) => {
             const meta = FIELD_META[key];
             const isMapped = !!mapDef[key];
+            // 수량(포수)은 선택 항목 — 미설정이어도 진행 가능(전원 1포). 빨강 대신 앰버로 안내.
+            const softMissing = optional && !isMapped;
+            const containerCls = isMapped ? `${meta.bg} ${meta.border}` : softMissing ? 'bg-amber-950/20 border-amber-700/40' : 'bg-red-950/20 border-red-800/40';
+            const labelCls = isMapped ? meta.color : softMissing ? 'text-amber-400' : 'text-red-400';
+            const badgeCls = isMapped ? 'bg-blue-900/50 text-blue-400' : softMissing ? 'bg-amber-900/50 text-amber-300' : 'bg-red-900/50 text-red-400';
+            const badgeTxt = isMapped ? '✓ 연결됨' : softMissing ? '선택 · 없으면 1포' : '✕ 누락';
             return (
-              <div key={key} className={`mb-3 p-3 rounded-xl border transition-all ${isMapped ? `${meta.bg} ${meta.border}` : 'bg-red-950/20 border-red-800/40'}`}>
+              <div key={key} className={`mb-3 p-3 rounded-xl border transition-all ${containerCls}`}>
                 <div className="flex items-center justify-between mb-2">
-                  <label className={`text-xs font-black ${isMapped ? meta.color : 'text-red-400'}`}>{label}</label>
-                  <span className={`text-[10px] font-black px-1.5 py-0.5 rounded ${isMapped ? 'bg-blue-900/50 text-blue-400' : 'bg-red-900/50 text-red-400'}`}>{isMapped ? '✓ 연결됨' : '✕ 누락'}</span>
+                  <label className={`text-xs font-black ${labelCls}`}>{label}</label>
+                  <span className={`text-[10px] font-black px-1.5 py-0.5 rounded ${badgeCls}`}>{badgeTxt}</span>
                 </div>
                 <select value={mapDef[key]} onChange={e => updateMap(key, e.target.value)} className="w-full bg-black/60 border border-white/10 text-white font-bold p-2 rounded-lg outline-none text-xs cursor-pointer focus:border-emerald-500">
                   <option value="">-- 컬럼 선택 --</option>
@@ -185,6 +194,12 @@ export default function Step3_Mapping({ step, setStep, mapDefs, setMapDefs, sele
       const saved = localStorage.getItem(COL_MAP_KEY(city));
       if (!saved) return;
       const savedMap = JSON.parse(saved); // { fieldKey: headerName }
+      // 과거에 '가구원수' 같은 인원 칼럼이 포수(qty)로 잘못 저장돼 있으면 즉시 제거 + 저장본 청소.
+      // (저장값 우선 규칙 때문에 가구 칼럼이 매 업로드마다 포수로 재주입되던 문제 차단. CLAUDE.md §5)
+      if (savedMap.qty && isHouseholdHeader(savedMap.qty)) {
+        delete savedMap.qty;
+        try { localStorage.setItem(COL_MAP_KEY(city), JSON.stringify(savedMap)); } catch { /* ignore */ }
+      }
       setMapDefs(prev => {
         const next = { ...prev };
         for (const sheet of selectedSheets) {
@@ -196,7 +211,9 @@ export default function Step3_Mapping({ step, setStep, mapDefs, setMapDefs, sele
             // 저장된 헤더가 이 시트에 존재하면 자동 적용(저장값 우선).
             // 자동매핑이 다르게 잡아도 사용자가 저장해 둔 매핑이 이김 → 같은 지자체
             // 재업로드 시 재수정 불필요. (CLAUDE.md CM-1~CM-4)
+            // 단, 포수(qty)에 가구/세대 칼럼은 절대 적용 금지(이중 방어).
             if (headerName && headers.includes(headerName)) {
+              if (fieldKey === 'qty' && isHouseholdHeader(headerName)) continue;
               merged[fieldKey] = headerName;
             }
           }
@@ -217,7 +234,10 @@ export default function Step3_Mapping({ step, setStep, mapDefs, setMapDefs, sele
     const combined = {};
     for (const sheetMap of Object.values(mapDefs)) {
       for (const [fieldKey, headerName] of Object.entries(sheetMap)) {
-        if (headerName) combined[fieldKey] = headerName;
+        if (!headerName) continue;
+        // 포수(qty)에 가구/세대 칼럼은 저장하지 않는다 → 다음 업로드 때 재주입 방지. CLAUDE.md §5
+        if (fieldKey === 'qty' && isHouseholdHeader(headerName)) continue;
+        combined[fieldKey] = headerName;
       }
     }
     if (Object.keys(combined).length) {
