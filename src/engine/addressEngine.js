@@ -874,8 +874,10 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
     parens.forEach(p => {
       const inner = p.replace(/^\(|\)$/g, '').trim();
       if (!inner) return;
+      // 주소 괄호(법정동+건물명)는 특이사항으로 보내지 않는다 — 법정동 토큰(OO동/읍/면) 포함 시 주소괄호로 간주.
+      const isAddrParen = /[가-힣]{2,}\d*(읍|면|동)(?![가-힣])/.test(inner);
       const wordCount = inner.split(/\s+/).length;
-      if (wordCount >= 3 || (inner.length >= 10 && /\s/.test(inner))) {
+      if (!isAddrParen && (wordCount >= 3 || (inner.length >= 10 && /\s/.test(inner)))) {
         result.특이사항 += (result.특이사항 ? ' ' : '') + inner;
         return;
       }
@@ -908,7 +910,8 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
         detailAddr    = detailAddr.replace(`__P${i}__`, '');
         return;
       }
-      if (wordCount >= 3 || (inner.length >= 10 && /\s/.test(inner))) {
+      const isAddrParen = /[가-힣]{2,}\d*(읍|면|동)(?![가-힣])/.test(inner);
+      if (!isAddrParen && (wordCount >= 3 || (inner.length >= 10 && /\s/.test(inner)))) {
         result.특이사항 += (result.특이사항 ? ' ' : '') + inner;
       } else if (!dongPart && DONG_SUFFIX.test(inner)) {
         dongPart = inner.replace(/^([가-힣]+)\d+(동)$/, '$1$2');
