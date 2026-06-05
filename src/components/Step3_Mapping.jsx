@@ -98,17 +98,6 @@ function SheetMappingPanel({ sheet, mapDef, setMapDef, worksheets, importNote, s
             </div>
           )}
 
-          {/* 비고 자동포함 토글 */}
-          <div className="mt-5 mb-3 p-3 rounded-xl border border-white/10 bg-black/30">
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input type="checkbox" checked={importNote} onChange={e => setImportNote(e.target.checked)} className="accent-emerald-500 w-4 h-4 cursor-pointer" />
-              <span className={`text-xs font-black ${importNote ? 'text-emerald-500' : 'text-gray-500'}`}>비고 → 특이사항 자동 포함</span>
-            </label>
-            <p className={`text-[10px] mt-1 ml-6 ${importNote ? 'text-gray-500' : 'text-gray-700'}`}>
-              {importNote ? '비고 열 내용이 특이사항에 자동으로 포함됩니다.' : '비고 열을 가져오지 않습니다.'}
-            </p>
-          </div>
-
           <p className="text-[10px] text-gray-600 font-black tracking-widest mb-3">━━ 보조 항목 (데이터 있는 항목만 표시)</p>
           {[
             { key: 'type',     label: '수급구분 열 (혼합명단 필수)' },

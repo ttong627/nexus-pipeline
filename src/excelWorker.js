@@ -189,6 +189,21 @@ function parseSheet(name, rawJson, dynamicRules) {
     }
   }
 
+  // 보조연락처 보강: 전화 키워드 칼럼이 2개 이상이면 연락처와 다른 칼럼을 반드시 보조연락처로.
+  // (전화번호2가 비어 있거나 지역번호 형식이 아니어도 '두 번째 전화 칼럼 = 보조연락처' 규칙 보장)
+  if (colIndices['보조연락처'] === undefined && colIndices['연락처'] !== undefined) {
+    const phoneCols = headers.reduce((acc, h, i) => {
+      const hn = normalizeH(h);
+      if (['휴대', '연락', '전화', '유선', '핸드폰', '핸드', '모바일', '휴폰', '폰'].some(k => hn.includes(normalizeH(k)))) acc.push(i);
+      return acc;
+    }, []);
+    const second = phoneCols.find(i => i !== colIndices['연락처']);
+    if (second !== undefined) {
+      colIndices['보조연락처'] = second;
+      if (!mappedKeys.includes('보조연락처')) mappedKeys.push('보조연락처');
+    }
+  }
+
   // 생년월일 컬럼 자동 탐지 (activeReqKeys에 없어 자동 매핑 안 되던 문제 수정)
   if (colIndices['생년월일'] === undefined) {
     const birthKws = ['생년월일', '생년', '주민등록'];
