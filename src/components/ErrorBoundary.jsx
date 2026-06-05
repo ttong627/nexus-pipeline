@@ -9,10 +9,9 @@ const isChunkLoadError = (error) => {
 const clearAppCachesAndReload = async () => {
   const key = `nexus_boundary_chunk_recovery_${APP_VERSION}`;
   try {
-    if (sessionStorage.getItem(key)) {
-      window.location.reload();
-      return;
-    }
+    // 이미 1회 캐시정리+새로고침을 시도했으면 더는 자동 reload 안 함(무한 새로고침 루프/탭 닫힘 방지).
+    // 에러 화면(수동 복구 버튼)이 표시되도록 그대로 둔다.
+    if (sessionStorage.getItem(key)) return;
     sessionStorage.setItem(key, '1');
   } catch { /* ignore */ }
 
