@@ -37,6 +37,21 @@ export default function EasyCleanConfirm({ city, month, sheets = [], mapDefs = {
     return (s.bodyRows || []).map(r => String(r?.[idx] ?? '').trim()).filter(Boolean).slice(0, 3).join(', ');
   };
 
+  // 전화 칸 질문 라벨은 '실제 들어있는 번호 형식'으로 표시한다 — 010이면 '휴대폰', 지역번호면 '유선전화'.
+  // (매칭은 그대로 두고 질문 글씨만 데이터에 맞춘다.)
+  const phoneTypeLabel = (s, header, fallback) => {
+    if (!header) return fallback;
+    const idx = s.headers.indexOf(header);
+    if (idx < 0) return fallback;
+    const ds = (s.bodyRows || []).map(r => String(r?.[idx] ?? '').replace(/[^0-9]/g, '')).filter(d => d.length >= 9);
+    if (ds.length < 2) return fallback;
+    const mob = ds.filter(d => /^01[016789]/.test(d) && d.length >= 10 && d.length <= 11).length / ds.length;
+    const land = ds.filter(d => /^0[2-6]/.test(d) && d.length >= 9 && d.length <= 11).length / ds.length;
+    if (mob >= 0.5) return '휴대폰';
+    if (land >= 0.5) return '유선전화';
+    return fallback;
+  };
+
   const yellowBySheet = sheets.map(s => {
     const sk = sheetKeyOf(s);
     const amb = (s.ambiguousKeys || [])
@@ -103,9 +118,14 @@ export default function EasyCleanConfirm({ city, month, sheets = [], mapDefs = {
                   <AlertTriangle size={14} /> {s.name} — 확인 필요 {amb.length}개
                 </div>
                 <div className="space-y-3">
-                  {amb.map(({ label, key }) => (
+                  {amb.map(({ label, key }) => {
+                    // 전화 칸이면 그 칸에 실제로 든 번호 형식으로 질문 라벨 결정(010 → 휴대폰).
+                    const qLabel = (key === 'contact1' || key === 'contact2')
+                      ? phoneTypeLabel(s, draft[sk]?.[key], label)
+                      : label;
+                    return (
                     <div key={key} className="flex flex-col gap-1.5">
-                      <span className="text-gray-300 text-sm font-bold">{label} 칼럼이 맞나요?</span>
+                      <span className="text-gray-300 text-sm font-bold">{qLabel} 칼럼이 맞나요?</span>
                       <select
                         value={draft[sk]?.[key] || ''}
                         onChange={e => setMap(sk, key, e.target.value)}
@@ -120,7 +140,8 @@ export default function EasyCleanConfirm({ city, month, sheets = [], mapDefs = {
                         <span className="text-[11px] text-gray-500">예시: {sampleOf(s, draft[sk][key]) || '(값 없음)'}</span>
                       )}
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             ))}
