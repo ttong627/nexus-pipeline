@@ -1,9 +1,10 @@
-export const APP_VERSION = 'V5.5.148';
+export const APP_VERSION = 'V5.5.149';
 export const APP_BUILD = '2026.06.06';
-export const APP_BUILD_TIME = '2026.06.06 00:08';
+export const APP_BUILD_TIME = '2026.06.06 00:36';
 
 export const CHANGELOG = [
   { v: 'V5.5', date: '2026.05.26', items: [
+    "포수 매칭 강화 — '가구'·'세대' 들어간 칼럼은 무조건 포수 제외(부분일치 전면 차단), 허용 키워드에 10kg 추가",
     '지자체이탈 좌표 분리 표시 — 좌표없음(빨강)과 지자체이탈(앰버) 구분, 이탈 좌표는 지도에 항상 표시',
     '루트맵 행정동 작업 큐 — 동별 순차 작업 워크플로우 (‹ › 이동, 저장 완료 표시)',
     '미저장 변경 경고 — 동 이동 시 미저장 배정 있으면 [저장 후 이동/그냥 이동/취소] 확인',
