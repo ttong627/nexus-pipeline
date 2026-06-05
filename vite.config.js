@@ -40,8 +40,8 @@ export default defineConfig({
         display: 'standalone',
         start_url: '/',
         icons: [
-          { src: '/ttongpa.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
-          { src: '/ttongpa.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+          // 실제 파일 크기(572x574)를 그대로 선언 — 크기 불일치로 크롬이 아이콘을 무시하던 문제 수정
+          { src: '/ttongpa.png', sizes: '572x574', type: 'image/png', purpose: 'any' },
         ],
       },
     }),
