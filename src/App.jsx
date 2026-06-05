@@ -246,11 +246,14 @@ export default function App() {
     { key: '사유',    label: '사유',    on: true },
     { key: '품명',    label: '품명',    on: false },
   ];
+  // 기본 칼럼 순서 버전 — 올리면 저장된 옛 순서를 1회 새 DEFAULT로 강제 교체(이후 편집·폭은 유지)
+  const DEFAULT_COLS_VERSION = 2;
   const [exportColOrder, setExportColOrder] = useState(() => {
     try {
       const saved = localStorage.getItem('nexus_export_cols_v2');
-      // 저장된 순서·on·폭은 유지하되 label 등 메타는 DEFAULT 기준으로 최신화(옛 라벨 교정)
-      if (saved) return refreshSavedCols(JSON.parse(saved), DEFAULT_EXPORT_COLS);
+      const ver = localStorage.getItem('nexus_export_cols_ver');
+      // 버전 일치할 때만 저장값 유지(라벨만 최신화). 불일치=구버전 → 새 DEFAULT 강제 적용
+      if (saved && ver === String(DEFAULT_COLS_VERSION)) return refreshSavedCols(JSON.parse(saved), DEFAULT_EXPORT_COLS);
     } catch { /* ignore */ }
     return DEFAULT_EXPORT_COLS;
   });
@@ -262,17 +265,20 @@ export default function App() {
   const lastSyncedColsRef = useRef(null); // Firestore와 마지막 동기화한 칼럼설정 JSON (에코 루프 방지)
   const colSyncTimerRef = useRef(null);   // Firestore 쓰기 디바운스 타이머
 
-  // exportColOrder 변경 시: localStorage 즉시 저장 + (로그인 시) Firestore 디바운스 저장
+  // exportColOrder 변경 시: localStorage 즉시 저장(+버전) + (로그인 시) Firestore 디바운스 저장
   useEffect(() => {
-    try { localStorage.setItem('nexus_export_cols_v2', JSON.stringify(exportColOrder)); } catch { /* ignore */ }
+    try {
+      localStorage.setItem('nexus_export_cols_v2', JSON.stringify(exportColOrder));
+      localStorage.setItem('nexus_export_cols_ver', String(DEFAULT_COLS_VERSION));
+    } catch { /* ignore */ }
     if (!user?.uid) return;
     const json = JSON.stringify(exportColOrder);
     if (json === lastSyncedColsRef.current) return; // 원격에서 받은 값이면 되쓰기 안 함
     clearTimeout(colSyncTimerRef.current);
     colSyncTimerRef.current = setTimeout(() => {
       lastSyncedColsRef.current = json;
-      updateDoc(doc(db, 'users', user.uid), { exportColOrder }).catch(() => {
-        setDoc(doc(db, 'users', user.uid), { exportColOrder }, { merge: true }).catch(() => { /* ignore */ });
+      updateDoc(doc(db, 'users', user.uid), { exportColOrder, exportColsVer: DEFAULT_COLS_VERSION }).catch(() => {
+        setDoc(doc(db, 'users', user.uid), { exportColOrder, exportColsVer: DEFAULT_COLS_VERSION }, { merge: true }).catch(() => { /* ignore */ });
       });
     }, 1500);
     return () => clearTimeout(colSyncTimerRef.current);
@@ -282,12 +288,13 @@ export default function App() {
   useEffect(() => {
     const remote = user?.exportColOrder;
     if (!Array.isArray(remote) || remote.length === 0) return;
+    if (user?.exportColsVer !== DEFAULT_COLS_VERSION) return; // 구버전 서버값 무시 → 새 DEFAULT 유지 후 덮어씀
     const remoteJson = JSON.stringify(remote);
     if (remoteJson === lastSyncedColsRef.current) return; // 이미 반영됨(에코 방지)
     lastSyncedColsRef.current = remoteJson;
     // 라벨·메타는 DEFAULT 기준 최신화, on·width·순서는 원격값 유지(새 키 append)
     setExportColOrder(refreshSavedCols(remote, DEFAULT_EXPORT_COLS));
-  }, [user?.exportColOrder]);
+  }, [user?.exportColOrder, user?.exportColsVer]);
   const [showUpgrade, setShowUpgrade] = useState(false);
   const [upgradeReason, setUpgradeReason] = useState('city_limit');
   const [showUtils, setShowUtils] = useState(false);
