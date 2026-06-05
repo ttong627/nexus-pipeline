@@ -1103,7 +1103,11 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
   if (apiResult?.jibunAddr && !result.standardRoadAddress) {
     appendCheckReason(result, `지번주소만 확인됨: ${apiResult.jibunAddr}`);
   } else if (!apiResult && text && !result.확인필요) {
-    appendCheckReason(result, '주소 없음: 전국 주소DB/JUSO에서 확인되지 않음');
+    // A-12: '도로명 미발견 AND API실패'만 확인필요. 도로명(로/길/대로+번호)이 멀쩡히 파싱됐으면
+    // DB/JUSO가 일시 미확인(대량 burst 등)이어도 멀쩡한 주소를 확인명단에 넣지 않는다.
+    if (!/(대로|로|길)\s*\d+(?:-\d+)?/.test(result.주소 || '')) {
+      appendCheckReason(result, '주소 없음: 전국 주소DB/JUSO에서 확인되지 않음');
+    }
   }
   result.lat   = null;
   result.lng   = null;
