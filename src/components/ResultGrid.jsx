@@ -781,7 +781,9 @@ const ResultGrid = memo(function ResultGrid({
               </tr>
             </thead>
             <tbody className="font-mono text-gray-200">
-              {paginatedData.map((row, idx) => {
+              {/* 칼럼 편집 중에는 상위 20행만 렌더 — auto-layout 테이블이 매 reflow마다 렌더된 전 행을
+                  다시 계산해 폭조절·이동이 버벅이던 문제 해결(편집 완료 시 전체 복원) */}
+              {(editor.editing ? paginatedData.slice(0, 20) : paginatedData).map((row, idx) => {
                 const isSelected = selectedIds.has(row.id);
                 return (
                   <tr key={row.id} className={`border-b border-[#222] group h-10 transition-colors ${isSelected ? 'bg-amber-950/20' : row._에러 ? 'bg-red-950/20 hover:bg-red-900/40' : 'bg-transparent hover:bg-[#060c18]/60'}`}>
@@ -798,6 +800,13 @@ const ResultGrid = memo(function ResultGrid({
                   </tr>
                 );
               })}
+              {editor.editing && paginatedData.length > 20 && (
+                <tr>
+                  <td colSpan={visibleCols.length + 2} className="px-4 py-2.5 text-center text-[11px] font-bold text-amber-400/80 bg-amber-950/15 border-b border-[#222]">
+                    ⚡ 칼럼 편집 중 — 빠른 조작을 위해 상위 20행만 미리보기 (편집 완료 시 전체 복원)
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
           {filteredData.length === 0 && (
