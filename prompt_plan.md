@@ -1,6 +1,7 @@
-# 작업 이어서: 화면 그리드 칼럼 재정렬 (ResultGrid)
+# 작업 완료: 화면 그리드 칼럼 재정렬 (ResultGrid)
 
-> 새 세션에서 "그리드 칼럼 재정렬 이어서 해줘"라고 하면 이 문서대로 바로 실행.
+> ✅ 2026-06-05 완료·배포됨. 화면 칼럼이 exportColOrder(엑셀 소스) 순서·표시(on)를 그대로 따른다.
+> renderHeaderCell·renderBodyCell + visibleCols 도입, 배송순번 화면 셀 신규 추가, 옛 localColVis 가드/고아 state 제거.
 > ⚠️ ResultGrid는 매일 쓰는 핵심 화면 → 격리 워크트리에서 단계별 빌드 검증 권장.
 
 ## 목표

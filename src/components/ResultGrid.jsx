@@ -181,21 +181,9 @@ const ResultGrid = memo(function ResultGrid({
   const [batchNoteOpen, setBatchNoteOpen] = useState(false);
   const [batchNoteValue, setBatchNoteValue] = useState('');
   const [updateModalRow, setUpdateModalRow] = useState(null);
-  const [showColSettings, setShowColSettings] = useState(false);
   const [showColOrder, setShowColOrder] = useState(false);
-  const [localColVis, setLocalColVis] = useState({ birth: false, contact2: false, sms: false, note: true, driver: true });
   const searchInputRef = useRef(null);
-  const colSettingsRef = useRef(null);
   const colOrderBtnRef = useRef(null);
-
-  useEffect(() => {
-    if (!showColSettings) return;
-    const handleClick = (e) => {
-      if (colSettingsRef.current && !colSettingsRef.current.contains(e.target)) setShowColSettings(false);
-    };
-    document.addEventListener('mousedown', handleClick);
-    return () => document.removeEventListener('mousedown', handleClick);
-  }, [showColSettings]);
 
   if (step !== 5) return null;
 
@@ -228,6 +216,166 @@ const ResultGrid = memo(function ResultGrid({
   const totalPages = Math.ceil(filteredData.length / itemsPerPage) || 1;
   const modeInfo = WORKFLOW_MODES[workflowMode] || WORKFLOW_MODES.cleaningOnly;
   const isDetailBeforeParen = addressDisplayMode === 'detailBeforeParen';
+
+  // 화면 칼럼은 exportColOrder(엑셀 다운로드 소스)의 순서·표시(on)를 그대로 따른다.
+  // 체크박스 + NO는 sticky 고정이라 reorder 대상에서 제외한다.
+  const visibleCols = exportColOrder.filter(c => c.on && c.key !== 'NO').map(c => c.key);
+
+  const renderHeaderCell = (key) => {
+    switch (key) {
+      case '구분':
+        return <th key="구분" className="px-4 py-3 font-bold border-r border-[#222] tracking-wide text-center cursor-pointer hover:bg-[#222] transition-colors" onClick={() => handleSort('구분')}>구분 {sortConfig.key === '구분' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>;
+      case '행정동':
+        return <th key="행정동" className="px-4 py-3 font-bold border-r border-[#222] tracking-wide cursor-pointer hover:bg-[#222] transition-colors" onClick={() => handleSort('행정동')}>행정구역 {sortConfig.key === '행정동' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>;
+      case '리':
+        return <th key="리" className="px-4 py-3 font-bold border-r border-[#222] tracking-wide text-center cursor-pointer hover:bg-[#222] transition-colors" onClick={() => handleSort('리')}>리 {sortConfig.key === '리' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>;
+      case '이름':
+        return <th key="이름" className="px-4 py-3 font-bold border-r border-[#222] tracking-wide cursor-pointer hover:bg-[#222] transition-colors" onClick={() => handleSort('이름')}>성명 {sortConfig.key === '이름' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>;
+      case '품명':
+        return <th key="품명" className="px-4 py-3 font-bold border-r border-[#222] tracking-wide text-center cursor-pointer hover:bg-[#222] transition-colors" onClick={() => handleSort('품명')}>품명 {sortConfig.key === '품명' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>;
+      case '생년월일':
+        return <th key="생년월일" className="px-4 py-3 font-bold border-r border-[#222] tracking-wide text-center">생년월일</th>;
+      case '포수':
+        return <th key="포수" className="px-4 py-3 font-bold border-r border-[#222] tracking-wide text-center">포수</th>;
+      case '휴대폰':
+        return <th key="휴대폰" className="px-4 py-3 font-bold border-r border-[#222] tracking-wide">메인(휴대폰)</th>;
+      case '유선전화':
+        return <th key="유선전화" className="px-4 py-3 font-bold border-r border-[#222] tracking-wide">보조(유선)</th>;
+      case '문자수신':
+        return <th key="문자수신" className="px-4 py-3 font-bold border-r border-[#222] tracking-wide text-center">문자수신</th>;
+      case '주소':
+        return <th key="주소" className="px-4 py-3 font-bold border-r border-[#222] tracking-wide text-[#3b82f6] bg-gradient-to-b from-[#060c18] to-[#0a0a0a] text-sm min-w-[400px] cursor-pointer hover:from-[#112211]" onClick={() => handleSort('주소')}>통합 주소 (클릭하여 텍스트 직접 수정) {sortConfig.key === '주소' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>;
+      case '특이사항':
+        return <th key="특이사항" className="px-4 py-3 font-bold border-r border-[#222] tracking-wide">특이사항 / 비고</th>;
+      case '기사':
+        return <th key="기사" className="px-4 py-3 font-bold border-r border-[#222] tracking-wide">기사</th>;
+      case '배송순번':
+        return <th key="배송순번" className="px-4 py-3 font-bold border-r border-[#222] tracking-wide text-center">배송순번</th>;
+      case '사유':
+        return <th key="사유" className="px-4 py-3 font-bold border-r border-[#222] tracking-wide">오류 사유</th>;
+      default:
+        return null;
+    }
+  };
+
+  const renderBodyCell = (key, row) => {
+    switch (key) {
+      case '구분':
+        return (
+          <td key="구분" className="px-4 py-1.5 border-r border-[#222] text-center">
+            <span className={`px-2 py-1 rounded-md text-xs font-bold tracking-widest border ${
+              row.구분 === '기초수급자' ? 'bg-blue-950/60 text-blue-300 border-blue-600/50' :
+              row.구분 === '차상위'     ? 'bg-amber-950/60 text-amber-300 border-amber-600/50' :
+                                         'bg-[#050505] text-gray-500 border-gray-800'
+            }`}>{row.구분}</span>
+          </td>
+        );
+      case '행정동':
+        return <td key="행정동" className="px-4 py-1.5 border-r border-[#222] max-w-[120px] truncate text-gray-400">{row.행정동}</td>;
+      case '리':
+        return <td key="리" className="px-4 py-1.5 border-r border-[#222] text-center text-emerald-300/80 max-w-[80px] truncate" title={row.리 || ''}>{row.리 || ''}</td>;
+      case '이름':
+        return <td key="이름" className="px-4 py-1.5 border-r border-[#222] font-black text-white text-[13px] drop-shadow-md">{row.이름}</td>;
+      case '품명':
+        return <td key="품명" className="px-4 py-1.5 border-r border-[#222] text-center text-fuchsia-400 font-bold">{row.품명}</td>;
+      case '생년월일':
+        return <td key="생년월일" className="px-4 py-1.5 border-r border-[#222] text-center text-gray-300 font-mono tracking-wider">{row.생년월일}</td>;
+      case '포수':
+        return <td key="포수" className="px-4 py-1.5 border-r border-[#222] text-center text-[#3b82f6] font-black bg-black/20">{row.포수 ? Number(row.포수).toLocaleString() : ""}</td>;
+      case '휴대폰':
+        return <td key="휴대폰" className="px-4 py-1.5 border-r border-[#222] text-gray-300 font-bold tracking-wider">{row.휴대폰}</td>;
+      case '유선전화':
+        return <td key="유선전화" className="px-4 py-1.5 border-r border-[#222] text-gray-500 tracking-wider">{row.유선전화}</td>;
+      case '문자수신':
+        return <td key="문자수신" className="px-4 py-1.5 border-r border-[#222] text-center"><span className={`px-2 py-0.5 rounded text-xs font-bold ${row.문자수신 === 'Y' ? 'bg-[#3b82f6]/20 text-[#93c5fd] border border-[#3b82f6]/30' : 'bg-transparent text-gray-600 border border-gray-700'}`}>{row.문자수신}</span></td>;
+      case '주소':
+        return (
+          <td key="주소" className="px-1 py-1 border-r border-l-2 border-l-[#3b82f6]/50 border-r-[#222] relative bg-black/40 group-hover:bg-black/60 transition-colors">
+            <input
+              className={`w-full h-full bg-transparent px-3 py-1.5 rounded outline-none focus:bg-[#060c18] focus:ring-2 focus:ring-[#3b82f6] shadow-inner font-bold transition-all ${row._에러 ? 'text-red-400 placeholder-red-800' : 'text-[#3b82f6]'}`}
+              value={row.주소}
+              onChange={(e) => handleCellEdit(row.id, '주소', e.target.value)}
+              onKeyDown={(e) => {
+                handleAddressKeyDown(e, row);
+                if ((e.ctrlKey || e.metaKey) && e.key === 'd') {
+                  e.preventDefault();
+                  const curIdx = paginatedData.findIndex(r => r.id === row.id);
+                  if (curIdx > 0) handleCellEdit(row.id, '주소', paginatedData[curIdx - 1].주소);
+                }
+              }}
+              title={row._에러 ? `[오류사유] ${row._사유} (Enter키로 즉시 재정제)` : 'Enter키로 즉시 재정제'}
+              placeholder="주소가 비어있습니다. 수정 후 Enter"
+            />
+          </td>
+        );
+      case '특이사항':
+        return (
+          <td key="특이사항" className={`px-1 py-1 border-r border-[#222] bg-black/40 group-hover:bg-black/60 min-w-[180px] transition-colors ${row._이식됨 ? 'border-l-2 border-l-[#3b82f6]/30 bg-[#3b82f6]/5' : ''}`}>
+            <input
+              className={`w-full h-full bg-transparent px-3 py-1.5 rounded outline-none focus:bg-[#060c18] focus:ring-2 focus:ring-[#93c5fd] shadow-inner font-medium transition-all ${row.특이사항?.includes('◆') ? 'text-amber-300' : row._이식됨 ? 'text-[#93c5fd]' : 'text-gray-300'}`}
+              value={row.특이사항}
+              onChange={(e) => handleCellEdit(row.id, '특이사항', e.target.value)}
+              onKeyDown={(e) => {
+                if ((e.ctrlKey || e.metaKey) && e.key === 'd') {
+                  e.preventDefault();
+                  const curIdx = paginatedData.findIndex(r => r.id === row.id);
+                  if (curIdx > 0) handleCellEdit(row.id, '특이사항', paginatedData[curIdx - 1].특이사항);
+                }
+              }}
+              placeholder=""
+            />
+          </td>
+        );
+      case '기사':
+        return (
+          <td key="기사" className={`px-1 py-1 border-r border-[#222] bg-black/20 min-w-[80px] ${row._이식됨 ? 'border-l-2 border-l-[#3b82f6]/30 bg-[#3b82f6]/5' : ''}`}>
+            <input
+              list="driver-list"
+              className={`w-full bg-transparent px-2 py-1.5 rounded outline-none focus:bg-[#060c18] focus:ring-1 focus:ring-[#3b82f6] text-xs font-mono transition-all ${row._이식됨 ? 'text-[#93c5fd]' : 'text-gray-300'} ${!(row.기사 || '').trim() ? 'placeholder-orange-800' : ''}`}
+              value={row.기사}
+              onChange={(e) => handleCellEdit(row.id, '기사', e.target.value)}
+              onKeyDown={(e) => {
+                if ((e.ctrlKey || e.metaKey) && e.key === 'd') {
+                  e.preventDefault();
+                  const curIdx = paginatedData.findIndex(r => r.id === row.id);
+                  if (curIdx > 0) handleCellEdit(row.id, '기사', paginatedData[curIdx - 1].기사);
+                }
+              }}
+              placeholder="기사"
+              title={!(row.기사 || '').trim() ? '미배정' : ''}
+            />
+          </td>
+        );
+      case '배송순번':
+        return <td key="배송순번" className="px-4 py-1.5 border-r border-[#222] text-center text-gray-300 font-bold tabular-nums">{row.배송순번 || ''}</td>;
+      case '사유':
+        return (
+          <td key="사유" className={`px-4 py-1.5 border-r border-[#222] text-xs font-bold ${row._에러 ? 'text-red-400' : 'text-gray-600'}`}>
+            <div className="flex items-center gap-2">
+              {row._주소추정 && (
+                <span
+                  title={`원주소: ${row._원주소 || row.주소 || ''}\n${row._추정사유 || '주소 추정 변환 또는 오타 보정이 적용되었습니다.'}`}
+                  className="px-1.5 py-0.5 rounded-md bg-amber-500/15 border border-amber-400/35 text-amber-200 text-[10px] font-black"
+                >
+                  추정
+                </span>
+              )}
+              <span>{row._에러 ? row._사유 : '정상'}</span>
+              {row._업데이트필요 && (
+                <button
+                  onClick={() => setUpdateModalRow(row)}
+                  className="px-2 py-1 bg-amber-500 text-black font-extrabold rounded text-xs hover:bg-amber-400 transition-colors shadow-md"
+                >
+                  클라우드 갱신
+                </button>
+              )}
+            </div>
+          </td>
+        );
+      default:
+        return null;
+    }
+  };
 
   return (
     <>
@@ -754,20 +902,7 @@ const ResultGrid = memo(function ResultGrid({
                   <input type="checkbox" checked={allPageSelected} onChange={toggleAll} className="accent-[#3b82f6] w-4 h-4 cursor-pointer" />
                 </th>
                 <th className="px-4 py-3 font-bold border-r border-[#222] tracking-wide text-center sticky left-10 bg-[#0a100c] z-30 shadow-[2px_0_5px_rgba(0,0,0,0.5)]">NO</th>
-                <th className="px-4 py-3 font-bold border-r border-[#222] tracking-wide text-center cursor-pointer hover:bg-[#222] transition-colors" onClick={() => handleSort('구분')}>구분 {sortConfig.key === '구분' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>
-                <th className="px-4 py-3 font-bold border-r border-[#222] tracking-wide cursor-pointer hover:bg-[#222] transition-colors" onClick={() => handleSort('행정동')}>행정구역 {sortConfig.key === '행정동' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>
-                <th className="px-4 py-3 font-bold border-r border-[#222] tracking-wide text-center cursor-pointer hover:bg-[#222] transition-colors" onClick={() => handleSort('리')}>리 {sortConfig.key === '리' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>
-                <th className="px-4 py-3 font-bold border-r border-[#222] tracking-wide cursor-pointer hover:bg-[#222] transition-colors" onClick={() => handleSort('이름')}>성명 {sortConfig.key === '이름' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>
-                <th className="px-4 py-3 font-bold border-r border-[#222] tracking-wide text-center cursor-pointer hover:bg-[#222] transition-colors" onClick={() => handleSort('품명')}>품명 {sortConfig.key === '품명' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>
-                {localColVis.birth && <th className="px-4 py-3 font-bold border-r border-[#222] tracking-wide text-center">생년월일</th>}
-                <th className="px-4 py-3 font-bold border-r border-[#222] tracking-wide text-center">포수</th>
-                <th className="px-4 py-3 font-bold border-r border-[#222] tracking-wide">메인(휴대폰)</th>
-                {localColVis.contact2 && <th className="px-4 py-3 font-bold border-r border-[#222] tracking-wide">보조(유선)</th>}
-                {localColVis.sms && <th className="px-4 py-3 font-bold border-r border-[#222] tracking-wide text-center">문자수신</th>}
-                <th className="px-4 py-3 font-bold border-r border-[#222] tracking-wide text-[#3b82f6] bg-gradient-to-b from-[#060c18] to-[#0a0a0a] text-sm min-w-[400px] cursor-pointer hover:from-[#112211]" onClick={() => handleSort('주소')}>통합 주소 (클릭하여 텍스트 직접 수정) {sortConfig.key === '주소' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>
-                {localColVis.note && <th className="px-4 py-3 font-bold border-r border-[#222] tracking-wide">특이사항 / 비고</th>}
-                {localColVis.driver && <th className="px-4 py-3 font-bold border-r border-[#222] tracking-wide">기사</th>}
-                <th className="px-4 py-3 font-bold border-r border-[#222] tracking-wide">오류 사유</th>
+                {visibleCols.map(renderHeaderCell)}
               </tr>
             </thead>
             <tbody className="font-mono text-gray-200">
@@ -784,98 +919,7 @@ const ResultGrid = memo(function ResultGrid({
                         {((currentPage - 1) * itemsPerPage + idx + 1).toLocaleString()}
                       </div>
                     </td>
-                    <td className="px-4 py-1.5 border-r border-[#222] text-center">
-                      <span className={`px-2 py-1 rounded-md text-xs font-bold tracking-widest border ${
-                        row.구분 === '기초수급자' ? 'bg-blue-950/60 text-blue-300 border-blue-600/50' :
-                        row.구분 === '차상위'     ? 'bg-amber-950/60 text-amber-300 border-amber-600/50' :
-                                                   'bg-[#050505] text-gray-500 border-gray-800'
-                      }`}>{row.구분}</span>
-                    </td>
-                    <td className="px-4 py-1.5 border-r border-[#222] max-w-[120px] truncate text-gray-400">{row.행정동}</td>
-                    <td className="px-4 py-1.5 border-r border-[#222] text-center text-emerald-300/80 max-w-[80px] truncate" title={row.리 || ''}>{row.리 || ''}</td>
-                    <td className="px-4 py-1.5 border-r border-[#222] font-black text-white text-[13px] drop-shadow-md">{row.이름}</td>
-                    <td className="px-4 py-1.5 border-r border-[#222] text-center text-fuchsia-400 font-bold">{row.품명}</td>
-                    {localColVis.birth && <td className="px-4 py-1.5 border-r border-[#222] text-center text-gray-300 font-mono tracking-wider">{row.생년월일}</td>}
-                    <td className="px-4 py-1.5 border-r border-[#222] text-center text-[#3b82f6] font-black bg-black/20">{row.포수 ? Number(row.포수).toLocaleString() : ""}</td>
-                    <td className="px-4 py-1.5 border-r border-[#222] text-gray-300 font-bold tracking-wider">{row.휴대폰}</td>
-                    {localColVis.contact2 && <td className="px-4 py-1.5 border-r border-[#222] text-gray-500 tracking-wider">{row.유선전화}</td>}
-                    {localColVis.sms && <td className="px-4 py-1.5 border-r border-[#222] text-center"><span className={`px-2 py-0.5 rounded text-xs font-bold ${row.문자수신 === 'Y' ? 'bg-[#3b82f6]/20 text-[#93c5fd] border border-[#3b82f6]/30' : 'bg-transparent text-gray-600 border border-gray-700'}`}>{row.문자수신}</span></td>}
-
-                    <td className="px-1 py-1 border-r border-l-2 border-l-[#3b82f6]/50 border-r-[#222] relative bg-black/40 group-hover:bg-black/60 transition-colors">
-                      <input
-                        className={`w-full h-full bg-transparent px-3 py-1.5 rounded outline-none focus:bg-[#060c18] focus:ring-2 focus:ring-[#3b82f6] shadow-inner font-bold transition-all ${row._에러 ? 'text-red-400 placeholder-red-800' : 'text-[#3b82f6]'}`}
-                        value={row.주소}
-                        onChange={(e) => handleCellEdit(row.id, '주소', e.target.value)}
-                        onKeyDown={(e) => {
-                          handleAddressKeyDown(e, row);
-                          if ((e.ctrlKey || e.metaKey) && e.key === 'd') {
-                            e.preventDefault();
-                            const curIdx = paginatedData.findIndex(r => r.id === row.id);
-                            if (curIdx > 0) handleCellEdit(row.id, '주소', paginatedData[curIdx - 1].주소);
-                          }
-                        }}
-                        title={row._에러 ? `[오류사유] ${row._사유} (Enter키로 즉시 재정제)` : 'Enter키로 즉시 재정제'}
-                        placeholder="주소가 비어있습니다. 수정 후 Enter"
-                      />
-                    </td>
-
-                    {localColVis.note && (
-                      <td className={`px-1 py-1 border-r border-[#222] bg-black/40 group-hover:bg-black/60 min-w-[180px] transition-colors ${row._이식됨 ? 'border-l-2 border-l-[#3b82f6]/30 bg-[#3b82f6]/5' : ''}`}>
-                        <input
-                          className={`w-full h-full bg-transparent px-3 py-1.5 rounded outline-none focus:bg-[#060c18] focus:ring-2 focus:ring-[#93c5fd] shadow-inner font-medium transition-all ${row.특이사항?.includes('◆') ? 'text-amber-300' : row._이식됨 ? 'text-[#93c5fd]' : 'text-gray-300'}`}
-                          value={row.특이사항}
-                          onChange={(e) => handleCellEdit(row.id, '특이사항', e.target.value)}
-                          onKeyDown={(e) => {
-                            if ((e.ctrlKey || e.metaKey) && e.key === 'd') {
-                              e.preventDefault();
-                              const curIdx = paginatedData.findIndex(r => r.id === row.id);
-                              if (curIdx > 0) handleCellEdit(row.id, '특이사항', paginatedData[curIdx - 1].특이사항);
-                            }
-                          }}
-                          placeholder=""
-                        />
-                      </td>
-                    )}
-                    {localColVis.driver && (
-                      <td className={`px-1 py-1 border-r border-[#222] bg-black/20 min-w-[80px] ${row._이식됨 ? 'border-l-2 border-l-[#3b82f6]/30 bg-[#3b82f6]/5' : ''}`}>
-                        <input
-                          list="driver-list"
-                          className={`w-full bg-transparent px-2 py-1.5 rounded outline-none focus:bg-[#060c18] focus:ring-1 focus:ring-[#3b82f6] text-xs font-mono transition-all ${row._이식됨 ? 'text-[#93c5fd]' : 'text-gray-300'} ${!(row.기사 || '').trim() ? 'placeholder-orange-800' : ''}`}
-                          value={row.기사}
-                          onChange={(e) => handleCellEdit(row.id, '기사', e.target.value)}
-                          onKeyDown={(e) => {
-                            if ((e.ctrlKey || e.metaKey) && e.key === 'd') {
-                              e.preventDefault();
-                              const curIdx = paginatedData.findIndex(r => r.id === row.id);
-                              if (curIdx > 0) handleCellEdit(row.id, '기사', paginatedData[curIdx - 1].기사);
-                            }
-                          }}
-                          placeholder="기사"
-                          title={!(row.기사 || '').trim() ? '미배정' : ''}
-                        />
-                      </td>
-                    )}
-                    <td className={`px-4 py-1.5 text-xs font-bold ${row._에러 ? 'text-red-400' : 'text-gray-600'}`}>
-                      <div className="flex items-center gap-2">
-                        {row._주소추정 && (
-                          <span
-                            title={`원주소: ${row._원주소 || row.주소 || ''}\n${row._추정사유 || '주소 추정 변환 또는 오타 보정이 적용되었습니다.'}`}
-                            className="px-1.5 py-0.5 rounded-md bg-amber-500/15 border border-amber-400/35 text-amber-200 text-[10px] font-black"
-                          >
-                            추정
-                          </span>
-                        )}
-                        <span>{row._에러 ? row._사유 : '정상'}</span>
-                        {row._업데이트필요 && (
-                          <button
-                            onClick={() => setUpdateModalRow(row)}
-                            className="px-2 py-1 bg-amber-500 text-black font-extrabold rounded text-xs hover:bg-amber-400 transition-colors shadow-md"
-                          >
-                            클라우드 갱신
-                          </button>
-                        )}
-                      </div>
-                    </td>
+                    {visibleCols.map(k => renderBodyCell(k, row))}
                   </tr>
                 );
               })}
