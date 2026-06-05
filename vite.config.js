@@ -40,7 +40,9 @@ export default defineConfig({
         display: 'standalone',
         start_url: '/',
         icons: [
-          // 실제 파일 크기(572x574)를 그대로 선언 — 크기 불일치로 크롬이 아이콘을 무시하던 문제 수정
+          // Claude 디자인 정사각 아이콘(SVG) — 모든 크기에 선명, 크기 불일치 문제 원천 차단
+          { src: '/app-icon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any maskable' },
+          // PNG 폴백(실제 크기 그대로 선언)
           { src: '/ttongpa.png', sizes: '572x574', type: 'image/png', purpose: 'any' },
         ],
       },

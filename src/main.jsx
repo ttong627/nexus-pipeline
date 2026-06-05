@@ -5,12 +5,8 @@ import App from './App.jsx'
 import ErrorBoundary from './components/ErrorBoundary.jsx'
 import { registerSW } from 'virtual:pwa-register'
 
-registerSW({
-  immediate: true,
-  onNeedRefresh() {
-    window.location.reload()
-  },
-})
+// 자동 업데이트만 사용(수동 reload 제거 — 새로고침 루프/크래시 방지)
+registerSW({ immediate: true })
 
 // PWA 설치 프롬프트를 앱 로드 즉시 잡아둔다('바로가기 만들기' 버튼이 사용)
 window.__pwaInstallPrompt = null

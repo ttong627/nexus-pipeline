@@ -1,0 +1,35 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="ic-bg" x1="40" y1="20" x2="480" y2="500" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#2b1a5e"/>
+      <stop offset=".5" stop-color="#3d2486"/>
+      <stop offset="1" stop-color="#140b30"/>
+    </linearGradient>
+    <linearGradient id="ic-mark" x1="170" y1="150" x2="350" y2="372" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#c4b5fd"/>
+      <stop offset=".55" stop-color="#8b5cf6"/>
+      <stop offset="1" stop-color="#34d399"/>
+    </linearGradient>
+    <radialGradient id="ic-glow" cx="256" cy="246" r="200" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#7c3aed" stop-opacity=".55"/>
+      <stop offset="1" stop-color="#7c3aed" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="ic-soft" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="7"/>
+    </filter>
+  </defs>
+
+  <rect width="512" height="512" rx="116" fill="url(#ic-bg)"/>
+  <rect x="24" y="22" width="464" height="210" rx="96" fill="#ffffff" opacity=".05"/>
+  <circle cx="256" cy="246" r="190" fill="url(#ic-glow)"/>
+
+  <g filter="url(#ic-soft)" opacity=".7">
+    <path d="M180 366V152M180 152L332 366M332 366V152" stroke="#8b5cf6" stroke-width="40" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+  <path d="M180 366V152M180 152L332 366M332 366V152" stroke="url(#ic-mark)" stroke-width="38" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <circle cx="180" cy="152" r="15" fill="#34d399"/>
+  <circle cx="332" cy="366" r="15" fill="#34d399"/>
+  <circle cx="332" cy="152" r="11" fill="#c4b5fd"/>
+  <circle cx="180" cy="366" r="11" fill="#c4b5fd"/>
+</svg>
