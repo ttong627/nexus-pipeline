@@ -182,6 +182,8 @@ export default function App() {
   const [cleanMode, setCleanMode] = useState('easy');      // 'easy'(초보) | 'advanced'(고급)
   const [showEasyConfirm, setShowEasyConfirm] = useState(false); // 쉬운 정제 확인 카드
   const [easyRun, setEasyRun] = useState(false);           // 쉬운 정제: 상태 세팅 후 자동 분석 트리거
+  const [operatorName, setOperatorName] = useState('');    // 담당자 이름(업로드 전 확인)
+  const [selectedCity, setSelectedCity] = useState('');    // 업로드 전 선택한 지자체
   const [aiRules, setAiRules] = useState(null);
   const [mapDefs, setMapDefs] = useState({});
   const [gridData, setGridData] = useState([]);
@@ -600,13 +602,14 @@ export default function App() {
           const approvedCities = user?.citiesApproved || [];
           const normCity = (s) => String(s || '').replace(/\s/g, '');
           const candList = (cityCandidates && cityCandidates.length) ? cityCandidates : (detectedCity ? [detectedCity] : []);
-          let resolvedCity = detectedCity;
+          // 업로드 전 담당자가 직접 고른 지자체(selectedCity)가 최우선
+          let resolvedCity = selectedCity || detectedCity;
           const hit = approvedCities.find(uc => candList.some(c => {
             const nc = normCity(c), nu = normCity(uc);
             const cTok = String(c).split(/\s+/).pop(); // 시군구 토큰
             return nc === nu || nu.includes(normCity(cTok)) || nc.includes(nu);
           }));
-          if (hit) resolvedCity = hit;
+          if (!selectedCity && hit) resolvedCity = hit;
 
           const initialSel = {};
           sheetsData.forEach(s => {
@@ -668,7 +671,7 @@ export default function App() {
   const handleCityMonthConfirm = (city, monthYYYYMM) => {
     const { sheetsData, initialSel } = pendingSetup || {};
     if (!sheetsData) return;
-    setFileInfo(prev => ({ ...prev, city, month: monthYYYYMM }));
+    setFileInfo(prev => ({ ...prev, city, month: monthYYYYMM, operatorName }));
     setWorksheets(sheetsData);
     setMapDefs(initialSel);
     setShowCityPicker(false);
@@ -1130,6 +1133,13 @@ export default function App() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [easyRun, selectedSheets]);
+
+  // 담당자 이름·지자체 기본값을 로그인 프로필에서 초기화(업로드 전 확인용)
+  useEffect(() => {
+    if (!user) return;
+    setOperatorName(prev => prev || user.realName || '');
+    setSelectedCity(prev => prev || (user.citiesApproved?.length === 1 ? user.citiesApproved[0] : ''));
+  }, [user]);
 
   const handleCellEdit = (id, field, value) => {
     // 타이핑마다 pushHistory 호출 시 stale closure + setHistory·setGridData 동시발동으로
@@ -2474,7 +2484,7 @@ export default function App() {
 
         <main className="flex-1 relative overflow-hidden bg-[#070807] flex flex-col">
           {step === 0 && <Dashboard user={user} onLogout={onLogout} onStart={(s) => setStep(typeof s === 'number' ? s : 1)} onHelp={onHelp} setFileInfo={setFileInfo} setWorksheets={setWorksheets} setBaseCount={setBaseCount} gridData={gridData} setGridData={setGridData} fileInfo={fileInfo} onCloudCard={(city) => { setDbNavCity(city); setStep(8); }} onBaseCard={(city) => { setDbNavCity(city); setStep(6); }} onOpenRouteMap={() => { if (!canUseRouteMap(user)) { setUpgradeReason('routeMap'); setShowUpgrade(true); } else setShowRouteQuick(true); }} workflowMode={workflowMode} onWorkflowModeChange={changeWorkflowMode} stepStatus={stepStatus} onOpenIntro={() => { setIntroReason('new'); setShowIntro(true); }} />}
-          {step === 1 && <Step1_Upload handleDragOver={handleDragOver} handleDrop={handleDrop} handleFileUpload={handleFileUpload} handleUnifiedDrop={handleUnifiedDrop} isBaseUploading={isBaseUploading} step={step} onHelp={onHelp} onCloudFetch={() => setShowCloudBase(true)} onOpenDashboard={() => setStep(0)} cleanMode={cleanMode} setCleanMode={setCleanMode} />}
+          {step === 1 && <Step1_Upload handleDragOver={handleDragOver} handleDrop={handleDrop} handleFileUpload={handleFileUpload} handleUnifiedDrop={handleUnifiedDrop} isBaseUploading={isBaseUploading} step={step} onHelp={onHelp} onCloudFetch={() => setShowCloudBase(true)} onOpenDashboard={() => setStep(0)} cleanMode={cleanMode} setCleanMode={setCleanMode} operatorName={operatorName} setOperatorName={setOperatorName} selectedCity={selectedCity} setSelectedCity={setSelectedCity} userCities={user?.citiesApproved || []} isAdmin={user?.role === 'admin'} />}
           {step === 2 && <Step2_SheetSelect step={step} setStep={setStep} fileInfo={fileInfo} setFileInfo={setFileInfo} worksheets={worksheets} setWorksheets={setWorksheets} setSelectedSheets={setSelectedSheets} onHelp={onHelp} handleSecondFileUpload={handleSecondFileUpload} userCities={user?.citiesApproved || []} isAdmin={user?.role === 'admin'} />}
           {step === 3 && <Step3_Mapping step={step} setStep={setStep} selectedSheets={selectedSheets} worksheets={worksheets} mapDefs={mapDefs} setMapDefs={setMapDefs} startProcessing={handleAnalyzeAll} onHelp={onHelp} isBasePurifyMode={isBasePurifyMode} setIsBasePurifyMode={setIsBasePurifyMode} onOpenDbImport={() => setShowDbImport(true)} dbImportReady={dbImportReady} onUserMapping={handleUserMapping} city={fileInfo?.city || ''} />}
           {step === 4 && <LoadingScreen progress={engineProgress} logs={progressLogs} />}
