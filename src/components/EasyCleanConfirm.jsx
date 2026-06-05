@@ -18,7 +18,7 @@ const sheetKeyOf = (s) => (s.fileSource ? `${s.fileSource}::${s.name}` : s.name)
 
 // ── 쉬운 정제 확인 카드 ───────────────────────────────────────────────────────
 // 자동 매칭된 칼럼은 그냥 보여주고, 애매(노랑)한 칼럼만 1클릭으로 확인/수정 후 [정제 시작].
-export default function EasyCleanConfirm({ city, month, sheets = [], mapDefs = {}, onConfirm, onAdvanced, onCancel }) {
+export default function EasyCleanConfirm({ city, month, sheets = [], mapDefs = {}, analysis = null, onConfirm, onAdvanced, onCancel }) {
   const [draft, setDraft] = useState(() => JSON.parse(JSON.stringify(mapDefs || {})));
 
   const totalCount = useMemo(
@@ -65,6 +65,25 @@ export default function EasyCleanConfirm({ city, month, sheets = [], mapDefs = {
           <span className="px-3 py-1.5 rounded-lg bg-[#11201c] border border-[#1c3a32] text-gray-300 font-bold">총 {totalCount.toLocaleString()}명</span>
           <span className="px-3 py-1.5 rounded-lg bg-[#11201c] border border-[#1c3a32] text-gray-300 font-bold">시트 {sheets.length}개</span>
         </div>
+
+        {analysis && (
+          <div className="mb-4 rounded-2xl bg-[#0c1418] border border-cyan-500/25 p-4">
+            <div className="flex items-center gap-2 text-cyan-300 text-sm font-black mb-2">
+              <CheckCircle size={16} /> 정밀 분석 결과
+            </div>
+            <div className="flex flex-wrap gap-2 text-[12px]">
+              <span className="px-2.5 py-1 rounded-lg bg-cyan-500/10 border border-cyan-500/20 text-cyan-200 font-bold">시트 {analysis.totalSheets}개 → 명단 {analysis.rosterSheets}개</span>
+              {analysis.excludedSheets?.length > 0 && <span className="px-2.5 py-1 rounded-lg bg-[#11201c] border border-[#1c3a32] text-gray-400 font-bold">잡음시트 {analysis.excludedSheets.length}개 제외</span>}
+              <span className="px-2.5 py-1 rounded-lg bg-[#11201c] border border-[#1c3a32] text-gray-300 font-bold">총 {Number(analysis.totalRows || 0).toLocaleString()}명</span>
+              {analysis.droppedRows > 0 && <span className="px-2.5 py-1 rounded-lg bg-[#11201c] border border-[#1c3a32] text-gray-400 font-bold">잡음행 {analysis.droppedRows}개 제거</span>}
+            </div>
+            {analysis.excludedSheets?.length > 0 && (
+              <p className="text-[11px] text-gray-500 mt-2 leading-relaxed">
+                제외: {analysis.excludedSheets.map(e => `${e.name}(${e.reason})`).join(' · ')}
+              </p>
+            )}
+          </div>
+        )}
 
         <div className="mb-5 rounded-2xl bg-[#0d1513] border border-[#1a2a26] p-4">
           <div className="flex items-center gap-2 text-emerald-300 text-sm font-black mb-2">

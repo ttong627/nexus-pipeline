@@ -198,6 +198,8 @@ export default function App() {
   const [easyRun, setEasyRun] = useState(false);           // 쉬운 정제: 상태 세팅 후 자동 분석 트리거
   const [operatorName, setOperatorName] = useState('');    // 담당자 이름(업로드 전 확인)
   const [selectedCity, setSelectedCity] = useState('');    // 업로드 전 선택한 지자체
+  const [analyzing, setAnalyzing] = useState(false);       // 파일 정밀 분석 중(3D 오버레이용)
+  const [analysisSummary, setAnalysisSummary] = useState(null); // 정밀 분석 요약(명단/제외 시트·잡음행)
   const [aiRules, setAiRules] = useState(null);
   const [mapDefs, setMapDefs] = useState({});
   const [gridData, setGridData] = useState([]);
@@ -601,16 +603,18 @@ export default function App() {
     // UI 로딩 상태 추가 가능
     setFileInfo({ name: file.name, size: file.size, file });
     
+    setAnalyzing(true);
     try {
       const buffer = await file.arrayBuffer();
       const worker = new Worker(new URL("./excelWorker.js", import.meta.url), { type: "module" });
-      
+
       gStart('파일 분석 중...', file.name);
       worker.postMessage({ action: "PARSE_TARGET", buffer, fileName: file.name, dynamicRules: aiRules });
       worker.onmessage = (evt) => {
         if (evt.data.ok && evt.data.action === "PARSE_TARGET") {
           gDone('파일 분석 완료!');
-          const { sheetsData, detectedCity, monthStr, cityCandidates } = evt.data;
+          setAnalyzing(false);
+          const { sheetsData, detectedCity, monthStr, cityCandidates, analysisSummary } = evt.data;
 
           // §5-2 지자체 허가지역 대조 — 후보 중 userCities와 일치하는 정확한 지자체명 우선
           const approvedCities = user?.citiesApproved || [];
@@ -668,31 +672,36 @@ export default function App() {
           });
 
           // 지자체·적용월 확인 모달 표시 (허가지역 대조된 resolvedCity 사용)
-          setPendingSetup({ sheetsData, detectedCity: resolvedCity, monthStr, initialSel });
+          setPendingSetup({ sheetsData, detectedCity: resolvedCity, monthStr, initialSel, analysisSummary });
           setShowCityPicker(true);
         } else if (!evt.data.ok) {
           setGLoad({ show: false });
+          setAnalyzing(false);
         alert("파일 분석 중 오류가 발생했습니다: " + evt.data.error);
         }
         worker.terminate();
       };
     } catch {
       setGLoad({ show: false });
+      setAnalyzing(false);
       alert("파일을 읽는 중 오류가 발생했습니다.");
     }
   };
 
   const handleCityMonthConfirm = (city, monthYYYYMM) => {
-    const { sheetsData, initialSel } = pendingSetup || {};
+    const { sheetsData, initialSel, analysisSummary: summary } = pendingSetup || {};
     if (!sheetsData) return;
     setFileInfo(prev => ({ ...prev, city, month: monthYYYYMM, operatorName }));
     setWorksheets(sheetsData);
     setMapDefs(initialSel);
+    setAnalysisSummary(summary || null);
     setShowCityPicker(false);
     setPendingSetup(null);
     if (cleanMode === 'easy') {
-      setSelectedSheets(sheetsData);  // 모든 시트 자동 선택
-      setShowEasyConfirm(true);       // 쉬운 정제 확인 카드(노랑만 확인)
+      // 명단으로 분류된 시트만 자동 선택(통계·안내 등 잡음 시트 자동 제외). 명단 0개면 전체 폴백.
+      const roster = sheetsData.filter(s => s.isRosterSheet);
+      setSelectedSheets(roster.length ? roster : sheetsData);
+      setShowEasyConfirm(true);       // 쉬운 정제 확인 카드(요약 + 노랑만 확인)
     } else {
       setStep(2);                     // 고급: 시트선택 → 매핑 검토
     }
@@ -2498,7 +2507,7 @@ export default function App() {
 
         <main className="flex-1 relative overflow-hidden bg-[#070807] flex flex-col">
           {step === 0 && <Dashboard user={user} onLogout={onLogout} onStart={(s) => setStep(typeof s === 'number' ? s : 1)} onHelp={onHelp} setFileInfo={setFileInfo} setWorksheets={setWorksheets} setBaseCount={setBaseCount} gridData={gridData} setGridData={setGridData} fileInfo={fileInfo} onCloudCard={(city) => { setDbNavCity(city); setStep(8); }} onBaseCard={(city) => { setDbNavCity(city); setStep(6); }} onOpenRouteMap={() => { if (!canUseRouteMap(user)) { setUpgradeReason('routeMap'); setShowUpgrade(true); } else setShowRouteQuick(true); }} workflowMode={workflowMode} onWorkflowModeChange={changeWorkflowMode} stepStatus={stepStatus} onOpenIntro={() => { setIntroReason('new'); setShowIntro(true); }} />}
-          {step === 1 && <Step1_Upload handleDragOver={handleDragOver} handleDrop={handleDrop} handleFileUpload={handleFileUpload} handleUnifiedDrop={handleUnifiedDrop} isBaseUploading={isBaseUploading} step={step} onHelp={onHelp} onCloudFetch={() => setShowCloudBase(true)} onOpenDashboard={() => setStep(0)} cleanMode={cleanMode} setCleanMode={setCleanMode} operatorName={operatorName} setOperatorName={setOperatorName} selectedCity={selectedCity} setSelectedCity={setSelectedCity} userCities={user?.citiesApproved || []} isAdmin={user?.role === 'admin'} />}
+          {step === 1 && <Step1_Upload handleDragOver={handleDragOver} handleDrop={handleDrop} handleFileUpload={handleFileUpload} handleUnifiedDrop={handleUnifiedDrop} isBaseUploading={isBaseUploading} step={step} onHelp={onHelp} onOpenDashboard={() => setStep(0)} cleanMode={cleanMode} setCleanMode={setCleanMode} analyzing={analyzing} />}
           {step === 2 && <Step2_SheetSelect step={step} setStep={setStep} fileInfo={fileInfo} setFileInfo={setFileInfo} worksheets={worksheets} setWorksheets={setWorksheets} setSelectedSheets={setSelectedSheets} onHelp={onHelp} handleSecondFileUpload={handleSecondFileUpload} userCities={user?.citiesApproved || []} isAdmin={user?.role === 'admin'} />}
           {step === 3 && <Step3_Mapping step={step} setStep={setStep} selectedSheets={selectedSheets} worksheets={worksheets} mapDefs={mapDefs} setMapDefs={setMapDefs} startProcessing={handleAnalyzeAll} onHelp={onHelp} isBasePurifyMode={isBasePurifyMode} setIsBasePurifyMode={setIsBasePurifyMode} onOpenDbImport={() => setShowDbImport(true)} dbImportReady={dbImportReady} onUserMapping={handleUserMapping} city={fileInfo?.city || ''} />}
           {step === 4 && <LoadingScreen progress={engineProgress} logs={progressLogs} />}
@@ -2542,6 +2551,7 @@ export default function App() {
             month={fileInfo?.month || ''}
             sheets={selectedSheets}
             mapDefs={mapDefs}
+            analysis={analysisSummary}
             onConfirm={handleEasyConfirm}
             onAdvanced={handleEasyToAdvanced}
             onCancel={() => { setShowEasyConfirm(false); setStep(0); }}

@@ -66,13 +66,19 @@ function parseSheet(name, rawJson, dynamicRules) {
   
   const allKws = activeReqKeys.flatMap(r => r.kws).concat(['비고', '연번', 'NO']);
 
-  for (let i = 0; i < Math.min(20, rawJson.length); i++) {
-    const rowStr = rawJson[i].map(c => String(c || '').trim()).join('');
+  // 헤더 탐지: 상위 40행을 스캔(머리말·표지·안내문이 길어도 진짜 헤더를 찾도록).
+  // 키워드 점수 + '바로 아래 행이 데이터처럼 보이면' 가점 → 제목/안내 행 오인 방지.
+  for (let i = 0; i < Math.min(40, rawJson.length); i++) {
+    const row = rawJson[i] || [];
+    const nonEmpty = row.filter(c => String(c).trim() !== '').length;
+    if (nonEmpty <= 2) continue; // 한두 칸짜리 제목/안내 행 제외
+    const rowStr = row.map(c => String(c || '').trim()).join('');
     let score = 0;
     allKws.forEach(kw => { if (rowStr.includes(kw)) score++; });
-    if (score > maxScore && rawJson[i].filter(c => String(c).trim() !== '').length > 2) {
-      maxScore = score; headerIdx = i;
-    }
+    const below = rawJson[i + 1] || [];
+    const belowData = below.filter(c => String(c).trim() !== '').length >= 2;
+    const adjScore = score + (belowData ? 0.5 : 0);
+    if (adjScore > maxScore) { maxScore = adjScore; headerIdx = i; }
   }
 
   // ─── 병합 헤더 처리 ──────────────────────────────────────────────
@@ -437,6 +443,16 @@ function parseSheet(name, rawJson, dynamicRules) {
     colConfidence['구분'] = (typeColIdx >= 0 || type === '기초수급자' || type === '차상위') ? 1 : 0.5;
   }
 
+  // ── 명단 시트 분류 (진짜 명단 vs 통계·요약·안내·빈 시트) ──────────────────
+  // 핵심열(이름·주소·연락처·행정동) 중 2개 이상 + 데이터행 1건 이상 + 시트명이 잡음 아님 → 명단.
+  const ROSTER_CORE = ['이름', '주소', '연락처', '행정동'];
+  const coreMatched = ROSTER_CORE.filter(k => colIndices[k] !== undefined && colIndices[k] !== -1).length;
+  const sheetNameJunk = /통계|요약|집계|개요|총괄|표지|목차|안내|설명|서식|양식|샘플|예시|pivot|피벗|차트|그래프/i.test(String(name));
+  const rosterScore = coreMatched + (bodyRows.length >= 3 ? 1 : 0);
+  const isRosterSheet = !sheetNameJunk && coreMatched >= 2 && bodyRows.length >= 1;
+  // 헤더 이후 실제 명단으로 안 잡힌(합계/소계/빈행/머리말) 행 수
+  const skippedRowCount = Math.max(0, (rawJson.length - (headerIdx + 1)) - bodyRows.length);
+
   return {
     name, selected, type, qty, rowsCount: bodyRows.length,
     headers, bodyRows, headerRowIdx: headerIdx + 1,
@@ -447,6 +463,9 @@ function parseSheet(name, rawJson, dynamicRules) {
     typeColIdx,
     colConfidence,
     ambiguousKeys,
+    isRosterSheet,
+    rosterScore,
+    skippedRowCount,
   };
 }
 
@@ -1383,8 +1402,24 @@ self.onmessage = ({ data }) => {
     );
     const detectedCity = cityCandidates[0] || '';
 
+    // ── 정밀 분석 요약 (명단 시트 자동 선별 + 제외 사유 + 잡음행 수) ──────────
+    const rosterSheetsArr = sheetsData.filter(s => s.isRosterSheet);
+    const excludedSheets = sheetsData.filter(s => !s.isRosterSheet).map(s => {
+      let reason = '명단 핵심열 부족';
+      if (/통계|요약|집계|개요|총괄|표지|목차|안내|설명|서식|양식|샘플|예시|pivot|피벗|차트|그래프/i.test(String(s.name))) reason = '통계·안내·서식 시트';
+      else if ((s.rowsCount || 0) === 0) reason = '데이터 없음(빈 시트)';
+      return { name: s.name, reason };
+    });
+    const analysisSummary = {
+      totalSheets: sheetsData.length,
+      rosterSheets: rosterSheetsArr.length,
+      excludedSheets,
+      totalRows: rosterSheetsArr.reduce((a, s) => a + (s.rowsCount || 0), 0),
+      droppedRows: sheetsData.reduce((a, s) => a + (s.skippedRowCount || 0), 0),
+    };
+
     const monthMatch = fileName.match(/(\d+)월/);
-    self.postMessage({ ok: true, action: 'PARSE_TARGET', sheetsData, detectedCity, cityCandidates, monthStr: monthMatch ? `${monthMatch[1]}월` : '' });
+    self.postMessage({ ok: true, action: 'PARSE_TARGET', sheetsData, detectedCity, cityCandidates, analysisSummary, monthStr: monthMatch ? `${monthMatch[1]}월` : '' });
   } catch (err) {
     self.postMessage({ ok: false, action: data.action, error: err.message });
   }
