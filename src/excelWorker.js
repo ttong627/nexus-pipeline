@@ -216,6 +216,28 @@ function parseSheet(name, rawJson, dynamicRules) {
     }
   }
 
+  // ★ 형식 최종 보정 (CLAUDE.md §5-1, §8): 휴대폰 형식(010/011/016~019)은 무조건 연락처(휴대폰)에.
+  //   유선칸(보조연락처)이 휴대폰 형식인데 휴대폰칸은 휴대폰 형식이 아니면(또는 비었으면) 역할을 바로잡는다.
+  //   easy·advanced 양쪽 모드가 모두 이 colIndices를 그대로 쓰므로 워커에서 한 번에 잡는다.
+  {
+    const sampleP = rawJson.slice(headerIdx + 1, headerIdx + 80);
+    const mobileRatio = (idx) => {
+      if (idx === undefined) return -1;
+      const ds = sampleP.map(r => String(r?.[idx] ?? '').replace(/[^0-9]/g, '')).filter(d => d.length >= 9);
+      if (ds.length < 2) return -1;
+      return ds.filter(d => /^01[016789]/.test(d) && d.length >= 10 && d.length <= 11).length / ds.length;
+    };
+    const c1 = colIndices['연락처'], c2 = colIndices['보조연락처'];
+    const c1Mobile = mobileRatio(c1) >= 0.5;
+    const c2Mobile = mobileRatio(c2) >= 0.5;
+    if (c2 !== undefined && c2Mobile && !c1Mobile) {
+      colIndices['연락처'] = c2;                         // 휴대폰 형식 → 휴대폰칸
+      if (c1 !== undefined) colIndices['보조연락처'] = c1; // 기존 휴대폰칸(지역번호/빈값) → 유선칸
+      else { delete colIndices['보조연락처']; const mi = mappedKeys.indexOf('보조연락처'); if (mi >= 0) mappedKeys.splice(mi, 1); }
+      if (!mappedKeys.includes('연락처')) mappedKeys.push('연락처');
+    }
+  }
+
   // 생년월일 컬럼 자동 탐지 (activeReqKeys에 없어 자동 매핑 안 되던 문제 수정)
   if (colIndices['생년월일'] === undefined) {
     const birthKws = ['생년월일', '생년', '주민등록'];

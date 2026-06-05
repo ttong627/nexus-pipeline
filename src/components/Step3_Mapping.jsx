@@ -74,6 +74,30 @@ function SheetMappingPanel({ sheet, mapDef, setMapDef, worksheets, importNote, s
     if (a) onUserMapping?.(a, 'contact2');
   };
 
+  // 휴대폰 형식(010/011/016~019, 10~11자리) 비율 — CLAUDE.md §5-1, §8.
+  const mobileRatioOf = (header) => {
+    const ds = previewData.map(r => String(r[header] ?? '').replace(/[^0-9]/g, '')).filter(d => d.length >= 9);
+    if (ds.length < 2) return -1; // 표본 부족 → 판정 불가
+    return ds.filter(d => /^01[016789]/.test(d) && d.length >= 10 && d.length <= 11).length / ds.length;
+  };
+
+  // ★ 규칙 강제: 전화 2개 중 '휴대폰 형식(010)' 칼럼은 무조건 휴대폰(contact1)에 매칭한다.
+  //    저장된 매핑/잔재가 010을 유선칸에 거꾸로 넣어놨어도 형식이 이긴다. (CLAUDE.md §5-1, §8)
+  useEffect(() => {
+    if (!isPhonePaired) return;
+    const [a, b] = phoneCols;
+    const aMobile = mobileRatioOf(a) >= 0.5;
+    const bMobile = mobileRatioOf(b) >= 0.5;
+    let mobile, land;
+    if (aMobile && !bMobile) { mobile = a; land = b; }
+    else if (bMobile && !aMobile) { mobile = b; land = a; }
+    else return; // 둘 다 휴대폰형식이거나 둘 다 아님 → 형식으로 못 가르므로 강제 안 함(수동/스왑 허용)
+    if (mapDef.contact1 !== mobile || mapDef.contact2 !== land) {
+      setMapDef({ ...mapDef, contact1: mobile, contact2: land });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sheet?.name, sheet?.fileSource]);
+
   // ✅ 방어: 헤더가 아예 없으면 매핑 불가 안내 표시
   if (headers.length === 0) {
     return (
