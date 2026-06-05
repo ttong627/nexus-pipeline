@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react';
 import * as XLSX from 'xlsx';
 import { ArrowLeft, AlertTriangle, Download, Search, X, RefreshCw, MapPin } from 'lucide-react';
+import { orderFieldsByExport } from '../utils/colOrder.js';
 
 const ADDR_FIELDS = [
   { key: '이름',     label: '이름',     minW: '80px' },
@@ -21,7 +22,7 @@ const COORD_FIELDS = [
   { key: '특이사항', label: '특이사항', minW: '160px' },
 ];
 
-export default function ErrorListManager({ gridData, onBack, handleCellEdit, handleAddressKeyDown, handleExportErrors, onRepurifyErrors }) {
+export default function ErrorListManager({ gridData, onBack, handleCellEdit, handleAddressKeyDown, handleExportErrors, onRepurifyErrors, exportColOrder = [] }) {
   const [activeTab, setActiveTab] = useState('address');
   const [search, setSearch] = useState('');
   const [editingCell, setEditingCell] = useState(null);
@@ -38,7 +39,11 @@ export default function ErrorListManager({ gridData, onBack, handleCellEdit, han
   [gridData]);
 
   const currentRows = activeTab === 'address' ? addrErrorRows : coordMissingRows;
-  const currentFields = activeTab === 'address' ? ADDR_FIELDS : COORD_FIELDS;
+  // 칼럼 순서·표시 — exportColOrder(전역, 엑셀·정제결과와 공유) 기준으로 재정렬
+  const currentFields = useMemo(
+    () => orderFieldsByExport(activeTab === 'address' ? ADDR_FIELDS : COORD_FIELDS, exportColOrder),
+    [activeTab, exportColOrder]
+  );
 
   const displayed = useMemo(() => {
     const q = search.trim().toLowerCase();

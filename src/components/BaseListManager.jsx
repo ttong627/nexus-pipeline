@@ -1,15 +1,17 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import * as XLSX from 'xlsx';
 import {
   db, collection, getDocs, getDocsFromServer, getDoc, setDoc, doc, deleteDoc, writeBatch, serverTimestamp, query, where
 } from '../config/firebase.js';
 import {
   Database, Upload, Trash2, ArrowLeft, AlertCircle,
-  Download, Search, Save, Clock, RotateCcw, FileSpreadsheet, X, RefreshCw, Calendar
+  Download, Search, Save, Clock, RotateCcw, FileSpreadsheet, X, RefreshCw, Calendar, Columns
 } from 'lucide-react';
 
 import { normalizeBirth, parsePhoneNumbers, formatPhoneInput } from '../utils/parsers.js';
 import { REGIONS } from '../utils/regions.js';
+import ColOrderPanel from './ColOrderPanel.jsx';
+import { orderFieldsByExport } from '../utils/colOrder.js';
 
 const FIELDS = [
   { key: 'name',     label: '성명',     minW: '90px'  },
@@ -26,9 +28,14 @@ const fmtDate = (ts) => {
   return `${d.getFullYear()}.${String(d.getMonth()+1).padStart(2,'0')}.${String(d.getDate()).padStart(2,'0')}`;
 };
 
-export default function BaseListManager({ user, onBack, initialCity = '' }) {
+export default function BaseListManager({ user, onBack, initialCity = '', exportColOrder = [], setExportColOrder, defaultExportCols = [] }) {
   const isAdmin = user?.role === 'admin';
   const citiesApproved = user?.citiesApproved || [];
+
+  // 칼럼 순서·표시 — exportColOrder(전역, 엑셀·정제결과와 공유) 기준으로 FIELDS 재정렬
+  const orderedFields = useMemo(() => orderFieldsByExport(FIELDS, exportColOrder), [exportColOrder]);
+  const [showColOrder, setShowColOrder] = useState(false);
+  const colOrderBtnRef = useRef(null);
   const TIER_QUOTAS = { basic: 0, vip: 2, vvip: 10, sapphire: 999 };
   const maxCities = TIER_QUOTAS[user?.tier || 'basic'] || 0;
 
@@ -1024,6 +1031,38 @@ export default function BaseListManager({ user, onBack, initialCity = '' }) {
                   초기화
                 </button>
               )}
+              {/* 칼럼 순서·표시 (엑셀·정제결과와 공유) */}
+              {setExportColOrder && exportColOrder.length > 0 && (
+                <div className="relative shrink-0">
+                  <button
+                    ref={colOrderBtnRef}
+                    onClick={() => setShowColOrder(v => !v)}
+                    title="칼럼 순서·표시 설정 (엑셀·정제결과 화면과 공유)"
+                    className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-[11px] font-bold border transition-colors ${
+                      showColOrder
+                        ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-300'
+                        : 'bg-[#0d1a0d] border-[#1a3a1a] text-emerald-500/70 hover:text-emerald-300 hover:border-emerald-500/40'
+                    }`}
+                  >
+                    <Columns size={12} />
+                    칼럼
+                    {exportColOrder.filter(c => !c.on).length > 0 && (
+                      <span className="w-4 h-4 bg-amber-500 text-black text-[9px] font-black rounded-full flex items-center justify-center">
+                        {exportColOrder.filter(c => !c.on).length}
+                      </span>
+                    )}
+                  </button>
+                  {showColOrder && (
+                    <ColOrderPanel
+                      cols={exportColOrder}
+                      onChange={(next) => setExportColOrder(next)}
+                      onReset={() => setExportColOrder(defaultExportCols)}
+                      onClose={() => setShowColOrder(false)}
+                      anchorRef={colOrderBtnRef}
+                    />
+                  )}
+                </div>
+              )}
               <span className="text-[11px] text-gray-600">
                 {displayRecords.length.toLocaleString()}건 표시
                 {records.length > 0 && ` (전체 ${records.length.toLocaleString()}건 중)`}
@@ -1069,7 +1108,7 @@ export default function BaseListManager({ user, onBack, initialCity = '' }) {
                 <thead className="sticky top-0 z-10">
                   <tr className="bg-[#0c0c0c] border-b border-[#1e1e1e]">
                     <th className="px-3 py-2.5 text-left text-[10px] text-gray-700 font-bold uppercase tracking-wider w-9">#</th>
-                    {FIELDS.map(f => (
+                    {orderedFields.map(f => (
                       <th key={f.key} style={{ minWidth: f.minW }} className="px-3 py-2.5 text-left text-[10px] text-gray-600 font-bold uppercase tracking-wider">
                         {f.label}
                       </th>
@@ -1091,7 +1130,7 @@ export default function BaseListManager({ user, onBack, initialCity = '' }) {
                             {idx + 1}
                           </span>
                         </td>
-                        {FIELDS.map(f => (
+                        {orderedFields.map(f => (
                           <td key={f.key} style={{ minWidth: f.minW }} className="px-3 py-2 max-w-0">
                             {renderCell(r, f.key)}
                           </td>

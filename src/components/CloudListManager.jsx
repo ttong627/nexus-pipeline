@@ -11,12 +11,14 @@ import {
   Cloud, Trash2, ArrowLeft, Download, Calendar, FileSpreadsheet,
   AlertCircle, ChevronRight, Search, Save, RotateCcw, X, CheckCircle, MapPin,
   Building2, DatabaseZap, Ghost, BookOpen, Phone, RefreshCw, LayoutGrid,
-  Wand2, AlertTriangle, List, Eraser,
+  Wand2, AlertTriangle, List, Eraser, Columns,
 } from 'lucide-react';
 import OrgPresetModal from './OrgPresetModal.jsx';
 import CoordBrushModal from './CoordBrushModal.jsx';
+import ColOrderPanel from './ColOrderPanel.jsx';
 import { processAddress, asyncPool } from '../engine/addressEngine.js';
 import { canUseCoords, canUseCoordsBg } from '../utils/tierUtils.js';
+import { orderFieldsByExport } from '../utils/colOrder.js';
 
 const KAKAO_REST_KEY = import.meta.env.VITE_KAKAO_REST_KEY;
 
@@ -136,7 +138,7 @@ const CellInput = memo(function CellInput({ type, opts, initial, onCommit, onCan
   );
 });
 
-const VirtualTable = memo(function VirtualTable({ displayRecords, dirtyRecords, deletedRecordIds, loadingRecords, records, renderCell, setDeletedRecordIds }) {
+const VirtualTable = memo(function VirtualTable({ fields, displayRecords, dirtyRecords, deletedRecordIds, loadingRecords, records, renderCell, setDeletedRecordIds }) {
   const scrollRef = useRef(null);
 
   const virtualizer = useVirtualizer({
@@ -176,7 +178,7 @@ const VirtualTable = memo(function VirtualTable({ displayRecords, dirtyRecords, 
           <thead className="sticky top-0 z-10">
             <tr className="bg-[#0c0c0c] border-b border-[#1e1e1e]">
               <th className="px-3 py-2.5 text-left text-[10px] text-gray-700 font-bold uppercase tracking-wider w-9">#</th>
-              {CLOUD_FIELDS.map(f => (
+              {fields.map(f => (
                 <th key={f.key} style={{ minWidth: f.minW }} className={`px-3 py-2.5 text-left text-[10px] font-bold uppercase tracking-wider ${f.key === '기사' || f.key === '배송순번' ? 'text-[#3b82f6]/60' : 'text-gray-600'}`}>
                   {f.label}
                 </th>
@@ -186,7 +188,7 @@ const VirtualTable = memo(function VirtualTable({ displayRecords, dirtyRecords, 
             </tr>
           </thead>
           <tbody>
-            {paddingTop > 0 && <tr><td style={{ height: paddingTop }} colSpan={CLOUD_FIELDS.length + 3} /></tr>}
+            {paddingTop > 0 && <tr><td style={{ height: paddingTop }} colSpan={fields.length + 3} /></tr>}
             {vItems.map(vRow => {
               const r = displayRecords[vRow.index];
               const isDirtyRow = !!dirtyRecords[r.id];
@@ -202,7 +204,7 @@ const VirtualTable = memo(function VirtualTable({ displayRecords, dirtyRecords, 
                       {vRow.index + 1}
                     </span>
                   </td>
-                  {CLOUD_FIELDS.map(f => (
+                  {fields.map(f => (
                     <td key={f.key} style={{ minWidth: f.minW }} className="px-3 py-2 max-w-0">
                       {renderCell(r, f)}
                     </td>
@@ -222,7 +224,7 @@ const VirtualTable = memo(function VirtualTable({ displayRecords, dirtyRecords, 
                 </tr>
               );
             })}
-            {paddingBottom > 0 && <tr><td style={{ height: paddingBottom }} colSpan={CLOUD_FIELDS.length + 3} /></tr>}
+            {paddingBottom > 0 && <tr><td style={{ height: paddingBottom }} colSpan={fields.length + 3} /></tr>}
           </tbody>
         </table>
       </div>
@@ -236,9 +238,14 @@ const VirtualTable = memo(function VirtualTable({ displayRecords, dirtyRecords, 
   );
 });  // end VirtualTable (memo)
 
-export default function CloudListManager({ user, onBack, initialCity = '', onOpenRouteMap, onOpenInResultGrid }) {
+export default function CloudListManager({ user, onBack, initialCity = '', onOpenRouteMap, onOpenInResultGrid, exportColOrder = [], setExportColOrder, defaultExportCols = [] }) {
   const isAdmin = user?.role === 'admin';
   const approvedCities = user?.citiesApproved || [];
+
+  // 칼럼 순서·표시 — exportColOrder(전역, 엑셀·정제결과와 공유) 기준으로 CLOUD_FIELDS 재정렬
+  const orderedFields = useMemo(() => orderFieldsByExport(CLOUD_FIELDS, exportColOrder), [exportColOrder]);
+  const [showColOrder, setShowColOrder] = useState(false);
+  const colOrderBtnRef = useRef(null);
 
   // City selection — initialCity에서 시도/시군구 파싱
   const initParts = initialCity.trim().split(/\s+/);
@@ -1714,6 +1721,38 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
                     초기화
                   </button>
                 )}
+                {/* 칼럼 순서·표시 (엑셀·정제결과와 공유) */}
+                {setExportColOrder && exportColOrder.length > 0 && (
+                  <div className="relative shrink-0">
+                    <button
+                      ref={colOrderBtnRef}
+                      onClick={() => setShowColOrder(v => !v)}
+                      title="칼럼 순서·표시 설정 (엑셀·정제결과 화면과 공유)"
+                      className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-[11px] font-bold border transition-colors ${
+                        showColOrder
+                          ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-300'
+                          : 'bg-[#0d1a0d] border-[#1a3a1a] text-emerald-500/70 hover:text-emerald-300 hover:border-emerald-500/40'
+                      }`}
+                    >
+                      <Columns size={12} />
+                      칼럼
+                      {exportColOrder.filter(c => !c.on).length > 0 && (
+                        <span className="w-4 h-4 bg-amber-500 text-black text-[9px] font-black rounded-full flex items-center justify-center">
+                          {exportColOrder.filter(c => !c.on).length}
+                        </span>
+                      )}
+                    </button>
+                    {showColOrder && (
+                      <ColOrderPanel
+                        cols={exportColOrder}
+                        onChange={(next) => setExportColOrder(next)}
+                        onReset={() => setExportColOrder(defaultExportCols)}
+                        onClose={() => setShowColOrder(false)}
+                        anchorRef={colOrderBtnRef}
+                      />
+                    )}
+                  </div>
+                )}
                 <span className="text-[11px] text-gray-600">
                   {displayRecords.length.toLocaleString()}건 표시
                   {(searchText || filterGubun || filterDong) && ` (전체 ${records.filter(r => !deletedRecordIds.has(r.id)).length.toLocaleString()}건 중)`}
@@ -1748,6 +1787,7 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
 
               {/* Records table — Virtual Scroll */}
               <VirtualTable
+                fields={orderedFields}
                 displayRecords={displayRecords}
                 dirtyRecords={dirtyRecords}
                 deletedRecordIds={deletedRecordIds}
