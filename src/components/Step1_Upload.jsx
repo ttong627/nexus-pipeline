@@ -1,14 +1,12 @@
 import React from 'react';
-import { UploadCloud, Loader2, Sparkles, Settings2, LayoutDashboard, User, MapPin, CheckCircle2 } from 'lucide-react';
+import { UploadCloud, Loader2, Sparkles, Settings2, LayoutDashboard } from 'lucide-react';
 
 export default function Step1_Upload({
-  handleDragOver, handleDrop, handleFileUpload, handleUnifiedDrop, isBaseUploading, step, onHelp, onCloudFetch, onOpenDashboard,
+  handleDragOver, handleDrop, handleFileUpload, handleUnifiedDrop, isBaseUploading, step, onHelp, onOpenDashboard,
   cleanMode = 'easy', setCleanMode,
-  operatorName = '', setOperatorName, selectedCity = '', setSelectedCity, userCities = [], isAdmin = false,
 }) {
   if (step !== 1) return null;
   const isEasy = cleanMode === 'easy';
-  const ready = !!(operatorName?.trim() && selectedCity?.trim()); // 이름+지자체 입력 후 업로드 열림
 
   return (
     <div className="absolute inset-0 overflow-y-auto">
@@ -30,7 +28,7 @@ export default function Step1_Upload({
 
       {/* ── 본문 ── */}
       <div className="min-h-[calc(100%-58px)] flex items-center justify-center px-6 py-8">
-        <div className="w-full max-w-3xl flex flex-col gap-6">
+        <div className="w-full max-w-3xl flex flex-col gap-7">
 
           {/* 헤더 */}
           <div className="text-center">
@@ -39,68 +37,14 @@ export default function Step1_Upload({
             </div>
             <h1 className="text-3xl sm:text-4xl font-black text-white tracking-tight">명단 정제 시작하기</h1>
             <p className="text-gray-500 text-sm sm:text-base mt-2.5 leading-relaxed">
-              담당자와 지자체를 확인하고, 방식을 고른 뒤 파일을 올려주세요.
+              엑셀 명단을 올리면 주소·연락처를 자동으로 정제합니다.<br className="hidden sm:block" />
+              방식을 고르고 파일을 올려주세요.
             </p>
           </div>
 
-          {/* ── 1) 담당자 · 지자체 확인 ── */}
-          <div className="rounded-2xl border border-[#1a2725] bg-[#0a0f0e] p-5">
-            <div className="flex items-center gap-2 mb-3">
-              <span className="w-5 h-5 rounded-full bg-emerald-500/20 text-emerald-200 text-[10px] font-black flex items-center justify-center border border-emerald-400/30">1</span>
-              <p className="text-gray-300 text-sm font-black">담당자 · 지자체 확인</p>
-              {ready && <CheckCircle2 size={15} className="text-emerald-400 ml-1" />}
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <label className="block text-[11px] text-gray-500 font-bold mb-1.5">담당자 이름</label>
-                <div className="relative">
-                  <User size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-600" />
-                  <input
-                    value={operatorName}
-                    onChange={e => setOperatorName?.(e.target.value)}
-                    placeholder="이름 입력"
-                    className="w-full pl-9 pr-3 py-2.5 bg-[#070b0a] border border-[#1f2a28] rounded-xl text-white text-sm focus:border-emerald-400 outline-none transition-colors"
-                  />
-                </div>
-              </div>
-              <div>
-                <label className="block text-[11px] text-gray-500 font-bold mb-1.5">지자체</label>
-                <div className="relative">
-                  <MapPin size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-600 z-10" />
-                  {isAdmin ? (
-                    <>
-                      <input
-                        list="step1-city-options"
-                        value={selectedCity}
-                        onChange={e => setSelectedCity?.(e.target.value)}
-                        placeholder="지자체 입력 또는 선택"
-                        className="w-full pl-9 pr-3 py-2.5 bg-[#070b0a] border border-[#1f2a28] rounded-xl text-white text-sm focus:border-emerald-400 outline-none transition-colors"
-                      />
-                      <datalist id="step1-city-options">
-                        {userCities.map((c, i) => <option key={i} value={c} />)}
-                      </datalist>
-                    </>
-                  ) : (
-                    <select
-                      value={selectedCity}
-                      onChange={e => setSelectedCity?.(e.target.value)}
-                      className="w-full pl-9 pr-3 py-2.5 bg-[#070b0a] border border-[#1f2a28] rounded-xl text-white text-sm focus:border-emerald-400 outline-none appearance-none transition-colors"
-                    >
-                      <option value="">지자체 선택</option>
-                      {userCities.map((c, i) => <option key={i} value={c}>{c}</option>)}
-                    </select>
-                  )}
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* ── 2) 정제 방식 선택 ── */}
+          {/* ── 정제 방식 선택 ── */}
           <div>
-            <div className="flex items-center justify-center gap-2 mb-3">
-              <span className="w-5 h-5 rounded-full bg-emerald-500/20 text-emerald-200 text-[10px] font-black flex items-center justify-center border border-emerald-400/30">2</span>
-              <p className="text-gray-500 text-xs font-black tracking-widest uppercase">정제 방식 선택</p>
-            </div>
+            <p className="text-center text-gray-500 text-xs font-black tracking-widest uppercase mb-3">정제 방식 선택</p>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
               <button
                 onClick={() => setCleanMode?.('easy')}
@@ -134,67 +78,56 @@ export default function Step1_Upload({
             </div>
           </div>
 
-          {/* ── 3) 파일 업로드 (이름+지자체 입력 후 활성화) ── */}
-          <div>
-            <div className="flex items-center justify-center gap-2 mb-3">
-              <span className="w-5 h-5 rounded-full bg-emerald-500/20 text-emerald-200 text-[10px] font-black flex items-center justify-center border border-emerald-400/30">3</span>
-              <p className="text-gray-500 text-xs font-black tracking-widest uppercase">파일 업로드</p>
-            </div>
-            {!ready && (
-              <p className="text-center text-amber-400/90 text-xs font-bold mb-2">
-                담당자 이름과 지자체를 먼저 입력하면 업로드가 열립니다
-              </p>
-            )}
-            <label
-              onDragOver={ready ? handleDragOver : undefined}
-              onDrop={ready ? (e) => {
-                e.preventDefault(); e.stopPropagation();
-                if (e.dataTransfer?.files?.length >= 2) handleUnifiedDrop(e);
-                else handleFileUpload(e);
-              } : (e) => { e.preventDefault(); }}
-              className={`
-                relative flex flex-col items-center py-20 px-10
-                bg-[#090f0d]/80 backdrop-blur-xl
-                border-2 border-dashed rounded-3xl transition-all duration-200 group
-                ${!ready ? 'opacity-45 cursor-not-allowed border-[#1f2a28]'
-                  : isBaseUploading ? 'border-emerald-500/60 bg-emerald-950/10 cursor-pointer'
-                  : 'border-emerald-500/30 hover:border-emerald-400/70 hover:bg-emerald-950/10 cursor-pointer'}
-              `}
-              style={{ boxShadow: '0 0 0 1px rgba(16,185,129,0.04) inset, 0 24px 70px rgba(0,0,0,0.5)' }}
-            >
-              <div className="absolute inset-0 rounded-3xl bg-gradient-to-b from-emerald-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none" />
+          {/* ── 파일 업로드 ── */}
+          <label
+            onDragOver={handleDragOver}
+            onDrop={(e) => {
+              e.preventDefault(); e.stopPropagation();
+              if (e.dataTransfer?.files?.length >= 2) handleUnifiedDrop(e);
+              else handleFileUpload(e);
+            }}
+            className={`
+              relative flex flex-col items-center py-20 px-10
+              bg-[#090f0d]/80 backdrop-blur-xl
+              border-2 border-dashed rounded-3xl cursor-pointer transition-all duration-200 group
+              ${isBaseUploading
+                ? 'border-emerald-500/60 bg-emerald-950/10'
+                : 'border-emerald-500/30 hover:border-emerald-400/70 hover:bg-emerald-950/10'}
+            `}
+            style={{ boxShadow: '0 0 0 1px rgba(16,185,129,0.04) inset, 0 24px 70px rgba(0,0,0,0.5)' }}
+          >
+            <div className="absolute inset-0 rounded-3xl bg-gradient-to-b from-emerald-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none" />
 
-              {isBaseUploading ? (
-                <div className="relative mb-6"><Loader2 size={60} className="text-emerald-400 animate-spin" /></div>
-              ) : (
-                <div className="relative mb-6">
-                  <div className="w-20 h-20 rounded-3xl bg-emerald-950/60 border border-emerald-500/30 flex items-center justify-center group-hover:border-emerald-400/60 group-hover:scale-105 transition-all">
-                    <UploadCloud size={40} className="text-emerald-400 group-hover:text-emerald-300 transition-colors" />
-                  </div>
+            {isBaseUploading ? (
+              <div className="relative mb-6"><Loader2 size={60} className="text-emerald-400 animate-spin" /></div>
+            ) : (
+              <div className="relative mb-6">
+                <div className="w-20 h-20 rounded-3xl bg-emerald-950/60 border border-emerald-500/30 flex items-center justify-center group-hover:border-emerald-400/60 group-hover:scale-105 transition-all">
+                  <UploadCloud size={40} className="text-emerald-400 group-hover:text-emerald-300 transition-colors" />
                 </div>
-              )}
+              </div>
+            )}
 
-              <h3 className="text-2xl font-black text-white mb-2.5 tracking-tight text-center">
-                {isBaseUploading ? '기초 명단 파싱 중...' : '엑셀 파일을 끌어다 놓거나 클릭하여 선택'}
-              </h3>
-              <p className="text-gray-500 text-center text-sm font-medium leading-relaxed">
-                {isBaseUploading ? '잠시만 기다려 주세요' : '.xlsx · .xls · .csv 형식 지원 · 복수 파일 동시 업로드 가능'}
-              </p>
+            <h3 className="text-2xl font-black text-white mb-2.5 tracking-tight text-center">
+              {isBaseUploading ? '기초 명단 파싱 중...' : '엑셀 파일을 끌어다 놓거나 클릭하여 선택'}
+            </h3>
+            <p className="text-gray-500 text-center text-sm font-medium leading-relaxed">
+              {isBaseUploading ? '잠시만 기다려 주세요' : '.xlsx · .xls · .csv 형식 지원 · 복수 파일 동시 업로드 가능'}
+            </p>
 
-              <input
-                type="file"
-                multiple
-                className="hidden"
-                accept=".xlsx,.xls,.csv"
-                onChange={(e) => {
-                  if (e.target.files.length >= 2) handleUnifiedDrop(e);
-                  else handleFileUpload(e);
-                  e.target.value = '';
-                }}
-                disabled={isBaseUploading || !ready}
-              />
-            </label>
-          </div>
+            <input
+              type="file"
+              multiple
+              className="hidden"
+              accept=".xlsx,.xls,.csv"
+              onChange={(e) => {
+                if (e.target.files.length >= 2) handleUnifiedDrop(e);
+                else handleFileUpload(e);
+                e.target.value = '';
+              }}
+              disabled={isBaseUploading}
+            />
+          </label>
 
         </div>
       </div>

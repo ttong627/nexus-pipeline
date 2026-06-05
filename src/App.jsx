@@ -73,6 +73,20 @@ const mergeUniqueText = (...parts) => {
   return tokens.join(' ').trim();
 };
 
+// 비고 → 특이사항: 배송에 필요한 '세부 주소·배송 안내'만 추출한다.
+// 예) 가져옴: "2층 301호", "쪽문 돌아 첫번째 문", "경비실 맡김", "부재시 문앞"
+//     버림:  "현금 공제", "환급 신청", "소득 자격" 등 행정·재정 잡음(쓰레기 데이터 방지)
+const NOTE_JUNK_RE = /현금|공제|환급|환수|납부|미납|체납|정산|소득|재산|계좌|지원금|보조금|바우처|포인트|감액|증액|신청|자격|선정|해지|중지|자부담|본인부담|급여|연금|결제|등급|세대주|주민번호/;
+const NOTE_DELIVERY_RE = /(\d+\s*층)|(\d+\s*호)|(\d+\s*동)|지하|반지하|지층|지하층|옥탑|옥상|문|경비|부재|계단|엘리베|승강기|E\/?V|현관|대문|쪽문|뒷문|우편함|택배|방문|호출|초인종|벨|인터폰|골목|주차|복도|단지|빌라|연립|다세대|상가|사무실|별채|돌아|첫번째|두번째|세번째|끝집|모퉁이|올라|내려|좌측|우측|왼쪽|오른쪽|맡(겨|김|기)/;
+const extractDeliveryNote = (raw) => {
+  const text = String(raw || '').trim();
+  if (!text) return '';
+  // 쉼표·슬래시·세미콜론·줄바꿈·중점으로 세그먼트 분리 → 배송 신호 있고 잡음 없는 세그먼트만 유지
+  const segs = text.split(/[,/;·\n]+/).map(s => s.trim()).filter(Boolean);
+  const kept = segs.filter(s => NOTE_DELIVERY_RE.test(s) && !NOTE_JUNK_RE.test(s));
+  return kept.join(' ').trim();
+};
+
 const ADDRESS_DISPLAY_MODES = {
   PAREN_BEFORE_DETAIL: 'parenBeforeDetail',
   DETAIL_BEFORE_PAREN: 'detailBeforeParen',
@@ -173,7 +187,7 @@ export default function App() {
   const [showAuth, setShowAuth] = useState(true);
   const [authStatus, setAuthStatus] = useState('checking');
   const [authLoading, setAuthLoading] = useState(false);
-  const [step, setStep] = useState(0);
+  const [step, setStep] = useState(1); // 첫 화면 = 파일 업로드(명단 정제). 지자체 현황은 상단 버튼/홈으로 이동
   const [fileInfo, setFileInfo] = useState(null);
   const [worksheets, setWorksheets] = useState([]);
   const [showCityPicker, setShowCityPicker] = useState(false);
@@ -954,7 +968,7 @@ export default function App() {
             특이사항: [
               processedRow.특이사항,
               phoneNotes,
-              getVal(row, 'note'),
+              extractDeliveryNote(getVal(row, 'note')), // 비고: 배송 안내(층·호·문 등)만, 현금공제 등 잡음 제외
               importedNote,
             ].filter(Boolean).join(' ').trim() || "",
             기사: getVal(row, 'driver') || importedDriver || "",
@@ -2155,7 +2169,7 @@ export default function App() {
       setShowAuth(true);
       setAuthStatus('unauthenticated');
       setAuthLoading(false);
-      setStep(0);
+      setStep(1);
       setGridData([]);
       setFileInfo(null);
       setWorksheets([]);
