@@ -145,6 +145,45 @@ function parseSheet(name, rawJson, dynamicRules) {
     }
   }
 
+  // ── 형식(내용) 기반 전화 칼럼 확정 (§5-1): 휴대폰=010 형식 다수, 유선=지역번호 ──
+  // 헤더 키워드/순서가 아니라 실제 데이터 형식으로 휴대폰·유선을 가른다.
+  {
+    const digits = (v) => String(v ?? '').replace(/[^0-9]/g, '');
+    const isMobile = (d) => /^01[016789]/.test(d) && d.length >= 10 && d.length <= 11;
+    const isLandline = (d) => /^0[2-6]/.test(d) && !isMobile(d) && d.length >= 9 && d.length <= 11;
+    const candSet = new Set();
+    if (colIndices['연락처'] !== undefined) candSet.add(colIndices['연락처']);
+    if (colIndices['보조연락처'] !== undefined) candSet.add(colIndices['보조연락처']);
+    headers.forEach((h, i) => {
+      const hn = normalizeH(h);
+      if (['휴대', '연락', '전화', '유선', '핸드폰', '핸드', '모바일', '휴폰', '폰'].some(k => hn.includes(normalizeH(k)))) candSet.add(i);
+    });
+    const sample = rawJson.slice(headerIdx + 1, headerIdx + 80);
+    const stats = [...candSet].map((idx) => {
+      const ds = sample.map((r) => digits(r?.[idx])).filter((d) => d.length >= 9);
+      const n = ds.length;
+      return { idx, n, mobile: n ? ds.filter(isMobile).length / n : 0, land: n ? ds.filter(isLandline).length / n : 0 };
+    }).filter((s) => s.n >= 2);
+    if (stats.length) {
+      const mTop = [...stats].sort((a, b) => b.mobile - a.mobile)[0];
+      const mobileCol = mTop && mTop.mobile >= 0.5 ? mTop.idx : undefined;
+      const lTop = [...stats].filter((s) => s.idx !== mobileCol).sort((a, b) => b.land - a.land)[0];
+      const landCol = lTop && lTop.land >= 0.5 ? lTop.idx : undefined;
+      if (mobileCol !== undefined) {
+        colIndices['연락처'] = mobileCol;                       // 휴대폰 = 010 형식 칼럼
+        if (!mappedKeys.includes('연락처')) mappedKeys.push('연락처');
+      }
+      if (landCol !== undefined && landCol !== mobileCol) {
+        colIndices['보조연락처'] = landCol;                     // 유선 = 지역번호 칼럼
+        if (!mappedKeys.includes('보조연락처')) mappedKeys.push('보조연락처');
+      }
+      if (colIndices['보조연락처'] !== undefined && colIndices['보조연락처'] === colIndices['연락처']) {
+        delete colIndices['보조연락처'];                        // 휴대=보조 충돌 방지
+        const i = mappedKeys.indexOf('보조연락처'); if (i >= 0) mappedKeys.splice(i, 1);
+      }
+    }
+  }
+
   // 생년월일 컬럼 자동 탐지 (activeReqKeys에 없어 자동 매핑 안 되던 문제 수정)
   if (colIndices['생년월일'] === undefined) {
     const birthKws = ['생년월일', '생년', '주민등록'];
