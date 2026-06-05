@@ -4,6 +4,20 @@ const ttl90 = () => Timestamp.fromMillis(Date.now() + 90 * 24 * 60 * 60 * 1000);
 import { APP_VERSION } from "./version.js";
 import { cleanupExpiredCache } from "./engine/dbCache.js";
 import { refreshSavedCols } from "./utils/colOrder.js";
+import { HOUSEHOLD_EXCL, HOUSEHOLD_RE } from "./columnRules.js";
+
+// 서버 AI 학습 규칙(nexus_config/ai_rules)이 '수량' 키워드에 가구·세대 칼럼을 끼워넣어
+// 기본 제외(excl)를 무력화하는 것을 로드 시점에 차단(이중 방어, 워커 최종가드와 병행). CLAUDE.md §5
+const sanitizeAiRules = (rules) => {
+  if (!rules || !Array.isArray(rules.reqKeys)) return rules;
+  const reqKeys = rules.reqKeys.map(r => {
+    if (r?.k !== '수량') return r;
+    const kws = Array.isArray(r.kws) ? r.kws.filter(k => !HOUSEHOLD_RE.test(String(k).replace(/\s+/g, ''))) : r.kws;
+    const excl = Array.from(new Set([...(r.excl || []), ...HOUSEHOLD_EXCL]));
+    return { ...r, kws, excl };
+  });
+  return { ...rules, reqKeys };
+};
 
 // ── 즉시 로드 (초기 화면에 필요)
 import Dashboard from "./components/Dashboard.jsx";
@@ -485,7 +499,7 @@ export default function App() {
         }
         
         const rulesDoc = await getDoc(doc(db, "nexus_config", "ai_rules"));
-        if (rulesDoc.exists()) setAiRules(rulesDoc.data());
+        if (rulesDoc.exists()) setAiRules(sanitizeAiRules(rulesDoc.data()));
         
         await loadTypoDict();
         

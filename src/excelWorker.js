@@ -136,6 +136,9 @@ function parseSheet(name, rawJson, dynamicRules) {
   activeReqKeys.forEach(req => {
     const idx = headers.findIndex(h => {
       const hn = normalizeH(h);
+      // 수량은 '가구·세대' 칼럼을 절대 매칭하지 않는다 → findIndex가 건너뛰어 진짜 포수 칼럼을 집는다.
+      // (AI규칙 reqKeys가 '가구원수'를 키워드로 끼워넣어도 출처 무관하게 차단. CLAUDE.md §5)
+      if (req.k === '수량' && HOUSEHOLD_RE.test(hn)) return false;
       return req.kws.some(k => hn.includes(normalizeH(k))) &&
         !(req.excl || []).some(e => hn.includes(normalizeH(e)));
     });
@@ -376,6 +379,12 @@ function parseSheet(name, rawJson, dynamicRules) {
       row[effectiveAmtIdx] = total || 1;
     });
     colIndices['수량'] = effectiveAmtIdx;
+  }
+
+  // ★ 최종 무조건 가드(중복 안전망): 어떤 경로로든 수량이 '가구·세대' 칼럼에 잡혀 있으면 무조건 해제.
+  //    (allAmtIdxs는 이미 가구 제외라 effectiveAmtIdx는 가구가 아님 → 합산값은 그대로 유효) CLAUDE.md §5
+  if (colIndices['수량'] !== undefined && HOUSEHOLD_RE.test(normalizeH(headers[colIndices['수량']] || ''))) {
+    delete colIndices['수량'];
   }
 
   let qty = 0;

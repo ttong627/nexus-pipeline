@@ -2,9 +2,9 @@
 import { Columns, ChevronLeft, Database, CheckCircle, Loader2, X } from 'lucide-react';
 import { isHouseholdHeader } from '../columnRules.js';
 
-// 수량(포수)은 진행을 막지 않는다 — 수급자 명단은 포수 칼럼이 없으면 전원 1포 처리(CLAUDE.md C-4).
-// 가구원수 같은 인원 칼럼을 억지로 포수로 잡지 않도록 '수량 미설정'을 허용한다.
-const REQUIRED_KEYS = ['name', 'contact1', 'address', 'admin'];
+// 수량(포수)은 필수다 — 절대 미설정(→1포 기본)으로 넘기지 않는다. 가구원수 같은 인원 칼럼만
+// 자동매칭에서 제외하고, 진짜 포수 칼럼은 반드시 매칭/지정하도록 강제한다.
+const REQUIRED_KEYS = ['name', 'contact1', 'address', 'qty', 'admin'];
 const FIELD_META = {
   name:     { label: '성명',       short: '[성명]',   color: 'text-blue-300',   bg: 'bg-blue-950/40',   border: 'border-blue-700/50' },
   contact1: { label: '연락처',     short: '[연락처]', color: 'text-blue-300',  bg: 'bg-blue-950/40',  border: 'border-blue-700/50' },
@@ -72,22 +72,16 @@ function SheetMappingPanel({ sheet, mapDef, setMapDef, worksheets, importNote, s
             { key: 'name',     label: '성명 (이름)' },
             { key: 'contact1', label: '연락처 (휴대폰)' },
             { key: 'address',  label: '주소' },
-            { key: 'qty',      label: '수량 (포수)', optional: true },
+            { key: 'qty',      label: '수량 (포수)' },
             { key: 'admin',    label: '행정구역 (읍면동)' },
-          ].map(({ key, label, optional }) => {
+          ].map(({ key, label }) => {
             const meta = FIELD_META[key];
             const isMapped = !!mapDef[key];
-            // 수량(포수)은 선택 항목 — 미설정이어도 진행 가능(전원 1포). 빨강 대신 앰버로 안내.
-            const softMissing = optional && !isMapped;
-            const containerCls = isMapped ? `${meta.bg} ${meta.border}` : softMissing ? 'bg-amber-950/20 border-amber-700/40' : 'bg-red-950/20 border-red-800/40';
-            const labelCls = isMapped ? meta.color : softMissing ? 'text-amber-400' : 'text-red-400';
-            const badgeCls = isMapped ? 'bg-blue-900/50 text-blue-400' : softMissing ? 'bg-amber-900/50 text-amber-300' : 'bg-red-900/50 text-red-400';
-            const badgeTxt = isMapped ? '✓ 연결됨' : softMissing ? '선택 · 없으면 1포' : '✕ 누락';
             return (
-              <div key={key} className={`mb-3 p-3 rounded-xl border transition-all ${containerCls}`}>
+              <div key={key} className={`mb-3 p-3 rounded-xl border transition-all ${isMapped ? `${meta.bg} ${meta.border}` : 'bg-red-950/20 border-red-800/40'}`}>
                 <div className="flex items-center justify-between mb-2">
-                  <label className={`text-xs font-black ${labelCls}`}>{label}</label>
-                  <span className={`text-[10px] font-black px-1.5 py-0.5 rounded ${badgeCls}`}>{badgeTxt}</span>
+                  <label className={`text-xs font-black ${isMapped ? meta.color : 'text-red-400'}`}>{label}</label>
+                  <span className={`text-[10px] font-black px-1.5 py-0.5 rounded ${isMapped ? 'bg-blue-900/50 text-blue-400' : 'bg-red-900/50 text-red-400'}`}>{isMapped ? '✓ 연결됨' : '✕ 누락'}</span>
                 </div>
                 <select value={mapDef[key]} onChange={e => updateMap(key, e.target.value)} className="w-full bg-black/60 border border-white/10 text-white font-bold p-2 rounded-lg outline-none text-xs cursor-pointer focus:border-emerald-500">
                   <option value="">-- 컬럼 선택 --</option>
