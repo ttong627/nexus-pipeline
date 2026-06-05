@@ -550,7 +550,7 @@ const ResultGrid = memo(function ResultGrid({
               )}
             </div>
             <button onClick={handleExport} className="px-5 py-2 bg-emerald-400 text-black font-black rounded-lg shadow-[0_0_12px_rgba(52,211,153,0.22)] hover:bg-emerald-300 transition-all flex items-center gap-2 text-xs">
-              <Download size={14} strokeWidth={2.5}/> 표준 명단 패키징
+              <Download size={14} strokeWidth={2.5}/> 명단 다운로드
             </button>
           </div>
         </div>
@@ -697,7 +697,7 @@ const ResultGrid = memo(function ResultGrid({
         {/* ══ Row 3: 검색 + 필터 ══ */}
         <div className="flex items-center gap-2 px-5 py-2 border-b border-[#141414] bg-[#030303] shrink-0 flex-wrap">
           <div className="relative">
-            <svg className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3 h-3 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+            <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.2}><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
             <input
               ref={searchInputRef}
               type="text"
@@ -706,12 +706,12 @@ const ResultGrid = memo(function ResultGrid({
               onKeyDown={e => {
                 if ((e.ctrlKey || e.metaKey) && e.key === 'f') { e.preventDefault(); searchInputRef.current?.focus(); }
               }}
-              placeholder="이름·행정동·주소 검색... (Ctrl+F)"
-              className="nexus-search-input bg-black/60 border border-[#2a2a2a] rounded-lg pl-7 pr-6 py-1.5 text-xs text-white outline-none focus:border-[#3b82f6]/50 placeholder:text-gray-700 w-52"
+              placeholder="이름·행정동·주소 검색  (Ctrl+F)"
+              className="nexus-search-input bg-[#0a1410] border-2 border-emerald-500/50 rounded-xl pl-11 pr-9 py-2.5 text-sm font-bold text-white outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-500/30 focus:bg-[#0c1a13] placeholder:text-gray-500 placeholder:font-normal w-80 shadow-[0_0_14px_rgba(16,185,129,0.18)] transition-all"
             />
             {filter.text && (
-              <button onClick={() => setFilter(f => ({ ...f, text: '' }))} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-600 hover:text-gray-400">
-                <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12"/></svg>
+              <button onClick={() => setFilter(f => ({ ...f, text: '' }))} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-red-400">
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12"/></svg>
               </button>
             )}
           </div>
