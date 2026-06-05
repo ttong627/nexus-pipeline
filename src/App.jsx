@@ -3,6 +3,7 @@ import { auth, onAuthStateChanged, signOut, setDoc, getDoc, updateDoc, deleteDoc
 const ttl90 = () => Timestamp.fromMillis(Date.now() + 90 * 24 * 60 * 60 * 1000);
 import { APP_VERSION } from "./version.js";
 import { cleanupExpiredCache } from "./engine/dbCache.js";
+import { refreshSavedCols } from "./utils/colOrder.js";
 
 // ── 즉시 로드 (초기 화면에 필요)
 import Dashboard from "./components/Dashboard.jsx";
@@ -230,9 +231,9 @@ export default function App() {
   const DEFAULT_EXPORT_COLS = [
     { key: 'NO',      label: 'NO',      on: true },
     { key: '구분',    label: '구분',    on: true },
-    { key: '행정동',  label: '행정동',  on: true },
+    { key: '행정동',  label: '읍면동',  on: true },
     { key: '리',      label: '리',      on: true },
-    { key: '이름',    label: '성명',    on: true },
+    { key: '이름',    label: '이름',    on: true },
     { key: '품명',    label: '품명',    on: true },
     { key: '생년월일',label: '생년월일',on: true },
     { key: '포수',    label: '포수',    on: true },
@@ -248,13 +249,8 @@ export default function App() {
   const [exportColOrder, setExportColOrder] = useState(() => {
     try {
       const saved = localStorage.getItem('nexus_export_cols_v2');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        // 저장된 순서·on 그대로 유지(사용자 재정렬 보존) + DEFAULT에 새로 생긴 칼럼만 뒤에 추가
-        const savedKeys = new Set(parsed.map(c => c.key));
-        const added = DEFAULT_EXPORT_COLS.filter(d => !savedKeys.has(d.key));
-        return [...parsed, ...added];
-      }
+      // 저장된 순서·on·폭은 유지하되 label 등 메타는 DEFAULT 기준으로 최신화(옛 라벨 교정)
+      if (saved) return refreshSavedCols(JSON.parse(saved), DEFAULT_EXPORT_COLS);
     } catch { /* ignore */ }
     return DEFAULT_EXPORT_COLS;
   });
@@ -289,10 +285,8 @@ export default function App() {
     const remoteJson = JSON.stringify(remote);
     if (remoteJson === lastSyncedColsRef.current) return; // 이미 반영됨(에코 방지)
     lastSyncedColsRef.current = remoteJson;
-    // 새 기본 칼럼이 추가된 경우 뒤에 붙임(기존 localStorage merge 정책과 동일)
-    const savedKeys = new Set(remote.map(c => c.key));
-    const added = DEFAULT_EXPORT_COLS.filter(d => !savedKeys.has(d.key));
-    setExportColOrder(added.length ? [...remote, ...added] : remote);
+    // 라벨·메타는 DEFAULT 기준 최신화, on·width·순서는 원격값 유지(새 키 append)
+    setExportColOrder(refreshSavedCols(remote, DEFAULT_EXPORT_COLS));
   }, [user?.exportColOrder]);
   const [showUpgrade, setShowUpgrade] = useState(false);
   const [upgradeReason, setUpgradeReason] = useState('city_limit');

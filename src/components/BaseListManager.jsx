@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import * as XLSX from 'xlsx';
 import {
   db, collection, getDocs, getDocsFromServer, getDoc, setDoc, doc, deleteDoc, writeBatch, serverTimestamp, query, where
@@ -11,16 +12,35 @@ import {
 import { normalizeBirth, parsePhoneNumbers, formatPhoneInput } from '../utils/parsers.js';
 import { REGIONS } from '../utils/regions.js';
 import ColOrderPanel from './ColOrderPanel.jsx';
-import { orderFieldsByExport } from '../utils/colOrder.js';
+import ColResizeHandle from './ColResizeHandle.jsx';
+import { orderFieldsByExport, getColWidth, setColWidthInCols, colCellStyle } from '../utils/colOrder.js';
 
 const FIELDS = [
-  { key: 'name',     label: '성명',     minW: '90px'  },
+  { key: 'name',     label: '이름',     minW: '90px'  },
   { key: 'birthKey', label: '생년월일', minW: '85px'  },
-  { key: 'dong',     label: '행정동',   minW: '75px'  },
+  { key: 'dong',     label: '읍면동',   minW: '75px'  },
   { key: 'mobile',   label: '휴대폰',   minW: '110px' },
   { key: 'landline', label: '유선전화', minW: '110px' },
   { key: 'note',     label: '특이사항', minW: '220px' },
 ];
+
+const ROW_HEIGHT = 36; // px — 가상스크롤 고정 행 높이
+
+// ── 기본명단 레코드 캐시 (sessionStorage, 10분 TTL) — 표시 즉시성용 ──────────────
+const BASE_RECS_CACHE_KEY = 'base_recs_v1';
+const BASE_RECS_CACHE_TTL = 10 * 60 * 1000;
+function readBaseCache(city) {
+  try {
+    const raw = sessionStorage.getItem(`${BASE_RECS_CACHE_KEY}_${city}`);
+    if (!raw) return null;
+    const { ts, data } = JSON.parse(raw);
+    if (Date.now() - ts > BASE_RECS_CACHE_TTL) return null;
+    return data;
+  } catch { return null; }
+}
+function writeBaseCache(city, data) {
+  try { sessionStorage.setItem(`${BASE_RECS_CACHE_KEY}_${city}`, JSON.stringify({ ts: Date.now(), data })); } catch { /* ignore */ }
+}
 
 const fmtDate = (ts) => {
   if (!ts) return '';
@@ -103,6 +123,22 @@ export default function BaseListManager({ user, onBack, initialCity = '', export
       });
   }, [records, dirtyMap, deletedIds, searchText, filterDong, showOnlyWithNote]);
 
+  // 가상스크롤 — 대량 명단도 렉 없이 렌더
+  const scrollRef = useRef(null);
+  const rowVirtualizer = useVirtualizer({
+    count: displayRecords.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => ROW_HEIGHT,
+    overscan: 8,
+  });
+  const vItems = rowVirtualizer.getVirtualItems();
+  const vTotal = rowVirtualizer.getTotalSize();
+  const padTop = vItems.length > 0 ? vItems[0].start : 0;
+  const padBottom = vItems.length > 0 ? vTotal - vItems[vItems.length - 1].end : 0;
+
+  // 칼럼 폭 드래그 → exportColOrder에 저장(계정 동기화)
+  const handleColResize = (key, px) => { if (setExportColOrder) setExportColOrder(prev => setColWidthInCols(prev, key, px)); };
+
   const noteCount = useMemo(() =>
     records.filter(r => !deletedIds.has(r.id) && (dirtyMap[r.id]?.note ?? r.note ?? '').trim()).length,
   [records, dirtyMap, deletedIds]);
@@ -174,17 +210,22 @@ export default function BaseListManager({ user, onBack, initialCity = '', export
   };
 
   const fetchRecords = async (cityId) => {
-    setLoading(true);
+    // 캐시 우선 즉시 표시(체감 로딩 0) → 백그라운드에서 서버 최신값으로 갱신
+    const cached = readBaseCache(cityId);
+    if (cached) { setRecords(cached); setLoading(false); }
+    else setLoading(true);
     try {
       const cityDoc = await getDoc(doc(db, 'base_lists', cityId));
       if (cityDoc.exists() && cityDoc.data().updatedAt) {
         setLastUpdatedAt(fmtDate(cityDoc.data().updatedAt));
       } else setLastUpdatedAt('');
       const snap = await getDocsFromServer(collection(db, `base_lists/${cityId}/records`));
-      setRecords(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+      const recs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      setRecords(recs);
+      writeBaseCache(cityId, recs);
     } catch (e) {
       console.error(e);
-      alert('데이터를 불러오는데 실패했습니다.');
+      if (!cached) alert('데이터를 불러오는데 실패했습니다.');
     } finally { setLoading(false); }
   };
 
@@ -999,10 +1040,10 @@ export default function BaseListManager({ user, onBack, initialCity = '', export
           {selectedCity && hasCityAccess && (
             <div className="shrink-0 border-b border-[#181818] flex items-center px-4 gap-2.5 bg-[#080808] py-2 flex-wrap">
               <div className="relative w-56">
-                <Search size={12} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-600" />
+                <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-emerald-400" />
                 <input type="text" value={searchText} onChange={e => setSearchText(e.target.value)}
-                  placeholder="성명, 행정동, 연락처, 특이사항..."
-                  className="w-full bg-black/70 border border-[#2a2a2a] rounded-xl pl-8 pr-7 py-1.5 text-xs text-white outline-none focus:border-blue-500/50 placeholder:text-gray-700" />
+                  placeholder="이름, 읍면동, 연락처, 특이사항..."
+                  className="w-full bg-[#0a1410] border-2 border-emerald-500/50 rounded-xl pl-8 pr-7 py-1.5 text-xs font-bold text-white outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-500/30 focus:bg-[#0c1a13] placeholder:text-gray-500 placeholder:font-normal shadow-[0_0_14px_rgba(16,185,129,0.18)] transition-all" />
                 {searchText && (
                   <button onClick={() => setSearchText('')} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-600 hover:text-gray-400">
                     <X size={11} />
@@ -1074,7 +1115,7 @@ export default function BaseListManager({ user, onBack, initialCity = '', export
           )}
 
           {/* Table area */}
-          <div className="flex-1 overflow-auto relative">
+          <div ref={scrollRef} className="flex-1 overflow-auto relative">
             {!selectedCity ? (
               <div className="h-full flex flex-col items-center justify-center gap-4 text-gray-700">
                 <Database size={44} className="opacity-20" />
@@ -1108,20 +1149,27 @@ export default function BaseListManager({ user, onBack, initialCity = '', export
                 <thead className="sticky top-0 z-10">
                   <tr className="bg-[#0c0c0c] border-b border-[#1e1e1e]">
                     <th className="px-3 py-2.5 text-left text-[10px] text-gray-700 font-bold uppercase tracking-wider w-9">#</th>
-                    {orderedFields.map(f => (
-                      <th key={f.key} style={{ minWidth: f.minW }} className="px-3 py-2.5 text-left text-[10px] text-gray-600 font-bold uppercase tracking-wider">
-                        {f.label}
-                      </th>
-                    ))}
+                    {orderedFields.map(f => {
+                      const w = getColWidth(exportColOrder, f.key);
+                      return (
+                        <th key={f.key} style={{ ...(colCellStyle(w) || { minWidth: f.minW }), position: 'relative' }} className="px-3 py-2.5 text-left text-[10px] text-gray-600 font-bold uppercase tracking-wider overflow-hidden">
+                          {f.label}
+                          <ColResizeHandle colKey={f.key} currentWidth={w} onResize={handleColResize} />
+                        </th>
+                      );
+                    })}
                     <th className="px-3 py-2.5 text-center text-[10px] text-gray-600 font-bold uppercase tracking-wider w-14">이력</th>
                     <th className="w-9" />
                   </tr>
                 </thead>
                 <tbody>
-                  {displayRecords.map((r, idx) => {
+                  {padTop > 0 && <tr><td style={{ height: padTop }} colSpan={orderedFields.length + 3} /></tr>}
+                  {vItems.map(vRow => {
+                    const r = displayRecords[vRow.index];
+                    const idx = vRow.index;
                     const isDirtyRow = !!dirtyMap[r.id];
                     return (
-                      <tr key={r.id} className={`border-b border-[#111] transition-colors group ${
+                      <tr key={r.id} style={{ height: ROW_HEIGHT }} className={`border-b border-[#111] transition-colors group ${
                         isDirtyRow ? 'bg-blue-950/10 hover:bg-blue-950/15' : 'hover:bg-white/[0.025]'
                       }`}>
                         <td className="px-3 py-2 text-[10px] text-gray-700">
@@ -1131,7 +1179,7 @@ export default function BaseListManager({ user, onBack, initialCity = '', export
                           </span>
                         </td>
                         {orderedFields.map(f => (
-                          <td key={f.key} style={{ minWidth: f.minW }} className="px-3 py-2 max-w-0">
+                          <td key={f.key} style={colCellStyle(getColWidth(exportColOrder, f.key)) || { minWidth: f.minW }} className="px-3 py-2 max-w-0 overflow-hidden">
                             {renderCell(r, f.key)}
                           </td>
                         ))}
@@ -1150,6 +1198,7 @@ export default function BaseListManager({ user, onBack, initialCity = '', export
                       </tr>
                     );
                   })}
+                  {padBottom > 0 && <tr><td style={{ height: padBottom }} colSpan={orderedFields.length + 3} /></tr>}
                 </tbody>
               </table>
             )}

@@ -54,3 +54,56 @@ export function orderFieldsByExport(viewFields, exportColOrder) {
   inExport.sort((a, b) => orderIdx.get(canonKey(a.key)) - orderIdx.get(canonKey(b.key)));
   return [...inExport, ...rest];
 }
+
+/**
+ * 저장된 칼럼설정(saved)을 defaultCols 기준으로 정규화한다.
+ * - label·기본 메타는 defaultCols에서 최신화(옛 라벨 자동 교정).
+ * - on·width 는 저장값을 유지(사용자의 표시/폭 보존).
+ * - defaultCols 에 없는 키는 제거, 새로 생긴 키는 뒤에 append.
+ * - 불변: 새 배열/객체 반환.
+ */
+export function refreshSavedCols(saved, defaultCols) {
+  if (!Array.isArray(defaultCols) || defaultCols.length === 0) {
+    return Array.isArray(saved) ? saved.map(c => ({ ...c })) : [];
+  }
+  if (!Array.isArray(saved) || saved.length === 0) return defaultCols.map(c => ({ ...c }));
+
+  const defByKey = new Map(defaultCols.map(c => [c.key, c]));
+  const kept = saved
+    .filter(c => defByKey.has(c.key))
+    .map(c => {
+      const merged = { ...defByKey.get(c.key), on: c.on !== false };
+      if (c.width != null) merged.width = c.width;
+      return merged;
+    });
+  const keptKeys = new Set(kept.map(c => c.key));
+  const added = defaultCols.filter(d => !keptKeys.has(d.key)).map(c => ({ ...c }));
+  return [...kept, ...added];
+}
+
+/** 레코드 중 리(里) 값이 하나라도 있으면 true (군 지역 판정용). */
+export function hasRi(records) {
+  if (!Array.isArray(records)) return false;
+  return records.some(r => r && String(r.리 ?? '').trim() !== '');
+}
+
+/** exportColOrder에서 canonical 키 기준 칼럼 폭(px) 조회. 없으면 null. */
+export function getColWidth(exportColOrder, key) {
+  if (!Array.isArray(exportColOrder)) return null;
+  const k = canonKey(key);
+  const col = exportColOrder.find(c => c.key === k);
+  return col && col.width != null ? col.width : null;
+}
+
+/** exportColOrder의 canonical 키 칼럼에 폭(px)을 설정한 새 배열 반환. */
+export function setColWidthInCols(exportColOrder, key, px) {
+  if (!Array.isArray(exportColOrder)) return exportColOrder;
+  const k = canonKey(key);
+  return exportColOrder.map(c => (c.key === k ? { ...c, width: px } : c));
+}
+
+/** 폭(px)을 th/td 인라인 style로. 폭 없으면 undefined(기본폭 유지). */
+export function colCellStyle(width) {
+  if (!width) return undefined;
+  return { width, minWidth: width, maxWidth: width };
+}

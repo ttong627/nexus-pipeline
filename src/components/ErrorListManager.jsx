@@ -2,12 +2,13 @@ import { useState, useMemo, useRef } from 'react';
 import * as XLSX from 'xlsx';
 import { ArrowLeft, AlertTriangle, Download, Search, X, RefreshCw, MapPin, Columns } from 'lucide-react';
 import ColOrderPanel from './ColOrderPanel.jsx';
-import { orderFieldsByExport } from '../utils/colOrder.js';
+import ColResizeHandle from './ColResizeHandle.jsx';
+import { orderFieldsByExport, getColWidth, setColWidthInCols, colCellStyle } from '../utils/colOrder.js';
 
 const ADDR_FIELDS = [
   { key: '이름',     label: '이름',     minW: '80px' },
   { key: '생년월일', label: '생년월일', minW: '80px' },
-  { key: '행정동',   label: '행정동',   minW: '75px' },
+  { key: '행정동',   label: '읍면동',   minW: '75px' },
   { key: '주소',     label: '주소',     minW: '240px' },
   { key: '휴대폰',   label: '휴대폰',   minW: '110px' },
   { key: '유선전화', label: '유선전화', minW: '110px' },
@@ -17,7 +18,7 @@ const ADDR_FIELDS = [
 
 const COORD_FIELDS = [
   { key: '이름',     label: '이름',     minW: '80px' },
-  { key: '행정동',   label: '행정동',   minW: '75px' },
+  { key: '행정동',   label: '읍면동',   minW: '75px' },
   { key: '주소',     label: '주소',     minW: '280px' },
   { key: '휴대폰',   label: '휴대폰',   minW: '110px' },
   { key: '특이사항', label: '특이사항', minW: '160px' },
@@ -30,6 +31,8 @@ export default function ErrorListManager({ gridData, onBack, handleCellEdit, han
   const [editValue, setEditValue] = useState('');
   const [showColOrder, setShowColOrder] = useState(false);
   const colOrderBtnRef = useRef(null);
+  // 칼럼 폭 드래그 → exportColOrder에 저장(계정 동기화)
+  const handleColResize = (key, px) => { if (setExportColOrder) setExportColOrder(prev => setColWidthInCols(prev, key, px)); };
 
   // 탭 1: 도로명주소 미매칭
   const addrErrorRows = useMemo(() =>
@@ -220,12 +223,12 @@ export default function ErrorListManager({ gridData, onBack, handleCellEdit, han
       {/* 검색바 */}
       <div className="shrink-0 border-b border-[#181818] bg-[#080808] px-4 py-2 flex items-center gap-3">
         <div className="relative w-64">
-          <Search size={12} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-600" />
+          <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-emerald-400" />
           <input
             value={search}
             onChange={e => setSearch(e.target.value)}
             placeholder="이름, 주소, 오류사유 검색..."
-            className="w-full bg-black/70 border border-[#2a2a2a] rounded-xl pl-8 pr-7 py-1.5 text-xs text-white outline-none focus:border-blue-500/50 placeholder:text-gray-700"
+            className="w-full bg-[#0a1410] border-2 border-emerald-500/50 rounded-xl pl-8 pr-7 py-1.5 text-xs font-bold text-white outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-500/30 focus:bg-[#0c1a13] placeholder:text-gray-500 placeholder:font-normal shadow-[0_0_14px_rgba(16,185,129,0.18)] transition-all"
           />
           {search && (
             <button onClick={() => setSearch('')} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-600 hover:text-gray-400">
@@ -276,14 +279,18 @@ export default function ErrorListManager({ gridData, onBack, handleCellEdit, han
             <thead className="sticky top-0 z-10">
               <tr className={`border-b border-[#1e1e1e] ${activeTab === 'address' ? 'bg-[#0c0c0c]' : 'bg-[#0a0c0a]'}`}>
                 <th className="px-3 py-2.5 text-left text-[10px] text-gray-700 font-bold w-9">#</th>
-                {currentFields.map(f => (
-                  <th key={f.key} style={{ minWidth: f.minW }}
-                    className={`px-3 py-2.5 text-left text-[10px] font-bold uppercase tracking-wider ${
-                      f.key === '_사유' ? 'text-red-600/70' : 'text-gray-600'
-                    }`}>
-                    {f.label}
-                  </th>
-                ))}
+                {currentFields.map(f => {
+                  const w = getColWidth(exportColOrder, f.key);
+                  return (
+                    <th key={f.key} style={{ ...(colCellStyle(w) || { minWidth: f.minW }), position: 'relative' }}
+                      className={`px-3 py-2.5 text-left text-[10px] font-bold uppercase tracking-wider overflow-hidden ${
+                        f.key === '_사유' ? 'text-red-600/70' : 'text-gray-600'
+                      }`}>
+                      {f.label}
+                      <ColResizeHandle colKey={f.key} currentWidth={w} onResize={handleColResize} />
+                    </th>
+                  );
+                })}
               </tr>
             </thead>
             <tbody>
@@ -296,10 +303,11 @@ export default function ErrorListManager({ gridData, onBack, handleCellEdit, han
                     const isAddr = f.key === '주소';
                     const isReason = f.key === '_사유';
                     const isReadOnly = activeTab === 'coord'; // 좌표탭은 읽기 전용
+                    const cellStyle = colCellStyle(getColWidth(exportColOrder, f.key)) || { minWidth: f.minW };
 
                     if (isEditing) {
                       return (
-                        <td key={f.key} style={{ minWidth: f.minW }} className="px-3 py-1.5 max-w-0">
+                        <td key={f.key} style={cellStyle} className="px-3 py-1.5 max-w-0 overflow-hidden">
                           <input
                             autoFocus
                             className="w-full bg-transparent text-white text-xs outline-none border-b border-blue-400 py-0.5"
@@ -322,7 +330,7 @@ export default function ErrorListManager({ gridData, onBack, handleCellEdit, han
                     }
 
                     return (
-                      <td key={f.key} style={{ minWidth: f.minW }} className="px-3 py-2 max-w-0">
+                      <td key={f.key} style={cellStyle} className="px-3 py-2 max-w-0 overflow-hidden">
                         <span
                           title={String(val)}
                           onClick={() => !isReason && !isReadOnly && startEdit(r.id, f.key, val)}

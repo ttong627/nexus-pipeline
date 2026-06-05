@@ -1,8 +1,10 @@
-﻿import { useState, useRef, memo } from 'react';
+﻿import { useState, useRef, memo, cloneElement } from 'react';
 import { ChevronLeft, ChevronRight, AlertTriangle, CheckCircle, Columns, Download, Trash2, Edit3, Database, X, MapPin, Users, UserX, StickyNote, User, Phone, BookOpen, Sparkles, ArrowLeftRight } from 'lucide-react';
 import { formatPhoneInput } from '../utils/parsers.js';
 import { WORKFLOW_MODES } from '../utils/workflow.js';
 import ColOrderPanel from './ColOrderPanel.jsx';
+import ColResizeHandle from './ColResizeHandle.jsx';
+import { hasRi, getColWidth, setColWidthInCols, colCellStyle } from '../utils/colOrder.js';
 
 const ResultGrid = memo(function ResultGrid({
   step, setStep, filter, setFilter, dongList = [], driverList = [], gridData, filteredData, paginatedData,
@@ -58,18 +60,25 @@ const ResultGrid = memo(function ResultGrid({
 
   // 화면 칼럼은 exportColOrder(엑셀 다운로드 소스)의 순서·표시(on)를 그대로 따른다.
   // 체크박스 + NO는 sticky 고정이라 reorder 대상에서 제외한다.
-  const visibleCols = exportColOrder.filter(c => c.on && c.key !== 'NO').map(c => c.key);
+  // 리(里)는 데이터가 있을 때만 표시(군 지역). 시/구 명단에선 숨김.
+  const riPresent = hasRi(gridData);
+  const visibleCols = exportColOrder
+    .filter(c => c.on && c.key !== 'NO' && !(c.key === '리' && !riPresent))
+    .map(c => c.key);
+
+  // 칼럼 폭 드래그 → exportColOrder에 폭 저장(계정 동기화)
+  const handleColResize = (key, px) => { if (setExportColOrder) setExportColOrder(prev => setColWidthInCols(prev, key, px)); };
 
   const renderHeaderCell = (key) => {
     switch (key) {
       case '구분':
         return <th key="구분" className="px-4 py-3 font-bold border-r border-[#222] tracking-wide text-center cursor-pointer hover:bg-[#222] transition-colors" onClick={() => handleSort('구분')}>구분 {sortConfig.key === '구분' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>;
       case '행정동':
-        return <th key="행정동" className="px-4 py-3 font-bold border-r border-[#222] tracking-wide cursor-pointer hover:bg-[#222] transition-colors" onClick={() => handleSort('행정동')}>행정구역 {sortConfig.key === '행정동' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>;
+        return <th key="행정동" className="px-4 py-3 font-bold border-r border-[#222] tracking-wide cursor-pointer hover:bg-[#222] transition-colors" onClick={() => handleSort('행정동')}>읍면동 {sortConfig.key === '행정동' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>;
       case '리':
         return <th key="리" className="px-4 py-3 font-bold border-r border-[#222] tracking-wide text-center cursor-pointer hover:bg-[#222] transition-colors" onClick={() => handleSort('리')}>리 {sortConfig.key === '리' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>;
       case '이름':
-        return <th key="이름" className="px-4 py-3 font-bold border-r border-[#222] tracking-wide cursor-pointer hover:bg-[#222] transition-colors" onClick={() => handleSort('이름')}>성명 {sortConfig.key === '이름' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>;
+        return <th key="이름" className="px-4 py-3 font-bold border-r border-[#222] tracking-wide cursor-pointer hover:bg-[#222] transition-colors" onClick={() => handleSort('이름')}>이름 {sortConfig.key === '이름' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>;
       case '품명':
         return <th key="품명" className="px-4 py-3 font-bold border-r border-[#222] tracking-wide text-center cursor-pointer hover:bg-[#222] transition-colors" onClick={() => handleSort('품명')}>품명 {sortConfig.key === '품명' ? (sortConfig.direction === 'asc' ? '▲' : '▼') : ''}</th>;
       case '생년월일':
@@ -214,6 +223,30 @@ const ResultGrid = memo(function ResultGrid({
       default:
         return null;
     }
+  };
+
+  // 칼럼 폭 + 리사이즈 핸들을 헤더 th에 주입(체크박스·NO 제외)
+  const renderHeaderCellWithResize = (key) => {
+    const th = renderHeaderCell(key);
+    if (!th) return th;
+    const w = getColWidth(exportColOrder, key);
+    const style = { ...(th.props.style || {}), ...(colCellStyle(w) || {}), position: 'relative' };
+    return cloneElement(
+      th,
+      { style, className: `${th.props.className || ''} overflow-hidden` },
+      th.props.children,
+      <ColResizeHandle key="__rz" colKey={key} currentWidth={w} onResize={handleColResize} />
+    );
+  };
+
+  // 본문 td에 동일 폭 적용
+  const renderBodyCellWithWidth = (key, row) => {
+    const td = renderBodyCell(key, row);
+    if (!td) return td;
+    const w = getColWidth(exportColOrder, key);
+    if (!w) return td;
+    const style = { ...(td.props.style || {}), ...colCellStyle(w) };
+    return cloneElement(td, { style, className: `${td.props.className || ''} overflow-hidden` });
   };
 
   return (
@@ -741,7 +774,7 @@ const ResultGrid = memo(function ResultGrid({
                   <input type="checkbox" checked={allPageSelected} onChange={toggleAll} className="accent-[#3b82f6] w-4 h-4 cursor-pointer" />
                 </th>
                 <th className="px-4 py-3 font-bold border-r border-[#222] tracking-wide text-center sticky left-10 bg-[#0a100c] z-30 shadow-[2px_0_5px_rgba(0,0,0,0.5)]">NO</th>
-                {visibleCols.map(renderHeaderCell)}
+                {visibleCols.map(renderHeaderCellWithResize)}
               </tr>
             </thead>
             <tbody className="font-mono text-gray-200">
@@ -758,7 +791,7 @@ const ResultGrid = memo(function ResultGrid({
                         {((currentPage - 1) * itemsPerPage + idx + 1).toLocaleString()}
                       </div>
                     </td>
-                    {visibleCols.map(k => renderBodyCell(k, row))}
+                    {visibleCols.map(k => renderBodyCellWithWidth(k, row))}
                   </tr>
                 );
               })}

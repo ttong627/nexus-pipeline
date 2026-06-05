@@ -16,9 +16,10 @@ import {
 import OrgPresetModal from './OrgPresetModal.jsx';
 import CoordBrushModal from './CoordBrushModal.jsx';
 import ColOrderPanel from './ColOrderPanel.jsx';
+import ColResizeHandle from './ColResizeHandle.jsx';
 import { processAddress, asyncPool } from '../engine/addressEngine.js';
 import { canUseCoords, canUseCoordsBg } from '../utils/tierUtils.js';
-import { orderFieldsByExport } from '../utils/colOrder.js';
+import { orderFieldsByExport, hasRi, getColWidth, setColWidthInCols, colCellStyle } from '../utils/colOrder.js';
 
 const KAKAO_REST_KEY = import.meta.env.VITE_KAKAO_REST_KEY;
 
@@ -56,7 +57,7 @@ const CLOUD_FIELDS = [
   { key: '구분',     label: '구분',     minW: '90px',  type: 'select', opts: ['기초수급자', '차상위'] },
   { key: '이름',     label: '이름',     minW: '80px',  type: 'text' },
   { key: '생년월일', label: '생년월일', minW: '85px',  type: 'text' },
-  { key: '행정동',   label: '행정동',   minW: '75px',  type: 'text' },
+  { key: '행정동',   label: '읍면동',   minW: '75px',  type: 'text' },
   { key: '리',       label: '리',       minW: '60px',  type: 'text' },
   { key: '주소',     label: '주소',     minW: '210px', type: 'text' },
   { key: '휴대폰',   label: '휴대폰',   minW: '110px', type: 'text' },
@@ -138,7 +139,7 @@ const CellInput = memo(function CellInput({ type, opts, initial, onCommit, onCan
   );
 });
 
-const VirtualTable = memo(function VirtualTable({ fields, displayRecords, dirtyRecords, deletedRecordIds, loadingRecords, records, renderCell, setDeletedRecordIds }) {
+const VirtualTable = memo(function VirtualTable({ fields, exportColOrder, onColResize, displayRecords, dirtyRecords, deletedRecordIds, loadingRecords, records, renderCell, setDeletedRecordIds }) {
   const scrollRef = useRef(null);
 
   const virtualizer = useVirtualizer({
@@ -178,11 +179,15 @@ const VirtualTable = memo(function VirtualTable({ fields, displayRecords, dirtyR
           <thead className="sticky top-0 z-10">
             <tr className="bg-[#0c0c0c] border-b border-[#1e1e1e]">
               <th className="px-3 py-2.5 text-left text-[10px] text-gray-700 font-bold uppercase tracking-wider w-9">#</th>
-              {fields.map(f => (
-                <th key={f.key} style={{ minWidth: f.minW }} className={`px-3 py-2.5 text-left text-[10px] font-bold uppercase tracking-wider ${f.key === '기사' || f.key === '배송순번' ? 'text-[#3b82f6]/60' : 'text-gray-600'}`}>
-                  {f.label}
-                </th>
-              ))}
+              {fields.map(f => {
+                const w = getColWidth(exportColOrder, f.key);
+                return (
+                  <th key={f.key} style={{ ...(colCellStyle(w) || { minWidth: f.minW }), position: 'relative' }} className={`px-3 py-2.5 text-left text-[10px] font-bold uppercase tracking-wider overflow-hidden ${f.key === '기사' || f.key === '배송순번' ? 'text-[#3b82f6]/60' : 'text-gray-600'}`}>
+                    {f.label}
+                    {onColResize && <ColResizeHandle colKey={f.key} currentWidth={w} onResize={onColResize} />}
+                  </th>
+                );
+              })}
               <th className="px-3 py-2.5 text-[10px] text-blue-600/60 font-bold w-12">좌표</th>
               <th className="w-9" />
             </tr>
@@ -205,7 +210,7 @@ const VirtualTable = memo(function VirtualTable({ fields, displayRecords, dirtyR
                     </span>
                   </td>
                   {fields.map(f => (
-                    <td key={f.key} style={{ minWidth: f.minW }} className="px-3 py-2 max-w-0">
+                    <td key={f.key} style={colCellStyle(getColWidth(exportColOrder, f.key)) || { minWidth: f.minW }} className="px-3 py-2 max-w-0 overflow-hidden">
                       {renderCell(r, f)}
                     </td>
                   ))}
@@ -246,6 +251,8 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
   const orderedFields = useMemo(() => orderFieldsByExport(CLOUD_FIELDS, exportColOrder), [exportColOrder]);
   const [showColOrder, setShowColOrder] = useState(false);
   const colOrderBtnRef = useRef(null);
+  // 칼럼 폭 드래그 → exportColOrder에 저장(계정 동기화)
+  const handleColResize = (key, px) => { if (setExportColOrder) setExportColOrder(prev => setColWidthInCols(prev, key, px)); };
 
   // City selection — initialCity에서 시도/시군구 파싱
   const initParts = initialCity.trim().split(/\s+/);
@@ -261,6 +268,13 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
   // Records
   const [records, setRecords] = useState([]);
   const [loadingRecords, setLoadingRecords] = useState(false);
+
+  // 리(里)는 데이터가 있을 때만 표시(군 지역). 시/구 명단에선 칼럼 숨김.
+  const riPresent = useMemo(() => hasRi(records), [records]);
+  const displayFields = useMemo(
+    () => (riPresent ? orderedFields : orderedFields.filter(c => c.key !== '리')),
+    [orderedFields, riPresent]
+  );
 
   // Inline edit state
   const [dirtyRecords, setDirtyRecords] = useState({});  // { [id]: { field: val } }
@@ -1668,12 +1682,12 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
               <div className="shrink-0 border-b border-[#181818] flex items-center px-4 gap-2.5 bg-[#080808] py-2 flex-wrap">
                 {/* 텍스트 검색 */}
                 <div className="relative w-56">
-                  <Search size={12} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-600" />
+                  <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-emerald-400" />
                   <input
                     type="text" value={searchInput}
                     onChange={e => handleSearchChange(e.target.value)}
-                    placeholder="이름, 행정동, 주소, 연락처 검색..."
-                    className="w-full bg-black/70 border border-[#2a2a2a] rounded-xl pl-8 pr-7 py-1.5 text-xs text-white outline-none focus:border-blue-500/50 placeholder:text-gray-700"
+                    placeholder="이름, 읍면동, 주소, 연락처 검색..."
+                    className="w-full bg-[#0a1410] border-2 border-emerald-500/50 rounded-xl pl-8 pr-7 py-1.5 text-xs font-bold text-white outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-500/30 focus:bg-[#0c1a13] placeholder:text-gray-500 placeholder:font-normal shadow-[0_0_14px_rgba(16,185,129,0.18)] transition-all"
                   />
                   {searchInput && (
                     <button onClick={() => { setSearchInput(''); setSearchText(''); }} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-600 hover:text-gray-400">
@@ -1787,7 +1801,9 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
 
               {/* Records table — Virtual Scroll */}
               <VirtualTable
-                fields={orderedFields}
+                fields={displayFields}
+                exportColOrder={exportColOrder}
+                onColResize={handleColResize}
                 displayRecords={displayRecords}
                 dirtyRecords={dirtyRecords}
                 deletedRecordIds={deletedRecordIds}
