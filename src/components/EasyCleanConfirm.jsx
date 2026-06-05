@@ -7,7 +7,7 @@ const FIELD_MAP = [
   { label: '주소', key: 'address' },
   { label: '행정동', key: 'admin' },
   { label: '휴대폰', key: 'contact1' },
-  { label: '유선전화', key: 'contact2' },
+  { label: '보조연락처', key: 'contact2' },
   { label: '포수', key: 'qty' },
   { label: '생년월일', key: 'birth' },
   { label: '문자수신', key: 'sms' },

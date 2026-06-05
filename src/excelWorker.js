@@ -459,7 +459,9 @@ function parseSheet(name, rawJson, dynamicRules) {
       ['주소', '주소', pRoad, true],
       ['행정동', '행정동', pDong, false],
       ['휴대폰', '연락처', pMobile, false],
-      ['유선전화', '보조연락처', pLand, false],
+      // 보조연락처는 유선이든 '두 번째 휴대폰'이든 모두 정상 → 전화 형식이면(휴대폰 OR 유선) 신뢰.
+      // (휴대폰 번호가 보조에 들어와도 '유선전화 맞나요?' 헛질문 뜨던 문제 해결. CLAUDE.md §5-1, §8)
+      ['보조연락처', '보조연락처', (v) => pMobile(v) || pLand(v), false],
       ['포수', '수량', pInt, false],
       ['문자수신', '문자수신', pYnox, false],
       ['생년월일', '생년월일', pDate, false],
