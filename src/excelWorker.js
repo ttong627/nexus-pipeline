@@ -24,6 +24,11 @@ const normalizeBirth = (raw) => {
   return raw;
 };
 
+// 포수(수량)로 절대 매칭하면 안 되는 '가구원수' 계열 헤더 (가구원수·세대수·인원수 등). CLAUDE.md §5.
+// '가구당 포수'처럼 단위를 뜻하는 경우는 막지 않도록 가구원'수' 복합어 위주로 제외.
+const HOUSEHOLD_EXCL = ['가구원', '세대원', '세대수', '가구수', '세대구성', '가구구성', '인원', '구성원', '동거인', '식구', '명수'];
+const HOUSEHOLD_RE = new RegExp(HOUSEHOLD_EXCL.join('|'));
+
 // 파일명·요약·주소 텍스트에서 매칭되는 모든 시·군·구 후보(전체 정식명)를 반환.
 // 첫 후보 = detectedCity, 전체 후보 = App에서 userCities(허가지역) 대조용(§5-2).
 function extractCityCandidates(fileName, rawJsonSamples, bodyRows, addrColIdx) {
@@ -58,7 +63,7 @@ function parseSheet(name, rawJson, dynamicRules) {
   const activeReqKeys = dynamicRules?.reqKeys || [
     { k: '이름',   kws: ['이름', '성명', '대상자', '수령자명'] },
     { k: '주소',   kws: ['주소'] },
-    { k: '수량',   kws: ['포수', '수량', '구입량', '포', '신청수량', '신청 수량'], excl: ['가구원'] },
+    { k: '수량',   kws: ['포수', '수량', '구입량', '포', '신청수량', '신청 수량'], excl: HOUSEHOLD_EXCL },
     { k: '연락처', kws: ['휴대', '연락', '전화', '유선', '핸드폰', '핸드', '모바일', '휴폰'] },
     { k: '행정동', kws: ['행정동', '읍면동', '동명', '관할구역'] },
     { k: '비고',   kws: ['특이사항', '비고', '메모'] }
@@ -354,7 +359,7 @@ function parseSheet(name, rawJson, dynamicRules) {
 
   // 포수 컬럼 전체 수집 (10kg(포수)/20kg(포수) 같은 품목별 복수 컬럼 합산 지원)
   const allAmtIdxs = headers.reduce((acc, h, i) => {
-    if (!h.includes('가구원') && (
+    if (!HOUSEHOLD_RE.test(h) && (
       h.includes('포수') || h.includes('수량') || h.includes('구입량') || h.includes('신청수량') || h.includes('신청 수량') ||
       h === '포' || (h.includes('포') && h.length <= 3)
     )) acc.push(i);
@@ -775,7 +780,7 @@ self.onmessage = ({ data }) => {
         dong:      det(['행정동', '읍면동', '동명', '관할구역']),
         name:      det(['이름', '성명', '대상자', '수령자']),
         gubun:     det(['구분', '유형', '계층', '자격']),
-        qty:       det(['포수', '수량', '구입량', '신청수량', '신청 수량'], ['가구원']),
+        qty:       det(['포수', '수량', '구입량', '신청수량', '신청 수량'], HOUSEHOLD_EXCL),
         addr:      det(['주소']),
         birth:     det(['생년월일', '생일', '생년']),
         mobile:    det(['휴대', '핸드', '모바일'], ['유선']),
