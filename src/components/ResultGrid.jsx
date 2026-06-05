@@ -488,32 +488,6 @@ const ResultGrid = memo(function ResultGrid({
                 </span>
               </button>
             )}
-            <div className="relative" ref={colSettingsRef}>
-              <button onClick={() => setShowColSettings(v => !v)} className="px-3 py-1.5 bg-[#111] border border-[#2a2a2a] text-gray-400 font-bold rounded-lg hover:bg-[#1a1a1a] transition-colors flex items-center gap-1.5 text-xs">
-                <Columns size={13}/> 컬럼 설정
-              </button>
-              {showColSettings && (
-                <div className="absolute right-0 top-full mt-1 z-50 bg-[#0d0d0d] border border-[#2a2a2a] rounded-xl shadow-2xl p-3 min-w-[160px] flex flex-col gap-2">
-                  {[
-                    { key: 'birth', label: '생년월일' },
-                    { key: 'contact2', label: '유선전화' },
-                    { key: 'sms', label: '문자수신' },
-                    { key: 'note', label: '특이사항' },
-                    { key: 'driver', label: '기사' },
-                  ].map(({ key, label }) => (
-                    <label key={key} className="flex items-center gap-2 cursor-pointer text-xs text-gray-300 hover:text-white transition-colors">
-                      <input
-                        type="checkbox"
-                        checked={localColVis[key]}
-                        onChange={() => setLocalColVis(v => ({ ...v, [key]: !v[key] }))}
-                        className="accent-[#3b82f6] w-3.5 h-3.5"
-                      />
-                      {label}
-                    </label>
-                  ))}
-                </div>
-              )}
-            </div>
             <button
               onClick={onHelp}
               className="w-8 h-8 rounded-full bg-emerald-950/30 border border-emerald-500/40 text-emerald-400 font-black text-sm hover:bg-emerald-500/20 hover:scale-110 transition-all shrink-0"

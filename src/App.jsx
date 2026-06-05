@@ -231,7 +231,9 @@ export default function App() {
     { key: 'NO',      label: 'NO',      on: true },
     { key: '구분',    label: '구분',    on: true },
     { key: '행정동',  label: '행정동',  on: true },
+    { key: '리',      label: '리',      on: true },
     { key: '이름',    label: '성명',    on: true },
+    { key: '품명',    label: '품명',    on: true },
     { key: '생년월일',label: '생년월일',on: true },
     { key: '포수',    label: '포수',    on: true },
     { key: '휴대폰',  label: '휴대폰',  on: true },
@@ -248,12 +250,10 @@ export default function App() {
       const saved = localStorage.getItem('nexus_export_cols_v2');
       if (saved) {
         const parsed = JSON.parse(saved);
-        // 저장된 설정에서 각 키의 on 여부를 보존하되, DEFAULT 기준으로 재정렬+누락 열 추가
-        const savedMap = new Map(parsed.map(c => [c.key, c]));
-        const merged = DEFAULT_EXPORT_COLS.map(def => savedMap.get(def.key) || def);
-        // 기존 저장에만 있는 extra 열도 뒤에 붙임
-        const extra = parsed.filter(c => !DEFAULT_EXPORT_COLS.find(d => d.key === c.key));
-        return [...merged, ...extra];
+        // 저장된 순서·on 그대로 유지(사용자 재정렬 보존) + DEFAULT에 새로 생긴 칼럼만 뒤에 추가
+        const savedKeys = new Set(parsed.map(c => c.key));
+        const added = DEFAULT_EXPORT_COLS.filter(d => !savedKeys.has(d.key));
+        return [...parsed, ...added];
       }
     } catch { /* ignore */ }
     return DEFAULT_EXPORT_COLS;
