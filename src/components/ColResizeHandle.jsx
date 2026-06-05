@@ -1,20 +1,21 @@
 import { useRef } from 'react';
 
 // ── 칼럼 폭 드래그 핸들 (엑셀처럼) ──────────────────────────────────────────────
-// 헤더 th 우측 끝에 얹는 4px 폭 드래그 영역.
-// 부모 th 는 position:relative + 폭 style 적용. 드래그 시 onResize(colKey, px) 호출.
-// colKey 는 뷰의 원본 필드 키(별칭 정규화는 onResize 쪽 setColWidthInCols 에서 처리).
+// 헤더 th 우측 끝에 얹는 드래그 영역. 부모 th 는 position:relative + 폭 style 적용.
+// ★ 성능: 드래그 중에는 React state(setDraft)를 건드리지 않고 '해당 th 폭만 DOM으로' 즉시 반영한다.
+//   (매 프레임 setState → 비가상화 그리드(수천 행) 전체 리렌더 → 렉·버벅임의 원인이었음)
+//   놓는 순간(mouseup)에만 onResize(colKey, px)로 1회 커밋 → 전체 셀에 최종 폭 반영.
 export default function ColResizeHandle({ colKey, currentWidth, minWidth = 40, onResize }) {
   const startX = useRef(0);
   const startW = useRef(0);
   const latest = useRef(0);
-  const rafId = useRef(null);
 
   const handleMouseDown = (e) => {
     e.preventDefault();
     e.stopPropagation();
+    const thEl = e.currentTarget.parentElement; // 폭 style 이 적용되는 헤더 th
     startX.current = e.clientX;
-    startW.current = currentWidth || e.currentTarget.parentElement?.offsetWidth || 100;
+    startW.current = currentWidth || thEl?.offsetWidth || 100;
     latest.current = startW.current;
     document.body.style.userSelect = 'none';
     document.body.style.cursor = 'col-resize';
@@ -22,11 +23,11 @@ export default function ColResizeHandle({ colKey, currentWidth, minWidth = 40, o
     const onMove = (ev) => {
       const delta = ev.clientX - startX.current;
       latest.current = Math.max(minWidth, Math.round(startW.current + delta));
-      if (rafId.current == null) {
-        rafId.current = requestAnimationFrame(() => {
-          rafId.current = null;
-          onResize(colKey, latest.current);
-        });
+      // 드래그 중: 전체 그리드 리렌더 없이 해당 th 폭만 즉시 갱신 → 부드럽게 동작
+      if (thEl) {
+        thEl.style.width = `${latest.current}px`;
+        thEl.style.minWidth = `${latest.current}px`;
+        thEl.style.maxWidth = `${latest.current}px`;
       }
     };
     const onUp = () => {
@@ -34,8 +35,7 @@ export default function ColResizeHandle({ colKey, currentWidth, minWidth = 40, o
       document.removeEventListener('mouseup', onUp);
       document.body.style.userSelect = '';
       document.body.style.cursor = '';
-      if (rafId.current != null) { cancelAnimationFrame(rafId.current); rafId.current = null; }
-      onResize(colKey, latest.current); // 최종 폭 커밋
+      onResize(colKey, latest.current); // 최종 폭 1회 커밋 (→ 모든 셀 반영)
     };
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
