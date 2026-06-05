@@ -1,6 +1,7 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useRef } from 'react';
 import * as XLSX from 'xlsx';
-import { ArrowLeft, AlertTriangle, Download, Search, X, RefreshCw, MapPin } from 'lucide-react';
+import { ArrowLeft, AlertTriangle, Download, Search, X, RefreshCw, MapPin, Columns } from 'lucide-react';
+import ColOrderPanel from './ColOrderPanel.jsx';
 import { orderFieldsByExport } from '../utils/colOrder.js';
 
 const ADDR_FIELDS = [
@@ -22,11 +23,13 @@ const COORD_FIELDS = [
   { key: '특이사항', label: '특이사항', minW: '160px' },
 ];
 
-export default function ErrorListManager({ gridData, onBack, handleCellEdit, handleAddressKeyDown, handleExportErrors, onRepurifyErrors, exportColOrder = [] }) {
+export default function ErrorListManager({ gridData, onBack, handleCellEdit, handleAddressKeyDown, handleExportErrors, onRepurifyErrors, exportColOrder = [], setExportColOrder, defaultExportCols = [] }) {
   const [activeTab, setActiveTab] = useState('address');
   const [search, setSearch] = useState('');
   const [editingCell, setEditingCell] = useState(null);
   const [editValue, setEditValue] = useState('');
+  const [showColOrder, setShowColOrder] = useState(false);
+  const colOrderBtnRef = useRef(null);
 
   // 탭 1: 도로명주소 미매칭
   const addrErrorRows = useMemo(() =>
@@ -142,6 +145,38 @@ export default function ErrorListManager({ gridData, onBack, handleCellEdit, han
             >
               <Download size={13} /> xlsx 내보내기
             </button>
+          )}
+          {/* 칼럼 순서·표시 (모든 명단·엑셀과 공유) */}
+          {setExportColOrder && exportColOrder.length > 0 && (
+            <div className="relative shrink-0">
+              <button
+                ref={colOrderBtnRef}
+                onClick={() => setShowColOrder(v => !v)}
+                title="칼럼 순서·표시 설정 (모든 명단·엑셀과 공유)"
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-bold border transition-colors ${
+                  showColOrder
+                    ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-300'
+                    : 'bg-[#0d1a0d] border-[#1a3a1a] text-emerald-500/70 hover:text-emerald-300 hover:border-emerald-500/40'
+                }`}
+              >
+                <Columns size={13} />
+                칼럼
+                {exportColOrder.filter(c => !c.on).length > 0 && (
+                  <span className="w-4 h-4 bg-amber-500 text-black text-[9px] font-black rounded-full flex items-center justify-center">
+                    {exportColOrder.filter(c => !c.on).length}
+                  </span>
+                )}
+              </button>
+              {showColOrder && (
+                <ColOrderPanel
+                  cols={exportColOrder}
+                  onChange={(next) => setExportColOrder(next)}
+                  onReset={() => setExportColOrder(defaultExportCols)}
+                  onClose={() => setShowColOrder(false)}
+                  anchorRef={colOrderBtnRef}
+                />
+              )}
+            </div>
           )}
         </div>
       </div>

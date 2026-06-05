@@ -262,10 +262,38 @@ export default function App() {
   const [showExportSetting, setShowExportSetting] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
 
-  // exportColOrder 변경 시 localStorage 자동 저장
+  // 기기 간 칼럼설정 동기화용 refs
+  const lastSyncedColsRef = useRef(null); // Firestore와 마지막 동기화한 칼럼설정 JSON (에코 루프 방지)
+  const colSyncTimerRef = useRef(null);   // Firestore 쓰기 디바운스 타이머
+
+  // exportColOrder 변경 시: localStorage 즉시 저장 + (로그인 시) Firestore 디바운스 저장
   useEffect(() => {
     try { localStorage.setItem('nexus_export_cols_v2', JSON.stringify(exportColOrder)); } catch { /* ignore */ }
-  }, [exportColOrder]);
+    if (!user?.uid) return;
+    const json = JSON.stringify(exportColOrder);
+    if (json === lastSyncedColsRef.current) return; // 원격에서 받은 값이면 되쓰기 안 함
+    clearTimeout(colSyncTimerRef.current);
+    colSyncTimerRef.current = setTimeout(() => {
+      lastSyncedColsRef.current = json;
+      updateDoc(doc(db, 'users', user.uid), { exportColOrder }).catch(() => {
+        setDoc(doc(db, 'users', user.uid), { exportColOrder }, { merge: true }).catch(() => { /* ignore */ });
+      });
+    }, 1500);
+    return () => clearTimeout(colSyncTimerRef.current);
+  }, [exportColOrder, user?.uid]);
+
+  // 다른 기기에서 바뀐 칼럼설정을 user 문서 실시간 구독(onSnapshot)으로 수신 → 로컬 반영
+  useEffect(() => {
+    const remote = user?.exportColOrder;
+    if (!Array.isArray(remote) || remote.length === 0) return;
+    const remoteJson = JSON.stringify(remote);
+    if (remoteJson === lastSyncedColsRef.current) return; // 이미 반영됨(에코 방지)
+    lastSyncedColsRef.current = remoteJson;
+    // 새 기본 칼럼이 추가된 경우 뒤에 붙임(기존 localStorage merge 정책과 동일)
+    const savedKeys = new Set(remote.map(c => c.key));
+    const added = DEFAULT_EXPORT_COLS.filter(d => !savedKeys.has(d.key));
+    setExportColOrder(added.length ? [...remote, ...added] : remote);
+  }, [user?.exportColOrder]);
   const [showUpgrade, setShowUpgrade] = useState(false);
   const [upgradeReason, setUpgradeReason] = useState('city_limit');
   const [showUtils, setShowUtils] = useState(false);
@@ -2359,7 +2387,7 @@ export default function App() {
           {step === 3 && <Step3_Mapping step={step} setStep={setStep} selectedSheets={selectedSheets} worksheets={worksheets} mapDefs={mapDefs} setMapDefs={setMapDefs} startProcessing={handleAnalyzeAll} onHelp={onHelp} isBasePurifyMode={isBasePurifyMode} setIsBasePurifyMode={setIsBasePurifyMode} onOpenDbImport={() => setShowDbImport(true)} dbImportReady={dbImportReady} onUserMapping={handleUserMapping} city={fileInfo?.city || ''} />}
           {step === 4 && <LoadingScreen progress={engineProgress} logs={progressLogs} />}
           {step === 5 && <ResultGrid step={step} setStep={setStep} fileInfo={fileInfo} filter={filter} setFilter={setFilter} dongList={gridDongList} driverList={gridDriverList} gridData={gridData} filteredData={filteredData} paginatedData={paginatedData} currentPage={currentPage} setCurrentPage={setCurrentPage} itemsPerPage={itemsPerPage} colVis={colVis} sortConfig={sortConfig} setSortConfig={setSortConfig} handleCellEdit={handleCellEdit} handleAddressKeyDown={handleAddressKeyDown} handleUpdateBaseList={handleUpdateBaseList} handleBatchSaveBaseList={handleBatchSaveBaseList} isSavingBaseList={isSavingBaseList} handleSaveMonthlyList={handleSaveMonthlyList} setShowExportSetting={setShowExportSetting} handleExport={handleExport} handleExportErrors={handleExportErrors} handleExportDongSummary={handleExportDongSummary} handleExportByDriver={handleExportByDriver} handleDeleteRows={handleDeleteRows} handleBatchSetNote={handleBatchSetNote} onHelp={onHelp} purifyResult={purifyResult} onClosePurifyResult={() => setPurifyResult(null)} onMovePhones={handleMovePhones} onRepurifyErrors={handleRepurifyErrors} onOpenRouteMap={openRouteFlow} onFetchBaseNotes={handleFetchBaseNotes} isFetchingNotes={isFetchingNotes} workflowMode={workflowMode} onWorkflowModeChange={changeWorkflowMode} stepStatus={stepStatus} addressDisplayMode={addressDisplayMode} onToggleAddressDisplayMode={handleToggleAddressDisplayMode} exportColOrder={exportColOrder} setExportColOrder={setExportColOrder} defaultExportCols={DEFAULT_EXPORT_COLS} />}
-          {step === 10 && <ErrorListManager gridData={gridData} onBack={() => setStep(gridData.length ? 5 : 0)} handleCellEdit={handleCellEdit} handleAddressKeyDown={handleAddressKeyDown} handleExportErrors={handleExportErrors} onRepurifyErrors={handleRepurifyErrors} exportColOrder={exportColOrder} />}
+          {step === 10 && <ErrorListManager gridData={gridData} onBack={() => setStep(gridData.length ? 5 : 0)} handleCellEdit={handleCellEdit} handleAddressKeyDown={handleAddressKeyDown} handleExportErrors={handleExportErrors} onRepurifyErrors={handleRepurifyErrors} exportColOrder={exportColOrder} setExportColOrder={setExportColOrder} defaultExportCols={DEFAULT_EXPORT_COLS} />}
           {step === 11 && <ScheduleTab user={user} onBack={() => setStep(0)} />}
           {step === 6 && <BaseListManager user={user} initialCity={dbNavCity} onBack={() => { setStep(0); setDbNavCity(''); }} exportColOrder={exportColOrder} setExportColOrder={setExportColOrder} defaultExportCols={DEFAULT_EXPORT_COLS} />}
           {step === 7 && <AdminPanel user={user} onClose={() => setStep(0)} />}
