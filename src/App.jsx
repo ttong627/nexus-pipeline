@@ -7,7 +7,6 @@ import { refreshSavedCols } from "./utils/colOrder.js";
 
 // ── 즉시 로드 (초기 화면에 필요)
 import Dashboard from "./components/Dashboard.jsx";
-import InstallButton from "./components/InstallButton.jsx";
 import ProfileSetupModal from "./components/ProfileSetupModal.jsx";
 import AuthScreen from "./components/AuthScreen.jsx";
 import Step1_Upload from "./components/Step1_Upload.jsx";
@@ -2248,7 +2247,6 @@ export default function App() {
             <button onClick={handleUndo} disabled={history.length === 0} className="px-3 py-1.5 bg-[#0d1520] hover:bg-[#111c2d] disabled:opacity-30 text-gray-400 hover:text-white text-xs font-bold rounded-lg transition-all flex items-center gap-1.5 border border-[#1a2a3a]">
               <Undo2 size={13} /> 실행취소
             </button>
-            <InstallButton />
             <div className="w-px h-5 bg-[#1a2a3a]" />
             <span className="text-gray-600 text-xs truncate max-w-[130px] hidden xl:block">{user?.realName || user?.email?.split('@')[0]}</span>
           </div>

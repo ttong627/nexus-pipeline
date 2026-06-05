@@ -3,18 +3,13 @@ import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.jsx'
 import ErrorBoundary from './components/ErrorBoundary.jsx'
-import { registerSW } from 'virtual:pwa-register'
 
-// 자동 업데이트만 사용(수동 reload 제거 — 새로고침 루프/크래시 방지)
-registerSW({ immediate: true })
-
-// PWA 설치 프롬프트를 앱 로드 즉시 잡아둔다('바로가기 만들기' 버튼이 사용)
-window.__pwaInstallPrompt = null
-window.addEventListener('beforeinstallprompt', (e) => {
-  e.preventDefault()
-  window.__pwaInstallPrompt = e
-  window.dispatchEvent(new Event('pwa-installable'))
-})
+// 서비스워커는 등록하지 않는다(selfDestroying SW가 기존 등록을 자동 해제).
+// 혹시 남아있는 SW가 있으면 즉시 해제 + 캐시 비우기(크래시/스테일 캐시 근본 차단).
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.getRegistrations().then(regs => regs.forEach(r => r.unregister())).catch(() => {})
+  if (window.caches?.keys) caches.keys().then(keys => keys.forEach(k => caches.delete(k))).catch(() => {})
+}
 
 createRoot(document.getElementById('root')).render(
   <StrictMode>

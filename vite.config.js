@@ -8,8 +8,11 @@ export default defineConfig({
     react(),
     tailwindcss(),
     VitePWA({
+      // 서비스워커 자가제거 — 기존에 설치된 SW를 깨끗이 해제하고 캐시를 비운다.
+      // (SW 캐시가 옛 버전을 잡아 크래시 루프 + 아이콘 미갱신을 유발하던 문제 근본 차단)
+      selfDestroying: true,
       registerType: 'autoUpdate',
-      injectRegister: 'auto',
+      injectRegister: false,
       workbox: {
         skipWaiting: true,
         clientsClaim: true,
