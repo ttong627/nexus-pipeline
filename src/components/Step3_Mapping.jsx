@@ -1,5 +1,5 @@
 ﻿import { useState, useRef, useEffect } from 'react';
-import { Columns, ChevronLeft, Database, CheckCircle, Loader2, X } from 'lucide-react';
+import { Columns, ChevronLeft, Database, CheckCircle, Loader2, X, ArrowLeftRight } from 'lucide-react';
 import { isHouseholdHeader } from '../columnRules.js';
 
 // 수량(포수)은 필수다 — 절대 미설정(→1포 기본)으로 넘기지 않는다. 가구원수 같은 인원 칼럼만
@@ -47,9 +47,31 @@ function SheetMappingPanel({ sheet, mapDef, setMapDef, worksheets, importNote, s
     Object.entries(mapDef).filter(([, v]) => v).map(([k, v]) => [v, k])
   );
 
+  // 전화 컬럼 2개 짝맞춤 — 하나를 고르면 나머지 전화 컬럼이 자동으로 반대편(휴대폰↔유선)에 매칭.
+  const PHONE_KWS = ['휴대', '연락', '전화', '유선', '핸드폰', '핸드', '모바일', '휴폰', '폰'];
+  const nzh = (s) => String(s || '').replace(/\s+/g, '');
+  const phoneCols = headers.filter(h => PHONE_KWS.some(k => nzh(h).includes(k)));
+  const isPhonePaired = phoneCols.length === 2;
+
   const updateMap = (key, val) => {
-    setMapDef({ ...mapDef, [key]: val });
+    const next = { ...mapDef, [key]: val };
+    // 전화 2개일 때: 휴대폰/보조 중 하나를 고르면 나머지 전화 컬럼을 자동으로 반대편에 매칭.
+    if (isPhonePaired && (key === 'contact1' || key === 'contact2') && val && phoneCols.includes(val)) {
+      const partner = key === 'contact1' ? 'contact2' : 'contact1';
+      const other = phoneCols.find(c => c !== val);
+      if (other) next[partner] = other;
+    }
+    setMapDef(next);
     if (val) onUserMapping?.(val, key);
+  };
+
+  // 휴대폰 ↔ 유선 두 전화 컬럼을 서로 맞바꾼다 (토글 버튼).
+  const swapPhones = () => {
+    const a = mapDef.contact1 || '';
+    const b = mapDef.contact2 || '';
+    setMapDef({ ...mapDef, contact1: b, contact2: a });
+    if (b) onUserMapping?.(b, 'contact1');
+    if (a) onUserMapping?.(a, 'contact2');
   };
 
   // ✅ 방어: 헤더가 아예 없으면 매핑 불가 안내 표시
@@ -90,6 +112,33 @@ function SheetMappingPanel({ sheet, mapDef, setMapDef, worksheets, importNote, s
                     return <option key={h} value={h}>{h}{sv ? ` → ${sv.slice(0, 16)}` : ''}</option>;
                   })}
                 </select>
+                {key === 'contact1' && isPhonePaired && (
+                  <div className="mt-2.5 rounded-lg bg-blue-950/40 border border-blue-700/40 p-2">
+                    <div className="flex items-center justify-between mb-1.5">
+                      <span className="text-[10px] font-black text-blue-300 flex items-center gap-1">
+                        <ArrowLeftRight size={11}/> 전화 2개 자동 짝맞춤
+                      </span>
+                      <button
+                        type="button"
+                        onClick={swapPhones}
+                        className="text-[10px] font-black px-2 py-0.5 rounded-md bg-blue-600/40 text-blue-100 border border-blue-400/50 hover:bg-blue-500/60 active:scale-95 transition-all flex items-center gap-1"
+                        title="휴대폰과 유선 번호를 서로 바꿉니다"
+                      >
+                        <ArrowLeftRight size={10}/> 바꾸기
+                      </button>
+                    </div>
+                    <div className="flex items-stretch gap-1.5">
+                      <div className="flex-1 min-w-0 px-2 py-1 rounded bg-blue-900/50 border border-blue-600/40">
+                        <div className="text-[8px] text-blue-400 font-black">📱 휴대폰</div>
+                        <div className="text-[10px] text-blue-100 font-bold truncate" title={mapDef.contact1}>{mapDef.contact1 || '—'}</div>
+                      </div>
+                      <div className="flex-1 min-w-0 px-2 py-1 rounded bg-teal-900/40 border border-teal-600/40">
+                        <div className="text-[8px] text-teal-400 font-black">☎ 유선(보조)</div>
+                        <div className="text-[10px] text-teal-100 font-bold truncate" title={mapDef.contact2}>{mapDef.contact2 || '—'}</div>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             );
           })}
