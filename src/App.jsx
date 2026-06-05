@@ -14,6 +14,7 @@ import Step1_Upload from "./components/Step1_Upload.jsx";
 import Step2_SheetSelect from "./components/Step2_SheetSelect.jsx";
 import Step3_Mapping from "./components/Step3_Mapping.jsx";
 import CityMonthPickerModal from "./components/CityMonthPickerModal.jsx";
+import EasyCleanConfirm from "./components/EasyCleanConfirm.jsx";
 import LoadingScreen from "./components/LoadingScreen.jsx";
 import ResultGrid from "./components/ResultGrid.jsx";
 import ErrorBoundary from "./components/ErrorBoundary.jsx";
@@ -178,6 +179,9 @@ export default function App() {
   const [showCityPicker, setShowCityPicker] = useState(false);
   const [pendingSetup, setPendingSetup] = useState(null); // { sheetsData, detectedCity, monthStr, initialSel }
   const [selectedSheets, setSelectedSheets] = useState([]);
+  const [cleanMode, setCleanMode] = useState('easy');      // 'easy'(초보) | 'advanced'(고급)
+  const [showEasyConfirm, setShowEasyConfirm] = useState(false); // 쉬운 정제 확인 카드
+  const [easyRun, setEasyRun] = useState(false);           // 쉬운 정제: 상태 세팅 후 자동 분석 트리거
   const [aiRules, setAiRules] = useState(null);
   const [mapDefs, setMapDefs] = useState({});
   const [gridData, setGridData] = useState([]);
@@ -590,7 +594,19 @@ export default function App() {
       worker.onmessage = (evt) => {
         if (evt.data.ok && evt.data.action === "PARSE_TARGET") {
           gDone('파일 분석 완료!');
-          const { sheetsData, detectedCity, monthStr } = evt.data;
+          const { sheetsData, detectedCity, monthStr, cityCandidates } = evt.data;
+
+          // §5-2 지자체 허가지역 대조 — 후보 중 userCities와 일치하는 정확한 지자체명 우선
+          const approvedCities = user?.citiesApproved || [];
+          const normCity = (s) => String(s || '').replace(/\s/g, '');
+          const candList = (cityCandidates && cityCandidates.length) ? cityCandidates : (detectedCity ? [detectedCity] : []);
+          let resolvedCity = detectedCity;
+          const hit = approvedCities.find(uc => candList.some(c => {
+            const nc = normCity(c), nu = normCity(uc);
+            const cTok = String(c).split(/\s+/).pop(); // 시군구 토큰
+            return nc === nu || nu.includes(normCity(cTok)) || nc.includes(nu);
+          }));
+          if (hit) resolvedCity = hit;
 
           const initialSel = {};
           sheetsData.forEach(s => {
@@ -634,8 +650,8 @@ export default function App() {
             }
           });
 
-          // 지자체·적용월 확인 모달 표시
-          setPendingSetup({ sheetsData, detectedCity, monthStr, initialSel });
+          // 지자체·적용월 확인 모달 표시 (허가지역 대조된 resolvedCity 사용)
+          setPendingSetup({ sheetsData, detectedCity: resolvedCity, monthStr, initialSel });
           setShowCityPicker(true);
         } else if (!evt.data.ok) {
           setGLoad({ show: false });
@@ -657,7 +673,23 @@ export default function App() {
     setMapDefs(initialSel);
     setShowCityPicker(false);
     setPendingSetup(null);
-    setStep(2);
+    if (cleanMode === 'easy') {
+      setSelectedSheets(sheetsData);  // 모든 시트 자동 선택
+      setShowEasyConfirm(true);       // 쉬운 정제 확인 카드(노랑만 확인)
+    } else {
+      setStep(2);                     // 고급: 시트선택 → 매핑 검토
+    }
+  };
+
+  // 쉬운 정제 확인 카드 → [정제 시작]: 매핑 확정 후 자동 분석
+  const handleEasyConfirm = (finalMapDefs) => {
+    if (finalMapDefs) setMapDefs(finalMapDefs);
+    setShowEasyConfirm(false);
+    setEasyRun(true); // selectedSheets 준비되면 useEffect가 handleAnalyzeAll 실행
+  };
+  const handleEasyToAdvanced = () => {
+    setShowEasyConfirm(false);
+    setStep(2); // 고급 모드(시트선택/매핑)로 전환
   };
 
   const handleCityMonthCancel = () => {
@@ -1089,6 +1121,15 @@ export default function App() {
       console.warn('[전월 비교 로드 실패 — 무시]', e);
     }
   };
+
+  // 쉬운 정제: 확인 카드 [정제 시작] 후 selectedSheets 준비되면 자동으로 엔진 실행
+  useEffect(() => {
+    if (easyRun && selectedSheets.length > 0) {
+      setEasyRun(false);
+      handleAnalyzeAll();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [easyRun, selectedSheets]);
 
   const handleCellEdit = (id, field, value) => {
     // 타이핑마다 pushHistory 호출 시 stale closure + setHistory·setGridData 동시발동으로
@@ -2433,7 +2474,7 @@ export default function App() {
 
         <main className="flex-1 relative overflow-hidden bg-[#070807] flex flex-col">
           {step === 0 && <Dashboard user={user} onLogout={onLogout} onStart={(s) => setStep(typeof s === 'number' ? s : 1)} onHelp={onHelp} setFileInfo={setFileInfo} setWorksheets={setWorksheets} setBaseCount={setBaseCount} gridData={gridData} setGridData={setGridData} fileInfo={fileInfo} onCloudCard={(city) => { setDbNavCity(city); setStep(8); }} onBaseCard={(city) => { setDbNavCity(city); setStep(6); }} onOpenRouteMap={() => { if (!canUseRouteMap(user)) { setUpgradeReason('routeMap'); setShowUpgrade(true); } else setShowRouteQuick(true); }} workflowMode={workflowMode} onWorkflowModeChange={changeWorkflowMode} stepStatus={stepStatus} onOpenIntro={() => { setIntroReason('new'); setShowIntro(true); }} />}
-          {step === 1 && <Step1_Upload handleDragOver={handleDragOver} handleDrop={handleDrop} handleFileUpload={handleFileUpload} handleUnifiedDrop={handleUnifiedDrop} isBaseUploading={isBaseUploading} step={step} onHelp={onHelp} onCloudFetch={() => setShowCloudBase(true)} />}
+          {step === 1 && <Step1_Upload handleDragOver={handleDragOver} handleDrop={handleDrop} handleFileUpload={handleFileUpload} handleUnifiedDrop={handleUnifiedDrop} isBaseUploading={isBaseUploading} step={step} onHelp={onHelp} onCloudFetch={() => setShowCloudBase(true)} cleanMode={cleanMode} setCleanMode={setCleanMode} />}
           {step === 2 && <Step2_SheetSelect step={step} setStep={setStep} fileInfo={fileInfo} setFileInfo={setFileInfo} worksheets={worksheets} setWorksheets={setWorksheets} setSelectedSheets={setSelectedSheets} onHelp={onHelp} handleSecondFileUpload={handleSecondFileUpload} userCities={user?.citiesApproved || []} isAdmin={user?.role === 'admin'} />}
           {step === 3 && <Step3_Mapping step={step} setStep={setStep} selectedSheets={selectedSheets} worksheets={worksheets} mapDefs={mapDefs} setMapDefs={setMapDefs} startProcessing={handleAnalyzeAll} onHelp={onHelp} isBasePurifyMode={isBasePurifyMode} setIsBasePurifyMode={setIsBasePurifyMode} onOpenDbImport={() => setShowDbImport(true)} dbImportReady={dbImportReady} onUserMapping={handleUserMapping} city={fileInfo?.city || ''} />}
           {step === 4 && <LoadingScreen progress={engineProgress} logs={progressLogs} />}
@@ -2467,6 +2508,19 @@ export default function App() {
             isAdmin={user?.role === 'admin'}
             onConfirm={handleCityMonthConfirm}
             onCancel={handleCityMonthCancel}
+          />
+        )}
+
+        {/* 쉬운 정제 확인 카드 (초보 모드) */}
+        {showEasyConfirm && (
+          <EasyCleanConfirm
+            city={fileInfo?.city || ''}
+            month={fileInfo?.month || ''}
+            sheets={selectedSheets}
+            mapDefs={mapDefs}
+            onConfirm={handleEasyConfirm}
+            onAdvanced={handleEasyToAdvanced}
+            onCancel={() => { setShowEasyConfirm(false); setStep(0); }}
           />
         )}
 

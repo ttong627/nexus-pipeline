@@ -24,20 +24,25 @@ const normalizeBirth = (raw) => {
   return raw;
 };
 
-function extractCityName(fileName, rawJsonSamples, bodyRows, addrColIdx) {
+// 파일명·요약·주소 텍스트에서 매칭되는 모든 시·군·구 후보(전체 정식명)를 반환.
+// 첫 후보 = detectedCity, 전체 후보 = App에서 userCities(허가지역) 대조용(§5-2).
+function extractCityCandidates(fileName, rawJsonSamples, bodyRows, addrColIdx) {
   const headerText = fileName + ' ' + rawJsonSamples.map(r => r.join(' ')).join(' ');
   let addrText = '';
   if (addrColIdx !== undefined && addrColIdx >= 0 && bodyRows && bodyRows.length > 0) {
     addrText = bodyRows.slice(0, 15).map(r => String(r[addrColIdx] || '')).join(' ');
   }
   const fullText = headerText + ' ' + addrText;
+  const found = [];
+  // 전체 정식명 우선
   for (const value of Object.values(KOREA_REGION_MAP)) {
-    if (fullText.includes(value)) return value;
+    if (fullText.includes(value) && !found.includes(value)) found.push(value);
   }
+  // 키(시군구 단독)로도 보완
   for (const [key, value] of Object.entries(KOREA_REGION_MAP)) {
-    if (fullText.includes(key)) return value;
+    if (fullText.includes(key) && !found.includes(value)) found.push(value);
   }
-  return '';
+  return found;
 }
 
 function parseSheet(name, rawJson, dynamicRules) {
@@ -372,6 +377,51 @@ function parseSheet(name, rawJson, dynamicRules) {
   }
   // ─────────────────────────────────────────────────────────────────────
 
+  // ── 칼럼 매칭 신뢰도 점수 + 애매(노랑) 키 (쉬운 정제용, §5-1) ──────────────
+  // 임계값 0.7: 실데이터(지번 혼재 등)에서 멀쩡한 칼럼이 노랑으로 과탐되지 않도록 실용값 사용.
+  const CONF_THRESHOLD = 0.7;
+  const colConfidence = {};
+  const ambiguousKeys = [];
+  {
+    const cs = rawJson.slice(headerIdx + 1, headerIdx + 80).filter(r => r && r.some(c => String(c || '').trim()));
+    const cVals = (idx) => (idx === undefined || idx < 0) ? [] : cs.map(r => String(r?.[idx] ?? '').trim()).filter(Boolean);
+    const cRatio = (idx, pred) => { const vs = cVals(idx); return vs.length >= 2 ? vs.filter(pred).length / vs.length : 0; };
+    const dg = (v) => String(v || '').replace(/[^0-9]/g, '');
+    const pMobile = (v) => { const d = dg(v); return /^01[016789]/.test(d) && d.length >= 10 && d.length <= 11; };
+    const pLand = (v) => { const d = dg(v); return /^0[2-6]/.test(d) && d.length >= 9 && d.length <= 11 && !pMobile(v); };
+    const pName = (v) => /^[가-힣]{2,5}$/.test(v.replace(/\s/g, ''));
+    const pDong = (v) => /^[가-힣0-9]{1,12}(동|읍|면)$/.test(v.replace(/\s/g, ''));
+    // 도로명 + 지번(동/리/번지/번호-번호) 모두 주소로 인정
+    const pRoad = (v) => v.length >= 6 && /(로|길|번지|동|리|읍|면|\d+-\d+|\d+호|\d+번길)/.test(v);
+    const pInt = (v) => /^\d{1,2}$/.test(v.trim()) && +v >= 1 && +v <= 30;
+    const pYnox = (v) => /^(y|n|o|x|○|×|ㅇ|예|아니오|동의|미동의|수신|거부)$/i.test(v.trim());
+    const pDate = (v) => { const d = v.replace(/[.\-/\s]/g, ''); return /^\d{6}$/.test(d) || /^\d{8}$/.test(d); };
+
+    // [표시라벨, colIndices키, 형식판정자, 필수여부]
+    const specs = [
+      ['이름', '이름', pName, true],
+      ['주소', '주소', pRoad, true],
+      ['행정동', '행정동', pDong, false],
+      ['휴대폰', '연락처', pMobile, false],
+      ['유선전화', '보조연락처', pLand, false],
+      ['포수', '수량', pInt, false],
+      ['문자수신', '문자수신', pYnox, false],
+      ['생년월일', '생년월일', pDate, false],
+    ];
+    for (const [label, ck, pred, required] of specs) {
+      const idx = colIndices[ck];
+      if (idx === undefined || idx < 0) {
+        colConfidence[label] = 0;
+        if (required) ambiguousKeys.push(label);
+        continue;
+      }
+      const r = cRatio(idx, pred);
+      colConfidence[label] = Math.round(r * 100) / 100;
+      if (r < CONF_THRESHOLD) ambiguousKeys.push(label);
+    }
+    colConfidence['구분'] = (typeColIdx >= 0 || type === '기초수급자' || type === '차상위') ? 1 : 0.5;
+  }
+
   return {
     name, selected, type, qty, rowsCount: bodyRows.length,
     headers, bodyRows, headerRowIdx: headerIdx + 1,
@@ -380,6 +430,8 @@ function parseSheet(name, rawJson, dynamicRules) {
     unmappedCols,
     colIndices,
     typeColIdx,
+    colConfidence,
+    ambiguousKeys,
   };
 }
 
@@ -1308,15 +1360,16 @@ self.onmessage = ({ data }) => {
     });
 
     const firstSheet = sheetsData[0];
-    const detectedCity = extractCityName(
+    const cityCandidates = extractCityCandidates(
       fileName,
       allRawData,
       firstSheet?.bodyRows,
       firstSheet?.addrColIdx
     );
+    const detectedCity = cityCandidates[0] || '';
 
     const monthMatch = fileName.match(/(\d+)월/);
-    self.postMessage({ ok: true, action: 'PARSE_TARGET', sheetsData, detectedCity, monthStr: monthMatch ? `${monthMatch[1]}월` : '' });
+    self.postMessage({ ok: true, action: 'PARSE_TARGET', sheetsData, detectedCity, cityCandidates, monthStr: monthMatch ? `${monthMatch[1]}월` : '' });
   } catch (err) {
     self.postMessage({ ok: false, action: data.action, error: err.message });
   }
