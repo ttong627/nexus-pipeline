@@ -210,6 +210,41 @@ function parseSheet(name, rawJson, dynamicRules) {
     }
   }
 
+  // ── 형식(내용) 기반 누락 칼럼 보완 (§5-1) — 키워드로 못 잡은 칼럼을 데이터 형식으로 확정 ──
+  {
+    const fSample = rawJson.slice(headerIdx + 1, headerIdx + 80).filter(r => r && r.some(c => String(c || '').trim()));
+    const colVals = (idx) => fSample.map(r => String(r?.[idx] ?? '').trim()).filter(Boolean);
+    const ratioOf = (idx, pred) => { const vs = colVals(idx); return vs.length >= 2 ? vs.filter(pred).length / vs.length : 0; };
+    const isDong = (v) => /^[가-힣0-9]{1,12}(동|읍|면)$/.test(v.replace(/\s/g, ''));
+    const isYNOX = (v) => /^(y|n|o|x|○|×|ㅇ|예|아니오|동의|미동의|수신|거부)$/i.test(v.trim());
+    const isDate = (v) => { const d = v.replace(/[.\-/\s]/g, ''); return /^\d{6}$/.test(d) || /^(19|20)?\d{6}$/.test(d) || /^\d{8}$/.test(d); };
+    const isKoreanName = (v) => /^[가-힣]{2,5}$/.test(v.replace(/\s/g, ''));
+    const isRoad = (v) => v.length >= 8 && /(로|길|번지|\d+-\d+|\d+호|\d+번길)/.test(v);
+
+    const assignByFormat = (key, pred, threshold, excl = []) => {
+      if (colIndices[key] !== undefined) return; // 이미 매칭됨
+      const used = new Set(Object.values(colIndices));
+      let best = -1, bestR = 0;
+      headers.forEach((h, i) => {
+        if (used.has(i)) return;
+        if (excl.length && excl.some(e => normalizeH(h).includes(normalizeH(e)))) return;
+        const r = ratioOf(i, pred);
+        if (r > bestR) { bestR = r; best = i; }
+      });
+      if (best >= 0 && bestR >= threshold) {
+        colIndices[key] = best;
+        if (!mappedKeys.includes(key)) mappedKeys.push(key);
+        const mi = missingKeys.indexOf(key); if (mi >= 0) missingKeys.splice(mi, 1);
+      }
+    };
+
+    assignByFormat('행정동', isDong, 0.5);        // 읍면동: OO동/읍/면 짧은 값
+    assignByFormat('생년월일', isDate, 0.6);       // 날짜/주민앞자리
+    assignByFormat('문자수신', isYNOX, 0.6);       // Y/N/O/X/○/×/예/아니오
+    assignByFormat('이름', isKoreanName, 0.7);     // 2~5자 한글
+    assignByFormat('주소', isRoad, 0.5);           // 도로명/지번 긴 텍스트
+  }
+
   // 매핑되지 않은 컬럼 찾기 (빈 컬럼 무시, 알려진 키워드 없는 컬럼)
   // colIndices에 이미 등록된 컬럼 인덱스를 제외 (보조연락처·생년월일·문자수신 포함)
   const mappedColIdxSet = new Set(Object.values(colIndices));
