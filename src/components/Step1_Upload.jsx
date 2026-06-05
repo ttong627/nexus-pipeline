@@ -1,5 +1,5 @@
 import React from 'react';
-import { Database, UploadCloud, Loader2, Sparkles, Settings2, LayoutDashboard, User, MapPin, CheckCircle2 } from 'lucide-react';
+import { UploadCloud, Loader2, Sparkles, Settings2, LayoutDashboard, User, MapPin, CheckCircle2 } from 'lucide-react';
 
 export default function Step1_Upload({
   handleDragOver, handleDrop, handleFileUpload, handleUnifiedDrop, isBaseUploading, step, onHelp, onCloudFetch, onOpenDashboard,
@@ -195,15 +195,6 @@ export default function Step1_Upload({
               />
             </label>
           </div>
-
-          {/* 클라우드 명단 불러오기 */}
-          <button
-            onClick={onCloudFetch}
-            className="w-full py-4 bg-[#0a1410]/80 border border-emerald-500/20 rounded-2xl text-emerald-400 font-bold text-sm hover:bg-emerald-950/30 hover:border-emerald-400/50 transition-all flex items-center justify-center gap-2.5 group"
-          >
-            <Database size={18} className="group-hover:scale-110 transition-transform shrink-0" />
-            클라우드 기준 명단 불러오기 (CRM)
-          </button>
 
         </div>
       </div>
