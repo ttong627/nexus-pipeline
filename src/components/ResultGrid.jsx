@@ -6,6 +6,7 @@ import ColResizeHandle from './ColResizeHandle.jsx';
 import ColumnEditBar from './ColumnEditBar.jsx';
 import ColHeaderEditControls from './ColHeaderEditControls.jsx';
 import { useColumnEditor } from '../hooks/useColumnEditor.js';
+import AddressConfirmModal from './AddressConfirmModal.jsx';
 import { hasRi, getColWidth, colCellStyle } from '../utils/colOrder.js';
 
 const ResultGrid = memo(function ResultGrid({
@@ -15,6 +16,7 @@ const ResultGrid = memo(function ResultGrid({
   handleSaveMonthlyList, setShowExportSetting, handleExport, handleExportErrors, handleExportDongSummary,
   handleExportByDriver, handleDeleteRows, handleBatchSetNote, onHelp, onOpenRouteMap,
   purifyResult, onClosePurifyResult, onMovePhones, onRepurifyErrors,
+  onConfirmAddress, onMarkPhoneCheck,
   onFetchBaseNotes, isFetchingNotes,
   workflowMode = 'cleaningOnly', onWorkflowModeChange,
   addressDisplayMode = 'parenBeforeDetail', onToggleAddressDisplayMode,
@@ -24,6 +26,7 @@ const ResultGrid = memo(function ResultGrid({
   const [batchNoteOpen, setBatchNoteOpen] = useState(false);
   const [batchNoteValue, setBatchNoteValue] = useState('');
   const [updateModalRow, setUpdateModalRow] = useState(null);
+  const [showAddrConfirm, setShowAddrConfirm] = useState(false);
   const searchInputRef = useRef(null);
   const editor = useColumnEditor({ exportColOrder, setExportColOrder, defaultExportCols });
 
@@ -54,6 +57,8 @@ const ResultGrid = memo(function ResultGrid({
   const hasActiveFilter = filter.text || filter.구분 || filter.dong || filter.driver || filter.noDriver || filter.hasNote || filter.inferredAddress;
 
   const errorCount = gridData.filter(d => d._에러).length;
+  // 주소 확인 대상 = 오류이면서 아직 전화확인으로 분류되지 않은 건(담당자 확인 필요)
+  const addrConfirmRows = gridData.filter(d => d._에러 && !d._전화확인);
   const inferredAddressCount = gridData.filter(d => d._주소추정 || (d._추정사유 || '').trim() || (d.특이사항 || '').includes('[주소추정]')).length;
   const totalPages = Math.ceil(filteredData.length / itemsPerPage) || 1;
   const modeInfo = WORKFLOW_MODES[workflowMode] || WORKFLOW_MODES.cleaningOnly;
@@ -477,6 +482,15 @@ const ResultGrid = memo(function ResultGrid({
                 ↺ 오류 재정제 <span className="font-mono font-black">{errorCount}</span>
               </button>
             )}
+            {addrConfirmRows.length > 0 && onConfirmAddress && (
+              <button
+                onClick={() => setShowAddrConfirm(true)}
+                title="이번달 주소가 없거나 못 찾은 건을 담당자가 한 건씩 확인합니다."
+                className="px-3 py-1.5 bg-amber-950/70 border border-amber-500/50 text-amber-300 text-xs font-bold rounded-lg flex items-center gap-1.5 hover:bg-amber-900/70 hover:border-amber-400/70 hover:text-amber-200 transition-all shrink-0"
+              >
+                <MapPin size={12}/> 주소 확인 <span className="font-mono font-black">{addrConfirmRows.length}</span>
+              </button>
+            )}
             {(() => {
               const matched = gridData.filter(d => d._이식됨);
               if (matched.length === 0) return null;
@@ -808,6 +822,15 @@ const ResultGrid = memo(function ResultGrid({
 
       {editor.editing && (
         <ColumnEditBar onReset={editor.reset} onCancel={editor.cancel} onCommit={editor.commit} />
+      )}
+
+      {showAddrConfirm && addrConfirmRows.length > 0 && (
+        <AddressConfirmModal
+          rows={addrConfirmRows}
+          onConfirm={onConfirmAddress}
+          onPhoneCheck={onMarkPhoneCheck}
+          onClose={() => setShowAddrConfirm(false)}
+        />
       )}
     </>
   );

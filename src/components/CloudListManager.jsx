@@ -91,29 +91,46 @@ const normalizeRoadAddressCompareKey = (addr) => {
     return `${roadName} ${main}${sub}`;
   };
 
-  const candidates = [
-    text,
-    text.replace(/\([^)]*\)/g, ' '),
-    text.split(',')[0] || text,
-  ];
+  const base = text
+    .replace(/\([^)]*\)/g, ' ')                                  // 괄호 제거
+    .replace(/번지/g, '')                                         // 번지 표기 제거
+    .replace(/(로|대로)\s+(\d+[가-힣]*(?:번?길|가))/g, '$1$2')     // '사가정로 2길' → '사가정로2길'
+    .split(',')[0] || text;                                      // 쉼표 앞(도로명+번)만
 
-  for (const candidate of candidates) {
-    const spaced = candidate.replace(/\s+/g, ' ').trim();
-    const spacedMatch = spaced.match(/([가-힣A-Za-z0-9·.\-]+(?:대로|로|길|가))\s*(\d+)(?:\s*-\s*(\d+))?/);
-    if (spacedMatch) return formatRoadKey(spacedMatch[1], spacedMatch[2], spacedMatch[3]);
-
-    const compact = candidate.replace(/\s+/g, '');
-    const compactMatch = compact.match(/([가-힣A-Za-z0-9·.\-]+(?:대로|로|길|가))(\d+)(?:-(\d+))?/);
-    if (compactMatch) return formatRoadKey(compactMatch[1], compactMatch[2], compactMatch[3]);
-  }
+  const spaced = base.match(/([가-힣A-Za-z0-9·.\-]+(?:대로|번길|로|길|가))\s*(\d+)(?:\s*-\s*(\d+))?/);
+  if (spaced) return formatRoadKey(spaced[1], spaced[2], spaced[3]);
+  const compact = base.replace(/\s+/g, '').match(/([가-힣A-Za-z0-9·.\-]+(?:대로|번길|로|길|가))(\d+)(?:-(\d+))?/);
+  if (compact) return formatRoadKey(compact[1], compact[2], compact[3]);
 
   return '';
 };
 
+// 유사 비교용 핵심 문자열: 도로명+번 영역 글자만(상세·동호수·층·공백·구두점 제거)
+const addressCompareCore = (addr) => {
+  let t = String(addr || '')
+    .normalize('NFC')
+    .replace(/\([^)]*\)/g, ' ');
+  t = (t.split(',')[0] || t)
+    .replace(/번지/g, '')
+    .replace(/지하\s*\d*\s*층|제?\s*\d+\s*층/g, '')
+    .replace(/제?\s*\d+\s*(?:-\s*\d+\s*)?호/g, '')
+    .replace(/(로|대로)\s+(\d+[가-힣]*(?:번?길|가))/g, '$1$2')
+    .replace(/[\s·.\-'`]/g, '');
+  return t.trim();
+};
+
+// 저번달 대비 "이사(변동)" 판정 — 과탐 최소화(애매하면 변동 아님).
 const hasRoadAddressChanged = (prevAddr, currentAddr) => {
   const prevKey = normalizeRoadAddressCompareKey(prevAddr);
   const currentKey = normalizeRoadAddressCompareKey(currentAddr);
-  return Boolean(prevKey && currentKey && prevKey !== currentKey);
+  if (prevKey && currentKey) {
+    if (prevKey === currentKey) return false;                    // 도로명+번 같음 → 변동 아님
+    const pc = addressCompareCore(prevAddr), cc = addressCompareCore(currentAddr);
+    if (pc && cc && (pc === cc || pc.includes(cc) || cc.includes(pc))) return false; // 추출오차 → 변동 아님
+    return true;                                                 // 도로/번이 명확히 다름 → 이사
+  }
+  // 한쪽이라도 도로키 추출 실패 → 보수적으로 변동 아님(이사 과탐 0)
+  return false;
 };
 
 // 셀 편집 입력 — 자체 상태 관리로 부모 리렌더 완전 차단
