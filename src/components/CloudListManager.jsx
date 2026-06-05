@@ -1388,12 +1388,7 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
         </button>
         <div className="flex items-center gap-2.5 flex-1 min-w-0">
           <Cloud size={17} className="text-blue-400 shrink-0" />
-          <div>
-            <h1 className="text-sm font-black text-white leading-tight">이번달 배송명단</h1>
-            <p className="text-[10px] text-gray-600 leading-tight">
-              {isAdmin ? '월별 배송명단 · 기사 배정 · 루트맵 · 조회 · 수정 · 다운로드' : `승인된 지자체 ${approvedCities.length}개 조회 가능`}
-            </p>
-          </div>
+          <h1 className="text-sm font-black text-white leading-tight truncate">이번달 배송명단</h1>
         </div>
 
         {/* Action buttons (shown when month selected) */}
