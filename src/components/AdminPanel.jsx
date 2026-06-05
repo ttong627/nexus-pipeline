@@ -1,8 +1,8 @@
 ﻿import { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { getDocs, getDoc, updateDoc, setDoc, deleteDoc, doc, collection, db, serverTimestamp, Timestamp, addDoc, query, where, orderBy, limit, writeBatch, onSnapshot, arrayUnion, arrayRemove } from '../config/firebase.js';
+import { getDocs, getDoc, updateDoc, setDoc, deleteDoc, doc, collection, db, serverTimestamp, Timestamp, addDoc, query, orderBy, limit, writeBatch, arrayUnion, arrayRemove } from '../config/firebase.js';
 const ttl90 = () => Timestamp.fromMillis(Date.now() + 90 * 24 * 60 * 60 * 1000);
-import { X, Users, BarChart2, Clock, ShieldOff, ShieldCheck, AlertTriangle, Crown, MessageSquare, CheckCircle2, MapPin, XCircle, Building2, ShieldAlert, Plus, ChevronDown, TrendingUp, AlertCircle, UserX, Activity, Zap, Trash2, Truck, Edit2, RefreshCw, UserCheck, ChevronRight } from 'lucide-react';
+import { X, Users, BarChart2, Clock, ShieldOff, ShieldCheck, AlertTriangle, Crown, MessageSquare, CheckCircle2, Building2, ShieldAlert, Plus, ChevronDown, TrendingUp, AlertCircle, UserX, Activity, Zap, Trash2, Truck, Edit2, RefreshCw, UserCheck } from 'lucide-react';
 import { REGIONS, getSigunguOptions } from '../utils/regions.js';
 import { getDriversCollection, getDriverScopeLabel } from '../utils/company.js';
 
@@ -704,9 +704,6 @@ export default function AdminPanel({ onClose, user }) {
     acc[k] = users.filter(u => (u.tier || 'basic') === k).length;
     return acc;
   }, {});
-  const totalRows   = users.reduce((s, u) => s + getProcessedRows(u), 0);
-  const totalFiles  = users.reduce((s, u) => s + getProcessedFiles(u), 0);
-  const bannedCount = users.filter(u => u.status === 'banned').length;
 
   const nowSec = Date.now() / 1000;
   const churnRisk = users.filter(u => {

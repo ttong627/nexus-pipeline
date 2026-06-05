@@ -236,7 +236,7 @@ export default function App() {
   const [purifyResult, setPurifyResult] = useState(null);
   const [prevMonthCompare, setPrevMonthCompare] = useState(null); // { warnings, changes, newCount, leftCount }
   const [showPrevCompare, setShowPrevCompare] = useState(false);
-  const [colVis, setColVis] = useState({});
+  const [colVis] = useState({});
   const [baseCount, setBaseCount] = useState(0);
   const [baseMap, setBaseMap] = useState(null);
   const [importFields, setImportFields] = useState(null); // null = 전체 이식, Set = 선택 필드만
@@ -296,7 +296,7 @@ export default function App() {
     return DEFAULT_EXPORT_COLS;
   });
 
-  const [showExportSetting, setShowExportSetting] = useState(false);
+  const [, setShowExportSetting] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
 
   // 기기 간 칼럼설정 동기화용 refs

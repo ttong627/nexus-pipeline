@@ -3,7 +3,7 @@ import { FileSpreadsheet, CheckCircle, Database, ChevronRight, Truck, BookOpen, 
 import { APP_VERSION } from '../version.js';
 import { db } from '../config/firebase.js';
 import {
-  collection, getDocs, getDoc, doc, query, orderBy, limit, getCountFromServer
+  collection, getDocs, query, orderBy, limit, getCountFromServer
 } from 'firebase/firestore';
 import { documentId } from 'firebase/firestore';
 import { WORKFLOW_MODES } from '../utils/workflow.js';
@@ -390,7 +390,7 @@ function CityCard({ item, onCloudCard, onBaseCard }) {
 }
 
 // ─── Dashboard ────────────────────────────────────────────────────────────────
-export default function Dashboard({ user, onStart, onHelp, onCloudCard, onBaseCard, gridData = [], fileInfo = null, onOpenRouteMap, workflowMode = 'cleaningOnly', onWorkflowModeChange, stepStatus, onOpenIntro }) {
+export default function Dashboard({ user, onStart, onCloudCard, onBaseCard, gridData = [], fileInfo = null, onOpenRouteMap, workflowMode = 'cleaningOnly', onWorkflowModeChange, stepStatus, onOpenIntro }) {
   const totalRows = getProcessedRows(user);
   const totalFiles = getProcessedFiles(user);
   const isAdmin = user?.role === 'admin';

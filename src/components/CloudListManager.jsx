@@ -9,8 +9,8 @@ import {
 import { normalizeBirth, formatPhoneInput } from '../utils/parsers.js';
 import {
   Cloud, Trash2, ArrowLeft, Download, Calendar, FileSpreadsheet,
-  AlertCircle, ChevronRight, Search, Save, RotateCcw, X, CheckCircle, MapPin,
-  Building2, DatabaseZap, Ghost, BookOpen, Phone, RefreshCw, LayoutGrid,
+  AlertCircle, Search, Save, RotateCcw, X, CheckCircle, MapPin,
+  Building2, DatabaseZap, Ghost, BookOpen, Phone, LayoutGrid,
   Wand2, AlertTriangle, List, Eraser, Columns,
 } from 'lucide-react';
 import OrgPresetModal from './OrgPresetModal.jsx';
@@ -20,7 +20,7 @@ import ColumnEditBar from './ColumnEditBar.jsx';
 import ColHeaderEditControls from './ColHeaderEditControls.jsx';
 import { useColumnEditor } from '../hooks/useColumnEditor.js';
 import { processAddress, asyncPool } from '../engine/addressEngine.js';
-import { canUseCoords, canUseCoordsBg } from '../utils/tierUtils.js';
+import { canUseCoords } from '../utils/tierUtils.js';
 import { orderFieldsByExport, hasRi, getColWidth, colCellStyle } from '../utils/colOrder.js';
 
 const KAKAO_REST_KEY = import.meta.env.VITE_KAKAO_REST_KEY;
@@ -289,7 +289,7 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
   // Month list
   const [months, setMonths] = useState([]);
   const [selectedMonth, setSelectedMonth] = useState(null);
-  const [loadingMonths, setLoadingMonths] = useState(false);
+  const [, setLoadingMonths] = useState(false);
 
   // Records
   const [records, setRecords] = useState([]);
@@ -326,7 +326,6 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
   // City cards (replaces sigungu dropdown)
   const [cityList, setCityList] = useState([]);
   const [loadingCities, setLoadingCities] = useState(false);
-  const [expandedCityId, setExpandedCityId] = useState(initialCity || '');
 
   // 특이사항·전화번호 처리
   const [isFetchingNotes, setIsFetchingNotes] = useState(false);

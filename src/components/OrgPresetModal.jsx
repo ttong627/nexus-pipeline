@@ -2,7 +2,7 @@
 import * as XLSX from 'xlsx';
 import {
   db,
-  setDoc, doc, getDoc, collection, getDocs,
+  setDoc, doc, getDoc,
 } from '../config/firebase.js';
 import {
   X, Plus, Trash2, Save, Download, Building2, ChevronDown, ChevronUp,

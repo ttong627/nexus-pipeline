@@ -1,6 +1,6 @@
 ﻿import { useState, useEffect } from 'react';
 import {
-  db, collection, getDocs, getCountFromServer, doc, getDoc,
+  db, collection, getDocs, getCountFromServer,
 } from '../config/firebase.js';
 import {
   ArrowLeft, Database, Cloud, RefreshCw, ChevronDown, ChevronRight,

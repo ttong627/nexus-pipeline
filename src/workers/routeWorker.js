@@ -369,7 +369,7 @@ const computeSeedVoronoi = (units, orderedDrivers, driverPins) => {
   // 초기 씨앗: 핀 → 그대로, 핀 없으면 PCA 분할 중심
   const pcaOrdered = orderUnitsByRoad(units, orderedDrivers.map(d => driverPins[d.id] || null));
   const pcaAssign = partitionContiguous(pcaOrdered, orderedDrivers);
-  const seeds = orderedDrivers.map((driver, i) => {
+  const seeds = orderedDrivers.map((driver) => {
     const pin = driverPins[driver.id];
     if (pin) return { driverId: driver.id, lat: Number(pin.lat), lng: Number(pin.lng), fixed: true };
     const pcaUnits = units.filter(u => pcaAssign[u.id] === driver.id);
@@ -448,7 +448,7 @@ const computeSeedVoronoi = (units, orderedDrivers, driverPins) => {
             .map(u => ({ u, du: haversine(u.lat, u.lng, underSeed.lat, underSeed.lng), do: haversine(u.lat, u.lng, overSeed.lat, overSeed.lng) }))
             .filter(c => c.du < c.do * 1.5)
             .sort((a, b) => a.du - b.du);
-          for (const { u, u: unit } of candidates) {
+          for (const { u: unit } of candidates) {
             const ml = unit.load;
             const no = (driverLoads[over.id] || 0) - ml;
             const nu = (driverLoads[under.id] || 0) + ml;

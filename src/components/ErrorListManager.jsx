@@ -26,7 +26,7 @@ const COORD_FIELDS = [
   { key: '특이사항', label: '특이사항', minW: '160px' },
 ];
 
-export default function ErrorListManager({ gridData, onBack, handleCellEdit, handleAddressKeyDown, handleExportErrors, onRepurifyErrors, exportColOrder = [], setExportColOrder, defaultExportCols = [] }) {
+export default function ErrorListManager({ gridData, onBack, handleCellEdit, handleAddressKeyDown, onRepurifyErrors, exportColOrder = [], setExportColOrder, defaultExportCols = [] }) {
   const [activeTab, setActiveTab] = useState('address');
   const [search, setSearch] = useState('');
   const [editingCell, setEditingCell] = useState(null);

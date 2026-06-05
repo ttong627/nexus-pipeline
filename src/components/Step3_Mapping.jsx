@@ -1,5 +1,5 @@
 ﻿import { useState, useRef, useEffect } from 'react';
-import { Columns, ChevronLeft, Database, CheckCircle, Loader2, X, ArrowLeftRight } from 'lucide-react';
+import { Columns, ChevronLeft, Database, CheckCircle, ArrowLeftRight } from 'lucide-react';
 import { isHouseholdHeader } from '../columnRules.js';
 
 // 수량(포수)은 필수다 — 절대 미설정(→1포 기본)으로 넘기지 않는다. 가구원수 같은 인원 칼럼만
@@ -29,7 +29,7 @@ const OPTIONAL_KWS = {
   seqNo:    ['순번', '배송순번'],
 };
 
-function SheetMappingPanel({ sheet, mapDef, setMapDef, worksheets, importNote, setImportNote, onUserMapping }) {
+function SheetMappingPanel({ sheet, mapDef, setMapDef, onUserMapping }) {
   // ✅ 방어: headers/bodyRows 없을 경우 빈 배열로 폴백 (forEach crash 원천 차단)
   const headers = Array.isArray(sheet?.headers) ? sheet.headers.filter(h => !/^col_\d+$/.test(h)) : [];
   const bodyRows = Array.isArray(sheet?.bodyRows) ? sheet.bodyRows : [];
@@ -40,7 +40,6 @@ function SheetMappingPanel({ sheet, mapDef, setMapDef, worksheets, importNote, s
     return obj;
   });
 
-  const hasMixedSheet = (worksheets || []).some(s => s.selected && s.type === '혼합');
   const isMixedWithoutType = sheet.type === '혼합' && !mapDef.type && !(sheet.typeColIdx >= 0);
   const hasColumn = (key) => !!mapDef[key] || headers.some(h => (OPTIONAL_KWS[key] || []).some(k => h.includes(k)));
   const colToField = Object.fromEntries(
@@ -248,10 +247,8 @@ const sheetKey = (sheet) => sheet.fileSource ? `${sheet.fileSource}::${sheet.nam
 
 const COL_MAP_KEY = (city) => `nexus_col_map_v1_${city}`;
 
-export default function Step3_Mapping({ step, setStep, mapDefs, setMapDefs, selectedSheets, worksheets, startProcessing, onHelp, importNote, setImportNote, baseFiles, baseCount, isBaseUploading, handleBaseUpload, handleRemoveBaseFile, handleAddTargetFile, handleRemoveTargetFile, isUploading, uploadFileName, isBasePurifyMode, setIsBasePurifyMode, onOpenDbImport, dbImportReady, onUserMapping, city }) {
+export default function Step3_Mapping({ step, setStep, mapDefs, setMapDefs, selectedSheets, worksheets, startProcessing, onHelp, importNote, setImportNote, isBasePurifyMode, setIsBasePurifyMode, onUserMapping, city }) {
   const [activeTab, setActiveTab] = useState(0);
-  const addTargetRef = useRef(null);
-  const addBaseRef = useRef(null);
   const skipFirstSaveRef = useRef(true); // 마운트 직후 자동매핑값이 저장값을 덮어쓰는 것 방지
 
   // 지자체별 저장된 칼럼 매핑 자동 불러오기 (마운트 시 1회)

@@ -178,7 +178,7 @@ const getMunicipalityMatch = (cityLabel, matchedSido, matchedSigungu) => {
   return { comparable: true, ok: sidoOk && sigunguOk, selectedSido, selectedSigungu };
 };
 
-const getAreaIssue = (cityLabel, inputAdminDong, matchedSido, matchedSigungu, matchedDong) => {
+const getAreaIssue = (cityLabel, inputAdminDong, matchedSido, matchedSigungu) => {
   const match = getMunicipalityMatch(cityLabel, matchedSido, matchedSigungu);
 
   if (match.comparable && !match.ok) {

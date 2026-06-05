@@ -2,7 +2,7 @@ import { useState } from 'react';
 import {
   X, Upload, FileSpreadsheet, Columns, Download, AlertTriangle,
   ChevronRight, ChevronLeft, ArrowRight, Zap, Star,
-  Map, Users, Database, Share2, MapPin, Link, Cloud,
+  Map, Database, Share2, Link, Cloud,
 } from 'lucide-react';
 
 const STEPS = [
@@ -352,7 +352,7 @@ const PaintBrushDiagram = () => (
         </div>
         <div className="text-[8px] text-amber-500 px-1">← 기사 카드에서 클릭</div>
         <div className="flex gap-1 px-1">
-          {[['소','30'],['중','60'],['대','100'],['특대','160']].map(([l, px]) => (
+          {[['소','30'],['중','60'],['대','100'],['특대','160']].map(([l]) => (
             <div key={l} className={`flex-1 text-center text-[8px] rounded py-0.5 border ${l==='중'?'bg-amber-500/20 border-amber-400/40 text-amber-300':'bg-[#111] border-[#222] text-gray-600'}`}>{l}</div>
           ))}
         </div>

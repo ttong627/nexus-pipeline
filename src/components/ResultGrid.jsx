@@ -1,5 +1,5 @@
 ﻿import { useState, useRef, memo, cloneElement } from 'react';
-import { ChevronLeft, ChevronRight, AlertTriangle, CheckCircle, Columns, Download, Trash2, Edit3, Database, X, MapPin, Users, UserX, StickyNote, User, Phone, BookOpen, Sparkles, ArrowLeftRight } from 'lucide-react';
+import { ChevronLeft, ChevronRight, AlertTriangle, CheckCircle, Columns, Download, Trash2, Edit3, Database, X, MapPin, Users, UserX, StickyNote, Phone, BookOpen, Sparkles, ArrowLeftRight } from 'lucide-react';
 import { formatPhoneInput } from '../utils/parsers.js';
 import { WORKFLOW_MODES } from '../utils/workflow.js';
 import ColResizeHandle from './ColResizeHandle.jsx';
@@ -11,9 +11,9 @@ import { hasRi, getColWidth, colCellStyle } from '../utils/colOrder.js';
 
 const ResultGrid = memo(function ResultGrid({
   step, setStep, filter, setFilter, dongList = [], driverList = [], gridData, filteredData, paginatedData,
-  currentPage, setCurrentPage, itemsPerPage, colVis, sortConfig, setSortConfig,
+  currentPage, setCurrentPage, itemsPerPage, sortConfig, setSortConfig,
   handleCellEdit, handleAddressKeyDown, handleUpdateBaseList, handleBatchSaveBaseList, isSavingBaseList,
-  handleSaveMonthlyList, setShowExportSetting, handleExport, handleExportErrors, handleExportDongSummary,
+  handleSaveMonthlyList, handleExport, handleExportErrors, handleExportDongSummary,
   handleExportByDriver, handleDeleteRows, handleBatchSetNote, onHelp, onOpenRouteMap,
   purifyResult, onClosePurifyResult, onMovePhones, onRepurifyErrors,
   onConfirmAddress, onMarkPhoneCheck,

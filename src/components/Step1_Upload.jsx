@@ -1,15 +1,16 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { UploadCloud, Loader2, Sparkles, Settings2, LayoutDashboard, ScanSearch } from 'lucide-react';
 
 export default function Step1_Upload({
-  handleDragOver, handleDrop, handleFileUpload, handleUnifiedDrop, isBaseUploading, step, onHelp, onOpenDashboard,
+  handleDragOver, handleFileUpload, handleUnifiedDrop, isBaseUploading, step, onHelp, onOpenDashboard,
   cleanMode = 'easy', setCleanMode, analyzing = false,
 }) {
+  // Hooks는 항상 최상단에서 무조건 호출 (React Hooks 규칙 — 조기 반환 이전)
+  const [tilt, setTilt] = useState({ rx: 0, ry: 0 });
+  const [dragActive, setDragActive] = useState(false);
   if (step !== 1) return null;
   const isEasy = cleanMode === 'easy';
   const reduceMotion = typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
-  const [tilt, setTilt] = useState({ rx: 0, ry: 0 });
-  const [dragActive, setDragActive] = useState(false);
 
   const onMove = (e) => {
     if (reduceMotion) return;

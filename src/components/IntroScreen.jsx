@@ -70,7 +70,7 @@ function getSubtitle(reason) {
 }
 
 // ── 개별 3D 틸트 카드 컴포넌트 ──
-function TiltCard({ step, title, desc, icon: Icon, num, theme: themeKey = 'sky' }) {
+function TiltCard({ title, desc, icon: Icon, num, theme: themeKey = 'sky' }) {
   const t = STEP_THEMES[themeKey] || STEP_THEMES.sky;
   const cardRef = useRef(null);
   const [coords, setCoords] = useState({ x: 0, y: 0 });

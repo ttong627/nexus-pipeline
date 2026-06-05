@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { MapPin, Calendar, CheckCircle, AlertCircle, ChevronRight, Clock } from 'lucide-react';
 
 // ── 저장 구조: nexus_city_prefs_v2[userId][city] = { month, lastUsed }

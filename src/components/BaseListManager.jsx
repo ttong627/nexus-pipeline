@@ -87,7 +87,6 @@ export default function BaseListManager({ user, onBack, initialCity = '', export
   const [showUpload, setShowUpload] = useState(false);
 
   const [uploading, setUploading] = useState(false);
-  const [showDedupReview, setShowDedupReview] = useState(false);
   const [historyRecord, setHistoryRecord] = useState(null);
   const [newHistoryNote, setNewHistoryNote] = useState('');
   const [notifyManager, setNotifyManager] = useState(false);

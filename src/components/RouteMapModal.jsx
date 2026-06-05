@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+﻿import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { X, MapPin, Navigation2, Plus, Minus, RefreshCw, Save, AlertTriangle, Map as MapIcon, List, Building2, Clock, FileSpreadsheet, Download, HardDrive, Maximize2, Minimize2, Columns, AlertCircle, Search, Crosshair, Share2, Link, Eraser, ArrowLeftRight } from 'lucide-react';
 import { db, auth } from '../config/firebase.js';
 import { collection, serverTimestamp, Timestamp, getDocs, getDoc, setDoc, updateDoc, doc, writeBatch, query, where, limit } from 'firebase/firestore';
@@ -816,7 +816,6 @@ const roadAwareTSP = (points, startPoint = null) => {
   });
 
   // ⑥ 좌표 없는 레코드: 같은 도로/단지 그룹 직후 삽입 (없으면 맨 끝)
-  const resultIds = new Set(result.map(r => r.id));
   const insertedIds = new Set();
   noCoordUnits.forEach(noUnit => {
     const key = noUnit.key;
@@ -1025,7 +1024,6 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
   const [showMapAnalysis, setShowMapAnalysis] = useState(false);
   const [manualBoundaryAdjustments, setManualBoundaryAdjustments] = useState({});
   const [selectedDriverFilter, setSelectedDriverFilter] = useState('all');
-  const [aptListExpanded, setAptListExpanded] = useState(true);
   const [aptMultiModal, setAptMultiModal] = useState(null); // { aptName, dongs: [{dong, records, assignedDriverId}] }
 
   const [isFetchingCoords, setIsFetchingCoords] = useState(false);
@@ -1054,7 +1052,6 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
 
   // 배송 일정 상태
   const [scheduleMode, setScheduleMode] = useState(false);
-  const [selectedDateFilter, setSelectedDateFilter] = useState('all');
 
   // 클라우드 모드 상태
   const [isCloudMode, setIsCloudMode] = useState(false);
@@ -1131,7 +1128,6 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
   const overlaysRef = useRef([]);
   const polylinesRef = useRef([]);
   const boundaryOverlaysRef = useRef([]);
-  const listPanelRef = useRef(null);
   const driverPinOverlaysRef = useRef([]);
   const mapClickListenerRef = useRef(null);
   const initialBoundsRef = useRef(null);
@@ -1189,7 +1185,6 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
   // 지자체벗어남: 좌표는 있어서 지도에 표시되지만 지자체가 다른 건
   const outCityCount = records.filter(r => r.좌표검증상태 === '지자체벗어남' && r._lat && r._lng).length;
   const totalAll = records.length;
-  const noCoordPct = totalAll > 0 ? Math.round(totalNoCoord / totalAll * 100) : 0;
   const withCoordPct = totalAll > 0 ? Math.round(totalWithCoord / totalAll * 100) : 0;
   const unassigned = filteredRecords.filter(r => !r._driverId).length;
   const filteredQty = filteredRecords.reduce((s, r) => s + (parseInt(r.포수 || r['수량(포수)']) || 1), 0);
@@ -3491,7 +3486,6 @@ ${folders}
       recordIds = null,
       force = false,
       skipConfirm = false,
-      reason = 'missing',
     } = options;
     const idSet = recordIds ? new Set(recordIds) : null;
     // 선택된 읍/면/동만 매칭 — 전체 매칭은 오래 걸려 작업이 끊기므로 현재 작업 동으로 한정.
@@ -4527,7 +4521,7 @@ ${folders}
                 <span className="text-[9px] text-orange-400 font-bold">{largeAptComplexes.length}개</span>
               </div>
               <div className="space-y-1 max-h-24 overflow-y-auto pr-1">
-                {largeAptComplexes.slice(0, 4).map(({ aptKey, aptName, road, totalQty, rentalDetected, buildingCount }) => (
+                {largeAptComplexes.slice(0, 4).map(({ aptKey, aptName, totalQty, rentalDetected, buildingCount }) => (
                   <div key={aptKey} className="flex items-center gap-1.5 bg-[#111] border border-orange-700/20 rounded-lg px-1.5 py-1">
                     <Building2 size={10} className="text-orange-400 shrink-0" />
                     <div className="min-w-0 flex-1">

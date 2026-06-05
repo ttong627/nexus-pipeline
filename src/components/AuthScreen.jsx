@@ -1,4 +1,3 @@
-import React from 'react';
 
 export default function AuthScreen({ authStatus, authLoading, handleGoogleLogin }) {
   if (authStatus === 'checking') {

@@ -1,7 +1,7 @@
-﻿import React, { useState, useEffect, useMemo } from 'react';
-import { X, MapPin, Play, ChevronRight, Truck, Building2, ChevronLeft, Plus, Trash2, Phone, Percent, Users, LayoutGrid, Navigation2, Crosshair, Loader2, CheckCircle, RefreshCw, CloudDownload } from 'lucide-react';
+﻿import { useState, useEffect, useMemo } from 'react';
+import { X, MapPin, Play, ChevronRight, Truck, Building2, ChevronLeft, Plus, Trash2, Users, LayoutGrid, Navigation2, Crosshair, Loader2, CheckCircle, RefreshCw, CloudDownload } from 'lucide-react';
 import { db, writeBatch } from '../config/firebase.js';
-import { getDocs, collection, getDoc, doc, setDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
+import { getDocs, collection, getDoc, doc, setDoc, serverTimestamp } from 'firebase/firestore';
 
 const KAKAO_REST_KEY = import.meta.env.VITE_KAKAO_REST_KEY;
 

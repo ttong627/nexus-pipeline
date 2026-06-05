@@ -20,7 +20,7 @@ self.onmessage = ({ data }) => {
   // 기사별 배송표 내보내기
   if (action === 'EXPORT_DRIVER_SHEETS') {
     try {
-      const { rows, activeCols } = data;
+      const { rows } = data;
       const wb = XLSX.utils.book_new();
 
       // 기사별 그룹화

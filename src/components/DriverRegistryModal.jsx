@@ -1,8 +1,8 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { X, Plus, Edit2, UserX, UserCheck, Truck, BarChart3, RefreshCw, MapPin, ChevronDown, ChevronUp, Download, Check, Building2, CheckSquare, Square, Users } from 'lucide-react';
 import { db, auth } from '../config/firebase.js';
-import { getDocs, getDoc, setDoc, addDoc, updateDoc, collection, doc, serverTimestamp, writeBatch } from 'firebase/firestore';
+import { getDocs, getDoc, setDoc, addDoc, collection, doc, serverTimestamp, writeBatch } from 'firebase/firestore';
 import * as XLSX from 'xlsx';
 import { formatPhoneInput } from '../utils/parsers.js';
 import { getDriversCollection, getDriverDoc } from '../utils/company.js';
