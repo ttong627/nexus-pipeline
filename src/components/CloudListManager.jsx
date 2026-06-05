@@ -15,11 +15,13 @@ import {
 } from 'lucide-react';
 import OrgPresetModal from './OrgPresetModal.jsx';
 import CoordBrushModal from './CoordBrushModal.jsx';
-import ColOrderPanel from './ColOrderPanel.jsx';
 import ColResizeHandle from './ColResizeHandle.jsx';
+import ColumnEditBar from './ColumnEditBar.jsx';
+import ColHeaderEditControls from './ColHeaderEditControls.jsx';
+import { useColumnEditor } from '../hooks/useColumnEditor.js';
 import { processAddress, asyncPool } from '../engine/addressEngine.js';
 import { canUseCoords, canUseCoordsBg } from '../utils/tierUtils.js';
-import { orderFieldsByExport, hasRi, getColWidth, setColWidthInCols, colCellStyle } from '../utils/colOrder.js';
+import { orderFieldsByExport, hasRi, getColWidth, colCellStyle } from '../utils/colOrder.js';
 
 const KAKAO_REST_KEY = import.meta.env.VITE_KAKAO_REST_KEY;
 
@@ -139,7 +141,7 @@ const CellInput = memo(function CellInput({ type, opts, initial, onCommit, onCan
   );
 });
 
-const VirtualTable = memo(function VirtualTable({ fields, exportColOrder, onColResize, displayRecords, dirtyRecords, deletedRecordIds, loadingRecords, records, renderCell, setDeletedRecordIds }) {
+const VirtualTable = memo(function VirtualTable({ fields, exportColOrder, onColResize, editing, isOn, onToggle, dragProps, displayRecords, dirtyRecords, deletedRecordIds, loadingRecords, records, renderCell, setDeletedRecordIds }) {
   const scrollRef = useRef(null);
 
   const virtualizer = useVirtualizer({
@@ -181,10 +183,16 @@ const VirtualTable = memo(function VirtualTable({ fields, exportColOrder, onColR
               <th className="px-3 py-2.5 text-left text-[10px] text-gray-700 font-bold uppercase tracking-wider w-9">#</th>
               {fields.map(f => {
                 const w = getColWidth(exportColOrder, f.key);
+                const on = isOn ? isOn(f.key) : true;
+                const dim = editing && !on;
                 return (
-                  <th key={f.key} style={{ ...(colCellStyle(w) || { minWidth: f.minW }), position: 'relative' }} className={`px-3 py-2.5 text-left text-[10px] font-bold uppercase tracking-wider overflow-hidden ${f.key === '기사' || f.key === '배송순번' ? 'text-[#3b82f6]/60' : 'text-gray-600'}`}>
+                  <th key={f.key}
+                    {...(editing && dragProps ? dragProps(f.key) : {})}
+                    style={{ ...(colCellStyle(w) || { minWidth: f.minW }), position: 'relative' }}
+                    className={`px-3 py-2.5 text-center text-[10px] font-bold uppercase tracking-wider overflow-hidden ${dim ? 'opacity-40' : ''} ${f.key === '기사' || f.key === '배송순번' ? 'text-[#3b82f6]/60' : 'text-gray-600'}`}>
+                    {editing && onToggle && <ColHeaderEditControls colKey={f.key} on={on} onToggle={onToggle} />}
                     {f.label}
-                    {onColResize && <ColResizeHandle colKey={f.key} currentWidth={w} onResize={onColResize} />}
+                    {editing && onColResize && <ColResizeHandle colKey={f.key} currentWidth={w} onResize={onColResize} />}
                   </th>
                 );
               })}
@@ -209,11 +217,14 @@ const VirtualTable = memo(function VirtualTable({ fields, exportColOrder, onColR
                       {vRow.index + 1}
                     </span>
                   </td>
-                  {fields.map(f => (
-                    <td key={f.key} style={colCellStyle(getColWidth(exportColOrder, f.key)) || { minWidth: f.minW }} className="px-3 py-2 max-w-0 overflow-hidden">
-                      {renderCell(r, f)}
-                    </td>
-                  ))}
+                  {fields.map(f => {
+                    const dim = editing && isOn && !isOn(f.key);
+                    return (
+                      <td key={f.key} style={colCellStyle(getColWidth(exportColOrder, f.key)) || { minWidth: f.minW }} className={`px-3 py-2 max-w-0 overflow-hidden ${dim ? 'opacity-40' : ''}`}>
+                        {renderCell(r, f)}
+                      </td>
+                    );
+                  })}
                   <td className="px-3 py-2 text-center">
                     {r.lat ? <span className="text-[#3b82f6] text-[10px]">✓</span> : <span className="text-gray-700 text-[10px]">✗</span>}
                   </td>
@@ -248,11 +259,9 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
   const approvedCities = user?.citiesApproved || [];
 
   // 칼럼 순서·표시 — exportColOrder(전역, 엑셀·정제결과와 공유) 기준으로 CLOUD_FIELDS 재정렬
-  const orderedFields = useMemo(() => orderFieldsByExport(CLOUD_FIELDS, exportColOrder), [exportColOrder]);
-  const [showColOrder, setShowColOrder] = useState(false);
-  const colOrderBtnRef = useRef(null);
-  // 칼럼 폭 드래그 → exportColOrder에 저장(계정 동기화)
-  const handleColResize = (key, px) => { if (setExportColOrder) setExportColOrder(prev => setColWidthInCols(prev, key, px)); };
+  const editor = useColumnEditor({ exportColOrder, setExportColOrder, defaultExportCols });
+  // 편집 중엔 숨김 칼럼(on=false)도 포함해 흐리게 표시
+  const orderedFields = useMemo(() => orderFieldsByExport(CLOUD_FIELDS, editor.cols, editor.editing), [editor.cols, editor.editing]);
 
   // City selection — initialCity에서 시도/시군구 파싱
   const initParts = initialCity.trim().split(/\s+/);
@@ -1730,37 +1739,20 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
                     초기화
                   </button>
                 )}
-                {/* 칼럼 순서·표시 (엑셀·정제결과와 공유) */}
+                {/* 칼럼 편집 토글 (헤더 직접 드래그·폭조절·표시/숨김) */}
                 {setExportColOrder && exportColOrder.length > 0 && (
-                  <div className="relative shrink-0">
-                    <button
-                      ref={colOrderBtnRef}
-                      onClick={() => setShowColOrder(v => !v)}
-                      title="칼럼 순서·표시 설정 (엑셀·정제결과 화면과 공유)"
-                      className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-[11px] font-bold border transition-colors ${
-                        showColOrder
-                          ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-300'
-                          : 'bg-[#0d1a0d] border-[#1a3a1a] text-emerald-500/70 hover:text-emerald-300 hover:border-emerald-500/40'
-                      }`}
-                    >
-                      <Columns size={12} />
-                      칼럼
-                      {exportColOrder.filter(c => !c.on).length > 0 && (
-                        <span className="w-4 h-4 bg-amber-500 text-black text-[9px] font-black rounded-full flex items-center justify-center">
-                          {exportColOrder.filter(c => !c.on).length}
-                        </span>
-                      )}
-                    </button>
-                    {showColOrder && (
-                      <ColOrderPanel
-                        cols={exportColOrder}
-                        onChange={(next) => setExportColOrder(next)}
-                        onReset={() => setExportColOrder(defaultExportCols)}
-                        onClose={() => setShowColOrder(false)}
-                        anchorRef={colOrderBtnRef}
-                      />
-                    )}
-                  </div>
+                  <button
+                    onClick={editor.editing ? editor.commit : editor.begin}
+                    title="칼럼 편집 — 헤더를 끌어 이동, 가장자리로 폭조절, 👁로 표시/숨김"
+                    className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-[11px] font-bold border transition-colors shrink-0 ${
+                      editor.editing
+                        ? 'bg-emerald-500 border-emerald-400 text-black'
+                        : 'bg-[#0d1a0d] border-[#1a3a1a] text-emerald-500/70 hover:text-emerald-300 hover:border-emerald-500/40'
+                    }`}
+                  >
+                    <Columns size={12} />
+                    {editor.editing ? '완료' : '칼럼 편집'}
+                  </button>
                 )}
                 <span className="text-[11px] text-gray-600">
                   {displayRecords.length.toLocaleString()}건 표시
@@ -1797,8 +1789,12 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
               {/* Records table — Virtual Scroll */}
               <VirtualTable
                 fields={displayFields}
-                exportColOrder={exportColOrder}
-                onColResize={handleColResize}
+                exportColOrder={editor.cols}
+                onColResize={editor.resizeKey}
+                editing={editor.editing}
+                isOn={editor.isOn}
+                onToggle={editor.toggleKey}
+                dragProps={editor.dragProps}
                 displayRecords={displayRecords}
                 dirtyRecords={dirtyRecords}
                 deletedRecordIds={deletedRecordIds}
@@ -1810,6 +1806,10 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
             </>
           )}
         </div>
+      )}
+
+      {editor.editing && (
+        <ColumnEditBar onReset={editor.reset} onCancel={editor.cancel} onCommit={editor.commit} />
       )}
 
       {/* ═══ ORG PRESET MODAL ═══ */}

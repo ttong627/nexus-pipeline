@@ -11,9 +11,11 @@ import {
 
 import { normalizeBirth, parsePhoneNumbers, formatPhoneInput } from '../utils/parsers.js';
 import { REGIONS } from '../utils/regions.js';
-import ColOrderPanel from './ColOrderPanel.jsx';
 import ColResizeHandle from './ColResizeHandle.jsx';
-import { orderFieldsByExport, getColWidth, setColWidthInCols, colCellStyle } from '../utils/colOrder.js';
+import ColumnEditBar from './ColumnEditBar.jsx';
+import ColHeaderEditControls from './ColHeaderEditControls.jsx';
+import { useColumnEditor } from '../hooks/useColumnEditor.js';
+import { orderFieldsByExport, getColWidth, colCellStyle } from '../utils/colOrder.js';
 
 const FIELDS = [
   { key: 'name',     label: '이름',     minW: '90px'  },
@@ -53,9 +55,8 @@ export default function BaseListManager({ user, onBack, initialCity = '', export
   const citiesApproved = user?.citiesApproved || [];
 
   // 칼럼 순서·표시 — exportColOrder(전역, 엑셀·정제결과와 공유) 기준으로 FIELDS 재정렬
-  const orderedFields = useMemo(() => orderFieldsByExport(FIELDS, exportColOrder), [exportColOrder]);
-  const [showColOrder, setShowColOrder] = useState(false);
-  const colOrderBtnRef = useRef(null);
+  const editor = useColumnEditor({ exportColOrder, setExportColOrder, defaultExportCols });
+  const orderedFields = useMemo(() => orderFieldsByExport(FIELDS, editor.cols, editor.editing), [editor.cols, editor.editing]);
   const TIER_QUOTAS = { basic: 0, vip: 2, vvip: 10, sapphire: 999 };
   const maxCities = TIER_QUOTAS[user?.tier || 'basic'] || 0;
 
@@ -136,8 +137,6 @@ export default function BaseListManager({ user, onBack, initialCity = '', export
   const padTop = vItems.length > 0 ? vItems[0].start : 0;
   const padBottom = vItems.length > 0 ? vTotal - vItems[vItems.length - 1].end : 0;
 
-  // 칼럼 폭 드래그 → exportColOrder에 저장(계정 동기화)
-  const handleColResize = (key, px) => { if (setExportColOrder) setExportColOrder(prev => setColWidthInCols(prev, key, px)); };
 
   const noteCount = useMemo(() =>
     records.filter(r => !deletedIds.has(r.id) && (dirtyMap[r.id]?.note ?? r.note ?? '').trim()).length,
@@ -1072,37 +1071,20 @@ export default function BaseListManager({ user, onBack, initialCity = '', export
                   초기화
                 </button>
               )}
-              {/* 칼럼 순서·표시 (엑셀·정제결과와 공유) */}
+              {/* 칼럼 편집 토글 (헤더 직접 드래그·폭조절·표시/숨김) */}
               {setExportColOrder && exportColOrder.length > 0 && (
-                <div className="relative shrink-0">
-                  <button
-                    ref={colOrderBtnRef}
-                    onClick={() => setShowColOrder(v => !v)}
-                    title="칼럼 순서·표시 설정 (엑셀·정제결과 화면과 공유)"
-                    className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-[11px] font-bold border transition-colors ${
-                      showColOrder
-                        ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-300'
-                        : 'bg-[#0d1a0d] border-[#1a3a1a] text-emerald-500/70 hover:text-emerald-300 hover:border-emerald-500/40'
-                    }`}
-                  >
-                    <Columns size={12} />
-                    칼럼
-                    {exportColOrder.filter(c => !c.on).length > 0 && (
-                      <span className="w-4 h-4 bg-amber-500 text-black text-[9px] font-black rounded-full flex items-center justify-center">
-                        {exportColOrder.filter(c => !c.on).length}
-                      </span>
-                    )}
-                  </button>
-                  {showColOrder && (
-                    <ColOrderPanel
-                      cols={exportColOrder}
-                      onChange={(next) => setExportColOrder(next)}
-                      onReset={() => setExportColOrder(defaultExportCols)}
-                      onClose={() => setShowColOrder(false)}
-                      anchorRef={colOrderBtnRef}
-                    />
-                  )}
-                </div>
+                <button
+                  onClick={editor.editing ? editor.commit : editor.begin}
+                  title="칼럼 편집 — 헤더를 끌어 이동, 가장자리로 폭조절, 👁로 표시/숨김"
+                  className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-[11px] font-bold border transition-colors shrink-0 ${
+                    editor.editing
+                      ? 'bg-emerald-500 border-emerald-400 text-black'
+                      : 'bg-[#0d1a0d] border-[#1a3a1a] text-emerald-500/70 hover:text-emerald-300 hover:border-emerald-500/40'
+                  }`}
+                >
+                  <Columns size={12} />
+                  {editor.editing ? '완료' : '칼럼 편집'}
+                </button>
               )}
               <span className="text-[11px] text-gray-600">
                 {displayRecords.length.toLocaleString()}건 표시
@@ -1150,11 +1132,17 @@ export default function BaseListManager({ user, onBack, initialCity = '', export
                   <tr className="bg-[#0c0c0c] border-b border-[#1e1e1e]">
                     <th className="px-3 py-2.5 text-left text-[10px] text-gray-700 font-bold uppercase tracking-wider w-9">#</th>
                     {orderedFields.map(f => {
-                      const w = getColWidth(exportColOrder, f.key);
+                      const w = getColWidth(editor.cols, f.key);
+                      const on = editor.isOn(f.key);
+                      const dim = editor.editing && !on;
                       return (
-                        <th key={f.key} style={{ ...(colCellStyle(w) || { minWidth: f.minW }), position: 'relative' }} className="px-3 py-2.5 text-left text-[10px] text-gray-600 font-bold uppercase tracking-wider overflow-hidden">
+                        <th key={f.key}
+                          {...(editor.editing ? editor.dragProps(f.key) : {})}
+                          style={{ ...(colCellStyle(w) || { minWidth: f.minW }), position: 'relative' }}
+                          className={`px-3 py-2.5 text-center text-[10px] text-gray-600 font-bold uppercase tracking-wider overflow-hidden ${dim ? 'opacity-40' : ''}`}>
+                          {editor.editing && <ColHeaderEditControls colKey={f.key} on={on} onToggle={editor.toggleKey} />}
                           {f.label}
-                          <ColResizeHandle colKey={f.key} currentWidth={w} onResize={handleColResize} />
+                          {editor.editing && <ColResizeHandle colKey={f.key} currentWidth={w} onResize={editor.resizeKey} />}
                         </th>
                       );
                     })}
@@ -1178,11 +1166,14 @@ export default function BaseListManager({ user, onBack, initialCity = '', export
                             {idx + 1}
                           </span>
                         </td>
-                        {orderedFields.map(f => (
-                          <td key={f.key} style={colCellStyle(getColWidth(exportColOrder, f.key)) || { minWidth: f.minW }} className="px-3 py-2 max-w-0 overflow-hidden">
-                            {renderCell(r, f.key)}
-                          </td>
-                        ))}
+                        {orderedFields.map(f => {
+                          const dim = editor.editing && !editor.isOn(f.key);
+                          return (
+                            <td key={f.key} style={colCellStyle(getColWidth(editor.cols, f.key)) || { minWidth: f.minW }} className={`px-3 py-2 max-w-0 overflow-hidden ${dim ? 'opacity-40' : ''}`}>
+                              {renderCell(r, f.key)}
+                            </td>
+                          );
+                        })}
                         <td className="px-2 py-2 text-center">
                           <button onClick={() => setHistoryRecord(records.find(x => x.id === r.id) || r)}
                             className="px-2 py-0.5 bg-white/5 hover:bg-white/10 text-gray-600 hover:text-gray-300 rounded text-[10px] transition-colors whitespace-nowrap">
@@ -1213,6 +1204,9 @@ export default function BaseListManager({ user, onBack, initialCity = '', export
         </div>
       </div>
 
+      {editor.editing && (
+        <ColumnEditBar onReset={editor.reset} onCancel={editor.cancel} onCommit={editor.commit} />
+      )}
 
       {/* ═══ HISTORY MODAL ═══ */}
       {historyRecord && (

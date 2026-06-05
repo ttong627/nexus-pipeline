@@ -234,17 +234,17 @@ export default function App() {
     { key: '행정동',  label: '읍면동',  on: true },
     { key: '리',      label: '리',      on: true },
     { key: '이름',    label: '이름',    on: true },
-    { key: '품명',    label: '품명',    on: true },
-    { key: '생년월일',label: '생년월일',on: true },
-    { key: '포수',    label: '포수',    on: true },
+    { key: '주소',    label: '주소',    on: true },
     { key: '휴대폰',  label: '휴대폰',  on: true },
     { key: '유선전화',label: '유선전화',on: true },
-    { key: '문자수신',label: '문자수신',on: true },
-    { key: '주소',    label: '주소',    on: true },
+    { key: '포수',    label: '포수',    on: true },
     { key: '특이사항',label: '특이사항',on: true },
+    { key: '문자수신',label: '문자수신',on: true },
+    { key: '생년월일',label: '생년월일',on: true },
     { key: '기사',    label: '기사',    on: true },
     { key: '배송순번',label: '배송순번',on: true },
     { key: '사유',    label: '사유',    on: true },
+    { key: '품명',    label: '품명',    on: false },
   ];
   const [exportColOrder, setExportColOrder] = useState(() => {
     try {

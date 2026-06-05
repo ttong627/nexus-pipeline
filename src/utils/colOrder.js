@@ -29,7 +29,7 @@ const canonKey = (key) => EXPORT_KEY_ALIAS[key] || key;
  * @param {Array<{key:string,on?:boolean}>} exportColOrder 마스터 칼럼 설정
  * @returns {Array} 재정렬·필터된 새 필드 배열
  */
-export function orderFieldsByExport(viewFields, exportColOrder) {
+export function orderFieldsByExport(viewFields, exportColOrder, includeHidden = false) {
   if (!Array.isArray(viewFields)) return [];
   if (!Array.isArray(exportColOrder) || exportColOrder.length === 0) return [...viewFields];
 
@@ -45,7 +45,7 @@ export function orderFieldsByExport(viewFields, exportColOrder) {
   for (const f of viewFields) {
     const k = canonKey(f.key);
     if (orderIdx.has(k)) {
-      if (onMap.get(k)) inExport.push(f); // on=false 면 숨김
+      if (includeHidden || onMap.get(k)) inExport.push(f); // 편집모드(includeHidden)면 off도 포함
     } else {
       rest.push(f); // 마스터에 없는 뷰 고유 필드는 항상 표시
     }
@@ -53,6 +53,35 @@ export function orderFieldsByExport(viewFields, exportColOrder) {
 
   inExport.sort((a, b) => orderIdx.get(canonKey(a.key)) - orderIdx.get(canonKey(b.key)));
   return [...inExport, ...rest];
+}
+
+/** cols 에서 dragKey 토큰을 targetKey 위치로 이동한 새 배열(불변). canonical 키 기준. */
+export function moveColTo(cols, dragKey, targetKey) {
+  if (!Array.isArray(cols)) return cols;
+  const dk = canonKey(dragKey);
+  const tk = canonKey(targetKey);
+  const from = cols.findIndex(c => c.key === dk);
+  const to = cols.findIndex(c => c.key === tk);
+  if (from < 0 || to < 0 || from === to) return cols;
+  const next = [...cols];
+  const [item] = next.splice(from, 1);
+  next.splice(to, 0, item);
+  return next;
+}
+
+/** canonical 키의 on 여부(없으면 true 취급). */
+export function isColOn(cols, key) {
+  if (!Array.isArray(cols)) return true;
+  const k = canonKey(key);
+  const col = cols.find(c => c.key === k);
+  return col ? col.on !== false : true;
+}
+
+/** canonical 키의 on 을 토글한 새 배열(불변). */
+export function toggleColOn(cols, key) {
+  if (!Array.isArray(cols)) return cols;
+  const k = canonKey(key);
+  return cols.map(c => (c.key === k ? { ...c, on: c.on === false } : c));
 }
 
 /**

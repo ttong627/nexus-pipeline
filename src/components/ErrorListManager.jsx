@@ -1,9 +1,11 @@
-import { useState, useMemo, useRef } from 'react';
+import { useState, useMemo } from 'react';
 import * as XLSX from 'xlsx';
 import { ArrowLeft, AlertTriangle, Download, Search, X, RefreshCw, MapPin, Columns } from 'lucide-react';
-import ColOrderPanel from './ColOrderPanel.jsx';
 import ColResizeHandle from './ColResizeHandle.jsx';
-import { orderFieldsByExport, getColWidth, setColWidthInCols, colCellStyle } from '../utils/colOrder.js';
+import ColumnEditBar from './ColumnEditBar.jsx';
+import ColHeaderEditControls from './ColHeaderEditControls.jsx';
+import { useColumnEditor } from '../hooks/useColumnEditor.js';
+import { orderFieldsByExport, getColWidth, colCellStyle } from '../utils/colOrder.js';
 
 const ADDR_FIELDS = [
   { key: '이름',     label: '이름',     minW: '80px' },
@@ -29,10 +31,7 @@ export default function ErrorListManager({ gridData, onBack, handleCellEdit, han
   const [search, setSearch] = useState('');
   const [editingCell, setEditingCell] = useState(null);
   const [editValue, setEditValue] = useState('');
-  const [showColOrder, setShowColOrder] = useState(false);
-  const colOrderBtnRef = useRef(null);
-  // 칼럼 폭 드래그 → exportColOrder에 저장(계정 동기화)
-  const handleColResize = (key, px) => { if (setExportColOrder) setExportColOrder(prev => setColWidthInCols(prev, key, px)); };
+  const editor = useColumnEditor({ exportColOrder, setExportColOrder, defaultExportCols });
 
   // 탭 1: 도로명주소 미매칭
   const addrErrorRows = useMemo(() =>
@@ -47,8 +46,8 @@ export default function ErrorListManager({ gridData, onBack, handleCellEdit, han
   const currentRows = activeTab === 'address' ? addrErrorRows : coordMissingRows;
   // 칼럼 순서·표시 — exportColOrder(전역, 엑셀·정제결과와 공유) 기준으로 재정렬
   const currentFields = useMemo(
-    () => orderFieldsByExport(activeTab === 'address' ? ADDR_FIELDS : COORD_FIELDS, exportColOrder),
-    [activeTab, exportColOrder]
+    () => orderFieldsByExport(activeTab === 'address' ? ADDR_FIELDS : COORD_FIELDS, editor.cols, editor.editing),
+    [activeTab, editor.cols, editor.editing]
   );
 
   const displayed = useMemo(() => {
@@ -149,37 +148,20 @@ export default function ErrorListManager({ gridData, onBack, handleCellEdit, han
               <Download size={13} /> xlsx 내보내기
             </button>
           )}
-          {/* 칼럼 순서·표시 (모든 명단·엑셀과 공유) */}
+          {/* 칼럼 편집 토글 (헤더 직접 드래그·폭조절·표시/숨김) */}
           {setExportColOrder && exportColOrder.length > 0 && (
-            <div className="relative shrink-0">
-              <button
-                ref={colOrderBtnRef}
-                onClick={() => setShowColOrder(v => !v)}
-                title="칼럼 순서·표시 설정 (모든 명단·엑셀과 공유)"
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-bold border transition-colors ${
-                  showColOrder
-                    ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-300'
-                    : 'bg-[#0d1a0d] border-[#1a3a1a] text-emerald-500/70 hover:text-emerald-300 hover:border-emerald-500/40'
-                }`}
-              >
-                <Columns size={13} />
-                칼럼
-                {exportColOrder.filter(c => !c.on).length > 0 && (
-                  <span className="w-4 h-4 bg-amber-500 text-black text-[9px] font-black rounded-full flex items-center justify-center">
-                    {exportColOrder.filter(c => !c.on).length}
-                  </span>
-                )}
-              </button>
-              {showColOrder && (
-                <ColOrderPanel
-                  cols={exportColOrder}
-                  onChange={(next) => setExportColOrder(next)}
-                  onReset={() => setExportColOrder(defaultExportCols)}
-                  onClose={() => setShowColOrder(false)}
-                  anchorRef={colOrderBtnRef}
-                />
-              )}
-            </div>
+            <button
+              onClick={editor.editing ? editor.commit : editor.begin}
+              title="칼럼 편집 — 헤더를 끌어 이동, 가장자리로 폭조절, 👁로 표시/숨김"
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-bold border transition-colors shrink-0 ${
+                editor.editing
+                  ? 'bg-emerald-500 border-emerald-400 text-black'
+                  : 'bg-[#0d1a0d] border-[#1a3a1a] text-emerald-500/70 hover:text-emerald-300 hover:border-emerald-500/40'
+              }`}
+            >
+              <Columns size={13} />
+              {editor.editing ? '완료' : '칼럼 편집'}
+            </button>
           )}
         </div>
       </div>
@@ -280,14 +262,19 @@ export default function ErrorListManager({ gridData, onBack, handleCellEdit, han
               <tr className={`border-b border-[#1e1e1e] ${activeTab === 'address' ? 'bg-[#0c0c0c]' : 'bg-[#0a0c0a]'}`}>
                 <th className="px-3 py-2.5 text-left text-[10px] text-gray-700 font-bold w-9">#</th>
                 {currentFields.map(f => {
-                  const w = getColWidth(exportColOrder, f.key);
+                  const w = getColWidth(editor.cols, f.key);
+                  const on = editor.isOn(f.key);
+                  const dim = editor.editing && !on;
                   return (
-                    <th key={f.key} style={{ ...(colCellStyle(w) || { minWidth: f.minW }), position: 'relative' }}
-                      className={`px-3 py-2.5 text-left text-[10px] font-bold uppercase tracking-wider overflow-hidden ${
+                    <th key={f.key}
+                      {...(editor.editing ? editor.dragProps(f.key) : {})}
+                      style={{ ...(colCellStyle(w) || { minWidth: f.minW }), position: 'relative' }}
+                      className={`px-3 py-2.5 text-center text-[10px] font-bold uppercase tracking-wider overflow-hidden ${dim ? 'opacity-40' : ''} ${
                         f.key === '_사유' ? 'text-red-600/70' : 'text-gray-600'
                       }`}>
+                      {editor.editing && <ColHeaderEditControls colKey={f.key} on={on} onToggle={editor.toggleKey} />}
                       {f.label}
-                      <ColResizeHandle colKey={f.key} currentWidth={w} onResize={handleColResize} />
+                      {editor.editing && <ColResizeHandle colKey={f.key} currentWidth={w} onResize={editor.resizeKey} />}
                     </th>
                   );
                 })}
@@ -303,11 +290,12 @@ export default function ErrorListManager({ gridData, onBack, handleCellEdit, han
                     const isAddr = f.key === '주소';
                     const isReason = f.key === '_사유';
                     const isReadOnly = activeTab === 'coord'; // 좌표탭은 읽기 전용
-                    const cellStyle = colCellStyle(getColWidth(exportColOrder, f.key)) || { minWidth: f.minW };
+                    const cellStyle = colCellStyle(getColWidth(editor.cols, f.key)) || { minWidth: f.minW };
+                    const dim = editor.editing && !editor.isOn(f.key);
 
                     if (isEditing) {
                       return (
-                        <td key={f.key} style={cellStyle} className="px-3 py-1.5 max-w-0 overflow-hidden">
+                        <td key={f.key} style={cellStyle} className={`px-3 py-1.5 max-w-0 overflow-hidden ${dim ? 'opacity-40' : ''}`}>
                           <input
                             autoFocus
                             className="w-full bg-transparent text-white text-xs outline-none border-b border-blue-400 py-0.5"
@@ -330,7 +318,7 @@ export default function ErrorListManager({ gridData, onBack, handleCellEdit, han
                     }
 
                     return (
-                      <td key={f.key} style={cellStyle} className="px-3 py-2 max-w-0 overflow-hidden">
+                      <td key={f.key} style={cellStyle} className={`px-3 py-2 max-w-0 overflow-hidden ${dim ? 'opacity-40' : ''}`}>
                         <span
                           title={String(val)}
                           onClick={() => !isReason && !isReadOnly && startEdit(r.id, f.key, val)}
@@ -354,6 +342,10 @@ export default function ErrorListManager({ gridData, onBack, handleCellEdit, han
             </tbody>
           </table>
         </div>
+      )}
+
+      {editor.editing && (
+        <ColumnEditBar onReset={editor.reset} onCancel={editor.cancel} onCommit={editor.commit} />
       )}
     </div>
   );

@@ -2,9 +2,11 @@
 import { ChevronLeft, ChevronRight, AlertTriangle, CheckCircle, Columns, Download, Trash2, Edit3, Database, X, MapPin, Users, UserX, StickyNote, User, Phone, BookOpen, Sparkles, ArrowLeftRight } from 'lucide-react';
 import { formatPhoneInput } from '../utils/parsers.js';
 import { WORKFLOW_MODES } from '../utils/workflow.js';
-import ColOrderPanel from './ColOrderPanel.jsx';
 import ColResizeHandle from './ColResizeHandle.jsx';
-import { hasRi, getColWidth, setColWidthInCols, colCellStyle } from '../utils/colOrder.js';
+import ColumnEditBar from './ColumnEditBar.jsx';
+import ColHeaderEditControls from './ColHeaderEditControls.jsx';
+import { useColumnEditor } from '../hooks/useColumnEditor.js';
+import { hasRi, getColWidth, colCellStyle } from '../utils/colOrder.js';
 
 const ResultGrid = memo(function ResultGrid({
   step, setStep, filter, setFilter, dongList = [], driverList = [], gridData, filteredData, paginatedData,
@@ -22,9 +24,8 @@ const ResultGrid = memo(function ResultGrid({
   const [batchNoteOpen, setBatchNoteOpen] = useState(false);
   const [batchNoteValue, setBatchNoteValue] = useState('');
   const [updateModalRow, setUpdateModalRow] = useState(null);
-  const [showColOrder, setShowColOrder] = useState(false);
   const searchInputRef = useRef(null);
-  const colOrderBtnRef = useRef(null);
+  const editor = useColumnEditor({ exportColOrder, setExportColOrder, defaultExportCols });
 
   if (step !== 5) return null;
 
@@ -61,13 +62,11 @@ const ResultGrid = memo(function ResultGrid({
   // 화면 칼럼은 exportColOrder(엑셀 다운로드 소스)의 순서·표시(on)를 그대로 따른다.
   // 체크박스 + NO는 sticky 고정이라 reorder 대상에서 제외한다.
   // 리(里)는 데이터가 있을 때만 표시(군 지역). 시/구 명단에선 숨김.
+  // 리(里)는 데이터가 있을 때만 표시(군 지역). 편집 중엔 숨김 칼럼(on=false)도 흐리게 표시.
   const riPresent = hasRi(gridData);
-  const visibleCols = exportColOrder
-    .filter(c => c.on && c.key !== 'NO' && !(c.key === '리' && !riPresent))
+  const visibleCols = editor.cols
+    .filter(c => c.key !== 'NO' && (editor.editing || c.on !== false) && !(c.key === '리' && !riPresent))
     .map(c => c.key);
-
-  // 칼럼 폭 드래그 → exportColOrder에 폭 저장(계정 동기화)
-  const handleColResize = (key, px) => { if (setExportColOrder) setExportColOrder(prev => setColWidthInCols(prev, key, px)); };
 
   const renderHeaderCell = (key) => {
     switch (key) {
@@ -225,28 +224,35 @@ const ResultGrid = memo(function ResultGrid({
     }
   };
 
-  // 칼럼 폭 + 리사이즈 핸들을 헤더 th에 주입(체크박스·NO 제외)
+  // 헤더 th: 가운데 정렬 + 폭 적용. 편집모드면 grip·눈·드래그·리사이즈 + 숨김칼럼 흐리게.
   const renderHeaderCellWithResize = (key) => {
     const th = renderHeaderCell(key);
     if (!th) return th;
-    const w = getColWidth(exportColOrder, key);
-    const style = { ...(th.props.style || {}), ...(colCellStyle(w) || {}), position: 'relative' };
-    return cloneElement(
-      th,
-      { style, className: `${th.props.className || ''} overflow-hidden` },
-      th.props.children,
-      <ColResizeHandle key="__rz" colKey={key} currentWidth={w} onResize={handleColResize} />
-    );
+    const w = getColWidth(editor.cols, key);
+    const on = editor.isOn(key);
+    const dim = editor.editing && !on;
+    const baseClass = `${th.props.className || ''}`.replace(/\btext-(left|right)\b/g, '').trim();
+    const className = `${baseClass} text-center overflow-hidden ${dim ? 'opacity-40' : ''}`.trim();
+    const props = { style: { ...(th.props.style || {}), ...(colCellStyle(w) || {}), position: 'relative' }, className };
+    const children = [th.props.children];
+    if (editor.editing) {
+      Object.assign(props, editor.dragProps(key), { onClick: undefined, title: '드래그로 이동' });
+      children.unshift(<ColHeaderEditControls key="__ce" colKey={key} on={on} onToggle={editor.toggleKey} />);
+      children.push(<ColResizeHandle key="__rz" colKey={key} currentWidth={w} onResize={editor.resizeKey} />);
+    }
+    return cloneElement(th, props, ...children);
   };
 
-  // 본문 td에 동일 폭 적용
+  // 본문 td: 폭 적용 + 편집 중 숨김칼럼 흐리게
   const renderBodyCellWithWidth = (key, row) => {
     const td = renderBodyCell(key, row);
     if (!td) return td;
-    const w = getColWidth(exportColOrder, key);
-    if (!w) return td;
-    const style = { ...(td.props.style || {}), ...colCellStyle(w) };
-    return cloneElement(td, { style, className: `${td.props.className || ''} overflow-hidden` });
+    const w = getColWidth(editor.cols, key);
+    const dim = editor.editing && !editor.isOn(key);
+    if (!w && !dim) return td;
+    const style = w ? { ...(td.props.style || {}), ...colCellStyle(w) } : td.props.style;
+    const className = `${td.props.className || ''} ${w ? 'overflow-hidden' : ''} ${dim ? 'opacity-40' : ''}`.trim();
+    return cloneElement(td, { style, className });
   };
 
   return (
@@ -514,35 +520,18 @@ const ResultGrid = memo(function ResultGrid({
               title="결과 화면 도움말"
             >?</button>
             <div className="h-5 w-px bg-[#2a2a2a]"/>
-            <div className="relative">
-              <button
-                ref={colOrderBtnRef}
-                onClick={() => setShowColOrder(v => !v)}
-                title="엑셀 칼럼 순서·표시 설정"
-                className={`px-3 py-2 rounded-lg border text-xs font-bold flex items-center gap-1.5 transition-all ${
-                  showColOrder
-                    ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-300'
-                    : 'bg-[#0d1a0d] border-[#1a3a1a] text-emerald-500/70 hover:text-emerald-300 hover:border-emerald-500/40'
-                }`}
-              >
-                <Columns size={13} />
-                <span className="hidden sm:inline">칼럼</span>
-                {exportColOrder.filter(c => !c.on).length > 0 && (
-                  <span className="w-4 h-4 bg-amber-500 text-black text-[9px] font-black rounded-full flex items-center justify-center">
-                    {exportColOrder.filter(c => !c.on).length}
-                  </span>
-                )}
-              </button>
-              {showColOrder && exportColOrder.length > 0 && (
-                <ColOrderPanel
-                  cols={exportColOrder}
-                  onChange={(next) => setExportColOrder(next)}
-                  onReset={() => setExportColOrder(defaultExportCols)}
-                  onClose={() => setShowColOrder(false)}
-                  anchorRef={colOrderBtnRef}
-                />
-              )}
-            </div>
+            <button
+              onClick={editor.editing ? editor.commit : editor.begin}
+              title="칼럼 순서·폭·표시 편집 (헤더를 끌어 이동, 가장자리로 폭조절, 👁로 표시/숨김)"
+              className={`px-3 py-2 rounded-lg border text-xs font-bold flex items-center gap-1.5 transition-all ${
+                editor.editing
+                  ? 'bg-emerald-500 border-emerald-400 text-black'
+                  : 'bg-[#0d1a0d] border-[#1a3a1a] text-emerald-500/70 hover:text-emerald-300 hover:border-emerald-500/40'
+              }`}
+            >
+              <Columns size={13} />
+              <span className="hidden sm:inline">{editor.editing ? '완료' : '칼럼 편집'}</span>
+            </button>
             <button onClick={handleExport} className="px-5 py-2 bg-emerald-400 text-black font-black rounded-lg shadow-[0_0_12px_rgba(52,211,153,0.22)] hover:bg-emerald-300 transition-all flex items-center gap-2 text-xs">
               <Download size={14} strokeWidth={2.5}/> 명단 다운로드
             </button>
@@ -815,6 +804,10 @@ const ResultGrid = memo(function ResultGrid({
             setUpdateModalRow(null);
           }}
         />
+      )}
+
+      {editor.editing && (
+        <ColumnEditBar onReset={editor.reset} onCancel={editor.cancel} onCommit={editor.commit} />
       )}
     </>
   );
