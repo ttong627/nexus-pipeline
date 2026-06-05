@@ -149,11 +149,12 @@ const addressPartsFromRow = (row) => {
   const legalDong = cleanAddressPiece(row?._legalDong || row?.legalDong || '');
   const buildingName = cleanAddressPiece(row?._buildingName || row?.buildingName || '');
   const paren = parsed.paren || [legalDong, buildingName].filter(Boolean).join(', ');
-  return {
-    road: parsed.road || roadFromAddressMeta(row),
-    detail: parsed.detail || cleanAddressPiece(row?._detailAddress || row?.detailAddress || ''),
-    paren,
-  };
+  const metaDetail = cleanAddressPiece(row?._detailAddress || row?.detailAddress || '');
+  const road = parsed.road || roadFromAddressMeta(row);
+  // 괄호 없는 정제결과(예: "한빛로 49 201- 302호")는 parsed.road가 동·호수까지 먹는다.
+  // 이때 _detailAddress를 다시 붙이면 "...201- 302호, 201- 302호" 중복 → road에 이미 있으면 사용 안 함.
+  const detail = parsed.detail || (metaDetail && !road.includes(metaDetail) ? metaDetail : '');
+  return { road, detail, paren };
 };
 
 const formatAddressForDisplayMode = (row, mode) => {

@@ -15,7 +15,7 @@ const JUSO_API_KEYS = [
 ].filter(Boolean);
 const KAKAO_REST_KEY = import.meta.env.VITE_KAKAO_REST_KEY;
 const ADDRESS_MATCH_API_URL = String(import.meta.env.VITE_ADDRESS_MATCH_API_URL || '').replace(/\/+$/, '');
-const ADDRESS_MATCH_TIMEOUT_MS = 1200;
+const ADDRESS_MATCH_TIMEOUT_MS = 3000; // 전국 DB가 1순위 — 대량(easy) burst·콜드스타트에 1200ms는 너무 짧아 JUSO로 새던 문제 해결
 const COORD_SERVICE_TIMEOUT_MS = 700;
 const JUSO_TIMEOUT_MS = 1800;
 let addressMatchCircuitOpenUntil = 0;
@@ -40,8 +40,10 @@ const markCircuitFailure = (kind) => {
     if (coordServiceFailCount >= 3) coordServiceCircuitOpenUntil = now + 120000;
     return;
   }
+  // 전국 DB는 1순위 — 일시적 burst 실패 몇 건으로 2분씩 끊으면 그 사이 전부 JUSO로 새서 정제가 깨진다.
+  // 임계값을 올리고(8), 열려도 짧게(20초)만 닫아 DB를 곧바로 재시도한다.
   addressMatchFailCount += 1;
-  if (addressMatchFailCount >= 3) addressMatchCircuitOpenUntil = now + 120000;
+  if (addressMatchFailCount >= 8) addressMatchCircuitOpenUntil = now + 20000;
 };
 
 const markCircuitSuccess = (kind) => {
@@ -1008,7 +1010,10 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
 
   result.주소 = [finalRoadAddr, parenStr].filter(Boolean).join(ROAD_DETAIL_SEPARATOR);
   if (finalDetail) {
-    result.주소 += `${result.주소 ? ' ' : ''}${finalDetail}`;
+    // 괄호 있으면 "(법정동, 건물명) 상세"(앞 공백), 괄호 없으면 "도로명, 상세"(쉼표).
+    // A-11: 도로명주소 바로 뒤 첫 구분자는 쉼표. 괄호 없을 때 공백으로 붙이면 표시단계에서 동호수 중복 유발.
+    const detailSep = parenStr ? ' ' : ROAD_DETAIL_SEPARATOR;
+    result.주소 += result.주소 ? `${detailSep}${finalDetail}` : finalDetail;
   }
 
   // ── A-12 ③: 변환 후 주소 3자 미만 플래그 ────────────────────────
