@@ -1,55 +1,13 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
-import { VitePWA } from 'vite-plugin-pwa'
 
+// PWA(바로가기 설치)는 vite-plugin-pwa의 precache 대신 public/sw.js(네트워크 통과 전용)로 직접 처리.
+// → 앱 파일을 캐시하지 않으므로 옛 버전 잡힘/크래시 루프가 구조적으로 불가능. 설치만 가능.
 export default defineConfig({
   plugins: [
     react(),
     tailwindcss(),
-    VitePWA({
-      // 서비스워커 자가제거 — 기존에 설치된 SW를 깨끗이 해제하고 캐시를 비운다.
-      // (SW 캐시가 옛 버전을 잡아 크래시 루프 + 아이콘 미갱신을 유발하던 문제 근본 차단)
-      selfDestroying: true,
-      registerType: 'autoUpdate',
-      injectRegister: false,
-      workbox: {
-        skipWaiting: true,
-        clientsClaim: true,
-        cleanupOutdatedCaches: true,
-        globPatterns: ['**/*.{js,css,html,ico,svg,woff2}'],
-        maximumFileSizeToCacheInBytes: 3 * 1024 * 1024,
-        runtimeCaching: [
-          {
-            urlPattern: /^https:\/\/.*\.googleapis\.com\/.*/i,
-            handler: 'NetworkFirst',
-            options: { cacheName: 'google-apis', expiration: { maxEntries: 50, maxAgeSeconds: 300 } },
-          },
-          {
-            urlPattern: /^https:\/\/.*\.kakao\.com\/.*/i,
-            handler: 'NetworkFirst',
-            options: { cacheName: 'kakao-apis', expiration: { maxEntries: 50, maxAgeSeconds: 300 } },
-          },
-        ],
-        navigateFallback: '/index.html',
-        navigateFallbackDenylist: [/^\/api\//],
-      },
-      manifest: {
-        name: 'Nexus Pipeline',
-        short_name: 'Nexus',
-        description: '웰쉐어 명단 정제 및 기사 배분 시스템',
-        theme_color: '#1e293b',
-        background_color: '#0f172a',
-        display: 'standalone',
-        start_url: '/',
-        icons: [
-          // Claude 디자인 정사각 아이콘(SVG) — 모든 크기에 선명, 크기 불일치 문제 원천 차단
-          { src: '/app-icon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any maskable' },
-          // PNG 폴백(실제 크기 그대로 선언)
-          { src: '/ttongpa.png', sizes: '572x574', type: 'image/png', purpose: 'any' },
-        ],
-      },
-    }),
   ],
   build: {
     chunkSizeWarningLimit: 1000,

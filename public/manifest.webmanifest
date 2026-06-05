@@ -1,0 +1,14 @@
+{
+  "name": "Nexus Pipeline",
+  "short_name": "Nexus",
+  "description": "웰쉐어 명단 정제 및 기사 배분 시스템",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#1e293b",
+  "lang": "ko",
+  "icons": [
+    { "src": "/ttongpa.png?v=3", "sizes": "572x574", "type": "image/png", "purpose": "any" }
+  ]
+}

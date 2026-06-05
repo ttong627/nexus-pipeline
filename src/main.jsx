@@ -4,12 +4,22 @@ import './index.css'
 import App from './App.jsx'
 import ErrorBoundary from './components/ErrorBoundary.jsx'
 
-// 서비스워커는 등록하지 않는다(selfDestroying SW가 기존 등록을 자동 해제).
-// 혹시 남아있는 SW가 있으면 즉시 해제 + 캐시 비우기(크래시/스테일 캐시 근본 차단).
+// 최소 SW 등록(public/sw.js, 네트워크 통과 전용) — 바로가기 설치만 가능, 앱 캐시 안 함.
+// 옛 vite-plugin-pwa precache 잔재는 비워 스테일 버전/크래시 근본 차단(새 SW는 캐시를 안 만듦).
 if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.getRegistrations().then(regs => regs.forEach(r => r.unregister())).catch(() => {})
   if (window.caches?.keys) caches.keys().then(keys => keys.forEach(k => caches.delete(k))).catch(() => {})
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch(() => {})
+  })
 }
+
+// PWA 설치 프롬프트를 앱 로드 즉시 잡아둔다('바로가기 만들기' 버튼이 사용)
+window.__pwaInstallPrompt = null
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault()
+  window.__pwaInstallPrompt = e
+  window.dispatchEvent(new Event('pwa-installable'))
+})
 
 createRoot(document.getElementById('root')).render(
   <StrictMode>
