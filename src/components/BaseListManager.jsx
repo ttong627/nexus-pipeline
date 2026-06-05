@@ -28,20 +28,25 @@ const FIELDS = [
 
 const ROW_HEIGHT = 36; // px — 가상스크롤 고정 행 높이
 
-// ── 기본명단 레코드 캐시 (sessionStorage, 10분 TTL) — 표시 즉시성용 ──────────────
+// ── 기본명단 레코드 캐시 (localStorage, 24h TTL) — 표시 즉시성용 ──────────────
+// 세션을 닫았다 다시 열어도 즉시 표시. fetchRecords가 항상 서버값으로 백그라운드 갱신하므로 자가 치유.
 const BASE_RECS_CACHE_KEY = 'base_recs_v1';
-const BASE_RECS_CACHE_TTL = 10 * 60 * 1000;
+const BASE_RECS_CACHE_TTL = 24 * 60 * 60 * 1000;
 function readBaseCache(city) {
   try {
-    const raw = sessionStorage.getItem(`${BASE_RECS_CACHE_KEY}_${city}`);
+    const raw = localStorage.getItem(`${BASE_RECS_CACHE_KEY}_${city}`);
     if (!raw) return null;
     const { ts, data } = JSON.parse(raw);
-    if (Date.now() - ts > BASE_RECS_CACHE_TTL) return null;
+    if (Date.now() - ts > BASE_RECS_CACHE_TTL) { localStorage.removeItem(`${BASE_RECS_CACHE_KEY}_${city}`); return null; }
     return data;
   } catch { return null; }
 }
 function writeBaseCache(city, data) {
-  try { sessionStorage.setItem(`${BASE_RECS_CACHE_KEY}_${city}`, JSON.stringify({ ts: Date.now(), data })); } catch { /* ignore */ }
+  try {
+    const str = JSON.stringify({ ts: Date.now(), data });
+    if (str.length > 4 * 1024 * 1024) return; // 4MB 초과 시 캐시 생략
+    localStorage.setItem(`${BASE_RECS_CACHE_KEY}_${city}`, str);
+  } catch { /* quota 초과 시 무시 */ }
 }
 
 const fmtDate = (ts) => {

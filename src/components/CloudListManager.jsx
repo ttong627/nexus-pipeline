@@ -27,14 +27,15 @@ const KAKAO_REST_KEY = import.meta.env.VITE_KAKAO_REST_KEY;
 
 // ─── Records Cache (sessionStorage, 10분 TTL) ─────────────────────────────────
 const RECS_CACHE_KEY = 'cloud_recs_v2';
-const RECS_CACHE_TTL = 10 * 60 * 1000;
+// localStorage + 24h TTL — 세션을 닫았다 다시 열어도 즉시 표시. 열 때마다 서버값으로 백그라운드 갱신되어 자가 치유.
+const RECS_CACHE_TTL = 24 * 60 * 60 * 1000;
 
 function readRecsCache(city, monthId) {
   try {
-    const raw = sessionStorage.getItem(`${RECS_CACHE_KEY}_${city}_${monthId}`);
+    const raw = localStorage.getItem(`${RECS_CACHE_KEY}_${city}_${monthId}`);
     if (!raw) return null;
     const { ts, data } = JSON.parse(raw);
-    if (Date.now() - ts > RECS_CACHE_TTL) { sessionStorage.removeItem(`${RECS_CACHE_KEY}_${city}_${monthId}`); return null; }
+    if (Date.now() - ts > RECS_CACHE_TTL) { localStorage.removeItem(`${RECS_CACHE_KEY}_${city}_${monthId}`); return null; }
     return data;
   } catch { return null; }
 }
@@ -42,11 +43,11 @@ function writeRecsCache(city, monthId, data) {
   try {
     const str = JSON.stringify({ ts: Date.now(), data });
     if (str.length > 4 * 1024 * 1024) return; // 4MB 초과 시 캐시 생략
-    sessionStorage.setItem(`${RECS_CACHE_KEY}_${city}_${monthId}`, str);
+    localStorage.setItem(`${RECS_CACHE_KEY}_${city}_${monthId}`, str);
   } catch { /* quota 초과 시 무시 */ }
 }
 function bustRecsCache(city, monthId) {
-  try { sessionStorage.removeItem(`${RECS_CACHE_KEY}_${city}_${monthId}`); } catch {}
+  try { localStorage.removeItem(`${RECS_CACHE_KEY}_${city}_${monthId}`); } catch {}
 }
 
 const fmtTs = (ts) => {
@@ -295,11 +296,13 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
   const [records, setRecords] = useState([]);
   const [loadingRecords, setLoadingRecords] = useState(false);
 
-  // 리(里)는 데이터가 있을 때만 표시(군 지역). 시/구 명단에선 칼럼 숨김.
+  // 리(里)는 행정구역이 '군'(읍·면 보유)일 때만 표시. 시/구 명단은 데이터에 리 값이 섞여도 숨긴다.
+  const isGunCity = useMemo(() => String(selectedCity || '').split(/\s+/).some(t => /군$/.test(t)), [selectedCity]);
   const riPresent = useMemo(() => hasRi(records), [records]);
+  const showRi = isGunCity && riPresent;
   const displayFields = useMemo(
-    () => (riPresent ? orderedFields : orderedFields.filter(c => c.key !== '리')),
-    [orderedFields, riPresent]
+    () => (showRi ? orderedFields : orderedFields.filter(c => c.key !== '리')),
+    [orderedFields, showRi]
   );
 
   // Inline edit state
@@ -481,11 +484,10 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
 
   // cityId를 직접 받는 버전 (카드 클릭 시 state 갱신 전 호출 대응)
   const fetchRecordsFor = async (cityId, monthId, force = false) => {
-    if (!force) {
-      const cached = readRecsCache(cityId, monthId);
-      if (cached) { setRecords(cached); setLoadingRecords(false); return; }
-    }
-    setLoadingRecords(true);
+    // 캐시 우선 즉시 표시(체감 0) → 서버 최신값으로 백그라운드 갱신(자가 치유). force면 캐시 무시.
+    const cached = force ? null : readRecsCache(cityId, monthId);
+    if (cached) { setRecords(cached); setLoadingRecords(false); }
+    else setLoadingRecords(true);
     try {
       const snap = await getDocs(collection(db, 'cloud_lists', cityId, 'months', monthId, 'records'));
       const recs = snap.docs.map(d => ({ id: d.id, ...d.data() }));

@@ -222,6 +222,7 @@ export default function AdminPanel({ onClose, user }) {
   const [loading, setLoading] = useState(true);
   const [migrationStatus, setMigrationStatus] = useState(null); // null | 'running' | { done, total, updated }
   const [companyMigStatus, setCompanyMigStatus] = useState(null); // 소속사→기업 통합 마이그레이션
+  const [noteCleanStatus, setNoteCleanStatus] = useState(null); // 특이사항 주소괄호(법정동,건물명) 오염 제거
   const [promoteMigStatus, setPromoteMigStatus] = useState(null); // 개인 자동기업→정식 기업 승격
   const [banTarget, setBanTarget] = useState(null);
   const [banReason, setBanReason] = useState('');
@@ -327,6 +328,81 @@ export default function AdminPanel({ onClose, user }) {
     } catch (e) {
       console.error('[Migration]', e);
       setMigrationStatus({ error: e.message || '오류 발생' });
+    }
+  };
+
+  // DB 마이그레이션: 특이사항/비고에 버그로 저장된 주소 괄호(법정동, 건물명) 오염 제거
+  //   예) "답십리1동, 래미안위브", "전농동, 전농SK아파트" 같은 조각을 삭제(실제 메모는 보존).
+  //   대상: base_lists(note) + cloud_lists(특이사항). 제거 후 공백·앞뒤 쉼표 정리.
+  const runNoteCleanMigration = async () => {
+    if (noteCleanStatus === 'running') return;
+    if (!window.confirm(
+      'base_lists · cloud_lists 전체를 스캔하여 특이사항/비고에 잘못 저장된 "법정동, 건물명"(주소 괄호 오염)을 제거합니다.\n\n' +
+      '예) "답십리1동, 래미안위브" 같은 조각만 삭제하고 실제 메모는 보존합니다.\n\n계속하시겠습니까?'
+    )) return;
+    setNoteCleanStatus('running');
+    // 법정동 토큰(OO동/읍/면) + ", " + 건물명 토큰 1개 = 주소 괄호 오염으로 간주하여 제거.
+    const POLLUTE_RE = /[가-힣]{2,}\d*(?:읍|면|동)(?![가-힣])\s*,\s*[^\s,;|]+/g;
+    const clean = (v) => {
+      if (typeof v !== 'string' || !v) return v;
+      return v
+        .replace(POLLUTE_RE, ' ')
+        .replace(/\(\s*\)/g, '')          // 빈 괄호 잔재 제거
+        .replace(/\s{2,}/g, ' ')          // 연속 공백 → 1
+        .replace(/^[\s,]+|[\s,]+$/g, '')  // 앞뒤 공백·쉼표 제거
+        .trim();
+    };
+    let scanned = 0, updated = 0;
+    try {
+      // 1) base_lists — note 필드
+      const baseCitySnap = await getDocs(collection(db, 'base_lists'));
+      for (const cityDoc of baseCitySnap.docs) {
+        const city = cityDoc.id;
+        const recSnap = await getDocs(collection(db, 'base_lists', city, 'records'));
+        const toUpdate = [];
+        recSnap.docs.forEach(d => {
+          scanned++;
+          const data = d.data();
+          const nn = clean(data.note || '');
+          if (nn !== (data.note || '')) toUpdate.push({ id: d.id, note: nn });
+        });
+        for (let i = 0; i < toUpdate.length; i += 499) {
+          const batch = writeBatch(db);
+          toUpdate.slice(i, i + 499).forEach(({ id, note }) =>
+            batch.set(doc(db, 'base_lists', city, 'records', id), { note }, { merge: true }));
+          await batch.commit();
+          updated += toUpdate.slice(i, i + 499).length;
+        }
+        setNoteCleanStatus({ done: scanned, updated });
+      }
+      // 2) cloud_lists — 특이사항 필드 (city → months → records)
+      const cloudCitySnap = await getDocs(collection(db, 'cloud_lists'));
+      for (const cityDoc of cloudCitySnap.docs) {
+        const city = cityDoc.id;
+        const monthSnap = await getDocs(collection(db, 'cloud_lists', city, 'months'));
+        for (const mDoc of monthSnap.docs) {
+          const recSnap = await getDocs(collection(db, 'cloud_lists', city, 'months', mDoc.id, 'records'));
+          const toUpdate = [];
+          recSnap.docs.forEach(d => {
+            scanned++;
+            const data = d.data();
+            const nn = clean(data.특이사항 || '');
+            if (nn !== (data.특이사항 || '')) toUpdate.push({ id: d.id, 특이사항: nn });
+          });
+          for (let i = 0; i < toUpdate.length; i += 499) {
+            const batch = writeBatch(db);
+            toUpdate.slice(i, i + 499).forEach((u) =>
+              batch.set(doc(db, 'cloud_lists', city, 'months', mDoc.id, 'records', u.id), { 특이사항: u.특이사항 }, { merge: true }));
+            await batch.commit();
+            updated += toUpdate.slice(i, i + 499).length;
+          }
+          setNoteCleanStatus({ done: scanned, updated });
+        }
+      }
+      setNoteCleanStatus({ done: scanned, updated, finished: true });
+    } catch (e) {
+      console.error('[NoteClean]', e);
+      setNoteCleanStatus({ error: e.message || '오류 발생' });
     }
   };
 
@@ -1498,6 +1574,32 @@ export default function AdminPanel({ onClose, user }) {
                   className="px-4 py-2 bg-orange-900/60 border border-orange-600/50 text-orange-300 font-black rounded-xl hover:bg-orange-800/60 transition-colors disabled:opacity-40 flex items-center gap-2 text-sm"
                 >
                   <RefreshCw size={14} className={migrationStatus === 'running' ? 'animate-spin' : ''}/> 마이그레이션 실행
+                </button>
+              </div>
+
+              {/* 특이사항 주소괄호(법정동, 건물명) 오염 제거 */}
+              <div className="bg-rose-950/20 border border-rose-700/30 rounded-xl p-4 mt-3">
+                <p className="text-rose-200/80 text-sm mb-1 font-bold">특이사항 정리 — 주소 괄호(법정동, 건물명) 오염 제거</p>
+                <p className="text-gray-500 text-xs mb-4">버그로 특이사항/비고에 들어간 "답십리1동, 래미안위브" 같은 조각을 base_lists·cloud_lists 전체에서 삭제합니다. 실제 메모는 보존됩니다.</p>
+                {noteCleanStatus === 'running' && (
+                  <div className="flex items-center gap-2 text-rose-400 text-sm mb-3">
+                    <RefreshCw size={14} className="animate-spin"/> 정리 진행 중...
+                    {typeof noteCleanStatus === 'object' && <span className="text-xs text-gray-500">스캔 {noteCleanStatus.done}건 / 정리 {noteCleanStatus.updated}건</span>}
+                  </div>
+                )}
+                {noteCleanStatus && noteCleanStatus !== 'running' && typeof noteCleanStatus === 'object' && (
+                  <div className={`text-sm mb-3 font-bold ${noteCleanStatus.error ? 'text-red-400' : 'text-emerald-400'}`}>
+                    {noteCleanStatus.error
+                      ? `오류: ${noteCleanStatus.error}`
+                      : `완료 — 스캔 ${noteCleanStatus.done}건 / 정리 ${noteCleanStatus.updated}건`}
+                  </div>
+                )}
+                <button
+                  onClick={runNoteCleanMigration}
+                  disabled={noteCleanStatus === 'running'}
+                  className="px-4 py-2 bg-rose-900/60 border border-rose-600/50 text-rose-300 font-black rounded-xl hover:bg-rose-800/60 transition-colors disabled:opacity-40 flex items-center gap-2 text-sm"
+                >
+                  <RefreshCw size={14} className={noteCleanStatus === 'running' ? 'animate-spin' : ''}/> 특이사항 정리 실행
                 </button>
               </div>
 

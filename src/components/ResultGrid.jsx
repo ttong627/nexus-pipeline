@@ -8,10 +8,20 @@ import ColHeaderEditControls from './ColHeaderEditControls.jsx';
 import { useColumnEditor } from '../hooks/useColumnEditor.js';
 import AddressConfirmModal from './AddressConfirmModal.jsx';
 import { hasRi, getColWidth, colCellStyle } from '../utils/colOrder.js';
+import { useVirtualizer } from '@tanstack/react-virtual';
+
+const ROW_HEIGHT = 40; // 본문 tr 높이(h-10 = 2.5rem). 가상화 estimateSize와 반드시 일치.
+// 가상화(table-layout:fixed)에서 스크롤 중 칼럼폭이 흔들리지 않도록 칼럼별 기본 폭(px).
+// 사용자가 칼럼을 리사이즈하면 getColWidth(editor.cols)가 우선한다.
+const COL_W = {
+  구분: 80, 행정동: 120, 리: 72, 이름: 96, 품명: 90, 생년월일: 100,
+  포수: 64, 휴대폰: 132, 유선전화: 132, 문자수신: 76,
+  주소: 440, 특이사항: 220, 기사: 104, 배송순번: 80, 사유: 170,
+};
 
 const ResultGrid = memo(function ResultGrid({
-  step, setStep, filter, setFilter, dongList = [], driverList = [], gridData, filteredData, paginatedData,
-  currentPage, setCurrentPage, itemsPerPage, sortConfig, setSortConfig,
+  step, setStep, filter, setFilter, dongList = [], driverList = [], gridData, filteredData, paginatedData, fileInfo = null,
+  currentPage, setCurrentPage, itemsPerPage, setItemsPerPage, sortConfig, setSortConfig,
   handleCellEdit, handleAddressKeyDown, handleUpdateBaseList, handleBatchSaveBaseList, isSavingBaseList,
   handleSaveMonthlyList, handleExport, handleExportErrors, handleExportDongSummary,
   handleExportByDriver, handleDeleteRows, handleBatchSetNote, onHelp, onOpenRouteMap,
@@ -29,6 +39,17 @@ const ResultGrid = memo(function ResultGrid({
   const [showAddrConfirm, setShowAddrConfirm] = useState(false);
   const searchInputRef = useRef(null);
   const editor = useColumnEditor({ exportColOrder, setExportColOrder, defaultExportCols });
+
+  // 가상화 스크롤 컨테이너 + 가상화기. Hooks 규칙상 조기 반환(step !== 5)보다 먼저 호출해야 한다.
+  // 편집 중에는 기존 규칙대로 상위 20행만 가상화 대상으로 둔다(폭조절 즉응 유지).
+  const scrollRef = useRef(null);
+  const virtualRows = editor.editing ? paginatedData.slice(0, 20) : paginatedData;
+  const rowVirtualizer = useVirtualizer({
+    count: virtualRows.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => ROW_HEIGHT,
+    overscan: 12,
+  });
 
   if (step !== 5) return null;
 
@@ -68,10 +89,20 @@ const ResultGrid = memo(function ResultGrid({
   // 체크박스 + NO는 sticky 고정이라 reorder 대상에서 제외한다.
   // 리(里)는 데이터가 있을 때만 표시(군 지역). 시/구 명단에선 숨김.
   // 리(里)는 데이터가 있을 때만 표시(군 지역). 편집 중엔 숨김 칼럼(on=false)도 흐리게 표시.
+  // 리(里)는 행정구역이 '군'(읍·면 보유)일 때만 표시. 시/구 명단은 데이터에 리 값이 섞여 있어도 숨긴다.
+  const isGunCity = String(fileInfo?.city || '').split(/\s+/).some(t => /군$/.test(t));
   const riPresent = hasRi(gridData);
+  const showRi = isGunCity && riPresent;
   const visibleCols = editor.cols
-    .filter(c => c.key !== 'NO' && (editor.editing || c.on !== false) && !(c.key === '리' && !riPresent))
+    .filter(c => c.key !== 'NO' && (editor.editing || c.on !== false) && !(c.key === '리' && !showRi))
     .map(c => c.key);
+
+  // 칼럼 폭: 사용자가 리사이즈한 값 우선, 없으면 기본폭(COL_W), 그래도 없으면 120px.
+  const colWidthPx = (key) => getColWidth(editor.cols, key) ?? COL_W[key] ?? 120;
+  const vItems = rowVirtualizer.getVirtualItems();
+  const vTotal = rowVirtualizer.getTotalSize();
+  const padTop = vItems.length ? vItems[0].start : 0;
+  const padBottom = vItems.length ? vTotal - vItems[vItems.length - 1].end : 0;
 
   const renderHeaderCell = (key) => {
     switch (key) {
@@ -233,7 +264,9 @@ const ResultGrid = memo(function ResultGrid({
   const renderHeaderCellWithResize = (key) => {
     const th = renderHeaderCell(key);
     if (!th) return th;
-    const w = getColWidth(editor.cols, key);
+    // table-layout:fixed에서 칼럼 폭은 첫 행(헤더)이 결정한다. 헤더는 가상화 대상이 아니므로
+    // 스크롤 중에도 폭이 흔들리지 않고, ColResizeHandle의 th 폭 드래그 프리뷰도 그대로 동작한다.
+    const w = colWidthPx(key);
     const on = editor.isOn(key);
     const dim = editor.editing && !on;
     const baseClass = `${th.props.className || ''}`.replace(/\btext-(left|right)\b/g, '').trim();
@@ -254,9 +287,9 @@ const ResultGrid = memo(function ResultGrid({
     if (!td) return td;
     const w = getColWidth(editor.cols, key);
     const dim = editor.editing && !editor.isOn(key);
-    if (!w && !dim) return td;
+    // table-layout:fixed에서 칼럼 폭을 넘는 내용이 옆칸을 침범하지 않도록 항상 overflow-hidden.
     const style = w ? { ...(td.props.style || {}), ...colCellStyle(w) } : td.props.style;
-    const className = `${td.props.className || ''} ${w ? 'overflow-hidden' : ''} ${dim ? 'opacity-40' : ''}`.trim();
+    const className = `${td.props.className || ''} overflow-hidden ${dim ? 'opacity-40' : ''}`.trim();
     return cloneElement(td, { style, className });
   };
 
@@ -683,6 +716,16 @@ const ResultGrid = memo(function ResultGrid({
               </>
             )}
 
+            {setItemsPerPage && (
+              <select
+                value={itemsPerPage}
+                onChange={(e) => { setItemsPerPage(Number(e.target.value)); setCurrentPage(1); }}
+                className="bg-black/60 border border-[#1e1e1e] text-gray-300 rounded-lg px-2 py-1.5 text-xs font-bold outline-none hover:border-[#3b82f6]/40 cursor-pointer"
+                title="페이지당 표시 행 수"
+              >
+                {[100, 200, 500, 1000].map(n => <option key={n} value={n} className="bg-[#0a0a0a]">{n.toLocaleString()}행</option>)}
+              </select>
+            )}
             <div className="flex items-center gap-1 text-xs text-gray-400 bg-black/60 px-3 py-1.5 rounded-lg border border-[#1e1e1e]">
               <button onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1} className="hover:text-[#3b82f6] disabled:opacity-20 transition-colors"><ChevronLeft size={14}/></button>
               <span className="font-mono font-bold text-gray-300 px-1">{currentPage} / {totalPages}</span>
@@ -769,24 +812,29 @@ const ResultGrid = memo(function ResultGrid({
           </span>
         </div>
 
-        <div className="flex-1 overflow-auto relative scrollbar-thin scrollbar-thumb-[#555] scrollbar-track-black/50">
-          <table className="w-full text-left text-[12px] whitespace-nowrap border-collapse">
+        <div ref={scrollRef} className="flex-1 overflow-auto relative scrollbar-thin scrollbar-thumb-[#555] scrollbar-track-black/50">
+          <table className="w-full text-left text-[12px] whitespace-nowrap border-collapse" style={{ tableLayout: 'fixed' }}>
             <thead className="sticky top-0 bg-[#0a100c] z-20 text-gray-400 shadow-[0_5px_15px_rgba(0,0,0,0.8)] border-b-2 border-[#333]">
               <tr>
-                <th className="px-2 py-3 font-bold border-r border-[#222] text-center sticky left-0 bg-[#0a100c] z-30 shadow-[2px_0_5px_rgba(0,0,0,0.5)] w-10">
+                <th style={{ width: 40 }} className="px-2 py-3 font-bold border-r border-[#222] text-center sticky left-0 bg-[#0a100c] z-30 shadow-[2px_0_5px_rgba(0,0,0,0.5)] w-10">
                   <input type="checkbox" checked={allPageSelected} onChange={toggleAll} className="accent-[#3b82f6] w-4 h-4 cursor-pointer" />
                 </th>
-                <th className="px-4 py-3 font-bold border-r border-[#222] tracking-wide text-center sticky left-10 bg-[#0a100c] z-30 shadow-[2px_0_5px_rgba(0,0,0,0.5)]">NO</th>
+                <th style={{ width: 56 }} className="px-4 py-3 font-bold border-r border-[#222] tracking-wide text-center sticky left-10 bg-[#0a100c] z-30 shadow-[2px_0_5px_rgba(0,0,0,0.5)]">NO</th>
                 {visibleCols.map(renderHeaderCellWithResize)}
               </tr>
             </thead>
             <tbody className="font-mono text-gray-200">
-              {/* 칼럼 편집 중에는 상위 20행만 렌더 — auto-layout 테이블이 매 reflow마다 렌더된 전 행을
-                  다시 계산해 폭조절·이동이 버벅이던 문제 해결(편집 완료 시 전체 복원) */}
-              {(editor.editing ? paginatedData.slice(0, 20) : paginatedData).map((row, idx) => {
+              {/* 가상화: 화면에 보이는 행만 렌더하고 위·아래를 빈 행 높이로 채워 전체 스크롤 높이를 유지.
+                  편집 중에는 기존 규칙대로 상위 20행만 대상(폭조절 즉응). */}
+              {padTop > 0 && (
+                <tr aria-hidden="true"><td colSpan={visibleCols.length + 2} style={{ height: padTop, padding: 0, border: 0 }} /></tr>
+              )}
+              {vItems.map(vRow => {
+                const row = virtualRows[vRow.index];
+                const idx = vRow.index;
                 const isSelected = selectedIds.has(row.id);
                 return (
-                  <tr key={row.id} className={`border-b border-[#222] group h-10 transition-colors ${isSelected ? 'bg-amber-950/20' : row._에러 ? 'bg-red-950/20 hover:bg-red-900/40' : 'bg-transparent hover:bg-[#060c18]/60'}`}>
+                  <tr key={row.id} style={{ height: ROW_HEIGHT }} className={`border-b border-[#222] group transition-colors ${isSelected ? 'bg-amber-950/20' : row._에러 ? 'bg-red-950/20 hover:bg-red-900/40' : 'bg-transparent hover:bg-[#060c18]/60'}`}>
                     <td className={`px-2 py-1.5 border-r border-[#222] text-center sticky left-0 z-10 shadow-[2px_0_5px_rgba(0,0,0,0.3)] ${isSelected ? 'bg-amber-950/40' : row._에러 ? 'bg-[#1a0505]' : 'bg-[#0a0a0a] group-hover:bg-[#0f1f12]'}`}>
                       <input type="checkbox" checked={isSelected} onChange={() => toggleRow(row.id)} className="accent-emerald-500 w-4 h-4 cursor-pointer" />
                     </td>
@@ -800,6 +848,9 @@ const ResultGrid = memo(function ResultGrid({
                   </tr>
                 );
               })}
+              {padBottom > 0 && (
+                <tr aria-hidden="true"><td colSpan={visibleCols.length + 2} style={{ height: padBottom, padding: 0, border: 0 }} /></tr>
+              )}
               {editor.editing && paginatedData.length > 20 && (
                 <tr>
                   <td colSpan={visibleCols.length + 2} className="px-4 py-2.5 text-center text-[11px] font-bold text-amber-400/80 bg-amber-950/15 border-b border-[#222]">
