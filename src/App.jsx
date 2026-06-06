@@ -218,7 +218,7 @@ export default function App() {
   const [aiRules, setAiRules] = useState(null);
   const [mapDefs, setMapDefs] = useState({});
   const [gridData, setGridData] = useState([]);
-  const [addressDisplayMode, setAddressDisplayMode] = useState(ADDRESS_DISPLAY_MODES.PAREN_BEFORE_DETAIL);
+  const [addressDisplayMode, setAddressDisplayMode] = useState(ADDRESS_DISPLAY_MODES.DETAIL_BEFORE_PAREN);
   const [workflowMode, setWorkflowMode] = useState(() => {
     try { return localStorage.getItem('nexus_workflow_mode_v1') || 'cleaningOnly'; }
     catch { return 'cleaningOnly'; }
