@@ -228,8 +228,7 @@ export default function RouteSetupModal({
             if (!uid) return;
             snap = await getDoc(doc(db, 'user_driver_presets', uid, 'cities', effectiveCity));
           } else {
-            const orgKey = selectedOrgId || 'all';
-            snap = await getDoc(doc(db, 'driver_assignments', effectiveCity, 'orgs', orgKey));
+            snap = await readOrgAssignment(effectiveCity); // 이름 키 우선 + id 폴백
           }
           const hasUsefulDrivers = snap?.exists() && snap.data().drivers?.some(d => d.name?.trim());
           if (hasUsefulDrivers) {
@@ -282,8 +281,7 @@ export default function RouteSetupModal({
             const uid = user?.uid;
             if (uid) presetSnap = await getDoc(doc(db, 'user_driver_presets', uid, 'cities', effectiveCity));
           } else {
-            const orgKey = selectedOrgId || 'all';
-            presetSnap = await getDoc(doc(db, 'driver_assignments', effectiveCity, 'orgs', orgKey));
+            presetSnap = await readOrgAssignment(effectiveCity); // 이름 키 우선 + id 폴백
           }
           const hasUsefulDrivers = presetSnap?.exists() && presetSnap.data().drivers?.some(d => d.name?.trim());
 
@@ -530,9 +528,9 @@ export default function RouteSetupModal({
         savedAt: serverTimestamp(),
       });
     } else {
-      const orgKey = selectedOrgId || 'all';
       const orgObj = orgs.find(o => o.id === selectedOrgId);
       const orgName = orgObj?.name || '전체';
+      const orgKey = getOrgStableKey();
       await setDoc(doc(db, 'driver_assignments', effectiveCity, 'orgs', orgKey), {
         city: effectiveCity,
         orgId: selectedOrgId || null,
@@ -579,7 +577,7 @@ export default function RouteSetupModal({
       companyDrivers: allNamedDrivers.length ? allNamedDrivers : finalDrivers,
       dongDriverMap: Object.keys(dongDriverMap).length ? dongDriverMap : map,
       baseDailyQty,
-      orgId: selectedOrgId || 'all',
+      orgId: getOrgStableKey(),
     });
   };
 
