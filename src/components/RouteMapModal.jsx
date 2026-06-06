@@ -1215,7 +1215,9 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
     let changed = false;
     const restored = records.map(r => {
       if (r._driverId) return r;
-      const driverName = String(r.기사 || r._origDriver || '').split('/')[0].trim();
+      const savedDriverRaw = String(r.기사 || r._origDriver || '').trim();
+      if (!savedDriverRaw || savedDriverRaw.includes('/')) return r;
+      const driverName = savedDriverRaw.trim();
       const driverId = nameToId.get(driverName);
       if (!driverId) return r;
       changed = true;
@@ -2329,7 +2331,14 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
     const assignable = dongRecs.filter(r => r._lat && r._lng && isCoordAssignable(r));
     if (!assignable.length) return; // 좌표 채워질 때까지 보류
     const mappedSet = new Set(mapped);
-    if (assignable.every(r => r._driverId && mappedSet.has(r._driverId))) { autoSplitAppliedRef.current.add(dong); return; } // 이미 분할됨
+    const assignedMappedIds = new Set(assignable.map(r => r._driverId).filter(id => mappedSet.has(id)));
+    if (
+      assignable.every(r => r._driverId && mappedSet.has(r._driverId)) &&
+      assignedMappedIds.size >= Math.min(mapped.length, assignable.length)
+    ) {
+      autoSplitAppliedRef.current.add(dong);
+      return;
+    } // 다기사 동이 실제 여러 기사로 나뉘어 있을 때만 이미 분할됨으로 인정
     if (autoSplitAppliedRef.current.has(dong)) return; // 이 동은 이미 1회 자동분할 시도함
     autoSplitAppliedRef.current.add(dong);
     handleAutoSplit(); // Part B로 그 동 매핑 기사로만 분할됨
@@ -3938,7 +3947,8 @@ ${folders}
     records.forEach(record => {
       const routeDong = getRouteDong(record);
       if (!isAllowedDong(routeDong)) return;
-      const savedDriverName = String(record.기사 || record._origDriver || '').split('/')[0].trim();
+      const savedDriverRaw = String(record.기사 || record._origDriver || '').trim();
+      const savedDriverName = savedDriverRaw && !savedDriverRaw.includes('/') ? savedDriverRaw : '';
       const driverId = record._driverId || nameToId.get(savedDriverName);
       if (!driverId || !validDriverIds.has(driverId)) return;
       if (!restoredDongDriverMap[routeDong]) restoredDongDriverMap[routeDong] = [];
