@@ -540,7 +540,9 @@ export default function RouteSetupModal({
     Object.entries(sanitizedDongDriverMap).forEach(([dong, ids]) => {
       if (!ids.length) return;
       const names = ids.map(id => drivers.find(d => d.id === id)?.name || '').filter(Boolean);
-      dongToName[dong] = names.join('/');
+      // ★ 단일 기사 동만 명단 기사칸에 적용. 2명 이상 동은 비워둠 — 지도 자동분할이 레코드별로 '단일' 기사를 배정.
+      //   (이전엔 names.join('/')로 '가명현/이진만'을 모든 레코드에 저장해 2명 묶음값이 명단에 남던 버그)
+      dongToName[dong] = names.length === 1 ? names[0] : '';
     });
     const CHUNK = 499;
     for (let i = 0; i < recordRefs.length; i += CHUNK) {
