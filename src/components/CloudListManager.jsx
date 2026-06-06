@@ -22,33 +22,29 @@ import { useColumnEditor } from '../hooks/useColumnEditor.js';
 import { processAddress, asyncPool } from '../engine/addressEngine.js';
 import { canUseCoords, canUseCoordsBg } from '../utils/tierUtils.js';
 import { getCachedCoord, saveCoordCache } from '../utils/coordCache.js';
+import { idbGet, idbSet, idbDel } from '../utils/idbCache.js';
 import { orderFieldsByExport, hasRi, getColWidth, colCellStyle } from '../utils/colOrder.js';
 
 const KAKAO_REST_KEY = import.meta.env.VITE_KAKAO_REST_KEY;
 
-// ─── Records Cache (sessionStorage, 10분 TTL) ─────────────────────────────────
-const RECS_CACHE_KEY = 'cloud_recs_v2';
-// localStorage + 24h TTL — 세션을 닫았다 다시 열어도 즉시 표시. 열 때마다 서버값으로 백그라운드 갱신되어 자가 치유.
+// ─── Records Cache (IndexedDB, 24h TTL) ───────────────────────────────────────
+// IndexedDB 비동기 저장 — 큰 JSON을 localStorage에 동기 저장/읽기하며 생기던 렉 제거.
+// 세션 간 지속 + 4MB 한계 없음(대형 명단도 캐시). 열 때마다 서버값으로 백그라운드 갱신(자가 치유).
+const RECS_CACHE_KEY = 'cloud_recs_v3';
 const RECS_CACHE_TTL = 24 * 60 * 60 * 1000;
+const recsKey = (city, monthId) => `${RECS_CACHE_KEY}_${city}_${monthId}`;
 
-function readRecsCache(city, monthId) {
-  try {
-    const raw = localStorage.getItem(`${RECS_CACHE_KEY}_${city}_${monthId}`);
-    if (!raw) return null;
-    const { ts, data } = JSON.parse(raw);
-    if (Date.now() - ts > RECS_CACHE_TTL) { localStorage.removeItem(`${RECS_CACHE_KEY}_${city}_${monthId}`); return null; }
-    return data;
-  } catch { return null; }
+async function readRecsCache(city, monthId) {
+  const rec = await idbGet(recsKey(city, monthId));
+  if (!rec || !rec.data) return null;
+  if (Date.now() - rec.ts > RECS_CACHE_TTL) { idbDel(recsKey(city, monthId)); return null; }
+  return rec.data;
 }
 function writeRecsCache(city, monthId, data) {
-  try {
-    const str = JSON.stringify({ ts: Date.now(), data });
-    if (str.length > 4 * 1024 * 1024) return; // 4MB 초과 시 캐시 생략
-    localStorage.setItem(`${RECS_CACHE_KEY}_${city}_${monthId}`, str);
-  } catch { /* quota 초과 시 무시 */ }
+  idbSet(recsKey(city, monthId), { ts: Date.now(), data }); // fire-and-forget(비동기)
 }
 function bustRecsCache(city, monthId) {
-  try { localStorage.removeItem(`${RECS_CACHE_KEY}_${city}_${monthId}`); } catch {}
+  idbDel(recsKey(city, monthId));
 }
 
 // 서버(클라우드 함수) 좌표 지오코딩 — 브라우저 부하 없이 서버에서 좌표를 채운다.
@@ -489,7 +485,7 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
   // cityId를 직접 받는 버전 (카드 클릭 시 state 갱신 전 호출 대응)
   const fetchRecordsFor = async (cityId, monthId, force = false) => {
     // 캐시 우선 즉시 표시(체감 0) → 서버 최신값으로 백그라운드 갱신(자가 치유). force면 캐시 무시.
-    const cached = force ? null : readRecsCache(cityId, monthId);
+    const cached = force ? null : await readRecsCache(cityId, monthId);
     if (cached) { setRecords(cached); setLoadingRecords(false); }
     else setLoadingRecords(true);
     try {

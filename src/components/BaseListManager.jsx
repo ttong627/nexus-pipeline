@@ -16,6 +16,7 @@ import ColumnEditBar from './ColumnEditBar.jsx';
 import ColHeaderEditControls from './ColHeaderEditControls.jsx';
 import { useColumnEditor } from '../hooks/useColumnEditor.js';
 import { orderFieldsByExport, getColWidth, colCellStyle } from '../utils/colOrder.js';
+import { idbGet, idbSet, idbDel } from '../utils/idbCache.js';
 
 const FIELDS = [
   { key: 'name',     label: '이름',     minW: '90px'  },
@@ -28,25 +29,20 @@ const FIELDS = [
 
 const ROW_HEIGHT = 36; // px — 가상스크롤 고정 행 높이
 
-// ── 기본명단 레코드 캐시 (localStorage, 24h TTL) — 표시 즉시성용 ──────────────
+// ── 기본명단 레코드 캐시 (IndexedDB, 24h TTL) — 표시 즉시성용 ──────────────
+// IndexedDB 비동기 — 큰 명단을 localStorage에 동기 저장하던 렉 제거. 4MB 한계 없음, 세션 간 지속.
 // 세션을 닫았다 다시 열어도 즉시 표시. fetchRecords가 항상 서버값으로 백그라운드 갱신하므로 자가 치유.
-const BASE_RECS_CACHE_KEY = 'base_recs_v1';
+const BASE_RECS_CACHE_KEY = 'base_recs_v2';
 const BASE_RECS_CACHE_TTL = 24 * 60 * 60 * 1000;
-function readBaseCache(city) {
-  try {
-    const raw = localStorage.getItem(`${BASE_RECS_CACHE_KEY}_${city}`);
-    if (!raw) return null;
-    const { ts, data } = JSON.parse(raw);
-    if (Date.now() - ts > BASE_RECS_CACHE_TTL) { localStorage.removeItem(`${BASE_RECS_CACHE_KEY}_${city}`); return null; }
-    return data;
-  } catch { return null; }
+const baseKey = (city) => `${BASE_RECS_CACHE_KEY}_${city}`;
+async function readBaseCache(city) {
+  const rec = await idbGet(baseKey(city));
+  if (!rec || !rec.data) return null;
+  if (Date.now() - rec.ts > BASE_RECS_CACHE_TTL) { idbDel(baseKey(city)); return null; }
+  return rec.data;
 }
 function writeBaseCache(city, data) {
-  try {
-    const str = JSON.stringify({ ts: Date.now(), data });
-    if (str.length > 4 * 1024 * 1024) return; // 4MB 초과 시 캐시 생략
-    localStorage.setItem(`${BASE_RECS_CACHE_KEY}_${city}`, str);
-  } catch { /* quota 초과 시 무시 */ }
+  idbSet(baseKey(city), { ts: Date.now(), data }); // fire-and-forget(비동기)
 }
 
 const fmtDate = (ts) => {
@@ -214,7 +210,7 @@ export default function BaseListManager({ user, onBack, initialCity = '', export
 
   const fetchRecords = async (cityId) => {
     // 캐시 우선 즉시 표시(체감 로딩 0) → 백그라운드에서 서버 최신값으로 갱신
-    const cached = readBaseCache(cityId);
+    const cached = await readBaseCache(cityId);
     if (cached) { setRecords(cached); setLoading(false); }
     else setLoading(true);
     try {
