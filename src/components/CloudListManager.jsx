@@ -842,13 +842,7 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
   const [coordProgress, setCoordProgress] = useState(null); // { done, total } | null
   const bgCoordCancelRef = useRef(false);
   const [bgCoordState, setBgCoordState] = useState(null); // { done, total, success, isDone } | null
-  // 백그라운드 좌표 자동 수신 ON/OFF. 기본 OFF — 대량 명단 자동 조회가 네트워크 부하를 유발해
-  // 명시적으로 켤 때만 동작(localStorage 'on'). 같은 명단 1회만 자동 시작(중복 방지).
-  const [autoBgCoord, setAutoBgCoord] = useState(() => {
-    try { return localStorage.getItem('nexus_auto_bg_coord') === 'on'; } catch { return false; }
-  });
-  const bgAutoKeyRef = useRef('');
-  const cloudGeoRef = useRef(false); // 클라우드 지오코딩 중복 실행 방지
+  const cloudGeoRef = useRef(false); // 클라우드 지오코딩 중복 실행 방지(수동 버튼)
 
   // 공통 Kakao 지오코딩 엔진 — VIP 수동·VVIP 백그라운드 공유
   const _processCoords = async (targets, { cityId, monthId, concurrency, requestGap, cancelRef, onProgress }) => {
@@ -1096,20 +1090,9 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
     }
   };
 
-  // 명단을 열면 좌표 없는 건이 있을 때 클라우드 좌표 채우기 자동 시작(토글 ON·권한 보유 시).
-  // 같은 명단(도시_월)에 대해 1회만 시작. 서버가 처리하므로 브라우저 부하 없음.
-  useEffect(() => {
-    if (!autoBgCoord || !canUseCoordsBg(user)) return;
-    if (!selectedCity || !selectedMonth?.id) return;
-    if (bgCoordState) return; // 이미 실행 중/완료표시 중
-    const key = `${selectedCity}_${selectedMonth.id}`;
-    if (bgAutoKeyRef.current === key) return; // 이 명단은 이미 자동 시작함
-    const missing = records.filter(r => r.주소 && !r.lat && !r.lng);
-    if (!missing.length) return;
-    bgAutoKeyRef.current = key;
-    bgCoordCancelRef.current = false;
-    handleCloudGeocode(selectedCity, selectedMonth.id, { silent: true });
-  }, [records, selectedCity, selectedMonth, autoBgCoord, user, bgCoordState]); // eslint-disable-line react-hooks/exhaustive-deps
+  // ※ 명단 열 때의 클라이언트 자동 좌표 조회는 제거 — 좌표 매칭은 서버 스케줄 함수(geocodeAuto)가
+  //    업로드 순서대로 자동·지속 처리한다. 브라우저는 좌표 조회를 하지 않는다.
+  //    (수동 즉시 처리가 필요하면 "클라우드 좌표" 버튼으로 서버 함수를 호출)
 
   // ── DB 전체 초기화 (records만 삭제, 월 메타는 유지) ─────────────────────
   const [isClearing, setIsClearing] = useState(false);
@@ -1826,30 +1809,17 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
                       : <><MapPin size={11} /> {filterDong} 좌표받기</>}
                   </button>
                 )}
-                {/* 클라우드 좌표 채우기 — 서버에서 좌표 없는 건을 채움(브라우저 부하 0, 실패만 확인필요로 남음) */}
+                {/* 클라우드 좌표 지금 채우기 — 서버 함수 즉시 호출(브라우저 부하 0). 평소엔 서버 스케줄이 자동 처리 */}
                 {canUseCoordsBg(user) && (
                   <button
                     onClick={() => handleCloudGeocode()}
                     disabled={!!bgCoordState}
-                    title="좌표 없는 건을 클라우드 서버에서 직접 채웁니다(브라우저 부하 없음). 못 받은 건만 확인 필요로 남습니다."
+                    title="좌표 없는 건을 서버에서 지금 바로 채웁니다(브라우저 부하 없음). 평소엔 서버가 업로드 순서대로 자동 처리하며, 못 받은 건만 확인 필요로 남습니다."
                     className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-[11px] font-bold border transition-colors shrink-0 bg-sky-950/40 hover:bg-sky-900/50 text-sky-400 border-sky-500/30 disabled:opacity-40"
                   >
                     {bgCoordState && !bgCoordState.isDone
                       ? <><span className="w-3 h-3 rounded-full border-2 border-sky-400 border-t-transparent animate-spin inline-block" /> {bgCoordState.total ? `${bgCoordState.done}/${bgCoordState.total}` : '처리중'}</>
                       : <><MapPin size={11} /> 클라우드 좌표</>}
-                  </button>
-                )}
-                {/* 백그라운드 좌표 자동 수신 ON/OFF — 명단 열 때 좌표없는 건 자동(클라우드) 채우기 */}
-                {canUseCoordsBg(user) && (
-                  <button
-                    onClick={() => setAutoBgCoord(v => { const nv = !v; try { localStorage.setItem('nexus_auto_bg_coord', nv ? 'on' : 'off'); } catch { /* ignore */ } return nv; })}
-                    title={autoBgCoord ? '명단 열 때 좌표 없는 건을 백그라운드로 자동 수신 중 (클릭하여 끄기)' : '백그라운드 좌표 자동 수신 꺼짐 (클릭하여 켜기)'}
-                    className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-[11px] font-bold border transition-colors shrink-0 ${autoBgCoord ? 'bg-emerald-950/40 hover:bg-emerald-900/50 text-emerald-400 border-emerald-500/30' : 'bg-black/40 hover:bg-[#1a1a1a] text-gray-500 border-[#2a2a2a]'}`}
-                  >
-                    {bgCoordState && !bgCoordState.isDone
-                      ? <span className="w-3 h-3 rounded-full border-2 border-emerald-400 border-t-transparent animate-spin inline-block" />
-                      : <MapPin size={11} />}
-                    자동좌표 {autoBgCoord ? 'ON' : 'OFF'}
                   </button>
                 )}
                 {/* 초기화 */}

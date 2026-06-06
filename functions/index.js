@@ -11,6 +11,7 @@
  */
 
 const { onRequest } = require('firebase-functions/v2/https');
+const { onSchedule } = require('firebase-functions/v2/scheduler');
 const admin = require('firebase-admin');
 
 admin.initializeApp();
@@ -286,6 +287,86 @@ exports.geocode = onRequest(
     } catch (e) {
       console.error('geocode 오류:', e);
       return res.status(500).json({ error: '지오코딩 실패: ' + e.message });
+    }
+  }
+);
+
+// ── 자동 스케줄 좌표 매칭 (서버가 업로드 순서대로 천천히 꾸준히) ──────────────
+//   3분마다 실행. coordsDone!=true 인 월 중 업로드가 가장 오래된 것을 골라
+//   좌표 없는 레코드를 배치(100)로 지오코딩(캐시→카카오). 실패는 coordFailed+확인필요로 남김.
+//   해당 월의 미좌표가 모두 해소되면 coordsDone=true + notifications에 완료 알림(에러 건수).
+exports.geocodeAuto = onSchedule(
+  { schedule: 'every 3 minutes', region: 'asia-northeast3', timeoutSeconds: 300, memory: '512MiB' },
+  async () => {
+    if (!KAKAO_REST_KEY) { console.warn('[geocodeAuto] KAKAO 키 없음'); return; }
+    try {
+      // 1) 미완료 월 메타 수집 (도시 × 월 메타만 읽음 — 가벼움)
+      const cityRefs = await db.collection('cloud_lists').listDocuments();
+      const candidates = [];
+      for (const cityRef of cityRefs) {
+        const months = await cityRef.collection('months').get();
+        months.forEach((m) => {
+          const md = m.data() || {};
+          if (md.coordsDone === true) return;
+          candidates.push({ city: cityRef.id, monthId: m.id, uploadedAt: md.uploadedAt?.toMillis?.() ?? 0, ref: m.ref });
+        });
+      }
+      if (!candidates.length) return;
+      candidates.sort((a, b) => a.uploadedAt - b.uploadedAt); // 업로드 오래된 순
+      const job = candidates[0];
+
+      const recsRef = db.collection('cloud_lists').doc(job.city).collection('months').doc(job.monthId).collection('records');
+      const snap = await recsRef.get();
+      const missing = snap.docs.filter((d) => { const x = d.data(); return x.주소 && (x.lat == null || x.lng == null) && x.coordFailed !== true; });
+
+      if (!missing.length) {
+        // 이 월 좌표 처리 완료 → 완료 표시 + 담당자 알림
+        const errorCount = snap.docs.filter((d) => d.data().coordFailed === true).length;
+        await job.ref.set({ coordsDone: true, coordErrorCount: errorCount, coordDoneAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        await db.collection('notifications').add({
+          type: 'geocode_done', city: job.city, monthId: job.monthId, errorCount,
+          message: `${job.city} ${job.monthId} 좌표 자동매칭 완료 — 실패(확인필요) ${errorCount}건`,
+          read: false, createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+        console.log(`[geocodeAuto] ${job.city} ${job.monthId} 완료, 실패 ${errorCount}건`);
+        return;
+      }
+
+      // 2) 배치 지오코딩 (천천히 — 한 번에 100건, 동시성 4)
+      const parts = job.city.split(/\s+/);
+      const sido = parts[0] || '';
+      const sigungu = parts.slice(1).join(' ');
+      const cacheCol = db.collection('coordinate_cache').doc(job.city).collection('addresses');
+      const batch = missing.slice(0, 100);
+      let idx = 0, success = 0, failed = 0;
+
+      const worker = async () => {
+        while (idx < batch.length) {
+          const docSnap = batch[idx++];
+          const r = docSnap.data();
+          const key = addrToDocId(extractRoadAddress(r.주소));
+          let coord = null;
+          if (key) {
+            try { const c = await cacheCol.doc(key).get(); if (c.exists) { const cd = c.data(); if (cd.lat && cd.lng) coord = { lat: cd.lat, lng: cd.lng }; } } catch { /* ignore */ }
+          }
+          if (!coord) {
+            coord = await kakaoGeocode(r.주소, sido, sigungu);
+            if (coord && key) { try { await cacheCol.doc(key).set({ address: extractRoadAddress(r.주소), lat: coord.lat, lng: coord.lng, fetchedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true }); } catch { /* ignore */ } }
+          }
+          if (coord) {
+            success++;
+            await docSnap.ref.update({ lat: coord.lat, lng: coord.lng, 좌표상태: '좌표확인', 좌표출처: 'cloud-auto', 좌표수정일시: admin.firestore.FieldValue.serverTimestamp() });
+          } else {
+            failed++;
+            await docSnap.ref.update({ coordFailed: true, 확인필요: true, 좌표상태: '좌표없음' });
+          }
+        }
+      };
+      await Promise.all([worker(), worker(), worker(), worker()]);
+      console.log(`[geocodeAuto] ${job.city} ${job.monthId} 진행 — 성공 ${success} 실패 ${failed} (남은 월 ${candidates.length})`);
+      // coordsDone는 아직 false → 다음 실행에서 이 월의 나머지를 계속 처리
+    } catch (e) {
+      console.error('[geocodeAuto] 오류:', e);
     }
   }
 );

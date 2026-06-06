@@ -1553,6 +1553,7 @@ export default function App() {
           uploadedAt: serverTimestamp(), uploadedBy: user?.email || 'unknown',
           workflowMeta,
           hasOriginal: false,
+          coordsDone: false, // 서버 스케줄 함수(geocodeAuto)가 좌표 자동 매칭하도록 표시
         });
       } catch (e) { throw new Error(`[4단계 월별메타 저장 권한 오류] ${e.message}\n계정: ${user?.email}`); }
 
@@ -1725,7 +1726,7 @@ export default function App() {
           if (!confirmDelete) {
             gDone(`${city} ${monthStr} · 전체 ${allData.length.toLocaleString()}건 저장 완료 (구월 유지)`);
             setTimeout(() => {
-              runSavedListBackgroundCoords({ city, monthId: monthStr, records: savedRecordsForBgCoords });
+              /* 좌표 매칭은 서버 스케줄 함수(geocodeAuto)가 업로드 순서대로 자동 처리 — 브라우저 지오코딩 중단 */
             }, 300);
             alert(`✅ ${city} ${monthStr} 월별 명단 전체 ${allData.length}건이 클라우드에 저장되었습니다.\n정상 ${validData.length}건 / 확인필요 ${errorData.length}건\n\n이전 월 데이터(${oldMonthNames})는 유지됩니다.`);
             return;
