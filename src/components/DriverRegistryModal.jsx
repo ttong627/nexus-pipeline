@@ -35,9 +35,11 @@ export default function DriverRegistryModal({ user, onClose }) {
   // 소속사 없는 일반 사용자 → 개인 기사 모드
   const isPersonalMode = !isAdmin && !user?.orgId && !!uid;
 
-  // ── 소속사 선택
+  // ── 소속사/기업 선택 (관리자는 둘 다 관리 가능)
   const [orgList, setOrgList] = useState([]);
   const [selectedOrg, setSelectedOrg] = useState(isAdmin ? '' : (user?.orgId || ''));
+  const [companyList, setCompanyList] = useState([]); // [{code, name}]
+  const [selectedCompany, setSelectedCompany] = useState(''); // 기업(companyCode) 선택 시 — 소속사보다 우선
 
   // ── 기사 목록
   const [drivers, setDrivers] = useState([]);
@@ -85,22 +87,32 @@ export default function DriverRegistryModal({ user, onClose }) {
     }).catch(() => {});
   }, [isAdmin]);
 
+  // ── 관리자용 기업(회사) 목록 로드 — 소속사처럼 기업 기사도 관리하기 위함
+  useEffect(() => {
+    if (!isAdmin) return;
+    getDocs(collection(db, 'user_companies')).then(snap => {
+      setCompanyList(snap.docs.map(d => ({ code: d.id, name: d.data().name || d.id })).sort((a, b) => a.name.localeCompare(b.name, 'ko')));
+    }).catch(() => {});
+  }, [isAdmin]);
+
   // ── 컬렉션 경로 헬퍼 (utils/company.js 단일 헬퍼로 통합)
   //   개인 모드: 기업(companyCode) 있으면 user_companies/{code}/drivers, 없으면 user_drivers/{uid}
   //   소속사 모드: org_drivers/{selectedOrg}/drivers — 기존 동작 100% 보존
   const getDriversCol = useCallback(() => {
     if (isPersonalMode) return getDriversCollection({ companyCode: user?.companyCode, uid });
+    if (selectedCompany) return getDriversCollection({ companyCode: selectedCompany }); // 기업 모드
     return getDriversCollection({ orgId: selectedOrg });
-  }, [isPersonalMode, user?.companyCode, uid, selectedOrg]);
+  }, [isPersonalMode, user?.companyCode, uid, selectedOrg, selectedCompany]);
 
   const getDriverDocRef = useCallback((driverId) => {
     if (isPersonalMode) return getDriverDoc({ companyCode: user?.companyCode, uid }, driverId);
+    if (selectedCompany) return getDriverDoc({ companyCode: selectedCompany }, driverId); // 기업 모드
     return getDriverDoc({ orgId: selectedOrg }, driverId);
-  }, [isPersonalMode, user?.companyCode, uid, selectedOrg]);
+  }, [isPersonalMode, user?.companyCode, uid, selectedOrg, selectedCompany]);
 
   // ── 기사 목록 로드 (개인 모드: companyCode 신경로 우선, 구경로 자동 이전)
   const loadDrivers = useCallback(async () => {
-    if (!isPersonalMode && !selectedOrg) { setDrivers([]); return; }
+    if (!isPersonalMode && !selectedOrg && !selectedCompany) { setDrivers([]); return; }
     if (isPersonalMode && !uid) { setDrivers([]); return; }
     setIsLoading(true);
     try {
@@ -126,7 +138,7 @@ export default function DriverRegistryModal({ user, onClose }) {
       setDrivers([]);
     }
     finally { setIsLoading(false); }
-  }, [isPersonalMode, uid, selectedOrg, getDriversCol, user?.companyCode]);
+  }, [isPersonalMode, uid, selectedOrg, selectedCompany, getDriversCol, user?.companyCode]);
 
   useEffect(() => { loadDrivers(); }, [loadDrivers]);
 
@@ -172,7 +184,7 @@ export default function DriverRegistryModal({ user, onClose }) {
   // ── 지역매칭 피커: org_presets 우선 → 없으면 cloud_lists 레코드에서 행정동 직접 추출
   const openZonePicker = async () => {
     if (showZonePicker) { setShowZonePicker(false); return; }
-    if (!selectedOrg && !isPersonalMode) { alert('소속사를 먼저 선택하세요.'); return; }
+    if (!selectedOrg && !selectedCompany && !isPersonalMode) { alert('소속사 또는 기업을 먼저 선택하세요.'); return; }
     setLoadingZone(true);
     try {
       let uniqueCities;
@@ -281,7 +293,7 @@ export default function DriverRegistryModal({ user, onClose }) {
   // ── 저장
   const handleSave = async () => {
     if (!form.name.trim()) { alert('이름을 입력하세요.'); return; }
-    if (!isPersonalMode && !selectedOrg) { alert('소속사를 선택하세요.'); return; }
+    if (!isPersonalMode && !selectedOrg && !selectedCompany) { alert('소속사 또는 기업을 선택하세요.'); return; }
     setIsSaving(true);
     try {
       const payload = {
@@ -289,7 +301,7 @@ export default function DriverRegistryModal({ user, onClose }) {
         capacity: parseInt(form.capacity)||100, color: form.color,
         memo: form.memo.trim(), status: 'active',
         assignedZones: form.assignedZones||[],
-        org: isPersonalMode ? `personal:${uid}` : selectedOrg,
+        org: isPersonalMode ? `personal:${uid}` : (selectedCompany ? `company:${selectedCompany}` : selectedOrg),
       };
       if (editingId === 'new') {
         payload.joinedAt = serverTimestamp();
@@ -395,7 +407,7 @@ export default function DriverRegistryModal({ user, onClose }) {
             <div>
               <h2 className="text-white font-black text-sm">{editingId==='new'?'기사 추가':'기사 정보 수정'}</h2>
               <p className="text-gray-500 text-[11px]">
-                {isPersonalMode ? '내 기사 관리 · 개인 기사 명단' : `${selectedOrg} · 소속사 기사 마스터`}
+                {isPersonalMode ? '내 기사 관리 · 개인 기사 명단' : (selectedCompany ? `${companyList.find(c=>c.code===selectedCompany)?.name || selectedCompany} · 기업 기사 마스터` : `${selectedOrg} · 소속사 기사 마스터`)}
               </p>
             </div>
           </div>
@@ -602,7 +614,7 @@ export default function DriverRegistryModal({ user, onClose }) {
             <p className="text-gray-500 text-[11px] flex items-center gap-2">
               {isPersonalMode
                 ? `기사 ${activeDrivers.length}명 · 루트맵 자동 연동`
-                : (selectedOrg ? `${selectedOrg} · 기사 ${activeDrivers.length}명` : '소속사를 선택하세요')}
+                : (selectedCompany ? `${companyList.find(c=>c.code===selectedCompany)?.name || selectedCompany} · 기사 ${activeDrivers.length}명` : selectedOrg ? `${selectedOrg} · 기사 ${activeDrivers.length}명` : '소속사·기업을 선택하세요')}
               {isPersonalMode && user?.companyCode && (
                 <span
                   className="font-mono text-[9px] bg-[#1a1a1a] border border-[#2a2a2a] text-gray-500 px-1.5 py-0.5 rounded cursor-pointer hover:text-blue-400 hover:border-blue-700/50 transition-colors"
@@ -622,10 +634,25 @@ export default function DriverRegistryModal({ user, onClose }) {
             <>
               <div className="flex items-center gap-2">
                 <Building2 size={13} className="text-gray-600" />
-                <select value={selectedOrg} onChange={e=>setSelectedOrg(e.target.value)}
+                <select
+                  value={selectedCompany ? `company:${selectedCompany}` : selectedOrg}
+                  onChange={e => {
+                    const v = e.target.value;
+                    if (v.startsWith('company:')) { setSelectedCompany(v.slice(8)); setSelectedOrg(''); }
+                    else { setSelectedOrg(v); setSelectedCompany(''); }
+                  }}
                   className="bg-[#111] border border-[#2a2a2a] text-white text-xs rounded-xl px-3 py-2 outline-none focus:border-blue-500/50 cursor-pointer">
-                  <option value="">소속사 선택</option>
-                  {orgList.map(org=><option key={org} value={org}>{org}</option>)}
+                  <option value="">소속사·기업 선택</option>
+                  {orgList.length > 0 && (
+                    <optgroup label="소속사">
+                      {orgList.map(org => <option key={org} value={org}>{org}</option>)}
+                    </optgroup>
+                  )}
+                  {companyList.length > 0 && (
+                    <optgroup label="기업(회사)">
+                      {companyList.map(c => <option key={c.code} value={`company:${c.code}`}>{c.name}</option>)}
+                    </optgroup>
+                  )}
                 </select>
               </div>
               {selectedOrg && (
@@ -676,10 +703,10 @@ export default function DriverRegistryModal({ user, onClose }) {
         {/* ══ 탭 1: 기사 관리 ══════════════════════════════════════════ */}
         {tab === 'drivers' && (
           <div className="flex-1 overflow-y-auto px-8 py-6">
-            {!isPersonalMode && !selectedOrg ? (
+            {!isPersonalMode && !selectedOrg && !selectedCompany ? (
               <div className="flex flex-col items-center justify-center h-48 text-gray-600 gap-3">
                 <Building2 size={32} className="opacity-20" />
-                <div className="text-sm">{isAdmin ? '상단에서 소속사를 선택하세요' : '소속사 정보를 확인할 수 없습니다'}</div>
+                <div className="text-sm">{isAdmin ? '상단에서 소속사 또는 기업을 선택하세요' : '소속사 정보를 확인할 수 없습니다'}</div>
               </div>
             ) : (
               <div className="max-w-4xl mx-auto">

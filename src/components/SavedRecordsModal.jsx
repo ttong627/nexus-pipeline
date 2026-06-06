@@ -1,142 +1,102 @@
-// 저장 내역 뷰어 — 사이드바에서 DB에 저장된 배정(기사·배송순번·좌표)을 지자체·월별로 조회.
-// "편집" → 해당 지자체·월을 루트맵으로 열어 수정(기존 루트맵 플로우 재사용).
-import React, { useState, useEffect, useCallback } from 'react';
+// 저장 내역 — 지도가 저장된 명단(route_sessions) 목록을 자기 소속 지자체 기준으로 보여준다.
+// 항목 클릭 → 해당 지자체·월을 루트맵으로 열어 확인·편집(기존 루트맵 플로우 재사용).
+import React, { useState, useEffect } from 'react';
 import { db } from '../config/firebase.js';
-import { collection, getDocs } from 'firebase/firestore';
-import { HardDrive, X, RefreshCw, Edit3 } from 'lucide-react';
+import { collection, getDocsFromServer } from 'firebase/firestore';
+import { HardDrive, X, RefreshCw, Edit3, MapPin } from 'lucide-react';
 
 export default function SavedRecordsModal({ user, onClose, onEdit }) {
   const isAdmin = user?.role === 'admin';
-  const [cities, setCities] = useState([]);
-  const [city, setCity] = useState('');
-  const [months, setMonths] = useState([]);
-  const [monthId, setMonthId] = useState('');
-  const [rows, setRows] = useState(null);
-  const [loading, setLoading] = useState(false);
+  const [sessions, setSessions] = useState(null);
+  const [loading, setLoading] = useState(true);
 
-  // 지자체 목록 — 기업/일반은 승인 지자체만, 관리자는 전체
   useEffect(() => {
     (async () => {
-      let cs = user?.citiesApproved || [];
-      if (isAdmin) {
-        try { const snap = await getDocs(collection(db, 'cloud_lists')); cs = snap.docs.map(d => d.id); } catch { /* ignore */ }
-      }
-      cs = [...new Set(cs)].sort((a, b) => a.localeCompare(b, 'ko'));
-      setCities(cs);
-      if (cs.length === 1) setCity(cs[0]);
+      setLoading(true);
+      try {
+        let cities = user?.citiesApproved || [];
+        if (isAdmin) {
+          try { const snap = await getDocsFromServer(collection(db, 'cloud_lists')); cities = snap.docs.map(d => d.id); } catch { /* ignore */ }
+        }
+        cities = [...new Set(cities)];
+        const all = [];
+        await Promise.all(cities.map(async city => {
+          try {
+            const snap = await getDocsFromServer(collection(db, 'route_sessions', city, 'months'));
+            snap.docs.forEach(d => {
+              const data = d.data();
+              all.push({
+                city, monthId: d.id,
+                savedAt: data.savedAt?.toMillis?.() || 0,
+                savedAtLabel: data.savedAt?.toDate?.()?.toLocaleString('ko-KR', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) || '',
+                driverCount: data.drivers?.length || 0,
+                assignedCount: data.assignedCount || 0,
+                totalRecords: data.totalRecords || 0,
+                status: data.status || 'draft',
+              });
+            });
+          } catch { /* 세션 없는 도시 무시 */ }
+        }));
+        all.sort((a, b) => b.savedAt - a.savedAt);
+        setSessions(all);
+      } catch { setSessions([]); }
+      finally { setLoading(false); }
     })();
   }, [isAdmin, user?.citiesApproved]);
 
-  // 월 목록
-  useEffect(() => {
-    if (!city) { setMonths([]); setMonthId(''); return; }
-    (async () => {
-      try {
-        const snap = await getDocs(collection(db, 'cloud_lists', city, 'months'));
-        const ms = snap.docs.map(d => d.id).sort((a, b) => b.localeCompare(a));
-        setMonths(ms);
-        setMonthId(ms[0] || '');
-      } catch { setMonths([]); setMonthId(''); }
-    })();
-  }, [city]);
-
-  const loadRecords = useCallback(async () => {
-    if (!city || !monthId) return;
-    setLoading(true);
-    setRows(null);
-    try {
-      const snap = await getDocs(collection(db, 'cloud_lists', city, 'months', monthId, 'records'));
-      const rs = snap.docs.map(d => {
-        const fd = d.data();
-        return { id: d.id, name: fd.이름 || '', dong: fd.행정동 || '', addr: fd.주소 || '', driver: (fd.기사 || '').trim(), seq: fd.배송순번 || '', hasCoord: fd.lat != null && fd.lng != null };
-      });
-      rs.sort((a, b) => (a.driver || 'ㅎ').localeCompare(b.driver || 'ㅎ', 'ko') || (parseInt(a.seq) || 9999) - (parseInt(b.seq) || 9999));
-      setRows(rs);
-    } catch (e) { alert('저장본 조회 실패: ' + e.message); }
-    finally { setLoading(false); }
-  }, [city, monthId]);
-
-  useEffect(() => { if (city && monthId) loadRecords(); }, [city, monthId, loadRecords]);
-
-  const summary = rows ? (() => {
-    const byDriver = {}; let assigned = 0, noCoord = 0;
-    rows.forEach(r => { if (r.driver) { byDriver[r.driver] = (byDriver[r.driver] || 0) + 1; assigned++; } if (!r.hasCoord) noCoord++; });
-    return { total: rows.length, assigned, noCoord, byDriver };
-  })() : null;
-
   return (
     <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-[600] flex items-center justify-center p-4" onClick={onClose}>
-      <div className="w-full max-w-3xl max-h-[88vh] bg-[#0a0a0a] border border-cyan-500/30 rounded-2xl shadow-[0_0_50px_rgba(6,182,212,0.15)] flex flex-col" onClick={e => e.stopPropagation()}>
+      <div className="w-full max-w-2xl max-h-[85vh] bg-[#0a0a0a] border border-cyan-500/30 rounded-2xl shadow-[0_0_50px_rgba(6,182,212,0.15)] flex flex-col" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between p-4 border-b border-[#1a1a1a]">
           <div className="flex items-center gap-2">
             <HardDrive size={16} className="text-cyan-400 shrink-0" />
             <div>
               <div className="text-sm font-black text-white">저장 내역</div>
-              <div className="text-[10px] text-gray-500">DB에 저장된 배정(기사·배송순번·좌표)을 지자체·월별로 확인하고 편집합니다</div>
+              <div className="text-[10px] text-gray-500">지도에 저장된 배정 명단 — 클릭하면 루트맵으로 열어 확인·편집</div>
             </div>
           </div>
           <button onClick={onClose} className="p-1.5 bg-red-900/40 hover:bg-red-700/60 text-red-400 hover:text-white rounded-lg transition-colors"><X size={14} /></button>
         </div>
 
-        <div className="px-4 py-3 border-b border-[#1a1a1a] flex flex-wrap items-center gap-2">
-          <select value={city} onChange={e => setCity(e.target.value)} className="bg-black/70 border border-[#2a2a2a] rounded-xl px-3 py-1.5 text-xs text-white outline-none focus:border-cyan-500/50 cursor-pointer">
-            <option value="">지자체 선택</option>
-            {cities.map(c => <option key={c} value={c}>{c}</option>)}
-          </select>
-          <select value={monthId} onChange={e => setMonthId(e.target.value)} disabled={!city} className="bg-black/70 border border-[#2a2a2a] rounded-xl px-3 py-1.5 text-xs text-white outline-none focus:border-cyan-500/50 cursor-pointer disabled:opacity-40">
-            <option value="">월 선택</option>
-            {months.map(m => <option key={m} value={m}>{m}</option>)}
-          </select>
-          {city && monthId && (
-            <button onClick={() => { onEdit?.(city, monthId); onClose(); }} className="ml-auto px-3 py-1.5 bg-cyan-950/50 border border-cyan-500/40 text-cyan-300 hover:bg-cyan-900/50 rounded-xl text-xs font-black flex items-center gap-1.5 transition-colors">
-              <Edit3 size={12} /> 이 저장본 편집(루트맵)
-            </button>
-          )}
-        </div>
-
-        {summary && (
-          <div className="px-4 py-2 border-b border-[#1a1a1a] flex flex-wrap items-center gap-2 text-[11px]">
-            <span className="text-gray-400">전체 <b className="text-white">{summary.total.toLocaleString()}</b></span>
-            <span className="text-gray-400">배정 <b className="text-emerald-400">{summary.assigned.toLocaleString()}</b></span>
-            <span className="text-gray-400">미배정 <b className="text-amber-400">{(summary.total - summary.assigned).toLocaleString()}</b></span>
-            <span className="text-gray-400">좌표없음 <b className={summary.noCoord > 0 ? 'text-red-400' : 'text-emerald-400'}>{summary.noCoord.toLocaleString()}</b></span>
-            <span className="mx-1 text-gray-700">|</span>
-            {Object.entries(summary.byDriver).sort((a, b) => b[1] - a[1]).map(([dn, c]) => (
-              <span key={dn} className="px-1.5 py-0.5 rounded bg-[#111] border border-[#222] text-gray-300">{dn} <b className="text-cyan-400">{c}</b></span>
-            ))}
-          </div>
-        )}
-
-        <div className="flex-1 overflow-y-auto min-h-[200px]">
+        <div className="flex-1 overflow-y-auto min-h-[200px] p-3">
           {loading ? (
             <div className="flex items-center justify-center p-10 text-gray-500 text-sm"><RefreshCw size={16} className="animate-spin mr-2" /> 불러오는 중...</div>
-          ) : !rows ? (
-            <div className="flex items-center justify-center p-10 text-gray-600 text-sm">지자체와 월을 선택하세요.</div>
-          ) : rows.length === 0 ? (
-            <div className="flex items-center justify-center p-10 text-gray-600 text-sm">저장된 레코드가 없습니다.</div>
+          ) : !sessions || sessions.length === 0 ? (
+            <div className="flex flex-col items-center justify-center p-12 text-gray-600 text-sm gap-2">
+              <MapPin size={28} className="text-gray-700" />
+              저장된 배정 명단이 없습니다.
+              <span className="text-[11px] text-gray-700">루트맵에서 배정 후 저장하면 여기에 표시됩니다.</span>
+            </div>
           ) : (
-            <table className="w-full text-[11px]">
-              <thead className="sticky top-0 bg-[#0d0d0d] text-gray-500 z-10">
-                <tr className="border-b border-[#1a1a1a]">
-                  <th className="text-left px-3 py-1.5 font-bold">기사</th>
-                  <th className="text-left px-2 py-1.5 font-bold w-10">순번</th>
-                  <th className="text-left px-2 py-1.5 font-bold">이름</th>
-                  <th className="text-left px-3 py-1.5 font-bold">주소</th>
-                  <th className="text-center px-2 py-1.5 font-bold w-12">좌표</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((r, i) => (
-                  <tr key={r.id || i} className="border-b border-[#141414] hover:bg-[#101010]">
-                    <td className="px-3 py-1 font-bold text-cyan-300">{r.driver || <span className="text-gray-600">미배정</span>}</td>
-                    <td className="px-2 py-1 text-gray-400">{r.seq || '-'}</td>
-                    <td className="px-2 py-1 text-gray-200 whitespace-nowrap">{r.name}</td>
-                    <td className="px-3 py-1 text-gray-400 truncate max-w-[280px]" title={r.addr}>{r.addr}</td>
-                    <td className="px-2 py-1 text-center">{r.hasCoord ? <span className="text-emerald-500">●</span> : <span className="text-red-500">○</span>}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <div className="space-y-1.5">
+              {sessions.map((s) => (
+                <button
+                  key={`${s.city}_${s.monthId}`}
+                  onClick={() => { onEdit?.(s.city, s.monthId); onClose(); }}
+                  className="w-full flex items-center gap-3 px-3 py-2.5 bg-[#0d0d0d] hover:bg-[#141414] border border-[#1e1e1e] hover:border-cyan-600/40 rounded-xl text-left transition-colors group"
+                >
+                  <div className="w-9 h-9 rounded-lg bg-cyan-950/40 border border-cyan-700/30 flex items-center justify-center shrink-0">
+                    <MapPin size={15} className="text-cyan-400" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="text-white text-[13px] font-black truncate">{s.city}</span>
+                      <span className="text-cyan-400 text-[11px] font-bold">{s.monthId}</span>
+                      {s.status === 'final'
+                        ? <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-950/50 border border-emerald-700/40 text-emerald-400 font-black">최종</span>
+                        : <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-950/40 border border-amber-700/40 text-amber-400 font-black">임시</span>}
+                    </div>
+                    <div className="text-[11px] text-gray-500 mt-0.5">
+                      기사 {s.driverCount}명 · 배정 {s.assignedCount.toLocaleString()}/{s.totalRecords.toLocaleString()}건
+                      {s.savedAtLabel && <span className="text-gray-600"> · {s.savedAtLabel}</span>}
+                    </div>
+                  </div>
+                  <span className="flex items-center gap-1 text-[11px] text-gray-600 group-hover:text-cyan-400 shrink-0 font-bold">
+                    <Edit3 size={12} /> 편집
+                  </span>
+                </button>
+              ))}
+            </div>
           )}
         </div>
       </div>
