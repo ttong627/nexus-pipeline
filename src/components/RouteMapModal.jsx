@@ -1530,6 +1530,27 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
     shouldFitBoundsRef.current = true;
   }, [activeDongIndex]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ── 단일 기사 동: 전체 동 레코드를 그 기사에 자동 배정 (R-L 1동=1기사, 이슈 4·1) ──
+  // setup에서 이 동에 1명만 배정됐거나(setupDongDriverMap), 활성 기사가 1명일 때.
+  // 진입·큐설정·좌표채움(records 변동) 시 반영. 좌표가 지자체 밖(배정불가)인 건은 제외.
+  useEffect(() => {
+    if (!dongQueue.length) return;
+    const dong = dongQueue[activeDongIndex];
+    const mapped = setupDongDriverMapProp?.[dong];
+    const soleDriverId = (Array.isArray(mapped) && mapped.length === 1) ? mapped[0]
+      : (driverCount === 1 && drivers[0] && !drivers[0].isExternal) ? drivers[0].id
+      : null;
+    if (!soleDriverId || !drivers.some(d => d.id === soleDriverId)) return;
+    const needsAssign = records.some(r => getRouteDong(r) === dong && r._driverId !== soleDriverId && isCoordAssignable(r));
+    if (!needsAssign) return;
+    setRecords(prev => prev.map(r =>
+      (getRouteDong(r) === dong && r._driverId !== soleDriverId && isCoordAssignable(r))
+        ? { ...r, _driverId: soleDriverId }
+        : r
+    ));
+    setIsDirty(true);
+  }, [activeDongIndex, dongQueue, records, driverCount, drivers, setupDongDriverMapProp]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // ── 행정동 큐 이동 — 미저장 변경 있으면 확인 모달 표시 ──────────────────
   const handleDongNavigate = useCallback((targetIndex) => {
     if (targetIndex < 0 || targetIndex >= dongQueue.length) return;
