@@ -2,7 +2,7 @@
 import { useVirtualizer } from '@tanstack/react-virtual';
 import * as XLSX from 'xlsx';
 import {
-  db, storage,
+  db, storage, auth,
   collection, getDocs, getDocsFromServer, getDoc, setDoc, doc, deleteDoc, writeBatch, serverTimestamp,
   ref, getDownloadURL, deleteObject,
 } from '../config/firebase.js';
@@ -50,6 +50,9 @@ function writeRecsCache(city, monthId, data) {
 function bustRecsCache(city, monthId) {
   try { localStorage.removeItem(`${RECS_CACHE_KEY}_${city}_${monthId}`); } catch {}
 }
+
+// 서버(클라우드 함수) 좌표 지오코딩 — 브라우저 부하 없이 서버에서 좌표를 채운다.
+const GEOCODE_FN_URL = 'https://asia-northeast3-logis-op.cloudfunctions.net/geocode';
 
 const fmtTs = (ts) => {
   if (!ts) return '-';
@@ -845,6 +848,7 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
     try { return localStorage.getItem('nexus_auto_bg_coord') === 'on'; } catch { return false; }
   });
   const bgAutoKeyRef = useRef('');
+  const cloudGeoRef = useRef(false); // 클라우드 지오코딩 중복 실행 방지
 
   // 공통 Kakao 지오코딩 엔진 — VIP 수동·VVIP 백그라운드 공유
   const _processCoords = async (targets, { cityId, monthId, concurrency, requestGap, cancelRef, onProgress }) => {
@@ -1049,8 +1053,51 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
     } catch { setBgCoordState(null); }
   };
 
-  // 명단을 열면 좌표 없는 건이 있을 때 백그라운드 좌표 자동 수신 시작(토글 ON·권한 보유 시).
-  // 같은 명단(도시_월)에 대해 1회만 시작하고, 이미 실행 중이면 건너뛴다. 캐시 우선이라 같은 주소는 API 미사용.
+  // 클라우드 함수로 서버에서 좌표 채우기 — 좌표 없는 건을 배치(200) 반복 호출로 처리.
+  //   카카오 호출은 전부 서버에서 → 브라우저 네트워크 부하 없음. 실패 건은 그대로 남는다(확인 필요).
+  const handleCloudGeocode = async (cityArg, monthArg, opts = {}) => {
+    const city = cityArg || selectedCity;
+    const month = monthArg || selectedMonth?.id;
+    if (!city || !month || cloudGeoRef.current) return;
+    const u = auth.currentUser;
+    if (!u) { if (!opts.silent) alert('로그인이 필요합니다.'); return; }
+    cloudGeoRef.current = true;
+    setBgCoordState({ done: 0, total: 0, success: 0 });
+    let totalSuccess = 0;
+    try {
+      for (let guard = 0; guard < 200; guard++) {
+        if (bgCoordCancelRef.current) break;
+        const token = await u.getIdToken();
+        const res = await fetch(GEOCODE_FN_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ city, monthId: month, limit: 200 }),
+        });
+        if (!res.ok) {
+          const e = await res.json().catch(() => ({}));
+          throw new Error(e.error || `HTTP ${res.status}`);
+        }
+        const data = await res.json();
+        totalSuccess += data.success || 0;
+        const totalMissing = data.totalMissing || (totalSuccess + (data.remaining || 0));
+        setBgCoordState({ done: totalSuccess, total: totalMissing, success: totalSuccess });
+        if (!data.remaining || data.success === 0) break; // 끝났거나, 남은 건 전부 실패(에러로 남김)
+      }
+      bustRecsCache(city, month);
+      await fetchRecordsFor(city, month, true); // 서버가 채운 좌표로 새로고침
+      setBgCoordState(prev => prev ? { ...prev, isDone: true } : null);
+      setTimeout(() => setBgCoordState(null), 8000);
+      if (!opts.silent) alert(`클라우드 좌표 채우기 완료\n성공 ${totalSuccess}건 (실패 건은 확인 필요로 남습니다)`);
+    } catch (e) {
+      setBgCoordState(null);
+      if (!opts.silent) alert('클라우드 좌표 채우기 실패: ' + e.message);
+    } finally {
+      cloudGeoRef.current = false;
+    }
+  };
+
+  // 명단을 열면 좌표 없는 건이 있을 때 클라우드 좌표 채우기 자동 시작(토글 ON·권한 보유 시).
+  // 같은 명단(도시_월)에 대해 1회만 시작. 서버가 처리하므로 브라우저 부하 없음.
   useEffect(() => {
     if (!autoBgCoord || !canUseCoordsBg(user)) return;
     if (!selectedCity || !selectedMonth?.id) return;
@@ -1060,7 +1107,8 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
     const missing = records.filter(r => r.주소 && !r.lat && !r.lng);
     if (!missing.length) return;
     bgAutoKeyRef.current = key;
-    triggerBgCoordFetch(selectedCity, selectedMonth.id, records);
+    bgCoordCancelRef.current = false;
+    handleCloudGeocode(selectedCity, selectedMonth.id, { silent: true });
   }, [records, selectedCity, selectedMonth, autoBgCoord, user, bgCoordState]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── DB 전체 초기화 (records만 삭제, 월 메타는 유지) ─────────────────────
@@ -1778,7 +1826,20 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
                       : <><MapPin size={11} /> {filterDong} 좌표받기</>}
                   </button>
                 )}
-                {/* 백그라운드 좌표 자동 수신 ON/OFF — 명단 열 때 좌표없는 건 자동 매칭(캐시 우선, API 최소화) */}
+                {/* 클라우드 좌표 채우기 — 서버에서 좌표 없는 건을 채움(브라우저 부하 0, 실패만 확인필요로 남음) */}
+                {canUseCoordsBg(user) && (
+                  <button
+                    onClick={() => handleCloudGeocode()}
+                    disabled={!!bgCoordState}
+                    title="좌표 없는 건을 클라우드 서버에서 직접 채웁니다(브라우저 부하 없음). 못 받은 건만 확인 필요로 남습니다."
+                    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-[11px] font-bold border transition-colors shrink-0 bg-sky-950/40 hover:bg-sky-900/50 text-sky-400 border-sky-500/30 disabled:opacity-40"
+                  >
+                    {bgCoordState && !bgCoordState.isDone
+                      ? <><span className="w-3 h-3 rounded-full border-2 border-sky-400 border-t-transparent animate-spin inline-block" /> {bgCoordState.total ? `${bgCoordState.done}/${bgCoordState.total}` : '처리중'}</>
+                      : <><MapPin size={11} /> 클라우드 좌표</>}
+                  </button>
+                )}
+                {/* 백그라운드 좌표 자동 수신 ON/OFF — 명단 열 때 좌표없는 건 자동(클라우드) 채우기 */}
                 {canUseCoordsBg(user) && (
                   <button
                     onClick={() => setAutoBgCoord(v => { const nv = !v; try { localStorage.setItem('nexus_auto_bg_coord', nv ? 'on' : 'off'); } catch { /* ignore */ } return nv; })}
