@@ -1537,9 +1537,9 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
     if (!dongQueue.length) return;
     const dong = dongQueue[activeDongIndex];
     const mapped = setupDongDriverMapProp?.[dong];
-    const soleDriverId = (Array.isArray(mapped) && mapped.length === 1) ? mapped[0]
-      : (driverCount === 1 && drivers[0] && !drivers[0].isExternal) ? drivers[0].id
-      : null;
+    // 맵핑(setupDongDriverMap)에서 이 동에 기사 '1명만' 확정된 경우에만 전체 동 자동 배정.
+    // 2명 이상 배정된 동은 자동 입력하지 않는다(지도 자동분할로 배정). 맵핑 없으면 자동 입력 안 함.
+    const soleDriverId = (Array.isArray(mapped) && mapped.length === 1) ? mapped[0] : null;
     if (!soleDriverId || !drivers.some(d => d.id === soleDriverId)) return;
     const needsAssign = records.some(r => getRouteDong(r) === dong && r._driverId !== soleDriverId && isCoordAssignable(r));
     if (!needsAssign) return;
@@ -1549,7 +1549,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
         : r
     ));
     setIsDirty(true);
-  }, [activeDongIndex, dongQueue, records, driverCount, drivers, setupDongDriverMapProp]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [activeDongIndex, dongQueue, records, drivers, setupDongDriverMapProp]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── 행정동 큐 이동 — 미저장 변경 있으면 확인 모달 표시 ──────────────────
   const handleDongNavigate = useCallback((targetIndex) => {
