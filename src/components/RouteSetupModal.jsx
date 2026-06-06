@@ -89,6 +89,21 @@ export default function RouteSetupModal({
   const [selectedOrgId, setSelectedOrgId] = useState(null);
   const [selectedOrgDongs, setSelectedOrgDongs] = useState(null);
 
+  // ── 소속사 안정 키: driver_assignments를 소속사 '이름'으로 통일(id 변경/재생성에도 안 깨짐). 개인은 __personal__.
+  const getOrgStableKey = () => selectedOrgId === '__personal__' ? '__personal__'
+    : ((orgs.find(o => o.id === selectedOrgId)?.name) || selectedOrgId || 'all');
+  // driver_assignments 읽기: 이름 키 우선, 비어있으면 id 키 폴백(기존 데이터 호환)
+  const readOrgAssignment = async (city) => {
+    const stableKey = getOrgStableKey();
+    const legacyId = selectedOrgId || 'all';
+    let snap = await getDoc(doc(db, 'driver_assignments', city, 'orgs', stableKey));
+    if ((!snap.exists() || !(snap.data().drivers?.some(d => d.name?.trim()))) && legacyId !== stableKey) {
+      const idSnap = await getDoc(doc(db, 'driver_assignments', city, 'orgs', legacyId));
+      if (idSnap.exists()) snap = idSnap;
+    }
+    return snap;
+  };
+
   // ── 기사 카드
   const [drivers, setDrivers] = useState([makeDriver(0), makeDriver(1)]);
   const [activeDriverIds, setActiveDriverIds] = useState(new Set());
@@ -552,13 +567,20 @@ export default function RouteSetupModal({
 
   // ── onStart 헬퍼
   const doStart = ({ selectedDongs, startDrivers, map }) => {
+    const allNamedDrivers = drivers.filter(d => d.name.trim());
     const validDrivers = startDrivers.filter(d => d.name.trim());
     const finalDrivers = validDrivers.length > 0 ? validDrivers : [
       { id: 'd1', name: '기사1', phone: '', capacity: 100, color: DRIVER_COLORS[0] },
       { id: 'd2', name: '기사2', phone: '', capacity: 100, color: DRIVER_COLORS[1] },
     ];
-    const companyDrivers = drivers.filter(d => d.name.trim());
-    onStart({ selectedDongs, drivers: finalDrivers, companyDrivers, dongDriverMap: map, baseDailyQty, orgId: selectedOrgId || 'all' });
+    onStart({
+      selectedDongs,
+      drivers: finalDrivers,
+      companyDrivers: allNamedDrivers.length ? allNamedDrivers : finalDrivers,
+      dongDriverMap: Object.keys(dongDriverMap).length ? dongDriverMap : map,
+      baseDailyQty,
+      orgId: selectedOrgId || 'all',
+    });
   };
 
   // ── 기사 마스터에서 불러오기 (소속사 또는 개인기사)

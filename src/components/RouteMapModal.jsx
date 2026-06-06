@@ -1001,6 +1001,14 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
   ];
   const startDrivers = initialDriversProp || defaultDrivers;
   const companyDriverPool = companyDriversProp?.length ? companyDriversProp : initialDriversProp;
+  const allKnownDrivers = useMemo(() => {
+    const byId = new Map();
+    [...(companyDriverPool || []), ...(startDrivers || [])].forEach(driver => {
+      if (!driver?.id) return;
+      byId.set(driver.id, { ...driver, ...byId.get(driver.id) });
+    });
+    return [...byId.values()];
+  }, [companyDriverPool, startDrivers]);
 
   const [drivers, setDrivers] = useState(startDrivers);
   const [records, setRecords] = useState(() =>
@@ -1182,8 +1190,39 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
     if (!hasDongSetupMapping) return drivers; // 셋업 매핑 없으면 전역
     const ids = new Set(resolveDongMappedIds(activeDong, filteredRecords));
     filteredRecords.forEach(r => { if (r._driverId) ids.add(r._driverId); }); // 현재 동에 이미 배정된 기사도 포함(관리용)
-    return drivers.filter(d => d.isExternal || ids.has(d.id));
-  }, [hasDongSetupMapping, drivers, activeDong, resolveDongMappedIds, filteredRecords]);
+    return allKnownDrivers.filter(d => d.isExternal || ids.has(d.id));
+  }, [hasDongSetupMapping, drivers, allKnownDrivers, activeDong, resolveDongMappedIds, filteredRecords]);
+
+  // 동을 바꿨을 때 해당 동 담당 기사가 현재 세션 drivers에 없으면 소속사 기사 풀에서 즉시 복구한다.
+  useEffect(() => {
+    if (!hasDongSetupMapping || !activeDong) return;
+    const mappedIds = resolveDongMappedIds(activeDong, filteredRecords);
+    if (!mappedIds.length) return;
+    const currentIds = new Set(drivers.map(d => d.id));
+    const missingDrivers = allKnownDrivers.filter(d => mappedIds.includes(d.id) && !currentIds.has(d.id));
+    if (!missingDrivers.length) return;
+    setDrivers(prev => [...prev, ...missingDrivers]);
+  }, [hasDongSetupMapping, activeDong, filteredRecords, drivers, allKnownDrivers, resolveDongMappedIds]);
+
+  // cloud_lists의 기사 문자열이 이미 저장되어 있으면 지도 내부 배정 키(_driverId)로 복원한다.
+  useEffect(() => {
+    if (!records.length || !allKnownDrivers.length) return;
+    const nameToId = new Map();
+    allKnownDrivers.forEach(d => {
+      const name = String(d.name || '').trim();
+      if (name && !nameToId.has(name)) nameToId.set(name, d.id);
+    });
+    let changed = false;
+    const restored = records.map(r => {
+      if (r._driverId) return r;
+      const driverName = String(r.기사 || r._origDriver || '').split('/')[0].trim();
+      const driverId = nameToId.get(driverName);
+      if (!driverId) return r;
+      changed = true;
+      return { ...r, _driverId: driverId };
+    });
+    if (changed) setRecords(restored);
+  }, [records, allKnownDrivers]);
 
   const [listFilterGubun, setListFilterGubun] = useState('');
   const displayRecords = (() => {
@@ -1571,7 +1610,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
     // 맵핑(setupDongDriverMap)에서 이 동에 기사 '1명만' 확정된 경우에만 전체 동 자동 배정.
     // 2명 이상 배정된 동은 자동 입력하지 않는다(지도 자동분할로 배정). 맵핑 없으면 자동 입력 안 함.
     const soleDriverId = (Array.isArray(mapped) && mapped.length === 1) ? mapped[0] : null;
-    if (!soleDriverId || !drivers.some(d => d.id === soleDriverId)) return;
+    if (!soleDriverId || !allKnownDrivers.some(d => d.id === soleDriverId)) return;
     const needsAssign = records.some(r => getRouteDong(r) === dong && r._driverId !== soleDriverId && isCoordAssignable(r));
     if (!needsAssign) return;
     setRecords(prev => prev.map(r =>
@@ -1580,7 +1619,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
         : r
     ));
     setIsDirty(true);
-  }, [activeDongIndex, dongQueue, records, drivers, setupDongDriverMapProp]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [activeDongIndex, dongQueue, records, allKnownDrivers, setupDongDriverMapProp]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── 행정동 큐 이동 — 미저장 변경 있으면 확인 모달 표시 ──────────────────
   const handleDongNavigate = useCallback((targetIndex) => {
