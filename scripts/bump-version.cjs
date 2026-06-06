@@ -40,8 +40,11 @@ const parseSemver = (version) => {
 
 const bumpVersion = ([major, minor, patch], bumpType) => {
   if (bumpType === 'major') return [major + 1, 0, 0];
-  if (bumpType === 'minor') return [major, minor + 1, 0];
-  return [major, minor, patch + 1];
+  if (bumpType === 'patch') return [major, minor, patch + 1];
+  // 'minor'(기본) — 빠른 버전업. 표기는 V{major}.{minor} 2자리 유지.
+  // minor가 100에 도달하면 major를 올리고 minor=0 으로 롤오버(번호가 과도하게 커지지 않게).
+  const nextMinor = minor + 1;
+  return nextMinor >= 100 ? [major + 1, 0, 0] : [major, nextMinor, 0];
 };
 
 const formatSemver = ([major, minor, patch]) => `${major}.${minor}.${patch}`;
@@ -77,7 +80,7 @@ const updateVersionFile = ({ appVersion, buildDate, buildTime }) => {
 };
 
 const main = () => {
-  const bumpType = (process.env.VERSION_BUMP || 'patch').toLowerCase();
+  const bumpType = (process.env.VERSION_BUMP || 'minor').toLowerCase();
   if (!['patch', 'minor', 'major'].includes(bumpType)) {
     throw new Error('VERSION_BUMP must be patch, minor, or major.');
   }
