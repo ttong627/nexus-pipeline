@@ -1745,7 +1745,7 @@ export default function App() {
 
       gDone(`${city} ${monthStr} · 전체 ${allData.length.toLocaleString()}건 저장 완료`);
       setTimeout(() => {
-        runSavedListBackgroundCoords({ city, monthId: monthStr, records: savedRecordsForBgCoords });
+        /* 좌표 매칭은 서버 스케줄 함수(geocodeAuto)가 업로드 순서대로 자동 처리 — 브라우저 지오코딩 중단 */
       }, 300);
       alert(`✅ ${city} ${monthStr} 월별 명단 전체 ${allData.length}건이 클라우드에 저장되었습니다.\n정상 ${validData.length}건 / 확인필요 ${errorData.length}건`);
     } catch (e) {
