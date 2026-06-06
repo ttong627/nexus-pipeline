@@ -1163,7 +1163,19 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
   const hasDongSetupMapping = !!setupDongDriverMapProp && Object.keys(setupDongDriverMapProp).length > 0;
   const dongScopedDrivers = useMemo(() => {
     if (!hasDongSetupMapping) return drivers; // 셋업 매핑 없으면 전역
-    const ids = new Set(setupDongDriverMapProp?.[activeDong] || []);
+    // 현재 동의 매핑 기사ID 조회. 좌표이탈 시 activeDong이 배정행정동(카카오 동명)으로 바뀌어
+    // setup 키(원본 행정동)와 어긋날 수 있어, activeDong + 레코드 원본 행정동/routeDong을 모두 후보로 시도.
+    // 키 비교는 공백/포맷 차이를 흡수하도록 정규화.
+    const norm = (s) => String(s || '').replace(/\s+/g, '');
+    const mapKeys = Object.keys(setupDongDriverMapProp);
+    const cands = [activeDong, filteredRecords[0]?.행정동, filteredRecords[0]?.routeDong, filteredRecords[0]?.배정행정동].filter(Boolean);
+    let mappedIds = null;
+    for (const ck of cands) {
+      if (setupDongDriverMapProp[ck]) { mappedIds = setupDongDriverMapProp[ck]; break; }
+      const nk = norm(ck) ? mapKeys.find(k => norm(k) === norm(ck)) : null;
+      if (nk) { mappedIds = setupDongDriverMapProp[nk]; break; }
+    }
+    const ids = new Set(mappedIds || []);
     filteredRecords.forEach(r => { if (r._driverId) ids.add(r._driverId); }); // 현재 동에 이미 배정된 기사도 포함(관리용)
     return drivers.filter(d => d.isExternal || ids.has(d.id));
   }, [hasDongSetupMapping, drivers, activeDong, setupDongDriverMapProp, filteredRecords]);
@@ -1549,7 +1561,17 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
   useEffect(() => {
     if (!dongQueue.length) return;
     const dong = dongQueue[activeDongIndex];
-    const mapped = setupDongDriverMapProp?.[dong];
+    const dongRecs = records.filter(r => getRouteDong(r) === dong);
+    // 맵핑 조회 — 좌표이탈로 동 키가 어긋날 수 있어 dong + 레코드 원본 행정동을 후보로, 공백/포맷 정규화 매칭.
+    const norm = (s) => String(s || '').replace(/\s+/g, '');
+    const mapKeys = setupDongDriverMapProp ? Object.keys(setupDongDriverMapProp) : [];
+    const cands = [dong, dongRecs[0]?.행정동, dongRecs[0]?.routeDong, dongRecs[0]?.배정행정동].filter(Boolean);
+    let mapped = null;
+    for (const ck of cands) {
+      if (setupDongDriverMapProp?.[ck]) { mapped = setupDongDriverMapProp[ck]; break; }
+      const nk = norm(ck) ? mapKeys.find(k => norm(k) === norm(ck)) : null;
+      if (nk) { mapped = setupDongDriverMapProp[nk]; break; }
+    }
     // 맵핑(setupDongDriverMap)에서 이 동에 기사 '1명만' 확정된 경우에만 전체 동 자동 배정.
     // 2명 이상 배정된 동은 자동 입력하지 않는다(지도 자동분할로 배정). 맵핑 없으면 자동 입력 안 함.
     const soleDriverId = (Array.isArray(mapped) && mapped.length === 1) ? mapped[0] : null;
@@ -3988,17 +4010,7 @@ ${folders}
             >
               <Navigation2 size={10} /> 순번
             </button>
-            {isAdminUser && (
-              <button
-                onClick={handleAdvancedAutoSequence}
-                disabled={isAdvancedSequencing}
-                title="관리자 실험 기능: 차량 경로 API 후보 검증 + 도보 후보 + 도로망 점수로 배송순번을 계산합니다"
-                className="px-2 py-1 bg-[#1a1024] border border-fuchsia-500/35 text-fuchsia-300 hover:bg-fuchsia-900/25 rounded-lg text-[10px] font-black flex items-center gap-1 transition-colors disabled:opacity-50"
-              >
-                {isAdvancedSequencing ? <RefreshCw size={10} className="animate-spin" /> : <Navigation2 size={10} />}
-                AI순번
-              </button>
-            )}
+            {/* AI순번 버튼 제거 — 결과가 불안정해 미사용(handleAdvancedAutoSequence 함수는 유지) */}
             <button
               onClick={handleRunSequenceAnalysis}
               title="배송순번의 점프·도보 후보·좌표 없음·도로 재방문을 분석합니다"
