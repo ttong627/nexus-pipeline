@@ -993,7 +993,7 @@ const nearestNeighborTSP = (points, startPoint = null) => {
   return result;
 };
 
-export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = null, onSave, initialCloudCity = null, initialCloudMonthId = null, orgDongs = null, initialDrivers: initialDriversProp = null, companyDrivers: companyDriversProp = null, setupDongDriverMap: setupDongDriverMapProp = null, selectedDongs: selectedDongsProp = null, baseDailyQty: baseDailyQtyProp = 40 }) {
+export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = null, onSave, initialCloudCity = null, initialCloudMonthId = null, orgDongs = null, initialDrivers: initialDriversProp = null, companyDrivers: companyDriversProp = null, setupDongDriverMap: setupDongDriverMapProp = null, orgId: orgIdProp = 'all', selectedDongs: selectedDongsProp = null, baseDailyQty: baseDailyQtyProp = 40 }) {
   const DEFAULT_START_ADDR = '경기도 수원시 장안구 정자천로188번길 39';
   const defaultDrivers = [
     { id: 'd1', name: '기사1', color: DRIVER_COLORS[0], startAddr: DEFAULT_START_ADDR },
@@ -1157,28 +1157,32 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
   const selectedDong = activeDong ?? '전체'; // 기존 코드 호환 alias (setSelectedDong 없음)
   const filteredRecords = activeDong ? records.filter(r => getRouteDong(r) === activeDong) : records;
 
-  // ── 현재 동에 한정된 기사 목록 — 동이 바뀌면 그 동의 기사 구성으로 새로 표시 ──
-  // 우선순위: setupDongDriverMap[현재동]에 매핑된 기사 + 현재 동에 실제 배정된 기사 + 외부기사.
-  // 설정 매핑이 전혀 없으면(셋업 미사용) 전역 기사 목록으로 폴백. 동에 기사 없으면 빈 목록("없음" 표시).
   const hasDongSetupMapping = !!setupDongDriverMapProp && Object.keys(setupDongDriverMapProp).length > 0;
-  const dongScopedDrivers = useMemo(() => {
-    if (!hasDongSetupMapping) return drivers; // 셋업 매핑 없으면 전역
-    // 현재 동의 매핑 기사ID 조회. 좌표이탈 시 activeDong이 배정행정동(카카오 동명)으로 바뀌어
-    // setup 키(원본 행정동)와 어긋날 수 있어, activeDong + 레코드 원본 행정동/routeDong을 모두 후보로 시도.
-    // 키 비교는 공백/포맷 차이를 흡수하도록 정규화.
+
+  // ── 공통: 동 → 매핑 기사ID 해석 (목록·단일배정·자동분할이 같은 결과를 내도록 단일화) ──
+  // 좌표이탈 시 activeDong이 배정행정동(카카오 동명)으로 바뀌어 setup 키(원본 행정동)와 어긋날 수 있어,
+  // dong + 레코드 원본 행정동/routeDong/배정행정동을 후보로, 공백/포맷 차이를 정규화해 매칭.
+  const resolveDongMappedIds = useCallback((dong, dongRecs = []) => {
+    if (!setupDongDriverMapProp) return [];
     const norm = (s) => String(s || '').replace(/\s+/g, '');
     const mapKeys = Object.keys(setupDongDriverMapProp);
-    const cands = [activeDong, filteredRecords[0]?.행정동, filteredRecords[0]?.routeDong, filteredRecords[0]?.배정행정동].filter(Boolean);
-    let mappedIds = null;
+    const cands = [dong, dongRecs[0]?.행정동, dongRecs[0]?.routeDong, dongRecs[0]?.배정행정동].filter(Boolean);
     for (const ck of cands) {
-      if (setupDongDriverMapProp[ck]) { mappedIds = setupDongDriverMapProp[ck]; break; }
+      if (setupDongDriverMapProp[ck]) return setupDongDriverMapProp[ck];
       const nk = norm(ck) ? mapKeys.find(k => norm(k) === norm(ck)) : null;
-      if (nk) { mappedIds = setupDongDriverMapProp[nk]; break; }
+      if (nk) return setupDongDriverMapProp[nk];
     }
-    const ids = new Set(mappedIds || []);
+    return [];
+  }, [setupDongDriverMapProp]);
+
+  // ── 현재 동에 한정된 기사 목록 — 동이 바뀌면 그 동의 기사 구성으로 새로 표시 ──
+  // setupDongDriverMap[현재동] 매핑 기사 + 현재 동에 실제 배정된 기사 + 외부기사. 매핑 없으면 전역 폴백.
+  const dongScopedDrivers = useMemo(() => {
+    if (!hasDongSetupMapping) return drivers; // 셋업 매핑 없으면 전역
+    const ids = new Set(resolveDongMappedIds(activeDong, filteredRecords));
     filteredRecords.forEach(r => { if (r._driverId) ids.add(r._driverId); }); // 현재 동에 이미 배정된 기사도 포함(관리용)
     return drivers.filter(d => d.isExternal || ids.has(d.id));
-  }, [hasDongSetupMapping, drivers, activeDong, setupDongDriverMapProp, filteredRecords]);
+  }, [hasDongSetupMapping, drivers, activeDong, resolveDongMappedIds, filteredRecords]);
 
   const [listFilterGubun, setListFilterGubun] = useState('');
   const displayRecords = (() => {
@@ -1562,16 +1566,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
     if (!dongQueue.length) return;
     const dong = dongQueue[activeDongIndex];
     const dongRecs = records.filter(r => getRouteDong(r) === dong);
-    // 맵핑 조회 — 좌표이탈로 동 키가 어긋날 수 있어 dong + 레코드 원본 행정동을 후보로, 공백/포맷 정규화 매칭.
-    const norm = (s) => String(s || '').replace(/\s+/g, '');
-    const mapKeys = setupDongDriverMapProp ? Object.keys(setupDongDriverMapProp) : [];
-    const cands = [dong, dongRecs[0]?.행정동, dongRecs[0]?.routeDong, dongRecs[0]?.배정행정동].filter(Boolean);
-    let mapped = null;
-    for (const ck of cands) {
-      if (setupDongDriverMapProp?.[ck]) { mapped = setupDongDriverMapProp[ck]; break; }
-      const nk = norm(ck) ? mapKeys.find(k => norm(k) === norm(ck)) : null;
-      if (nk) { mapped = setupDongDriverMapProp[nk]; break; }
-    }
+    const mapped = resolveDongMappedIds(dong, dongRecs);
     // 맵핑(setupDongDriverMap)에서 이 동에 기사 '1명만' 확정된 경우에만 전체 동 자동 배정.
     // 2명 이상 배정된 동은 자동 입력하지 않는다(지도 자동분할로 배정). 맵핑 없으면 자동 입력 안 함.
     const soleDriverId = (Array.isArray(mapped) && mapped.length === 1) ? mapped[0] : null;
@@ -2180,7 +2175,12 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
   // ── 도로주소 단위 연속 권역 자동 배정 ────────────────────────────────
   const handleAutoSplit = useCallback(() => {
     if (isAssignmentLocked) { showToast('error', '🔒 기사 배치가 잠겨 있습니다. 잠금을 해제하세요.'); return; }
-    const activeDrivers = drivers.slice(0, Math.min(driverCount, drivers.length)).filter(d => !d.isExternal);
+    // 자동분할 대상 기사 = 현재 동에 매핑된 기사만(셋업의 동↔기사 매칭 준수). 매핑 없으면 전역 활성 기사.
+    const mappedIdsForSplit = hasDongSetupMapping ? resolveDongMappedIds(activeDong, filteredRecords) : [];
+    const splitPool = (hasDongSetupMapping && mappedIdsForSplit.length)
+      ? drivers.filter(d => mappedIdsForSplit.includes(d.id))
+      : drivers.slice(0, Math.min(driverCount, drivers.length));
+    const activeDrivers = splitPool.filter(d => !d.isExternal);
     const target = filteredRecords.filter(r => r._lat && r._lng && isCoordAssignable(r));
     if (!target.length || !activeDrivers.length) return;
     const safeAutoSplitStrategy = ['dongGroup', 'hilbert'].includes(autoSplitStrategy) ? autoSplitStrategy : 'dongGroup';
@@ -2273,7 +2273,27 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
       driverPins,
       strategy: effectiveStrategy,
     });
-  }, [filteredRecords, drivers, driverCount, driverPins, showToast, isAssignmentLocked, autoSplitStrategy]);
+  }, [filteredRecords, drivers, driverCount, driverPins, showToast, isAssignmentLocked, autoSplitStrategy, hasDongSetupMapping, resolveDongMappedIds, activeDong]);
+
+  // ── 다중기사 동: 진입 시 1회 자동 지리분할 (그 동 매핑 기사로만 — Part C) ──────────
+  // 셋업의 동↔기사 매핑을 지도에 반영. 단일기사 동은 위 effect가, 2명 이상 동은 진입 시 여기서 분할.
+  // 동별 1회만 시도(재진입·records 변동 중복 방지). 좌표 없으면 채워질 때까지 보류.
+  const autoSplitAppliedRef = useRef(new Set());
+  useEffect(() => {
+    if (!dongQueue.length || isAssignmentLocked || !hasDongSetupMapping) return;
+    const dong = dongQueue[activeDongIndex];
+    if (!dong) return;
+    const dongRecs = records.filter(r => getRouteDong(r) === dong);
+    const mapped = resolveDongMappedIds(dong, dongRecs).filter(id => drivers.some(d => d.id === id));
+    if (mapped.length < 2) return; // 1명 동은 단일배정 effect가 처리
+    const assignable = dongRecs.filter(r => r._lat && r._lng && isCoordAssignable(r));
+    if (!assignable.length) return; // 좌표 채워질 때까지 보류
+    const mappedSet = new Set(mapped);
+    if (assignable.every(r => r._driverId && mappedSet.has(r._driverId))) { autoSplitAppliedRef.current.add(dong); return; } // 이미 분할됨
+    if (autoSplitAppliedRef.current.has(dong)) return; // 이 동은 이미 1회 자동분할 시도함
+    autoSplitAppliedRef.current.add(dong);
+    handleAutoSplit(); // Part B로 그 동 매핑 기사로만 분할됨
+  }, [activeDongIndex, dongQueue, records, drivers, hasDongSetupMapping, resolveDongMappedIds, isAssignmentLocked, handleAutoSplit]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── 핀 DOM 색상 직접 업데이트 (React re-render 없이 즉시 시각 반영)
   const updatePinColorDOM = useCallback((recordId, color) => {
@@ -2763,7 +2783,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
           if (!dongDriverMap[routeDong].includes(r._driverId)) dongDriverMap[routeDong].push(r._driverId);
         });
         await setDoc(
-          doc(db, 'driver_assignments', cloudCity, 'orgs', 'all'),
+          doc(db, 'driver_assignments', cloudCity, 'orgs', orgIdProp || 'all'),
           {
             drivers: drivers.map(d => ({ id: d.id, name: d.name, color: d.color, capacity: d.capacity || 100, startAddr: d.startAddr || '' })),
             dongDriverMap,

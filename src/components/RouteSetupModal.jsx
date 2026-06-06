@@ -548,7 +548,7 @@ export default function RouteSetupModal({
       { id: 'd2', name: '기사2', phone: '', capacity: 100, color: DRIVER_COLORS[1] },
     ];
     const companyDrivers = drivers.filter(d => d.name.trim());
-    onStart({ selectedDongs, drivers: finalDrivers, companyDrivers, dongDriverMap: map, baseDailyQty });
+    onStart({ selectedDongs, drivers: finalDrivers, companyDrivers, dongDriverMap: map, baseDailyQty, orgId: selectedOrgId || 'all' });
   };
 
   // ── 기사 마스터에서 불러오기 (소속사 또는 개인기사)

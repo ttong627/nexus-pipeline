@@ -2627,8 +2627,8 @@ export default function App() {
             orgDongs={cloudRouteConfig?.orgDongs || null}
             user={user}
             startAtMatch={routeBackToMatch}
-            onStart={({ selectedDongs, drivers, companyDrivers, dongDriverMap, baseDailyQty }) => {
-              setRouteSetupResult({ selectedDongs, drivers, companyDrivers, dongDriverMap, baseDailyQty });
+            onStart={({ selectedDongs, drivers, companyDrivers, dongDriverMap, baseDailyQty, orgId }) => {
+              setRouteSetupResult({ selectedDongs, drivers, companyDrivers, dongDriverMap, baseDailyQty, orgId: orgId || 'all' });
               setRouteBackToMatch(false);
               setShowRouteSetup(false);
               setShowRouteMap(true);
@@ -2649,6 +2649,7 @@ export default function App() {
             initialDrivers={routeSetupResult?.drivers || null}
             companyDrivers={routeSetupResult?.companyDrivers || routeSetupResult?.drivers || null}
             setupDongDriverMap={routeSetupResult?.dongDriverMap || null}
+            orgId={routeSetupResult?.orgId || 'all'}
             selectedDongs={routeSetupResult?.selectedDongs || null}
             baseDailyQty={routeSetupResult?.baseDailyQty || 40}
           />
