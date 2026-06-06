@@ -993,7 +993,7 @@ const nearestNeighborTSP = (points, startPoint = null) => {
   return result;
 };
 
-export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, initialCloudCity = null, initialCloudMonthId = null, orgDongs = null, initialDrivers: initialDriversProp = null, companyDrivers: companyDriversProp = null, setupDongDriverMap: setupDongDriverMapProp = null, selectedDongs: selectedDongsProp = null, baseDailyQty: baseDailyQtyProp = 40 }) {
+export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = null, onSave, initialCloudCity = null, initialCloudMonthId = null, orgDongs = null, initialDrivers: initialDriversProp = null, companyDrivers: companyDriversProp = null, setupDongDriverMap: setupDongDriverMapProp = null, selectedDongs: selectedDongsProp = null, baseDailyQty: baseDailyQtyProp = 40 }) {
   const DEFAULT_START_ADDR = '경기도 수원시 장안구 정자천로188번길 39';
   const defaultDrivers = [
     { id: 'd1', name: '기사1', color: DRIVER_COLORS[0], startAddr: DEFAULT_START_ADDR },
@@ -4886,13 +4886,23 @@ ${folders}
 
             {/* 지도 오버레이 버튼 */}
             <div className="absolute top-2 right-2 z-10 flex gap-1.5">
-              {/* 이전 화면으로 나가기 (전체화면에서도 항상 보이게 지도 위에 배치) */}
+              {/* 이전 화면 — 매칭 방식 선택(setup match 단계)으로 돌아가기. 지도를 닫지 않음 */}
+              {onBack && (
+                <button
+                  onClick={() => { if (isDirty && !window.confirm('저장하지 않은 배정 변경이 있습니다.\n이전 화면(매칭 방식 선택)으로 돌아가시겠습니까?\n(저장 안 한 변경은 사라집니다)')) return; onBack(); }}
+                  title="이전 화면(매칭 방식 선택)으로 돌아가기"
+                  className="px-2.5 py-1.5 bg-black/70 hover:bg-blue-900/60 text-white/80 hover:text-white border border-white/15 hover:border-blue-500/40 rounded-lg text-[10px] font-bold flex items-center gap-1.5 backdrop-blur-sm shadow-lg transition-all"
+                >
+                  <ChevronLeft size={11} /> 이전 화면
+                </button>
+              )}
+              {/* 닫기 — 지도 전체 종료(X와 동일) */}
               <button
                 onClick={onClose}
-                title="이전 화면으로 나가기"
+                title="닫기 (지도 전체 종료)"
                 className="px-2.5 py-1.5 bg-black/70 hover:bg-red-900/60 text-white/80 hover:text-white border border-white/15 hover:border-red-500/40 rounded-lg text-[10px] font-bold flex items-center gap-1.5 backdrop-blur-sm shadow-lg transition-all"
               >
-                <ChevronLeft size={11} /> 나가기
+                <X size={11} /> 닫기
               </button>
               {/* 중심 이동 버튼 */}
               <button

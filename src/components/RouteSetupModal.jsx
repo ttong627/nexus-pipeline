@@ -75,11 +75,13 @@ function ModalHeader({ onBack, title, badge, subtitle, onClose, stepLabel }) {
 
 export default function RouteSetupModal({
   mode = 'local', allRecords = [], city, cloudCity, cloudMonthId, orgDongs, user, onStart, onClose,
+  startAtMatch = false,
 }) {
   const effectiveCity = cloudCity || city || '';
 
   // ── 단계: 'org' | 'setup' | 'match'
-  const [step, setStep] = useState('org');
+  // startAtMatch=true: 지도에서 "이전 화면"으로 돌아온 경우 매칭 방식 선택(match) 단계부터 시작
+  const [step, setStep] = useState(startAtMatch ? 'match' : 'org');
 
   // ── 소속사
   const [orgs, setOrgs] = useState([]);

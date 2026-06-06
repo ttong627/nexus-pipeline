@@ -343,6 +343,7 @@ export default function App() {
   const [showRouteQuick, setShowRouteQuick] = useState(false);
   const [cloudRouteConfig, setCloudRouteConfig] = useState(null);
   const [routeSetupResult, setRouteSetupResult] = useState(null);
+  const [routeBackToMatch, setRouteBackToMatch] = useState(false); // 지도→이전화면 복귀 시 setup을 match 단계로
   const [shareParams] = useState(() => {
     const p = new URLSearchParams(window.location.search);
     const r = p.get('r');
@@ -2604,6 +2605,7 @@ export default function App() {
             onClose={() => setShowRouteQuick(false)}
             onConfirm={(city, monthId) => {
               setCloudRouteConfig({ city, monthId, orgDongs: null });
+              setRouteBackToMatch(false);
               setShowRouteQuick(false);
               setShowRouteSetup(true);
             }}
@@ -2624,12 +2626,14 @@ export default function App() {
             cloudMonthId={cloudRouteConfig?.monthId}
             orgDongs={cloudRouteConfig?.orgDongs || null}
             user={user}
+            startAtMatch={routeBackToMatch}
             onStart={({ selectedDongs, drivers, companyDrivers, dongDriverMap, baseDailyQty }) => {
               setRouteSetupResult({ selectedDongs, drivers, companyDrivers, dongDriverMap, baseDailyQty });
+              setRouteBackToMatch(false);
               setShowRouteSetup(false);
               setShowRouteMap(true);
             }}
-            onClose={() => { setShowRouteSetup(false); setCloudRouteConfig(null); setRouteSetupResult(null); }}
+            onClose={() => { setShowRouteSetup(false); setCloudRouteConfig(null); setRouteSetupResult(null); setRouteBackToMatch(false); }}
           />
         )}
         {showRouteMap && (
@@ -2637,6 +2641,7 @@ export default function App() {
             gridData={cloudRouteConfig ? [] : gridData.filter(r => !routeSetupResult?.selectedDongs || routeSetupResult.selectedDongs.has(r.행정동))}
             fileInfo={fileInfo}
             onClose={() => { setShowRouteMap(false); setCloudRouteConfig(null); setRouteSetupResult(null); }}
+            onBack={() => { setShowRouteMap(false); setRouteBackToMatch(true); setShowRouteSetup(true); }}
             onSave={(updated) => pushHistory(updated)}
             initialCloudCity={cloudRouteConfig?.city || null}
             initialCloudMonthId={cloudRouteConfig?.monthId || null}
