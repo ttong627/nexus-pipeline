@@ -2115,11 +2115,18 @@ export default function App() {
     worker.postMessage(payload);
   };
 
+  // 내보내기 칼럼: 리(里)는 행정구역이 '군'(읍·면)이고 실제 리 데이터가 있을 때만 포함(화면 규칙과 동일).
+  const _activeExportCols = () => {
+    const isGunCity = String(fileInfo?.city || '').split(/\s+/).some(t => /군$/.test(t));
+    const showRi = isGunCity && gridData.some(r => String(r.리 ?? '').trim() !== '');
+    return exportColOrder.filter(c => c.on && (c.key !== '리' || showRi));
+  };
+
   const handleExport = () => {
     if (!filteredData.length) return alert('내보낼 데이터가 없습니다.');
     const unconfirmed = gridData.filter(r => r._에러 && !r._전화확인).length;
     if (unconfirmed > 0 && !window.confirm(`주소 확인이 안 된 ${unconfirmed}건이 있습니다.\n담당자 확인(주소 입력 또는 전화확인) 후 진행을 권장합니다.\n그래도 다운로드할까요?`)) return;
-    const activeCols = exportColOrder.filter(c => c.on);
+    const activeCols = _activeExportCols();
     const finalRows = filteredData.map((r, i) => {
       const row = {};
       activeCols.forEach(c => {
@@ -2135,7 +2142,7 @@ export default function App() {
   const handleExportErrors = () => {
     const errors = filteredData.filter(r => r._에러);
     if (!errors.length) return alert('확인 필요 항목이 없습니다.');
-    const activeCols = exportColOrder.filter(c => c.on);
+    const activeCols = _activeExportCols();
     const finalRows = errors.map((r, i) => {
       const row = {};
       activeCols.forEach(c => {
@@ -2150,7 +2157,7 @@ export default function App() {
 
   const handleExportDongSummary = () => {
     if (!filteredData.length) return alert('내보낼 데이터가 없습니다.');
-    const activeCols = exportColOrder.filter(c => c.on);
+    const activeCols = _activeExportCols();
     _runExportWorker({
       action: 'EXPORT_DONG_SUMMARY',
       rawRows: filteredData,
@@ -2163,7 +2170,7 @@ export default function App() {
 
   const handleExportByDriver = () => {
     if (!filteredData.length) return alert('내보낼 데이터가 없습니다.');
-    const activeCols = exportColOrder.filter(c => c.on);
+    const activeCols = _activeExportCols();
     const worker = new Worker(new URL('./exportWorker.js', import.meta.url), { type: 'module' });
     worker.onmessage = (e) => {
       worker.terminate();
