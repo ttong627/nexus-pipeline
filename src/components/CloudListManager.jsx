@@ -1178,6 +1178,31 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
     }
   };
 
+  // ── 기사칸 정리: 등록 안 된 기사명 + 2명 이상 표시된 칸 비우기 (맵 매칭 등록기사 1명만 남김) ──
+  const handleCleanDrivers = async () => {
+    if (!selectedCity || !selectedMonth || !records.length) return;
+    if (!confirm('이번달 명단의 기사칸에서 "등록 안 된 기사명"과 "2명 이상 표시된 칸"을 비웁니다.\n맵에서 매칭된 등록 기사 1명만 남깁니다. 계속할까요?')) return;
+    // 유효(등록) 기사 = 맵 저장본(route_sessions)의 기사명
+    const valid = new Set();
+    try {
+      const sess = await getDoc(doc(db, 'route_sessions', selectedCity, 'months', selectedMonth.id));
+      if (sess.exists()) (sess.data().drivers || []).forEach(d => { const n = (d.name || '').trim(); if (n) valid.add(n); });
+    } catch { /* 세션 없으면 빈 셋 */ }
+    const changes = {};
+    let cleared = 0;
+    records.forEach(r => {
+      const raw = String(dirtyRecords[r.id]?.기사 ?? r.기사 ?? '').trim();
+      if (!raw) return;
+      const names = raw.split(/[\s,/·|]+/).map(s => s.trim()).filter(Boolean);
+      const isMulti = names.length >= 2;                                   // 2명 이상
+      const isUnregistered = names.length === 1 && valid.size > 0 && !valid.has(names[0]); // 등록 안 된 단일 기사
+      if (isMulti || isUnregistered) { changes[r.id] = { ...(dirtyRecords[r.id] || {}), 기사: '' }; cleared++; }
+    });
+    if (!cleared) { alert(valid.size ? '정리할 기사가 없습니다 (모두 등록된 단일 기사).' : '맵 저장본이 없어 등록 기준을 만들 수 없고, 2명 이상도 없습니다.'); return; }
+    setDirtyRecords(prev => ({ ...prev, ...changes }));
+    alert(`${cleared}건의 기사칸을 비웠습니다.\n상단 "변경사항 저장"으로 확정하세요.${valid.size ? '' : '\n(맵 저장본이 없어 단일 기사명은 검증하지 못해, 2명 이상만 정리했습니다.)'}`);
+  };
+
   // ── 주소 정제 (저장된 명단에 addressEngine 직접 적용) ────────────────
   const handleRefineAddresses = async () => {
     if (!records.length || isRefiningAddr) return;
@@ -1557,6 +1582,15 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
                 title="읍/면 주소에서 리(里)를 추출해 리 컬럼을 채웁니다 (주소 불변)"
               >
                 <MapPin size={13} /> {isFillingRi ? '리 채우는 중...' : '리 채우기'}
+              </button>
+            )}
+            {records.length > 0 && (
+              <button
+                onClick={handleCleanDrivers}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-bold bg-rose-950/40 hover:bg-rose-900/50 text-rose-400 border border-rose-500/30 transition-colors"
+                title="기사칸에서 등록 안 된 기사명·2명 이상 표시된 칸을 비웁니다 (맵에서 매칭된 등록 기사 1명만 남김). '변경사항 저장'으로 확정"
+              >
+                <Eraser size={13} /> 기사 정리
               </button>
             )}
             {addrChanges.length > 0 && (
