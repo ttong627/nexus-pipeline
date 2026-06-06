@@ -87,11 +87,15 @@ export default function DriverRegistryModal({ user, onClose }) {
     }).catch(() => {});
   }, [isAdmin]);
 
-  // ── 관리자용 기업(회사) 목록 로드 — 소속사처럼 기업 기사도 관리하기 위함
+  // ── 관리자용 기업(회사) 목록 로드 — 소속사처럼 기업 기사도 관리하기 위함. 기업 허용 지자체(cities)도 함께 보관
   useEffect(() => {
     if (!isAdmin) return;
     getDocs(collection(db, 'user_companies')).then(snap => {
-      setCompanyList(snap.docs.map(d => ({ code: d.id, name: d.data().name || d.id })).sort((a, b) => a.name.localeCompare(b.name, 'ko')));
+      setCompanyList(snap.docs.map(d => {
+        const data = d.data();
+        const cities = Array.isArray(data.citiesApproved) ? data.citiesApproved : (Array.isArray(data.cities) ? data.cities : []);
+        return { code: d.id, name: data.name || d.id, cities };
+      }).sort((a, b) => a.name.localeCompare(b.name, 'ko')));
     }).catch(() => {});
   }, [isAdmin]);
 
@@ -188,27 +192,35 @@ export default function DriverRegistryModal({ user, onClose }) {
     setLoadingZone(true);
     try {
       let uniqueCities;
-      if (isAdmin) {
+      if (selectedCompany) {
+        // 기업 모드: 관리자라도 그 기업의 허용 지자체만 표시(관리자 전체 지역 노출 금지)
+        uniqueCities = [...new Set(companyList.find(c => c.code === selectedCompany)?.cities || [])];
+      } else if (isAdmin) {
         const snap = await getDocs(collection(db, 'cloud_lists'));
         uniqueCities = snap.docs.map(d => d.id);
       } else {
         uniqueCities = [...new Set(user?.citiesApproved || [])];
       }
-      if (!uniqueCities.length) { alert('배정된 지자체가 없습니다.\n관리자에게 지자체 승인을 요청하세요.'); return; }
+      if (!uniqueCities.length) { alert(selectedCompany ? '이 기업에 허용된 지자체가 없습니다.\n관리자 패널에서 기업 지자체를 배정하세요.' : '배정된 지자체가 없습니다.\n관리자에게 지자체 승인을 요청하세요.'); return; }
 
+      // 군(郡) 지자체는 리(里)까지 나눠 표시 — 주소에서 "XX리" 추출
+      const extractRi = (addr) => { const m = String(addr || '').match(/([가-힣]{2,5}리)(?![가-힣])/); return m ? m[1] : ''; };
       const result = {};
       for (const city of uniqueCities) {
-        // 1순위: org_presets에서 소속사 행정동 로드
+        const isGun = city.trim().split(/\s+/).pop().endsWith('군'); // 시·군·구 토큰이 "군"으로 끝나면 군
         let dongs = [];
-        try {
-          const presetSnap = await getDoc(doc(db, 'org_presets', city));
-          if (presetSnap.exists()) {
-            const org = (presetSnap.data().orgs || []).find(o => o.name === selectedOrg || o.id === selectedOrg);
-            dongs = org?.dongs || [];
-          }
-        } catch { /* org_presets 접근 실패 시 fallback으로 */ }
+        // 군이 아니면 org_presets(읍면동) 우선. 군이면 리까지 필요해 records에서 직접 구성.
+        if (!isGun) {
+          try {
+            const presetSnap = await getDoc(doc(db, 'org_presets', city));
+            if (presetSnap.exists()) {
+              const org = (presetSnap.data().orgs || []).find(o => o.name === selectedOrg || o.id === selectedOrg);
+              dongs = org?.dongs || [];
+            }
+          } catch { /* org_presets 접근 실패 시 fallback으로 */ }
+        }
 
-        // 2순위 fallback: cloud_lists 최신 월 레코드에서 행정동 추출
+        // fallback(군은 항상): cloud_lists 최신 월 레코드에서 행정동(군이면 읍면+리) 추출
         if (!dongs.length) {
           try {
             const monthsSnap = await getDocs(collection(db, 'cloud_lists', city, 'months'));
@@ -217,8 +229,11 @@ export default function DriverRegistryModal({ user, onClose }) {
               const recordsSnap = await getDocs(collection(db, 'cloud_lists', city, 'months', latestMonth, 'records'));
               const dongSet = new Set();
               recordsSnap.docs.forEach(d => {
-                const dong = d.data()['행정동'];
-                if (dong) dongSet.add(dong);
+                const data = d.data();
+                const dong = data['행정동'];
+                if (!dong) return;
+                if (isGun) { const ri = extractRi(data['주소'] || ''); dongSet.add(ri ? `${dong} ${ri}` : dong); }
+                else dongSet.add(dong);
               });
               dongs = [...dongSet].sort((a, b) => a.localeCompare(b, 'ko'));
             }
