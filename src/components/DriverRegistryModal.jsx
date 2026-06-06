@@ -358,8 +358,20 @@ export default function DriverRegistryModal({ user, onClose }) {
     setImportSelected(new Set());
     setIsLoadingImport(true);
     try {
-      const snap = await getDocs(collection(db, 'user_drivers', u.id, 'drivers'));
-      setImportDrivers(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(d => d.status !== 'inactive'));
+      // 신경로(user_companies/{companyCode}) + 구경로(user_drivers/{uid}) 둘 다 읽어 합침(중복 id 제거)
+      // → companyCode로 이전된 사용자의 기사도 가져오기 목록에 누락되지 않게
+      const seen = new Set();
+      const all = [];
+      const cols = [];
+      if (u.companyCode) { const c = getDriversCollection({ companyCode: u.companyCode }); if (c) cols.push(c); }
+      cols.push(collection(db, 'user_drivers', u.id, 'drivers'));
+      for (const col of cols) {
+        try {
+          const snap = await getDocs(col);
+          snap.docs.forEach(d => { if (!seen.has(d.id)) { seen.add(d.id); all.push({ id: d.id, ...d.data() }); } });
+        } catch { /* 한쪽 경로 실패는 무시 */ }
+      }
+      setImportDrivers(all.filter(d => d.status !== 'inactive'));
     } catch { setImportDrivers([]); }
     finally { setIsLoadingImport(false); }
   };
