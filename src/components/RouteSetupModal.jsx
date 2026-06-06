@@ -266,7 +266,8 @@ export default function RouteSetupModal({
         // "이전 화면" 복귀: 인메모리 원본 설정을 그대로 복원(DB 재로드 안 함 — 지도가 덮어쓴 손상본 방지).
         // 이게 단일 소스 오브 트루스. 휘경1동 누락·기사 왜곡의 근본 원인 제거.
         if (restoreState?.dongDriverMap && Object.keys(restoreState.dongDriverMap).length) {
-          if (restoreState.drivers?.length) setDrivers(restoreState.drivers);
+          const restoreDrivers = restoreState.companyDrivers?.length ? restoreState.companyDrivers : restoreState.drivers;
+          if (restoreDrivers?.length) setDrivers(restoreDrivers);
           setDongDriverMap(restoreState.dongDriverMap);
           if (restoreState.baseDailyQty) setBaseDailyQty(restoreState.baseDailyQty);
           if (restoreState.orgId && restoreState.orgId !== 'all') setSelectedOrgId(restoreState.orgId); // 소속사 보존

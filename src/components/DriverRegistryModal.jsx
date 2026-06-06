@@ -45,6 +45,7 @@ export default function DriverRegistryModal({ user, onClose }) {
   const [drivers, setDrivers] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [showInactive, setShowInactive] = useState(false);
+  const [driverSearch, setDriverSearch] = useState(''); // 기사 검색(이름·전화)
 
   // ── 폼
   const [editingId, setEditingId] = useState(null);
@@ -319,6 +320,10 @@ export default function DriverRegistryModal({ user, onClose }) {
         org: isPersonalMode ? `personal:${uid}` : (selectedCompany ? `company:${selectedCompany}` : selectedOrg),
       };
       if (editingId === 'new') {
+        // 중복 방지: 같은 이름(전화번호까지 같으면 더 확실) 활성 기사가 이미 있으면 확인
+        const nm = form.name.trim(), ph = form.phone.trim();
+        const dup = drivers.find(d => d.status !== 'inactive' && (d.name || '').trim() === nm && (!ph || (d.phone || '').trim() === ph));
+        if (dup && !window.confirm(`이미 같은 이름${ph && (dup.phone || '').trim() === ph ? '·전화번호' : ''}의 기사가 있습니다 (${dup.name}). 그래도 추가할까요?`)) { setIsSaving(false); return; }
         payload.joinedAt = serverTimestamp();
         payload.createdBy = auth.currentUser?.email||'';
         await addDoc(getDriversCol(), payload);
@@ -386,8 +391,13 @@ export default function DriverRegistryModal({ user, onClose }) {
     if (!importSelected.size || !selectedOrg) return;
     setIsImporting(true);
     try {
+      // 중복 방지: 이미 있는 이름은 건너뜀
+      const existingNames = new Set(drivers.filter(d => d.status !== 'inactive').map(d => (d.name || '').trim()).filter(Boolean));
       const toImport = importDrivers.filter(d => importSelected.has(d.id));
+      let added = 0, skipped = 0;
       for (const d of toImport) {
+        const nm = (d.name || '').trim();
+        if (nm && existingNames.has(nm)) { skipped++; continue; }
         const { id: _id, ...rest } = d;
         await addDoc(collection(db, 'org_drivers', selectedOrg, 'drivers'), {
           ...rest,
@@ -395,9 +405,12 @@ export default function DriverRegistryModal({ user, onClose }) {
           importedFrom: importUser?.id || '',
           importedAt: serverTimestamp(),
         });
+        if (nm) existingNames.add(nm);
+        added++;
       }
       await loadDrivers();
       setShowImportPanel(false);
+      if (skipped > 0) alert(`${added}명 추가${skipped > 0 ? `, ${skipped}명은 이미 있어 건너뜀` : ''}`);
       setImportUser(null); setImportDrivers([]); setImportSelected(new Set()); setImportSearchEmail('');
       alert(`✅ ${toImport.length}명 가져오기 완료`);
     } catch (e) { alert('가져오기 실패: ' + e.message); }
@@ -417,6 +430,10 @@ export default function DriverRegistryModal({ user, onClose }) {
 
   const activeDrivers = drivers.filter(d => d.status !== 'inactive');
   const inactiveDrivers = drivers.filter(d => d.status === 'inactive');
+  const driverSearchQ = driverSearch.trim();
+  const shownDrivers = driverSearchQ
+    ? activeDrivers.filter(d => (d.name || '').includes(driverSearchQ) || (d.phone || '').replace(/[^0-9]/g, '').includes(driverSearchQ.replace(/[^0-9]/g, '')))
+    : activeDrivers;
   const maxQty = statsData.length ? Math.max(...statsData.map(d=>d.totalQty||0), 1) : 1;
 
   // ════════════════════════════════════════════════
@@ -746,13 +763,20 @@ export default function DriverRegistryModal({ user, onClose }) {
                     </div>
                   </div>
                 )}
-                <div className="flex items-center justify-between mb-5">
-                  <div className="text-gray-500 text-[12px]">
+                <div className="flex items-center justify-between gap-3 mb-5">
+                  <div className="text-gray-500 text-[12px] shrink-0">
                     활성 <span className="text-blue-400 font-black">{activeDrivers.length}명</span>
+                    {driverSearchQ && <span className="text-gray-600"> · 검색 {shownDrivers.length}</span>}
                     {inactiveDrivers.length > 0 && <span> · 비활성 {inactiveDrivers.length}명</span>}
                   </div>
+                  <input
+                    value={driverSearch}
+                    onChange={e => setDriverSearch(e.target.value)}
+                    placeholder="기사 검색 (이름·전화)"
+                    className="flex-1 max-w-[240px] bg-[#111] border border-[#2a2a2a] text-white text-xs rounded-xl px-3 py-2 outline-none focus:border-blue-500/40 placeholder:text-gray-600"
+                  />
                   <button onClick={openNew}
-                    className="flex items-center gap-2 px-4 py-2.5 bg-blue-700 hover:bg-blue-600 text-white text-[12px] font-black rounded-xl transition-colors">
+                    className="flex items-center gap-2 px-4 py-2.5 bg-blue-700 hover:bg-blue-600 text-white text-[12px] font-black rounded-xl transition-colors shrink-0">
                     <Plus size={14}/> 기사 추가
                   </button>
                 </div>
@@ -772,7 +796,9 @@ export default function DriverRegistryModal({ user, onClose }) {
                       </div>
                     ) : (
                       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mb-6">
-                        {activeDrivers.map(driver=>(
+                        {shownDrivers.length === 0 ? (
+                          <div className="col-span-full text-center text-gray-600 text-xs py-8">검색 결과가 없습니다 — &quot;{driverSearchQ}&quot;</div>
+                        ) : shownDrivers.map(driver=>(
                           <DriverCard key={driver.id} driver={driver}
                             onEdit={()=>openEdit(driver)} onToggle={()=>handleToggleStatus(driver)} />
                         ))}
