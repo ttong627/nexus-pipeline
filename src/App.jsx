@@ -189,6 +189,7 @@ const RouteMapModal         = lazyWithChunkRecovery(() => import("./components/R
 const RouteSetupModal       = lazyWithChunkRecovery(() => import("./components/RouteSetupModal.jsx"));
 const RouteQuickModal       = lazyWithChunkRecovery(() => import("./components/RouteQuickModal.jsx"));
 const DriverRegistryModal   = lazyWithChunkRecovery(() => import("./components/DriverRegistryModal.jsx"));
+const SavedRecordsModal     = lazyWithChunkRecovery(() => import("./components/SavedRecordsModal.jsx"));
 const ScheduleTab           = lazyWithChunkRecovery(() => import("./components/ScheduleTab.jsx"));
 
 import { processAddress, asyncPool, addTypoRecord, loadTypoDict } from "./engine/addressEngine.js";
@@ -196,7 +197,7 @@ import { parsePhoneNumbers, parseSMS, parseBirthDate, normalizeBirth, extractPho
 import { canUseRouteMap, canUseDbOverview, getMonthlyLimit } from "./utils/tierUtils.js";
 import { getCachedCoord, saveCoordCache } from "./utils/coordCache.js";
 import { buildStepStatus, getVisibleWorkflowSteps, getWorkflowMeta, getWorkflowMode, WORKFLOW_STEP_LABELS } from "./utils/workflow.js";
-import { LogOut, ShieldCheck, Database, Crown, Layers, UserCircle, Undo2, BarChart3, MapPin, Truck, CalendarDays, FileSpreadsheet, Home, ChevronLeft, ChevronRight, BookOpen } from "lucide-react";
+import { LogOut, ShieldCheck, Database, Crown, Layers, UserCircle, Undo2, BarChart3, MapPin, Truck, CalendarDays, FileSpreadsheet, Home, ChevronLeft, ChevronRight, BookOpen, HardDrive } from "lucide-react";
 
 export default function App() {
   const [user, setUser] = useState(null);
@@ -351,6 +352,7 @@ export default function App() {
   });
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [showDriverRegistry, setShowDriverRegistry] = useState(false);
+  const [showSavedRecords, setShowSavedRecords] = useState(false);
   const [profileModal, setProfileModal] = useState({ open: false, isNew: false });
   const [pendingInquiriesCount, setPendingInquiriesCount] = useState(0);
 
@@ -2455,6 +2457,7 @@ export default function App() {
                 locked={!canUseDbOverview(user)}
               />
               <SidebarItem icon={Truck} label="기사 관리" active={showDriverRegistry} onClick={() => setShowDriverRegistry(true)} />
+              <SidebarItem icon={HardDrive} label="저장 내역" active={showSavedRecords} onClick={() => setShowSavedRecords(true)} />
 
               {/* ── 설정 ── */}
               <SidebarSection label="설정" />
@@ -2659,6 +2662,18 @@ export default function App() {
           <DriverRegistryModal
             user={user}
             onClose={() => setShowDriverRegistry(false)}
+          />
+        )}
+        {showSavedRecords && (
+          <SavedRecordsModal
+            user={user}
+            onClose={() => setShowSavedRecords(false)}
+            onEdit={(city, monthId) => {
+              setCloudRouteConfig({ city, monthId, orgDongs: null });
+              setRouteBackToMatch(false);
+              setShowSavedRecords(false);
+              setShowRouteSetup(true);
+            }}
           />
         )}
         {profileModal.open && <ProfileSetupModal user={user} isNewUser={profileModal.isNew} onClose={(saved, savedRegion) => { const wasNew = profileModal.isNew; setProfileModal({ open: false, isNew: false }); if (saved) { setIntroReason(wasNew ? 'new' : 'region'); setIntroMeta({ region: savedRegion }); setShowIntro(true); } }} />}
