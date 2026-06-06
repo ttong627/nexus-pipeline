@@ -1082,6 +1082,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
 
   // ── 좌표 삭제 브러시 모달
   const [showCoordBrush, setShowCoordBrush] = useState(false);
+  const [showExportMenu, setShowExportMenu] = useState(false); // 내보내기 드롭다운(KML·엑셀·배송루트·공유 통합)
 
   // ── 소속사 기사 추가 피커
   const [showCompanyPicker, setShowCompanyPicker] = useState(false);
@@ -3892,15 +3893,7 @@ ${folders}
                 {isLoadingSession ? '로딩...' : '이어서 작업'}
               </button>
               {/* 임시저장 */}
-              <button
-                onClick={() => handleSaveSession(false)}
-                disabled={isSavingSession}
-                title="현재 배정 현황을 임시 저장합니다 (기본명단에 미반영, 언제든 재수정 가능)"
-                className="px-2 py-1 bg-amber-950/40 border border-amber-600/40 text-amber-400 hover:bg-amber-900/30 rounded-lg text-[10px] font-bold flex items-center gap-1 transition-colors disabled:opacity-50"
-              >
-                {isSavingSession ? <RefreshCw size={10} className="animate-spin" /> : <Save size={10} />}
-                {isSavingSession ? '저장중...' : '임시저장'}
-              </button>
+              {/* 임시저장(수동)은 제거 — 5분 자동 임시저장이 상시 동작하므로 중복 */}
               {/* 이전달 승계 */}
               <button
                 onClick={handleLoadPrevMonth}
@@ -4048,38 +4041,41 @@ ${folders}
                 {isSavingCloud ? '저장중...' : 'DB 저장'}
               </button>
             )}
-            {/* KML 다운로드 — 네이버 지도·카카오맵·구글 지도 임포트용 */}
-            <button
-              onClick={handleDownloadKML}
-              title="배송 경로를 KML 파일로 다운로드합니다 (네이버 지도·Google Maps 가져오기 가능)"
-              className="px-2 py-1 bg-[#0d1a0d] border border-emerald-600/40 text-emerald-400 hover:bg-emerald-900/20 rounded-lg text-[10px] font-bold flex items-center gap-1 transition-colors"
-            >
-              <Download size={10} /> KML 경로
-            </button>
-            <button
-              onClick={handleExportDriverExcel}
-              title="기사별 배송 목록을 엑셀 파일로 다운로드합니다"
-              className="px-2 py-1 bg-[#0d1220] text-blue-400 border border-blue-500/30 hover:bg-blue-900/20 rounded-lg text-[10px] font-bold flex items-center gap-1 transition-colors"
-            >
-              <FileSpreadsheet size={10} /> 담당자 엑셀
-            </button>
-            <button
-              onClick={handleDownloadRouteBundle}
-              title="기사별 배송루트 엑셀 파일 묶음을 다운로드합니다"
-              className="px-2 py-1 bg-[#060c18] text-blue-400 border border-blue-600/40 hover:bg-blue-900/20 rounded-lg text-[10px] font-bold flex items-center gap-1 transition-colors"
-            >
-              <Download size={10} /> 배송루트
-            </button>
-            {/* 기사 배송루트 공유 링크 생성 */}
-            <button
-              onClick={handleCreateShareLink}
-              disabled={isCreatingShare}
-              title="기사별 배송루트 카카오지도 공유 링크를 생성합니다 (기사가 모바일로 확인 가능)"
-              className="px-2 py-1 bg-[#0d1a0d] border border-green-600/40 text-green-400 hover:bg-green-900/20 rounded-lg text-[10px] font-bold flex items-center gap-1 transition-colors disabled:opacity-50"
-            >
-              {isCreatingShare ? <RefreshCw size={10} className="animate-spin" /> : <Share2 size={10} />}
-              {isCreatingShare ? '생성중...' : '공유'}
-            </button>
+            {/* 내보내기·공유 통합 드롭다운 (KML·담당자엑셀·배송루트·공유) */}
+            <div className="relative">
+              <button
+                onClick={() => setShowExportMenu(v => !v)}
+                title="KML 경로·담당자 엑셀·배송루트 묶음·기사 공유 링크를 한 곳에서 내보냅니다"
+                className="px-2 py-1 bg-[#0d1a0d] border border-emerald-600/40 text-emerald-400 hover:bg-emerald-900/20 rounded-lg text-[10px] font-bold flex items-center gap-1 transition-colors"
+              >
+                {isCreatingShare ? <RefreshCw size={10} className="animate-spin" /> : <Download size={10} />}
+                내보내기 <span className="text-[8px] leading-none">▾</span>
+              </button>
+              {showExportMenu && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setShowExportMenu(false)} />
+                  <div className="absolute right-0 mt-1 z-50 bg-[#0a0a0a] border border-[#2a2a2a] rounded-xl p-1 shadow-2xl min-w-[152px]">
+                    <button onClick={() => { setShowExportMenu(false); handleDownloadKML(); }}
+                      className="w-full text-left px-2.5 py-1.5 rounded-lg text-[11px] font-bold text-emerald-400 hover:bg-emerald-900/20 flex items-center gap-1.5 transition-colors">
+                      <Download size={11} /> KML 경로
+                    </button>
+                    <button onClick={() => { setShowExportMenu(false); handleExportDriverExcel(); }}
+                      className="w-full text-left px-2.5 py-1.5 rounded-lg text-[11px] font-bold text-blue-400 hover:bg-blue-900/20 flex items-center gap-1.5 transition-colors">
+                      <FileSpreadsheet size={11} /> 담당자 엑셀
+                    </button>
+                    <button onClick={() => { setShowExportMenu(false); handleDownloadRouteBundle(); }}
+                      className="w-full text-left px-2.5 py-1.5 rounded-lg text-[11px] font-bold text-blue-400 hover:bg-blue-900/20 flex items-center gap-1.5 transition-colors">
+                      <Download size={11} /> 배송루트 묶음
+                    </button>
+                    <button onClick={() => { setShowExportMenu(false); handleCreateShareLink(); }}
+                      disabled={isCreatingShare}
+                      className="w-full text-left px-2.5 py-1.5 rounded-lg text-[11px] font-bold text-green-400 hover:bg-green-900/20 flex items-center gap-1.5 transition-colors disabled:opacity-50">
+                      <Share2 size={11} /> 기사 공유 링크
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
             {isCloudMode && (
               <button
                 onClick={handleLoadOrderApplyRequests}
