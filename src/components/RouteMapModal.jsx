@@ -3939,13 +3939,15 @@ ${folders}
 
     return {
       selectedDongs: selectedDongsProp || (dongQueue.length ? new Set(dongQueue) : null),
+      scopeDongs: orgDongs ? new Set(orgDongs) : (selectedDongsProp || (dongQueue.length ? new Set(dongQueue) : null)),
+      orgDongs: orgDongs ? new Set(orgDongs) : null,
       drivers: mergedDrivers.length ? mergedDrivers : drivers,
       companyDrivers: mergedDrivers.length ? mergedDrivers : allKnownDrivers,
       dongDriverMap: restoredDongDriverMap,
       baseDailyQty: baseDailyQtyProp,
       orgId: orgIdProp || 'all',
     };
-  }, [allKnownDrivers, drivers, setupDongDriverMapProp, records, selectedDongsProp, dongQueue, baseDailyQtyProp, orgIdProp]);
+  }, [allKnownDrivers, drivers, setupDongDriverMapProp, records, selectedDongsProp, dongQueue, orgDongs, baseDailyQtyProp, orgIdProp]);
 
   const removeDriver = (id) => {
     setDrivers(prev => prev.filter(d => d.id !== id));

@@ -271,6 +271,8 @@ export default function RouteSetupModal({
           setDongDriverMap(restoreState.dongDriverMap);
           if (restoreState.baseDailyQty) setBaseDailyQty(restoreState.baseDailyQty);
           if (restoreState.orgId && restoreState.orgId !== 'all') setSelectedOrgId(restoreState.orgId); // 소속사 보존
+          const restoreScopeDongs = restoreState.scopeDongs || restoreState.orgDongs || null;
+          if (restoreScopeDongs) setSelectedOrgDongs(new Set(restoreScopeDongs));
           setSavedAssignmentLoaded(true);
           return; // finally가 isLoading 해제
         }
@@ -579,6 +581,7 @@ export default function RouteSetupModal({
       dongDriverMap: Object.keys(dongDriverMap).length ? dongDriverMap : map,
       baseDailyQty,
       orgId: getOrgStableKey(),
+      scopeDongs: selectedOrgDongs ? new Set(selectedOrgDongs) : (orgDongs ? new Set(orgDongs) : null),
     });
   };
 

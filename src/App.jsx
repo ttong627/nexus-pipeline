@@ -2627,12 +2627,16 @@ export default function App() {
             city={fileInfo?.city || ''}
             cloudCity={cloudRouteConfig?.city}
             cloudMonthId={cloudRouteConfig?.monthId}
-            orgDongs={cloudRouteConfig?.orgDongs || null}
+            orgDongs={routeSetupResult?.scopeDongs || cloudRouteConfig?.orgDongs || null}
             user={user}
             startAtMatch={routeBackToMatch}
             restoreState={routeBackToMatch ? routeSetupResult : null}
-            onStart={({ selectedDongs, drivers, companyDrivers, dongDriverMap, baseDailyQty, orgId }) => {
-              setRouteSetupResult({ selectedDongs, drivers, companyDrivers, dongDriverMap, baseDailyQty, orgId: orgId || 'all' });
+            onStart={({ selectedDongs, drivers, companyDrivers, dongDriverMap, baseDailyQty, orgId, scopeDongs }) => {
+              const restoredScopeDongs = scopeDongs || cloudRouteConfig?.orgDongs || null;
+              setRouteSetupResult({ selectedDongs, drivers, companyDrivers, dongDriverMap, baseDailyQty, orgId: orgId || 'all', scopeDongs: restoredScopeDongs });
+              if (restoredScopeDongs && cloudRouteConfig) {
+                setCloudRouteConfig(prev => prev ? { ...prev, orgDongs: restoredScopeDongs } : prev);
+              }
               setRouteBackToMatch(false);
               setShowRouteSetup(false);
               setShowRouteMap(true);
@@ -2656,7 +2660,12 @@ export default function App() {
                   dongDriverMap: restorePayload.dongDriverMap || prev?.dongDriverMap || null,
                   baseDailyQty: restorePayload.baseDailyQty || prev?.baseDailyQty || 40,
                   orgId: restorePayload.orgId || prev?.orgId || 'all',
+                  scopeDongs: restorePayload.scopeDongs || restorePayload.orgDongs || prev?.scopeDongs || null,
                 }));
+                const restoreScopeDongs = restorePayload.scopeDongs || restorePayload.orgDongs || null;
+                if (restoreScopeDongs) {
+                  setCloudRouteConfig(prev => prev ? { ...prev, orgDongs: restoreScopeDongs } : prev);
+                }
               }
               setShowRouteMap(false);
               setRouteBackToMatch(true);
@@ -2665,7 +2674,7 @@ export default function App() {
             onSave={(updated) => pushHistory(updated)}
             initialCloudCity={cloudRouteConfig?.city || null}
             initialCloudMonthId={cloudRouteConfig?.monthId || null}
-            orgDongs={cloudRouteConfig?.orgDongs || null}
+            orgDongs={routeSetupResult?.scopeDongs || cloudRouteConfig?.orgDongs || null}
             initialDrivers={routeSetupResult?.drivers || null}
             companyDrivers={routeSetupResult?.companyDrivers || routeSetupResult?.drivers || null}
             setupDongDriverMap={routeSetupResult?.dongDriverMap || null}
