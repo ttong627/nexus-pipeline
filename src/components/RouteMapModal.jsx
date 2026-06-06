@@ -2008,6 +2008,8 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
     () => mapRecords.map(r => `${r.id}:${r._driverId||''}:${r.배송순번||''}:${!!r._에러}`).join('|'),
     [mapRecords]
   );
+  // 오버레이는 기사 id·색만 영향 — 기사명 편집 등으로는 재생성하지 않도록 시그니처화(재생성 최소화).
+  const driverColorSig = useMemo(() => drivers.map(d => `${d.id}:${d.color}`).join('|'), [drivers]);
 
   useEffect(() => {
     if (!kakaoMapRef.current) return;
@@ -2138,7 +2140,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
       .filter(unit => mixedKeys.has(unit.key))
       .reduce((sum, unit) => sum + unit.records.length, 0);
     setOverlapCount(cnt);
-  }, [mapPinSignature, drivers]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [mapPinSignature, driverColorSig]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── 도로주소 단위 연속 권역 자동 배정 ────────────────────────────────
   const handleAutoSplit = useCallback(() => {

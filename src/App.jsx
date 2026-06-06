@@ -1623,6 +1623,7 @@ export default function App() {
           });
           await batch.commit();
           gUpdate(Math.round(Math.min(i + 499, allData.length) / allData.length * 100));
+          await new Promise(r => setTimeout(r, 0)); // 메인스레드 양보 — 대량 저장 중 UI 프리징 완화
         }
       } catch (e) { throw new Error(`[5단계 레코드 배치저장 권한 오류] ${e.message}\n계정: ${user?.email}`); }
 
@@ -1667,6 +1668,7 @@ export default function App() {
             });
           });
           await b.commit();
+          await new Promise(r => setTimeout(r, 0)); // 메인스레드 양보
         }
       } catch (dhErr) {
         console.warn('[delivery_history 저장 실패 — 무시]', dhErr);
