@@ -1,5 +1,5 @@
 ﻿import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { X, MapPin, Navigation2, Plus, Minus, RefreshCw, Save, AlertTriangle, Map as MapIcon, List, Building2, Clock, FileSpreadsheet, Download, HardDrive, Maximize2, Minimize2, Columns, AlertCircle, Search, Crosshair, Share2, Link, Eraser, ArrowLeftRight } from 'lucide-react';
+import { X, MapPin, Navigation2, Plus, Minus, RefreshCw, Save, AlertTriangle, Map as MapIcon, List, Building2, Clock, FileSpreadsheet, Download, HardDrive, Maximize2, Minimize2, Columns, AlertCircle, Search, Crosshair, Share2, Link, Eraser, ArrowLeftRight, ChevronLeft } from 'lucide-react';
 import { db, auth } from '../config/firebase.js';
 import { collection, serverTimestamp, Timestamp, getDocs, getDoc, setDoc, updateDoc, doc, writeBatch, query, where, limit } from 'firebase/firestore';
 import * as XLSX from 'xlsx';
@@ -4840,6 +4840,14 @@ ${folders}
 
             {/* 지도 오버레이 버튼 */}
             <div className="absolute top-2 right-2 z-10 flex gap-1.5">
+              {/* 이전 화면으로 나가기 (전체화면에서도 항상 보이게 지도 위에 배치) */}
+              <button
+                onClick={onClose}
+                title="이전 화면으로 나가기"
+                className="px-2.5 py-1.5 bg-black/70 hover:bg-red-900/60 text-white/80 hover:text-white border border-white/15 hover:border-red-500/40 rounded-lg text-[10px] font-bold flex items-center gap-1.5 backdrop-blur-sm shadow-lg transition-all"
+              >
+                <ChevronLeft size={11} /> 나가기
+              </button>
               {/* 중심 이동 버튼 */}
               <button
                 onClick={() => {

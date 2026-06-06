@@ -839,9 +839,10 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
   const [coordProgress, setCoordProgress] = useState(null); // { done, total } | null
   const bgCoordCancelRef = useRef(false);
   const [bgCoordState, setBgCoordState] = useState(null); // { done, total, success, isDone } | null
-  // 백그라운드 좌표 자동 수신 ON/OFF (기본 ON, localStorage 기억). 같은 명단 1회만 자동 시작(중복 방지).
+  // 백그라운드 좌표 자동 수신 ON/OFF. 기본 OFF — 대량 명단 자동 조회가 네트워크 부하를 유발해
+  // 명시적으로 켤 때만 동작(localStorage 'on'). 같은 명단 1회만 자동 시작(중복 방지).
   const [autoBgCoord, setAutoBgCoord] = useState(() => {
-    try { return localStorage.getItem('nexus_auto_bg_coord') !== 'off'; } catch { return true; }
+    try { return localStorage.getItem('nexus_auto_bg_coord') === 'on'; } catch { return false; }
   });
   const bgAutoKeyRef = useRef('');
 
@@ -1035,7 +1036,7 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
     try {
       await _processCoords(targets, {
         cityId, monthId,
-        concurrency: 1, requestGap: 1500,
+        concurrency: 1, requestGap: 2500, // 네트워크 부하 완화 — 캐시 우선이라 같은 주소는 즉시 통과
         cancelRef: bgCoordCancelRef,
         onProgress: (done, success) => {
           if (!bgCoordCancelRef.current) setBgCoordState(prev => prev ? { ...prev, done, success } : null);
