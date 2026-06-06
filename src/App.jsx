@@ -2627,6 +2627,7 @@ export default function App() {
             orgDongs={cloudRouteConfig?.orgDongs || null}
             user={user}
             startAtMatch={routeBackToMatch}
+            restoreState={routeBackToMatch ? routeSetupResult : null}
             onStart={({ selectedDongs, drivers, companyDrivers, dongDriverMap, baseDailyQty, orgId }) => {
               setRouteSetupResult({ selectedDongs, drivers, companyDrivers, dongDriverMap, baseDailyQty, orgId: orgId || 'all' });
               setRouteBackToMatch(false);

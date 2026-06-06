@@ -75,7 +75,7 @@ function ModalHeader({ onBack, title, badge, subtitle, onClose, stepLabel }) {
 
 export default function RouteSetupModal({
   mode = 'local', allRecords = [], city, cloudCity, cloudMonthId, orgDongs, user, onStart, onClose,
-  startAtMatch = false,
+  startAtMatch = false, restoreState = null,
 }) {
   const effectiveCity = cloudCity || city || '';
 
@@ -249,6 +249,15 @@ export default function RouteSetupModal({
         });
         setDongCounts(counts);
         setRecordRefs(refs);
+        // "이전 화면" 복귀: 인메모리 원본 설정을 그대로 복원(DB 재로드 안 함 — 지도가 덮어쓴 손상본 방지).
+        // 이게 단일 소스 오브 트루스. 휘경1동 누락·기사 왜곡의 근본 원인 제거.
+        if (restoreState?.dongDriverMap && Object.keys(restoreState.dongDriverMap).length) {
+          if (restoreState.drivers?.length) setDrivers(restoreState.drivers);
+          setDongDriverMap(restoreState.dongDriverMap);
+          if (restoreState.baseDailyQty) setBaseDailyQty(restoreState.baseDailyQty);
+          setSavedAssignmentLoaded(true);
+          return; // finally가 isLoading 해제
+        }
         setDongDriverMap({});
         // 저장된 기사매칭 프리셋 자동로드 (driver_assignments → route_sessions fallback)
         try {

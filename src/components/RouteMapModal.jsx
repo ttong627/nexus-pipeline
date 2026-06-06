@@ -2775,8 +2775,13 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
         if (hasOps) await batch.commit();
       }
       // driver_assignments 동기화 — RouteSetupModal에서 다음번 기사구성 자동 로드용
+      // ★ 셋업 원본 매핑 보존: 이번에 '작업한 동'만 records 기준으로 갱신하고, 작업 안 한 동(좌표 미수신 등)은
+      //   셋업 원본(setupDongDriverMapProp)을 그대로 유지 → 휘경1동 같은 미작업 동이 저장에서 증발하지 않게 함.
       try {
-        const dongDriverMap = {};
+        const dongDriverMap = { ...(setupDongDriverMapProp || {}) }; // 원본에서 출발
+        const workedDongs = new Set();
+        records.forEach(r => { if (r._driverId) { const rd = getRouteDong(r); if (rd) workedDongs.add(rd); } });
+        workedDongs.forEach(d => { dongDriverMap[d] = []; }); // 작업한 동만 비우고 아래서 records로 재구성
         records.forEach(r => {
           const routeDong = getRouteDong(r);
           if (!r._driverId || !routeDong) return;
