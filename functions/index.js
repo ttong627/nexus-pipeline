@@ -236,12 +236,21 @@ exports.geocode = onRequest(
     if (req.method !== 'POST') return res.status(405).json({ error: 'POST만 허용' });
     const token = (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
     if (!token) return res.status(401).json({ error: '인증 토큰이 필요합니다.' });
-    try { await admin.auth().verifyIdToken(token); }
+    let decoded;
+    try { decoded = await admin.auth().verifyIdToken(token); }
     catch { return res.status(401).json({ error: '유효하지 않은 토큰입니다.' }); }
     if (!KAKAO_REST_KEY) return res.status(500).json({ error: '서버에 카카오 키가 설정되지 않았습니다.' });
 
     const { city, monthId, limit = 200 } = req.body || {};
     if (!city || !monthId) return res.status(400).json({ error: 'city, monthId가 필요합니다.' });
+    // 권한: 관리자 또는 해당 지자체 승인 사용자만 호출 가능 (카카오 비용 무단 유발 차단)
+    try {
+      const u = (await db.doc(`users/${decoded.uid}`).get()).data() || {};
+      const cities = Array.isArray(u.citiesApproved) ? u.citiesApproved : [];
+      if (u.role !== 'admin' && !cities.includes(city)) {
+        return res.status(403).json({ error: '이 지자체에 대한 권한이 없습니다.' });
+      }
+    } catch { return res.status(403).json({ error: '권한 확인 실패' }); }
     const parts = String(city).trim().split(/\s+/);
     const sido = parts[0] || '';
     const sigungu = parts.slice(1).join(' ');

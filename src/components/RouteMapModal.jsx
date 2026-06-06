@@ -3559,7 +3559,6 @@ ${folders}
     const cacheCity = isCloudMode ? cloudCity : (fileInfo?.city || '');
     if (cacheCity && !force) {
       setCoordProgress({ done: 0, total: targets.length, round: 0 });
-      let cacheHits = 0;
       for (const r of targets) {
         const road = extractRoadAddress(r.주소);
         const cached = await getCachedCoord(cacheCity, road);
@@ -3567,11 +3566,9 @@ ${folders}
           updates[r.id] = cached;
           updateMeta[r.id] = { source: 'cache', query: road };
           areaMeta[r.id] = { status: r.좌표검증상태 || '정상', routeDong: getRouteDong(r), transferNeeded: !!r.이관필요 };
-          cacheHits++;
         }
         setCoordProgress(prev => prev ? { ...prev, done: prev.done + 1 } : prev);
       }
-      if (cacheHits > 0) console.log(`좌표 캐시 ${cacheHits}건 즉시 적용`);
     }
 
     const runRound = async (roundTargets, round, label, queryBuilder) => {

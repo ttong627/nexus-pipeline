@@ -1021,28 +1021,6 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
     finally { setIsFetchingCoords(false); setCoordProgress(null); }
   };
 
-  // VVIP: 업로드 후 백그라운드 자동 좌표 매칭 (느리지만 안정적, 취소 가능)
-  const triggerBgCoordFetch = async (cityId, monthId, allRecords) => {
-    const targets = allRecords.filter(r => r.주소 && !r.lat && !r.lng);
-    if (!targets.length) return;
-    bgCoordCancelRef.current = false;
-    setBgCoordState({ done: 0, total: targets.length, success: 0 });
-    try {
-      await _processCoords(targets, {
-        cityId, monthId,
-        concurrency: 1, requestGap: 2500, // 네트워크 부하 완화 — 캐시 우선이라 같은 주소는 즉시 통과
-        cancelRef: bgCoordCancelRef,
-        onProgress: (done, success) => {
-          if (!bgCoordCancelRef.current) setBgCoordState(prev => prev ? { ...prev, done, success } : null);
-        },
-      });
-      if (!bgCoordCancelRef.current) {
-        setBgCoordState(prev => prev ? { ...prev, isDone: true } : null);
-        setTimeout(() => setBgCoordState(null), 8000);
-      }
-    } catch { setBgCoordState(null); }
-  };
-
   // 클라우드 함수로 서버에서 좌표 채우기 — 좌표 없는 건을 배치(200) 반복 호출로 처리.
   //   카카오 호출은 전부 서버에서 → 브라우저 네트워크 부하 없음. 실패 건은 그대로 남는다(확인 필요).
   const handleCloudGeocode = async (cityArg, monthArg, opts = {}) => {

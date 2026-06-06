@@ -1559,7 +1559,6 @@ export default function App() {
 
       // [5단계] 레코드 499건씩 배치 저장 (규칙 C-5: 원본 명단 전건 보존)
       setGLoad({ show: true, msg: '클라우드 저장 중...', sub: `${city} ${monthStr} · 전체 ${allData.length.toLocaleString()}건`, pct: 0, done: false, blocking: true });
-      const savedRecordsForBgCoords = [];
       try {
         for (let i = 0; i < allData.length; i += 499) {
           const batch = writeBatch(db);
@@ -1619,7 +1618,6 @@ export default function App() {
               _idx: i + j,
             };
             batch.set(ref, payload);
-            savedRecordsForBgCoords.push({ id: recordId, ...payload });
           });
           await batch.commit();
           gUpdate(Math.round(Math.min(i + 499, allData.length) / allData.length * 100));
