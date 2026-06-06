@@ -1175,16 +1175,18 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
 
   const mapRecords = displayRecords.filter(r => r._lat && r._lng);
   const aptRecords = filteredRecords.filter(r => isApartmentLike(r));
-  const withCoordCount = records.filter(r => !r._isApt && r._lat && r._lng).length;
-  const aptCount = records.filter(r => r._isApt).length;
-  const aptWithCoord = records.filter(r => r._isApt && r._lat && r._lng).length;
-  const noCoordCount = records.filter(r => !r._isApt && (!r._lat || !r._lng)).length;
-  const aptNoCoord = records.filter(r => r._isApt && (!r._lat || !r._lng)).length;
+  // 카운트는 현재 작업 동(filteredRecords) 기준 — 지도·리스트·매칭·자동분할 모두 동 단위로 동작하므로 통일.
+  // activeDong 없으면(전체 보기) filteredRecords === records 라 전체 기준과 동일.
+  const withCoordCount = filteredRecords.filter(r => !r._isApt && r._lat && r._lng).length;
+  const aptCount = filteredRecords.filter(r => r._isApt).length;
+  const aptWithCoord = filteredRecords.filter(r => r._isApt && r._lat && r._lng).length;
+  const noCoordCount = filteredRecords.filter(r => !r._isApt && (!r._lat || !r._lng)).length;
+  const aptNoCoord = filteredRecords.filter(r => r._isApt && (!r._lat || !r._lng)).length;
   const totalWithCoord = withCoordCount + aptWithCoord;
   const totalNoCoord = noCoordCount + aptNoCoord;
-  // 지자체벗어남: 좌표는 있어서 지도에 표시되지만 지자체가 다른 건
-  const outCityCount = records.filter(r => r.좌표검증상태 === '지자체벗어남' && r._lat && r._lng).length;
-  const totalAll = records.length;
+  // 지자체벗어남: 좌표는 있어서 지도에 표시되지만 지자체가 다른 건 (현재 작업 동 기준)
+  const outCityCount = filteredRecords.filter(r => r.좌표검증상태 === '지자체벗어남' && r._lat && r._lng).length;
+  const totalAll = filteredRecords.length;
   const withCoordPct = totalAll > 0 ? Math.round(totalWithCoord / totalAll * 100) : 0;
   const unassigned = filteredRecords.filter(r => !r._driverId).length;
   const filteredQty = filteredRecords.reduce((s, r) => s + (parseInt(r.포수 || r['수량(포수)']) || 1), 0);
@@ -3699,8 +3701,14 @@ ${folders}
 
       const success = Object.keys(updates).length;
       const remain = targets.length - success;
+      // 좌표가 선택 지자체 밖/타 행정동인 건수 — 담당자에게 명시적으로 알림(확인필요로도 표시됨)
+      const outCity = Object.keys(updates).filter(id => areaMeta[id]?.status === '지자체벗어남').length;
+      const dongOut = Object.keys(updates).filter(id => areaMeta[id]?.status === '행정동벗어남').length;
       const title = force ? '좌표 재매칭 완료' : '좌표 보완 완료';
-      alert(`✅ ${title}\n성공: ${success}/${targets.length}건${remain > 0 ? `\n미수신 ${remain}건은 주소 재확인이 필요합니다.` : ' (100% 완료!)'}`);
+      let msg = `✅ ${title}\n성공: ${success}/${targets.length}건${remain > 0 ? `\n미수신 ${remain}건은 주소 재확인이 필요합니다.` : ' (100% 완료!)'}`;
+      if (outCity > 0) msg += `\n\n⚠ 지자체 이탈 ${outCity}건 — 선택한 지자체 밖 좌표입니다. 자동배정에서 제외되고 '확인필요'로 표시됩니다. 배정 전 담당자 확인 필요.`;
+      if (dongOut > 0) msg += `\n↪ 타 행정동 ${dongOut}건 — 다른 동으로 이관이 필요합니다('확인필요' 표시).`;
+      alert(msg);
     } catch (e) {
       alert('좌표 처리 실패: ' + e.message);
     } finally {
