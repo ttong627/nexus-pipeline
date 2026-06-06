@@ -333,9 +333,48 @@ export default function RouteSetupModal({
     [dongCounts]
   );
 
+  const scopedDongSet = useMemo(() => {
+    const source = selectedOrgDongs || orgDongs;
+    return source ? new Set(source) : null;
+  }, [selectedOrgDongs, orgDongs]);
+
+  const validDriverIdSet = useMemo(
+    () => new Set(drivers.filter(d => (d.name || '').trim()).map(d => d.id)),
+    [drivers]
+  );
+
+  const sanitizeDongDriverMap = useCallback((map = {}) => {
+    const next = {};
+    Object.entries(map || {}).forEach(([dong, ids]) => {
+      if (!dong) return;
+      if (scopedDongSet && !scopedDongSet.has(dong)) return;
+      if (!dongCounts[dong]) return;
+      const cleanIds = [...new Set(Array.isArray(ids) ? ids : [])].filter(id => validDriverIdSet.has(id));
+      if (cleanIds.length) next[dong] = cleanIds;
+    });
+    return next;
+  }, [scopedDongSet, dongCounts, validDriverIdSet]);
+
+  const sanitizedDongDriverMap = useMemo(
+    () => sanitizeDongDriverMap(dongDriverMap),
+    [dongDriverMap, sanitizeDongDriverMap]
+  );
+
+  useEffect(() => {
+    const prevJson = JSON.stringify(Object.keys(dongDriverMap).sort().reduce((acc, dong) => {
+      acc[dong] = [...(dongDriverMap[dong] || [])].sort();
+      return acc;
+    }, {}));
+    const nextJson = JSON.stringify(Object.keys(sanitizedDongDriverMap).sort().reduce((acc, dong) => {
+      acc[dong] = [...(sanitizedDongDriverMap[dong] || [])].sort();
+      return acc;
+    }, {}));
+    if (prevJson !== nextJson) setDongDriverMap(sanitizedDongDriverMap);
+  }, [dongDriverMap, sanitizedDongDriverMap]);
+
   const assignedDongs = useMemo(() =>
-    new Set(Object.entries(dongDriverMap).filter(([, ids]) => ids.length > 0).map(([d]) => d)),
-    [dongDriverMap]
+    new Set(Object.entries(sanitizedDongDriverMap).filter(([, ids]) => ids.length > 0).map(([d]) => d)),
+    [sanitizedDongDriverMap]
   );
 
   const totalSelected = useMemo(() =>
@@ -498,7 +537,7 @@ export default function RouteSetupModal({
   const saveDriverAssignment = async () => {
     if (mode !== 'cloud' || !cloudCity || !cloudMonthId || recordRefs.length === 0) return;
     const dongToName = {};
-    Object.entries(dongDriverMap).forEach(([dong, ids]) => {
+    Object.entries(sanitizedDongDriverMap).forEach(([dong, ids]) => {
       if (!ids.length) return;
       const names = ids.map(id => drivers.find(d => d.id === id)?.name || '').filter(Boolean);
       dongToName[dong] = names.join('/');
@@ -526,7 +565,7 @@ export default function RouteSetupModal({
       await setDoc(doc(db, 'user_driver_presets', uid, 'cities', effectiveCity), {
         city: effectiveCity,
         drivers,
-        dongDriverMap,
+        dongDriverMap: sanitizedDongDriverMap,
         baseDailyQty,
         savedAt: serverTimestamp(),
       });
@@ -539,7 +578,7 @@ export default function RouteSetupModal({
         orgId: selectedOrgId || null,
         orgName,
         drivers,
-        dongDriverMap,
+        dongDriverMap: sanitizedDongDriverMap,
         baseDailyQty,
         savedAt: serverTimestamp(),
       });
@@ -578,7 +617,7 @@ export default function RouteSetupModal({
       selectedDongs,
       drivers: finalDrivers,
       companyDrivers: allNamedDrivers.length ? allNamedDrivers : finalDrivers,
-      dongDriverMap: Object.keys(dongDriverMap).length ? dongDriverMap : map,
+      dongDriverMap: Object.keys(sanitizedDongDriverMap).length ? sanitizedDongDriverMap : sanitizeDongDriverMap(map),
       baseDailyQty,
       orgId: getOrgStableKey(),
       scopeDongs: selectedOrgDongs ? new Set(selectedOrgDongs) : (orgDongs ? new Set(orgDongs) : null),
@@ -659,6 +698,8 @@ export default function RouteSetupModal({
         const cityZone = (d.assignedZones || []).find(z => z.city === effectiveCity);
         if (!cityZone) return;
         cityZone.dongs.forEach(dong => {
+          if (scopedDongSet && !scopedDongSet.has(dong)) return;
+          if (!dongCounts[dong]) return;
           if (!newDongMap[dong]) newDongMap[dong] = [];
           if (!newDongMap[dong].includes(d._docId)) newDongMap[dong].push(d._docId);
         });
@@ -676,14 +717,14 @@ export default function RouteSetupModal({
   const handleStartAll = () => doStart({
     selectedDongs: assignedDongs,
     startDrivers: assignedDrivers.length > 0 ? assignedDrivers : drivers,
-    map: dongDriverMap,
+    map: sanitizedDongDriverMap,
   });
 
   // 기사별 시작
   const handleStartForDriver = (driverId) => {
     const driver = drivers.find(d => d.id === driverId);
     if (!driver) return;
-    const driverDongs = Object.entries(dongDriverMap)
+    const driverDongs = Object.entries(sanitizedDongDriverMap)
       .filter(([, ids]) => ids.includes(driverId)).map(([d]) => d);
     const filteredMap = {};
     driverDongs.forEach(dong => { filteredMap[dong] = [driverId]; });
@@ -692,7 +733,7 @@ export default function RouteSetupModal({
 
   // 행정동별 시작 (단일)
   const handleStartForDong = (dong) => {
-    const ids = dongDriverMap[dong] || [];
+    const ids = sanitizedDongDriverMap[dong] || [];
     const dongDrivers = drivers.filter(d => ids.includes(d.id));
     doStart({ selectedDongs: new Set([dong]), startDrivers: dongDrivers, map: { [dong]: ids } });
   };
@@ -705,7 +746,8 @@ export default function RouteSetupModal({
     const map = {};
     const driverIdSet = new Set();
     orderedSelection.forEach(dong => {
-      const ids = dongDriverMap[dong] || [];
+      const ids = sanitizedDongDriverMap[dong] || [];
+      if (!ids.length) return;
       map[dong] = ids;
       ids.forEach(id => driverIdSet.add(id));
     });
@@ -726,7 +768,7 @@ export default function RouteSetupModal({
   const isPersonalDriverMode = selectedOrgId === '__personal__';
   const activeDriverList = drivers.filter(d => activeDriverIds.has(d.id));
   const assignedDrivers = drivers.filter(d =>
-    Object.values(dongDriverMap).some(ids => ids.includes(d.id))
+    Object.values(sanitizedDongDriverMap).some(ids => ids.includes(d.id))
   );
 
   const headerSubtitle = mode === 'cloud' ? `${cloudCity} · ${cloudMonthId}` : '로컬 데이터';
@@ -885,7 +927,7 @@ export default function RouteSetupModal({
               <div className="grid grid-cols-3 gap-1.5">
                 {drivers.map((driver, idx) => {
                   const isActive = activeDriverIds.has(driver.id);
-                  const assignedDongNames = Object.entries(dongDriverMap)
+                  const assignedDongNames = Object.entries(sanitizedDongDriverMap)
                     .filter(([, ids]) => ids.includes(driver.id)).map(([d]) => d);
                   return (
                     <div key={driver.id} onClick={() => toggleDriverActive(driver.id)}
@@ -1028,7 +1070,7 @@ export default function RouteSetupModal({
               ) : (
                 <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2">
                   {dongList.map(dong => {
-                    const assignedIds = dongDriverMap[dong] || [];
+                    const assignedIds = sanitizedDongDriverMap[dong] || [];
                     const hasAssignment = assignedIds.length > 0;
                     const activeAssignedCount = assignedIds.filter(id => activeDriverIds.has(id)).length;
                     const isActiveAll = activeDriverIds.size > 0 && activeAssignedCount === activeDriverIds.size;
@@ -1230,7 +1272,7 @@ export default function RouteSetupModal({
           {/* 기사별 배분 현황 */}
           <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${Math.min(assignedDrivers.length, 3)}, 1fr)` }}>
             {assignedDrivers.map((d, idx) => {
-              const dDongs = Object.entries(dongDriverMap).filter(([, ids]) => ids.includes(d.id)).map(([dong]) => dong);
+              const dDongs = Object.entries(sanitizedDongDriverMap).filter(([, ids]) => ids.includes(d.id)).map(([dong]) => dong);
               const cnt = dDongs.reduce((s, dong) => s + (dongCounts[dong] || 0), 0);
               const pct = totalSelected > 0 ? Math.round(cnt / totalSelected * 100) : 0;
               // 기사별 좌표 현황 (cloud 모드, recordRefs 있을 때)
@@ -1406,7 +1448,7 @@ export default function RouteSetupModal({
               <div className="text-[11px] text-gray-400 font-bold px-1">기사 카드를 클릭하면 해당 기사의 행정동만 지도에 표시됩니다</div>
               <div className="grid grid-cols-2 gap-4">
                 {assignedDrivers.map(d => {
-                  const dDongs = Object.entries(dongDriverMap).filter(([, ids]) => ids.includes(d.id)).map(([dong]) => dong);
+                  const dDongs = Object.entries(sanitizedDongDriverMap).filter(([, ids]) => ids.includes(d.id)).map(([dong]) => dong);
                   const cnt = dDongs.reduce((s, dong) => s + (dongCounts[dong] || 0), 0);
                   return (
                     <button
@@ -1468,7 +1510,7 @@ export default function RouteSetupModal({
               {/* 동 카드 그리드 */}
               <div className="grid grid-cols-3 gap-3">
                 {[...assignedDongs].sort((a, b) => a.localeCompare(b, 'ko')).map(dong => {
-                  const ids = dongDriverMap[dong] || [];
+                  const ids = sanitizedDongDriverMap[dong] || [];
                   const dongDriversList = drivers.filter(d => ids.includes(d.id));
                   const cnt = dongCounts[dong] || 0;
                   const isSelected = dongSelection.has(dong);

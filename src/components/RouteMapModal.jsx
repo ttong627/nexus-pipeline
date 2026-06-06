@@ -3918,29 +3918,47 @@ ${folders}
       const name = String(driver.name || '').trim();
       if (name && !nameToId.has(name)) nameToId.set(name, driver.id);
     });
+    const validDriverIds = new Set(mergedDrivers.map(driver => driver.id));
+    const scopeDongSet = orgDongs ? new Set(orgDongs) : null;
+    const recordDongSet = new Set(records.map(record => getRouteDong(record)).filter(Boolean));
+    const isAllowedDong = (dong) => {
+      if (!dong) return false;
+      if (scopeDongSet && !scopeDongSet.has(dong)) return false;
+      if (recordDongSet.size && !recordDongSet.has(dong)) return false;
+      return true;
+    };
 
     const restoredDongDriverMap = {};
     Object.entries(setupDongDriverMapProp || {}).forEach(([dong, ids]) => {
-      if (!dong) return;
-      restoredDongDriverMap[dong] = Array.isArray(ids) ? [...ids] : [];
+      if (!isAllowedDong(dong)) return;
+      const cleanIds = [...new Set(Array.isArray(ids) ? ids : [])].filter(id => validDriverIds.has(id));
+      if (cleanIds.length) restoredDongDriverMap[dong] = cleanIds;
     });
 
     records.forEach(record => {
       const routeDong = getRouteDong(record);
-      if (!routeDong) return;
+      if (!isAllowedDong(routeDong)) return;
       const savedDriverName = String(record.기사 || record._origDriver || '').split('/')[0].trim();
       const driverId = record._driverId || nameToId.get(savedDriverName);
-      if (!driverId) return;
+      if (!driverId || !validDriverIds.has(driverId)) return;
       if (!restoredDongDriverMap[routeDong]) restoredDongDriverMap[routeDong] = [];
       if (!restoredDongDriverMap[routeDong].includes(driverId)) {
         restoredDongDriverMap[routeDong].push(driverId);
       }
     });
 
+    const payloadSelectedDongs = selectedDongsProp || (dongQueue.length ? new Set(dongQueue) : null);
+    const cleanSelectedDongs = payloadSelectedDongs
+      ? new Set([...payloadSelectedDongs].filter(isAllowedDong))
+      : null;
+    const cleanScopeDongs = orgDongs
+      ? new Set([...orgDongs].filter(dong => !recordDongSet.size || recordDongSet.has(dong)))
+      : cleanSelectedDongs;
+
     return {
-      selectedDongs: selectedDongsProp || (dongQueue.length ? new Set(dongQueue) : null),
-      scopeDongs: orgDongs ? new Set(orgDongs) : (selectedDongsProp || (dongQueue.length ? new Set(dongQueue) : null)),
-      orgDongs: orgDongs ? new Set(orgDongs) : null,
+      selectedDongs: cleanSelectedDongs,
+      scopeDongs: cleanScopeDongs,
+      orgDongs: cleanScopeDongs,
       drivers: mergedDrivers.length ? mergedDrivers : drivers,
       companyDrivers: mergedDrivers.length ? mergedDrivers : allKnownDrivers,
       dongDriverMap: restoredDongDriverMap,
