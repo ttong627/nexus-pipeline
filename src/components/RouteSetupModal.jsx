@@ -255,6 +255,7 @@ export default function RouteSetupModal({
           if (restoreState.drivers?.length) setDrivers(restoreState.drivers);
           setDongDriverMap(restoreState.dongDriverMap);
           if (restoreState.baseDailyQty) setBaseDailyQty(restoreState.baseDailyQty);
+          if (restoreState.orgId && restoreState.orgId !== 'all') setSelectedOrgId(restoreState.orgId); // 소속사 보존
           setSavedAssignmentLoaded(true);
           return; // finally가 isLoading 해제
         }
@@ -672,15 +673,20 @@ export default function RouteSetupModal({
     doStart({ selectedDongs: new Set([dong]), startDrivers: dongDrivers, map: { [dong]: ids } });
   };
 
-  // 행정동별 시작 (다중 선택)
+  // 행정동별 시작 (다중 선택) — 선택한 '모든' 동 + 그 동들 담당 기사 전체 + 전체 매핑을 넘김
   const handleStartForSelectedDongs = () => {
     if (!dongSelection.size) return;
     const orderedSelection = dongList.filter(dong => dongSelection.has(dong));
-    const firstDong = orderedSelection[0];
-    if (!firstDong) return;
-    const ids = dongDriverMap[firstDong] || [];
-    const dongDrivers = drivers.filter(d => ids.includes(d.id));
-    doStart({ selectedDongs: new Set([firstDong]), startDrivers: dongDrivers, map: { [firstDong]: ids } });
+    if (!orderedSelection.length) return;
+    const map = {};
+    const driverIdSet = new Set();
+    orderedSelection.forEach(dong => {
+      const ids = dongDriverMap[dong] || [];
+      map[dong] = ids;
+      ids.forEach(id => driverIdSet.add(id));
+    });
+    const dongDrivers = drivers.filter(d => driverIdSet.has(d.id));
+    doStart({ selectedDongs: new Set(orderedSelection), startDrivers: dongDrivers, map });
   };
 
   // 행정동 선택 토글

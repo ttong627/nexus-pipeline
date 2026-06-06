@@ -2745,6 +2745,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
         doc(db, 'route_sessions', cloudCity, 'months', cloudMonthId),
         {
           city: cloudCity, monthId: cloudMonthId,
+          orgId: orgIdProp || 'all',
           savedAt: serverTimestamp(),
           savedBy: auth.currentUser?.email || '',
           drivers: drivers.map(d => ({ id: d.id, name: d.name, color: d.color, capacity: d.capacity || 100, deliveryDate: d.deliveryDate || '' })),
@@ -2775,29 +2776,39 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
         if (hasOps) await batch.commit();
       }
       // driver_assignments 동기화 — RouteSetupModal에서 다음번 기사구성 자동 로드용
-      // ★ 셋업 원본 매핑 보존: 이번에 '작업한 동'만 records 기준으로 갱신하고, 작업 안 한 동(좌표 미수신 등)은
-      //   셋업 원본(setupDongDriverMapProp)을 그대로 유지 → 휘경1동 같은 미작업 동이 저장에서 증발하지 않게 함.
+      // ★ 근본 수정: 기존 저장본(전체 매핑·전체 기사)을 읽어 베이스로 삼고, 이번 세션에서 '작업한 동'만 갱신.
+      //   "행정동별 작업"으로 일부 동만 작업·저장해도 전체 매핑이 부분집합으로 덮어써지지 않게 함(나머지 동·기사 전부 보존).
       try {
-        const dongDriverMap = { ...(setupDongDriverMapProp || {}) }; // 원본에서 출발
+        const assignRef = doc(db, 'driver_assignments', cloudCity, 'orgs', orgIdProp || 'all');
+        let baseMap = {};
+        let baseDrivers = [];
+        try {
+          const existing = await getDoc(assignRef);
+          if (existing.exists()) {
+            baseMap = existing.data().dongDriverMap || {};
+            baseDrivers = Array.isArray(existing.data().drivers) ? existing.data().drivers : [];
+          }
+        } catch { /* 없으면 빈 베이스 */ }
+        // 베이스 = 기존 전체 저장본 + 이번 세션 셋업 매핑(작업 대상 동)
+        const dongDriverMap = { ...baseMap, ...(setupDongDriverMapProp || {}) };
         const workedDongs = new Set();
         records.forEach(r => { if (r._driverId) { const rd = getRouteDong(r); if (rd) workedDongs.add(rd); } });
-        workedDongs.forEach(d => { dongDriverMap[d] = []; }); // 작업한 동만 비우고 아래서 records로 재구성
+        workedDongs.forEach(d => { dongDriverMap[d] = []; }); // 작업한 동만 비우고 records로 재구성
         records.forEach(r => {
           const routeDong = getRouteDong(r);
           if (!r._driverId || !routeDong) return;
           if (!dongDriverMap[routeDong]) dongDriverMap[routeDong] = [];
           if (!dongDriverMap[routeDong].includes(r._driverId)) dongDriverMap[routeDong].push(r._driverId);
         });
-        await setDoc(
-          doc(db, 'driver_assignments', cloudCity, 'orgs', orgIdProp || 'all'),
-          {
-            drivers: drivers.map(d => ({ id: d.id, name: d.name, color: d.color, capacity: d.capacity || 100, startAddr: d.startAddr || '' })),
-            dongDriverMap,
-            updatedAt: serverTimestamp(),
-            updatedBy: auth.currentUser?.email || '',
-          },
-          { merge: true }
-        );
+        // 기사 명단 병합: 기존 + 이번 세션(id/name 갱신, 없으면 추가) → 부분 세션이 전체 기사를 날리지 않게
+        const sessionDrivers = drivers.map(d => ({ id: d.id, name: d.name, color: d.color, capacity: d.capacity || 100, startAddr: d.startAddr || '' }));
+        const mergedDrivers = [...baseDrivers];
+        sessionDrivers.forEach(sd => {
+          const i = mergedDrivers.findIndex(d => d.id === sd.id || (d.name && d.name === sd.name));
+          if (i >= 0) mergedDrivers[i] = { ...mergedDrivers[i], ...sd };
+          else mergedDrivers.push(sd);
+        });
+        await setDoc(assignRef, { drivers: mergedDrivers, dongDriverMap, updatedAt: serverTimestamp(), updatedBy: auth.currentUser?.email || '' }, { merge: true });
       } catch (syncErr) {
         console.error('driver_assignments 동기화 실패:', syncErr);
       }
