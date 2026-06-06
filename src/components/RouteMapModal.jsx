@@ -1156,6 +1156,18 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onSave, ini
   const activeDong = dongQueue[activeDongIndex] ?? null;
   const selectedDong = activeDong ?? '전체'; // 기존 코드 호환 alias (setSelectedDong 없음)
   const filteredRecords = activeDong ? records.filter(r => getRouteDong(r) === activeDong) : records;
+
+  // ── 현재 동에 한정된 기사 목록 — 동이 바뀌면 그 동의 기사 구성으로 새로 표시 ──
+  // 우선순위: setupDongDriverMap[현재동]에 매핑된 기사 + 현재 동에 실제 배정된 기사 + 외부기사.
+  // 설정 매핑이 전혀 없으면(셋업 미사용) 전역 기사 목록으로 폴백. 동에 기사 없으면 빈 목록("없음" 표시).
+  const hasDongSetupMapping = !!setupDongDriverMapProp && Object.keys(setupDongDriverMapProp).length > 0;
+  const dongScopedDrivers = useMemo(() => {
+    if (!hasDongSetupMapping) return drivers; // 셋업 매핑 없으면 전역
+    const ids = new Set(setupDongDriverMapProp?.[activeDong] || []);
+    filteredRecords.forEach(r => { if (r._driverId) ids.add(r._driverId); }); // 현재 동에 이미 배정된 기사도 포함(관리용)
+    return drivers.filter(d => d.isExternal || ids.has(d.id));
+  }, [hasDongSetupMapping, drivers, activeDong, setupDongDriverMapProp, filteredRecords]);
+
   const [listFilterGubun, setListFilterGubun] = useState('');
   const displayRecords = (() => {
     let base = selectedDriverFilter === 'all' ? filteredRecords
@@ -4613,7 +4625,13 @@ ${folders}
                   <span className="text-[10px] text-gray-600 font-bold">{unassigned}건</span>
                 </div>
               </button>
-              {drivers.map(d => {
+              {hasDongSetupMapping && dongScopedDrivers.filter(d => !d.isExternal).length === 0 && (
+                <div className="px-2 py-2.5 text-center text-[10px] text-gray-600 border border-dashed border-[#262626] rounded-lg">
+                  이 동에 배정된 기사 없음
+                  <div className="text-[9px] text-gray-700 mt-0.5">[추가]로 기사를 배정하거나 설정에서 매핑하세요</div>
+                </div>
+              )}
+              {dongScopedDrivers.map(d => {
                 const cnt = filteredRecords.filter(r => r._driverId === d.id).length;
                 const driverQty = filteredRecords.filter(r => r._driverId === d.id).reduce((s, r) => s + (parseInt(r.포수 || r['수량(포수)']) || 1), 0);
                 const isActive = selectedDriverFilter === d.id;
