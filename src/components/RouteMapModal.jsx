@@ -3905,6 +3905,48 @@ ${folders}
     setShowCompanyPicker(false);
   }, [drivers]);
 
+  const buildSetupRestorePayload = useCallback(() => {
+    const mergedDriverMap = new Map();
+    [...(allKnownDrivers || []), ...(drivers || [])].forEach(driver => {
+      if (!driver?.id) return;
+      mergedDriverMap.set(driver.id, { ...mergedDriverMap.get(driver.id), ...driver });
+    });
+
+    const mergedDrivers = [...mergedDriverMap.values()].filter(d => (d.name || '').trim());
+    const nameToId = new Map();
+    mergedDrivers.forEach(driver => {
+      const name = String(driver.name || '').trim();
+      if (name && !nameToId.has(name)) nameToId.set(name, driver.id);
+    });
+
+    const restoredDongDriverMap = {};
+    Object.entries(setupDongDriverMapProp || {}).forEach(([dong, ids]) => {
+      if (!dong) return;
+      restoredDongDriverMap[dong] = Array.isArray(ids) ? [...ids] : [];
+    });
+
+    records.forEach(record => {
+      const routeDong = getRouteDong(record);
+      if (!routeDong) return;
+      const savedDriverName = String(record.기사 || record._origDriver || '').split('/')[0].trim();
+      const driverId = record._driverId || nameToId.get(savedDriverName);
+      if (!driverId) return;
+      if (!restoredDongDriverMap[routeDong]) restoredDongDriverMap[routeDong] = [];
+      if (!restoredDongDriverMap[routeDong].includes(driverId)) {
+        restoredDongDriverMap[routeDong].push(driverId);
+      }
+    });
+
+    return {
+      selectedDongs: selectedDongsProp || (dongQueue.length ? new Set(dongQueue) : null),
+      drivers: mergedDrivers.length ? mergedDrivers : drivers,
+      companyDrivers: mergedDrivers.length ? mergedDrivers : allKnownDrivers,
+      dongDriverMap: restoredDongDriverMap,
+      baseDailyQty: baseDailyQtyProp,
+      orgId: orgIdProp || 'all',
+    };
+  }, [allKnownDrivers, drivers, setupDongDriverMapProp, records, selectedDongsProp, dongQueue, baseDailyQtyProp, orgIdProp]);
+
   const removeDriver = (id) => {
     setDrivers(prev => prev.filter(d => d.id !== id));
     setRecords(prev => prev.map(r => r._driverId === id ? { ...r, _driverId: null, 배송순번: '' } : r));
@@ -5008,7 +5050,7 @@ ${folders}
               {/* 이전 화면 — 매칭 방식 선택(setup match 단계)으로 돌아가기. 지도를 닫지 않음 */}
               {onBack && (
                 <button
-                  onClick={() => { if (isDirty && !window.confirm('저장하지 않은 배정 변경이 있습니다.\n이전 화면(매칭 방식 선택)으로 돌아가시겠습니까?\n(저장 안 한 변경은 사라집니다)')) return; onBack(); }}
+                  onClick={() => { if (isDirty && !window.confirm('저장하지 않은 배정 변경이 있습니다.\n이전 화면(매칭 방식 선택)으로 돌아가시겠습니까?\n(저장 안 한 변경은 사라집니다)')) return; onBack(buildSetupRestorePayload()); }}
                   title="이전 화면(매칭 방식 선택)으로 돌아가기"
                   className="px-2.5 py-1.5 bg-black/70 hover:bg-blue-900/60 text-white/80 hover:text-white border border-white/15 hover:border-blue-500/40 rounded-lg text-[10px] font-bold flex items-center gap-1.5 backdrop-blur-sm shadow-lg transition-all"
                 >

@@ -2645,7 +2645,23 @@ export default function App() {
             gridData={cloudRouteConfig ? [] : gridData.filter(r => !routeSetupResult?.selectedDongs || routeSetupResult.selectedDongs.has(r.행정동))}
             fileInfo={fileInfo}
             onClose={() => { setShowRouteMap(false); setCloudRouteConfig(null); setRouteSetupResult(null); }}
-            onBack={() => { setShowRouteMap(false); setRouteBackToMatch(true); setShowRouteSetup(true); }}
+            onBack={(restorePayload = null) => {
+              if (restorePayload) {
+                setRouteSetupResult(prev => ({
+                  ...(prev || {}),
+                  ...restorePayload,
+                  selectedDongs: restorePayload.selectedDongs ?? prev?.selectedDongs ?? null,
+                  drivers: restorePayload.drivers || prev?.drivers || null,
+                  companyDrivers: restorePayload.companyDrivers || prev?.companyDrivers || restorePayload.drivers || prev?.drivers || null,
+                  dongDriverMap: restorePayload.dongDriverMap || prev?.dongDriverMap || null,
+                  baseDailyQty: restorePayload.baseDailyQty || prev?.baseDailyQty || 40,
+                  orgId: restorePayload.orgId || prev?.orgId || 'all',
+                }));
+              }
+              setShowRouteMap(false);
+              setRouteBackToMatch(true);
+              setShowRouteSetup(true);
+            }}
             onSave={(updated) => pushHistory(updated)}
             initialCloudCity={cloudRouteConfig?.city || null}
             initialCloudMonthId={cloudRouteConfig?.monthId || null}
