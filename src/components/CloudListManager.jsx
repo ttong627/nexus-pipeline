@@ -20,7 +20,8 @@ import ColumnEditBar from './ColumnEditBar.jsx';
 import ColHeaderEditControls from './ColHeaderEditControls.jsx';
 import { useColumnEditor } from '../hooks/useColumnEditor.js';
 import { processAddress, asyncPool } from '../engine/addressEngine.js';
-import { canUseCoords } from '../utils/tierUtils.js';
+import { canUseCoords, canUseCoordsBg } from '../utils/tierUtils.js';
+import { getCachedCoord, saveCoordCache } from '../utils/coordCache.js';
 import { orderFieldsByExport, hasRi, getColWidth, colCellStyle } from '../utils/colOrder.js';
 
 const KAKAO_REST_KEY = import.meta.env.VITE_KAKAO_REST_KEY;
@@ -838,6 +839,11 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
   const [coordProgress, setCoordProgress] = useState(null); // { done, total } | null
   const bgCoordCancelRef = useRef(false);
   const [bgCoordState, setBgCoordState] = useState(null); // { done, total, success, isDone } | null
+  // 백그라운드 좌표 자동 수신 ON/OFF (기본 ON, localStorage 기억). 같은 명단 1회만 자동 시작(중복 방지).
+  const [autoBgCoord, setAutoBgCoord] = useState(() => {
+    try { return localStorage.getItem('nexus_auto_bg_coord') !== 'off'; } catch { return true; }
+  });
+  const bgAutoKeyRef = useRef('');
 
   // 공통 Kakao 지오코딩 엔진 — VIP 수동·VVIP 백그라운드 공유
   const _processCoords = async (targets, { cityId, monthId, concurrency, requestGap, cancelRef, onProgress }) => {
@@ -896,7 +902,7 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
     //   3) 지자체+전체주소(건물명 포함) keyword 검색
     //   4) 행정동+건물명 keyword 검색 (건물명 전용)
     // ※ 모든 단계에 반드시 지자체 컨텍스트 포함 — 도로명 단독 검색 금지
-    const getCoord = async (주소, 행정동 = '') => {
+    const getCoordKakao = async (주소, 행정동 = '') => {
       const road = cleanRoad(주소);
       const prefixedRoad = cityPrefix ? `${cityPrefix} ${road}` : road;
 
@@ -949,6 +955,15 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
       }
 
       return null;
+    };
+
+    // 영구 캐시 우선 — 같은 주소면 카카오 호출 없이 즉시 반환, 새로 받은 좌표는 캐시에 저장(API 최소화).
+    const getCoord = async (주소, 행정동 = '') => {
+      const cached = await getCachedCoord(db, cityId, 주소);
+      if (cached) return { ...cached, _step: 0 };
+      const r = await getCoordKakao(주소, 행정동);
+      if (r?.lat && r?.lng) await saveCoordCache(db, cityId, 주소, r.lat, r.lng);
+      return r;
     };
 
     let doneCount = 0;
@@ -1032,6 +1047,20 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
       }
     } catch { setBgCoordState(null); }
   };
+
+  // 명단을 열면 좌표 없는 건이 있을 때 백그라운드 좌표 자동 수신 시작(토글 ON·권한 보유 시).
+  // 같은 명단(도시_월)에 대해 1회만 시작하고, 이미 실행 중이면 건너뛴다. 캐시 우선이라 같은 주소는 API 미사용.
+  useEffect(() => {
+    if (!autoBgCoord || !canUseCoordsBg(user)) return;
+    if (!selectedCity || !selectedMonth?.id) return;
+    if (bgCoordState) return; // 이미 실행 중/완료표시 중
+    const key = `${selectedCity}_${selectedMonth.id}`;
+    if (bgAutoKeyRef.current === key) return; // 이 명단은 이미 자동 시작함
+    const missing = records.filter(r => r.주소 && !r.lat && !r.lng);
+    if (!missing.length) return;
+    bgAutoKeyRef.current = key;
+    triggerBgCoordFetch(selectedCity, selectedMonth.id, records);
+  }, [records, selectedCity, selectedMonth, autoBgCoord, user, bgCoordState]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── DB 전체 초기화 (records만 삭제, 월 메타는 유지) ─────────────────────
   const [isClearing, setIsClearing] = useState(false);
@@ -1746,6 +1775,19 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
                     {isFetchingCoords
                       ? <><span className="w-3 h-3 rounded-full border-2 border-blue-400 border-t-transparent animate-spin inline-block" /> {coordProgress ? `${coordProgress.done}/${coordProgress.total}건` : '준비중...'}</>
                       : <><MapPin size={11} /> {filterDong} 좌표받기</>}
+                  </button>
+                )}
+                {/* 백그라운드 좌표 자동 수신 ON/OFF — 명단 열 때 좌표없는 건 자동 매칭(캐시 우선, API 최소화) */}
+                {canUseCoordsBg(user) && (
+                  <button
+                    onClick={() => setAutoBgCoord(v => { const nv = !v; try { localStorage.setItem('nexus_auto_bg_coord', nv ? 'on' : 'off'); } catch { /* ignore */ } return nv; })}
+                    title={autoBgCoord ? '명단 열 때 좌표 없는 건을 백그라운드로 자동 수신 중 (클릭하여 끄기)' : '백그라운드 좌표 자동 수신 꺼짐 (클릭하여 켜기)'}
+                    className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-[11px] font-bold border transition-colors shrink-0 ${autoBgCoord ? 'bg-emerald-950/40 hover:bg-emerald-900/50 text-emerald-400 border-emerald-500/30' : 'bg-black/40 hover:bg-[#1a1a1a] text-gray-500 border-[#2a2a2a]'}`}
+                  >
+                    {bgCoordState && !bgCoordState.isDone
+                      ? <span className="w-3 h-3 rounded-full border-2 border-emerald-400 border-t-transparent animate-spin inline-block" />
+                      : <MapPin size={11} />}
+                    자동좌표 {autoBgCoord ? 'ON' : 'OFF'}
                   </button>
                 )}
                 {/* 초기화 */}

@@ -194,6 +194,7 @@ const ScheduleTab           = lazyWithChunkRecovery(() => import("./components/S
 import { processAddress, asyncPool, addTypoRecord, loadTypoDict } from "./engine/addressEngine.js";
 import { parsePhoneNumbers, parseSMS, parseBirthDate, normalizeBirth, extractPhoneNote, formatPhone } from "./utils/parsers.js";
 import { canUseRouteMap, canUseDbOverview, getMonthlyLimit } from "./utils/tierUtils.js";
+import { getCachedCoord, saveCoordCache } from "./utils/coordCache.js";
 import { buildStepStatus, getVisibleWorkflowSteps, getWorkflowMeta, getWorkflowMode, WORKFLOW_STEP_LABELS } from "./utils/workflow.js";
 import { LogOut, ShieldCheck, Database, Crown, Layers, UserCircle, Undo2, BarChart3, MapPin, Truck, CalendarDays, FileSpreadsheet, Home, ChevronLeft, ChevronRight, BookOpen } from "lucide-react";
 
@@ -1417,30 +1418,40 @@ export default function App() {
     try {
       for (const record of targets) {
         if (bgSaveCoordCancelRef.current) break;
-        await sleep(650);
 
-        const result = await processAddress(
-          record.주소,
-          record.이름 || '',
-          record.행정동 || '',
-          city,
-          record.특이사항 || '',
-          { includeCoords: true }
-        );
+        // 영구 캐시(coordinate_cache) 우선 — 같은 주소면 카카오 호출 없이 즉시 적용(API 최소화).
+        let coord = await getCachedCoord(db, city, record.주소);
+        let source = 'cache';
+        if (!coord) {
+          await sleep(650);
+          const result = await processAddress(
+            record.주소,
+            record.이름 || '',
+            record.행정동 || '',
+            city,
+            record.특이사항 || '',
+            { includeCoords: true }
+          );
+          if (result.lat && result.lng) {
+            coord = { lat: result.lat, lng: result.lng };
+            source = result.matchSource || 'background';
+            await saveCoordCache(db, city, record.주소, coord.lat, coord.lng); // 다음 명단에서 재사용
+          }
+        }
 
-        if (result.lat && result.lng) {
+        if (coord) {
           success++;
           const patch = {
-            lat: result.lat,
-            lng: result.lng,
+            lat: coord.lat,
+            lng: coord.lng,
             좌표상태: '좌표확인',
             배송상태: record.확인필요 ? '확인후배정가능' : '배송준비',
-            좌표출처: result.matchSource || 'background',
+            좌표출처: source,
             좌표수정일시: serverTimestamp(),
             좌표수정자: user?.email || 'background',
           };
           patches.push({ record, patch });
-          gridPatches[record.id] = { _lat: result.lat, _lng: result.lng };
+          gridPatches[record.id] = { _lat: coord.lat, _lng: coord.lng };
         }
 
         done++;

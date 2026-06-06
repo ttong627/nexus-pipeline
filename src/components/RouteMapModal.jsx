@@ -4,6 +4,7 @@ import { db, auth } from '../config/firebase.js';
 import { collection, serverTimestamp, Timestamp, getDocs, getDoc, setDoc, updateDoc, doc, writeBatch, query, where, limit } from 'firebase/firestore';
 import * as XLSX from 'xlsx';
 import CoordBrushModal from './CoordBrushModal.jsx';
+import { formatAddressDisplay } from '../utils/addressFormat.js';
 
 const KAKAO_JS_KEY = import.meta.env.VITE_KAKAO_JS_KEY;
 const KAKAO_REST_KEY = import.meta.env.VITE_KAKAO_REST_KEY;
@@ -5028,7 +5029,7 @@ ${folders}
                           </span>
                         </td>
                         <td className="px-1 py-0.5 text-gray-500 max-w-0 w-full">
-                          <span className="block truncate" title={r.주소}>{r.주소}</span>
+                          <span className="block truncate" title={formatAddressDisplay(r.주소)}>{formatAddressDisplay(r.주소)}</span>
                         </td>
                         <td className="px-1 py-0.5 text-center">
                           <input
@@ -5213,7 +5214,7 @@ ${folders}
 
                       {/* 현재 주소 */}
                       <div className="text-xs text-gray-400 bg-[#0a0a0a] rounded-lg px-3 py-2 break-all">
-                        {r.주소 || <span className="text-gray-600 italic">주소 없음</span>}
+                        {formatAddressDisplay(r.주소) || <span className="text-gray-600 italic">주소 없음</span>}
                       </div>
 
                       {/* 지자체이탈: 안내 / 좌표없음: 주소수정 재처리 */}
