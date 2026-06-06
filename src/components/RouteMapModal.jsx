@@ -1083,6 +1083,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
   // ── 좌표 삭제 브러시 모달
   const [showCoordBrush, setShowCoordBrush] = useState(false);
   const [showExportMenu, setShowExportMenu] = useState(false); // 내보내기 드롭다운(KML·엑셀·배송루트·공유 통합)
+  const [savedView, setSavedView] = useState(null); // 저장본 보기 모달: null | { loading, rows, summary }
 
   // ── 소속사 기사 추가 피커
   const [showCompanyPicker, setShowCompanyPicker] = useState(false);
@@ -2879,6 +2880,39 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
     }
   }, [cloudCity, cloudMonthId, showToast]);
 
+  // ── 저장본 보기: 현재 지자체·월의 DB 저장본(기사·배송순번·좌표)을 그대로 조회해 표로 보여줌 ──
+  const handleOpenSavedView = useCallback(async () => {
+    if (!cloudCity || !cloudMonthId) { showToast('error', '클라우드 명단이 아닙니다.'); return; }
+    setSavedView({ loading: true, rows: [], summary: { total: 0, assigned: 0, noCoord: 0, byDriver: {} } });
+    try {
+      const recSnap = await getDocs(collection(db, 'cloud_lists', cloudCity, 'months', cloudMonthId, 'records'));
+      const rows = recSnap.docs.map(d => {
+        const fd = d.data();
+        return {
+          id: d.id,
+          name: fd.이름 || '',
+          dong: fd.행정동 || '',
+          addr: fd.주소 || '',
+          driver: (fd.기사 || '').trim(),
+          seq: fd.배송순번 || '',
+          hasCoord: fd.lat != null && fd.lng != null,
+        };
+      });
+      const byDriver = {};
+      let assigned = 0, noCoord = 0;
+      rows.forEach(r => {
+        if (r.driver) { byDriver[r.driver] = (byDriver[r.driver] || 0) + 1; assigned++; }
+        if (!r.hasCoord) noCoord++;
+      });
+      // 기사별 → 배송순번 순으로 정렬해 보기 편하게
+      rows.sort((a, b) => (a.driver || 'ㅎ').localeCompare(b.driver || 'ㅎ', 'ko') || (parseInt(a.seq) || 9999) - (parseInt(b.seq) || 9999));
+      setSavedView({ loading: false, rows, summary: { total: rows.length, assigned, noCoord, byDriver } });
+    } catch (e) {
+      showToast('error', `저장본 조회 실패: ${e.message}`);
+      setSavedView(null);
+    }
+  }, [cloudCity, cloudMonthId, showToast]);
+
   // ── 2단계: 좌표 캐시 유틸 ────────────────────────────────────────────
   const addrToDocId = (addr) => (addr || '').replace(/[/]/g, '_').slice(0, 400);
 
@@ -3946,6 +3980,16 @@ ${folders}
                 {isLoadingSession ? <RefreshCw size={10} className="animate-spin" /> : <RefreshCw size={10} />}
                 {isLoadingSession ? '로딩...' : '이어서 작업'}
               </button>
+              {/* 저장본 보기/편집 — DB에 저장된 기사·배송순번·좌표를 표로 보고, 불러와 편집 */}
+              {isCloudMode && (
+                <button
+                  onClick={handleOpenSavedView}
+                  title="DB에 저장된 배정(기사·배송순번·좌표)을 표로 보고, 불러와 편집할 수 있습니다"
+                  className="px-2 py-1 bg-[#0a1520] border border-cyan-600/40 text-cyan-400 hover:bg-cyan-900/20 rounded-lg text-[10px] font-bold flex items-center gap-1 transition-colors"
+                >
+                  <HardDrive size={10} /> 저장본
+                </button>
+              )}
               {/* 임시저장 */}
               {/* 임시저장(수동)은 제거 — 5분 자동 임시저장이 상시 동작하므로 중복 */}
               {/* 이전달 승계 */}
@@ -5942,6 +5986,75 @@ ${folders}
                 <Share2 size={12} /> 전체 복사
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── 저장본 보기/편집 모달 ─────────────────────────────────────────── */}
+      {savedView && (
+        <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-[650] flex items-center justify-center p-4" onClick={() => setSavedView(null)}>
+          <div className="w-full max-w-3xl max-h-[85vh] bg-[#0a0a0a] border border-cyan-500/30 rounded-2xl shadow-[0_0_50px_rgba(6,182,212,0.15)] flex flex-col" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between p-4 border-b border-[#1a1a1a]">
+              <div className="flex items-center gap-2">
+                <HardDrive size={16} className="text-cyan-400 shrink-0" />
+                <div>
+                  <div className="text-sm font-black text-white">저장본 — {cloudCity} {cloudMonthId}</div>
+                  <div className="text-[10px] text-gray-500">DB에 저장된 기사·배송순번·좌표입니다</div>
+                </div>
+              </div>
+              <button onClick={() => setSavedView(null)} className="p-1.5 bg-red-900/40 hover:bg-red-700/60 text-red-400 hover:text-white rounded-lg transition-colors"><X size={14} /></button>
+            </div>
+
+            {savedView.loading ? (
+              <div className="flex-1 flex items-center justify-center p-10 text-gray-500 text-sm"><RefreshCw size={16} className="animate-spin mr-2" /> 저장본 불러오는 중...</div>
+            ) : (
+              <>
+                <div className="px-4 py-2 border-b border-[#1a1a1a] flex flex-wrap items-center gap-2 text-[11px]">
+                  <span className="text-gray-400">전체 <b className="text-white">{savedView.summary.total.toLocaleString()}</b></span>
+                  <span className="text-gray-400">배정 <b className="text-emerald-400">{savedView.summary.assigned.toLocaleString()}</b></span>
+                  <span className="text-gray-400">미배정 <b className="text-amber-400">{(savedView.summary.total - savedView.summary.assigned).toLocaleString()}</b></span>
+                  <span className="text-gray-400">좌표없음 <b className={savedView.summary.noCoord > 0 ? 'text-red-400' : 'text-emerald-400'}>{savedView.summary.noCoord.toLocaleString()}</b></span>
+                  <span className="mx-1 text-gray-700">|</span>
+                  {Object.entries(savedView.summary.byDriver).sort((a, b) => b[1] - a[1]).map(([dn, c]) => (
+                    <span key={dn} className="px-1.5 py-0.5 rounded bg-[#111] border border-[#222] text-gray-300">{dn} <b className="text-cyan-400">{c}</b></span>
+                  ))}
+                </div>
+                <div className="flex-1 overflow-y-auto">
+                  <table className="w-full text-[11px]">
+                    <thead className="sticky top-0 bg-[#0d0d0d] text-gray-500 z-10">
+                      <tr className="border-b border-[#1a1a1a]">
+                        <th className="text-left px-3 py-1.5 font-bold">기사</th>
+                        <th className="text-left px-2 py-1.5 font-bold w-10">순번</th>
+                        <th className="text-left px-2 py-1.5 font-bold">이름</th>
+                        <th className="text-left px-3 py-1.5 font-bold">주소</th>
+                        <th className="text-center px-2 py-1.5 font-bold w-12">좌표</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {savedView.rows.map((r, i) => (
+                        <tr key={r.id || i} className="border-b border-[#141414] hover:bg-[#101010]">
+                          <td className="px-3 py-1 font-bold text-cyan-300">{r.driver || <span className="text-gray-600">미배정</span>}</td>
+                          <td className="px-2 py-1 text-gray-400">{r.seq || '-'}</td>
+                          <td className="px-2 py-1 text-gray-200 whitespace-nowrap">{r.name}</td>
+                          <td className="px-3 py-1 text-gray-400 truncate max-w-[280px]" title={r.addr}>{r.addr}</td>
+                          <td className="px-2 py-1 text-center">{r.hasCoord ? <span className="text-emerald-500">●</span> : <span className="text-red-500">○</span>}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="p-3 border-t border-[#1a1a1a] flex items-center justify-between gap-2">
+                  <span className="text-[10px] text-gray-600">편집하려면 저장본을 지도로 불러온 뒤 수정하고 다시 저장하세요.</span>
+                  <button
+                    onClick={() => { setSavedView(null); handleLoadSession(); }}
+                    disabled={isLoadingSession}
+                    className="px-3 py-1.5 bg-cyan-950/50 border border-cyan-500/40 text-cyan-300 hover:bg-cyan-900/50 rounded-xl text-xs font-black flex items-center gap-1.5 transition-colors disabled:opacity-50"
+                  >
+                    <RefreshCw size={12} /> 이 저장본 불러와 편집
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}
