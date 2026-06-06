@@ -233,8 +233,11 @@ export default function DriverRegistryModal({ user, onClose }) {
                 const data = d.data();
                 const dong = data['행정동'];
                 if (!dong) return;
-                if (isGun) { const ri = extractRi(data['주소'] || ''); dongSet.add(ri ? `${dong} ${ri}` : dong); }
-                else dongSet.add(dong);
+                if (isGun) {
+                  // 군은 리까지: 저장된 '리' 필드 우선, 없으면 주소에서 추출
+                  const ri = (data['리'] || '').trim() || extractRi(data['주소'] || '');
+                  dongSet.add(ri ? `${dong} ${ri}` : dong);
+                } else dongSet.add(dong);
               });
               dongs = [...dongSet].sort((a, b) => a.localeCompare(b, 'ko'));
             }
