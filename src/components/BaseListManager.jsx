@@ -11,6 +11,7 @@ import {
 
 import { normalizeBirth, parsePhoneNumbers, formatPhoneInput } from '../utils/parsers.js';
 import { REGIONS } from '../utils/regions.js';
+import { useConfirmDelete } from '../contexts/ConfirmDeleteContext.jsx';
 import ColResizeHandle from './ColResizeHandle.jsx';
 import ColumnEditBar from './ColumnEditBar.jsx';
 import ColHeaderEditControls from './ColHeaderEditControls.jsx';
@@ -54,6 +55,7 @@ const fmtDate = (ts) => {
 export default function BaseListManager({ user, onBack, initialCity = '', exportColOrder = [], setExportColOrder, defaultExportCols = [] }) {
   const isAdmin = user?.role === 'admin';
   const citiesApproved = user?.citiesApproved || [];
+  const confirmDelete = useConfirmDelete();
 
   // 칼럼 순서·표시 — exportColOrder(전역, 엑셀·정제결과와 공유) 기준으로 FIELDS 재정렬
   const editor = useColumnEditor({ exportColOrder, setExportColOrder, defaultExportCols });
@@ -311,7 +313,10 @@ export default function BaseListManager({ user, onBack, initialCity = '', export
     if (!hasChanges || saving) return;
     const modifiedEntries = Object.entries(dirtyMap).filter(([id]) => !deletedIds.has(id));
     const deletedArr = [...deletedIds];
-    if (!confirm(`변경사항을 저장하시겠습니까?\n수정: ${modifiedEntries.length}건 / 삭제: ${deletedArr.length}건`)) return;
+    const _saveMsg = `변경사항을 저장하시겠습니까?\n수정: ${modifiedEntries.length}건 / 삭제: ${deletedArr.length}건`;
+    if (!confirm(deletedArr.length > 0
+      ? `⚠️ 삭제 ${deletedArr.length}건이 포함됩니다 — 삭제는 되돌릴 수 없습니다.\n\n${_saveMsg}`
+      : _saveMsg)) return;
     setSaving(true);
     try {
       const allOps = [
@@ -339,7 +344,7 @@ export default function BaseListManager({ user, onBack, initialCity = '', export
 
   const handleDeleteAllRecords = async () => {
     if (!selectedCity || !hasCityAccess) return;
-    if (!confirm(`⚠️ "${selectedCity}" 기본명단을 전체 삭제합니다.\n이 작업은 되돌릴 수 없습니다. 계속하시겠습니까?`)) return;
+    if (!(await confirmDelete({ target: `"${selectedCity}" 기본명단 전체`, count: records.length, dangerous: true }))) return;
     setSaving(true);
     try {
       const freshSnap = await getDocsFromServer(collection(db, `base_lists/${selectedCity}/records`));
@@ -363,7 +368,7 @@ export default function BaseListManager({ user, onBack, initialCity = '', export
     if (!selectedCity || !hasCityAccess) return;
     const targets = records.filter(r => !(r.note || '').trim());
     if (!targets.length) { alert('특이사항 없는 레코드가 없습니다.'); return; }
-    if (!confirm(`특이사항이 없는 레코드 ${targets.length.toLocaleString()}건을 삭제합니다.\n이 작업은 되돌릴 수 없습니다. 계속하시겠습니까?`)) return;
+    if (!(await confirmDelete({ target: '특이사항 없는 레코드', count: targets.length, dangerous: targets.length >= 50 }))) return;
     setSaving(true);
     try {
       for (let i = 0; i < targets.length; i += 499) {
@@ -383,7 +388,7 @@ export default function BaseListManager({ user, onBack, initialCity = '', export
 
   // ── 지자체 항목 자체 삭제 (카드 X 버튼) ──────────────────────────
   const handleDeleteCity = async (cityId) => {
-    if (!confirm(`"${cityId}" 지자체 항목을 삭제합니다.\n레코드 ${storedCities.find(c => c.id === cityId)?.recordCount ?? '전체'}건도 함께 삭제됩니다.\n계속하시겠습니까?`)) return;
+    if (!(await confirmDelete({ target: `"${cityId}" 지자체 항목`, count: storedCities.find(c => c.id === cityId)?.recordCount, note: '소속 레코드도 함께 삭제됩니다.', dangerous: true }))) return;
     setSaving(true);
     try {
       const snap = await getDocsFromServer(collection(db, `base_lists/${cityId}/records`));
@@ -411,7 +416,7 @@ export default function BaseListManager({ user, onBack, initialCity = '', export
       const snap = await getDocsFromServer(collection(db, `base_lists/${selectedCity}/records`));
       const ghosts = snap.docs.filter(d => !d.data().name?.trim());
       if (ghosts.length === 0) { alert('유령 데이터가 없습니다.'); return; }
-      if (!confirm(`이름이 없는 유령 레코드 ${ghosts.length}건을 삭제합니다.\n계속하시겠습니까?`)) return;
+      if (!(await confirmDelete({ target: '이름 없는 유령 레코드', count: ghosts.length, dangerous: ghosts.length >= 50 }))) return;
       for (let i = 0; i < ghosts.length; i += 499) {
         const batch = writeBatch(db);
         ghosts.slice(i, i + 499).forEach(d => batch.delete(d.ref));

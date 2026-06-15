@@ -112,36 +112,26 @@ service cloud.firestore {
         uData.citiesApproved.hasAll([cityId]);
     }
 
-    // ── 기본명단: 생성·수정은 승인 사용자, 삭제는 관리자만 (#5) ──────────────
+    // ── 기본명단: 데이터는 기업에 귀속 — 본인 승인 지자체 담당자 풀 CRUD (등록·수정·삭제) ──
     match /base_lists/{cityId} {
-      allow read: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin() || isAdminEmail());
-      allow create, update: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin() || isAdminEmail());
-      allow delete: if isAdmin() || isAdminEmail();
+      allow read, write: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin() || isAdminEmail());
 
       match /records/{recordId} {
-        allow read: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin() || isAdminEmail());
-        allow create, update: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin() || isAdminEmail());
-        allow delete: if isAdmin() || isAdminEmail();
+        allow read, write: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin() || isAdminEmail());
       }
     }
 
     // ── 월별 배송명단: 읽기는 승인 사용자, 쓰기는 관리자, 기사·배송순번은 담당자도 수정 가능 ──
     match /cloud_lists/{cityId} {
+      // 데이터는 기업에 귀속 — 본인 승인 지자체 담당자 풀 CRUD (등록·수정·삭제)
       // isAdminEmail(): JWT 직접 확인 — isAdmin()의 Firestore get() 실패 시 폴백
-      allow read: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin() || isAdminEmail());
-      allow write: if isAdmin() || isAdminEmail();
+      allow read, write: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin() || isAdminEmail());
 
       match /months/{monthId} {
-        allow read: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin() || isAdminEmail());
-        allow write: if isAdmin() || isAdminEmail();
+        allow read, write: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin() || isAdminEmail());
 
         match /records/{recordId} {
-          allow read: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin() || isAdminEmail());
-          allow write: if isAdmin() || isAdminEmail();
-          // 담당자: 기사·배송순번·좌표·isApt 업데이트 허용 (루트맵 배정+좌표 저장용)
-          allow update: if isAuthenticated() && hasCityAccess(cityId) &&
-            request.resource.data.diff(resource.data).affectedKeys()
-              .hasOnly(['기사', '배송순번', 'lat', 'lng', 'isApt']);
+          allow read, write: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin() || isAdminEmail());
         }
       }
     }

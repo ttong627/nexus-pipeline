@@ -3,7 +3,7 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import * as XLSX from 'xlsx';
 import {
   db, storage, auth,
-  collection, getDocs, getDocsFromServer, getDoc, setDoc, doc, deleteDoc, writeBatch, serverTimestamp,
+  collection, getDocs, getDocsFromServer, getDoc, setDoc, doc, deleteDoc, writeBatch, serverTimestamp, addDoc, Timestamp,
   ref, getDownloadURL, deleteObject,
 } from '../config/firebase.js';
 import { normalizeBirth, formatPhoneInput } from '../utils/parsers.js';
@@ -24,8 +24,10 @@ import { canUseCoords, canUseCoordsBg } from '../utils/tierUtils.js';
 import { getCachedCoord, saveCoordCache } from '../utils/coordCache.js';
 import { idbGet, idbSet, idbDel } from '../utils/idbCache.js';
 import { orderFieldsByExport, hasRi, getColWidth, colCellStyle } from '../utils/colOrder.js';
+import { useConfirmDelete } from '../contexts/ConfirmDeleteContext.jsx';
 
 const KAKAO_REST_KEY = import.meta.env.VITE_KAKAO_REST_KEY;
+const ttl90 = () => Timestamp.fromMillis(Date.now() + 90 * 24 * 60 * 60 * 1000);
 
 // ─── Records Cache (IndexedDB, 24h TTL) ───────────────────────────────────────
 // IndexedDB 비동기 저장 — 큰 JSON을 localStorage에 동기 저장/읽기하며 생기던 렉 제거.
@@ -275,6 +277,9 @@ const VirtualTable = memo(function VirtualTable({ fields, exportColOrder, onColR
 export default function CloudListManager({ user, onBack, initialCity = '', onOpenRouteMap, onOpenInResultGrid, exportColOrder = [], setExportColOrder, defaultExportCols = [] }) {
   const isAdmin = user?.role === 'admin';
   const approvedCities = user?.citiesApproved || [];
+  // 월별 명단 삭제 권한: 관리자 또는 본인 승인 지자체 담당자 (CLAUDE.md 권한규칙 — base_lists 제외)
+  const canDeleteCity = (cityId) => isAdmin || approvedCities.includes(cityId);
+  const confirmDelete = useConfirmDelete();
 
   // 칼럼 순서·표시 — exportColOrder(전역, 엑셀·정제결과와 공유) 기준으로 CLOUD_FIELDS 재정렬
   const editor = useColumnEditor({ exportColOrder, setExportColOrder, defaultExportCols });
@@ -691,6 +696,17 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
         'latest차상위Count': newLatest?.차상위Count ?? 0,
         lastUpdatedAt: serverTimestamp(),
       }, { merge: true });
+      // 감사 로그 — 담당자/관리자 월 삭제 추적 (CLAUDE.md B-11)
+      try {
+        await addDoc(collection(db, 'audit_logs'), {
+          action: 'DELETE_MONTHLY_LIST', city, monthId: month.id,
+          count: rSnap.docs.length,
+          timestamp: serverTimestamp(),
+          adminEmail: user?.email || 'unknown',
+          uid: user?.uid || auth.currentUser?.uid || 'unknown',
+          expireAt: ttl90(),
+        });
+      } catch { /* 감사 로그 실패는 삭제 자체를 막지 않음 */ }
       fetchMonths();
       fetchAllCities();
       alert(`${city} ${month.id} 명단이 삭제되었습니다.`);
@@ -793,7 +809,10 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
     if (!hasRecordChanges || saving) return;
     const modCount = Object.keys(dirtyRecords).length;
     const delCount = deletedRecordIds.size;
-    if (!confirm(`변경사항을 저장하시겠습니까?\n수정: ${modCount}건 / 삭제: ${delCount}건`)) return;
+    const _saveMsg = `변경사항을 저장하시겠습니까?\n수정: ${modCount}건 / 삭제: ${delCount}건`;
+    if (!confirm(delCount > 0
+      ? `⚠️ 삭제 ${delCount}건이 포함됩니다 — 삭제는 되돌릴 수 없습니다.\n\n${_saveMsg}`
+      : _saveMsg)) return;
     setSaving(true);
     try {
       const allOps = [
@@ -1073,9 +1092,7 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
   const handleClearAllRecords = async () => {
     if (!isAdmin || !selectedCity || !selectedMonth) return;
     const count = records.length;
-    if (!window.confirm(
-      `⚠️ 경고: ${selectedCity} ${selectedMonth.id} 월의 레코드 ${count.toLocaleString()}건을 전부 삭제합니다.\n\n월 항목은 유지되며 재업로드 가능합니다.\n이 작업은 되돌릴 수 없습니다. 계속하시겠습니까?`
-    )) return;
+    if (!(await confirmDelete({ target: `${selectedCity} ${selectedMonth.id} 월 레코드`, count, note: '월 항목은 유지되며 재업로드 가능합니다.', dangerous: true }))) return;
     setIsClearing(true);
     try {
       const snap = await getDocs(collection(db, 'cloud_lists', selectedCity, 'months', selectedMonth.id, 'records'));
@@ -1142,9 +1159,7 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
     const preview = ghosts.slice(0, 5).map(r =>
       `• ${r.이름 || '(이름없음)'} / ${r.행정동 || ''} ${r.주소 || '(주소없음)'}`
     ).join('\n');
-    if (!window.confirm(
-      `유령데이터 ${ghosts.length}건을 삭제합니다.\n\n예시:\n${preview}${ghosts.length > 5 ? `\n...외 ${ghosts.length - 5}건` : ''}\n\n계속하시겠습니까?`
-    )) return;
+    if (!(await confirmDelete({ target: '유령데이터', count: ghosts.length, note: `예시:\n${preview}${ghosts.length > 5 ? `\n...외 ${ghosts.length - 5}건` : ''}`, dangerous: ghosts.length >= 50 }))) return;
 
     setIsPurging(true);
     try {
@@ -1674,16 +1689,18 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
                             : 'bg-[#0a0a0a] border-[#181818] opacity-50 cursor-not-allowed'
                         }`}
                       >
-                        {/* 관리 모드 버튼 (관리자만) */}
-                        {isAdmin && m && (
+                        {/* 관리 버튼: 인라인 편집은 관리자만, 월 삭제는 담당자/관리자 */}
+                        {(isAdmin || canDeleteCity(cityItem.id)) && m && (
                           <div className="absolute top-3 right-3 opacity-0 group-hover:opacity-100 flex gap-1 transition-all">
-                            <button
-                              onClick={e => { e.stopPropagation(); handleAdminMode(cityItem); }}
-                              className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-gray-600 hover:text-gray-300 transition-all"
-                              title="인라인 편집 모드"
-                            >
-                              <FileSpreadsheet size={12} />
-                            </button>
+                            {isAdmin && (
+                              <button
+                                onClick={e => { e.stopPropagation(); handleAdminMode(cityItem); }}
+                                className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-gray-600 hover:text-gray-300 transition-all"
+                                title="인라인 편집 모드"
+                              >
+                                <FileSpreadsheet size={12} />
+                              </button>
+                            )}
                             <button
                               onClick={e => { e.stopPropagation(); setDeleteMonthConfirm({ month: m, city: cityItem.id }); }}
                               className="p-1.5 rounded-lg bg-red-950/30 hover:bg-red-950/60 text-red-700 hover:text-red-400 transition-all"
@@ -1757,7 +1774,7 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
                       <span className="text-gray-600">업로드: {fmtTs(selectedMonth.uploadedAt)} · {selectedMonth.uploadedBy}</span>
                     )}
                   </div>
-                  {isAdmin && (
+                  {canDeleteCity(selectedCity) && (
                     <button
                       onClick={() => setDeleteMonthConfirm({ month: selectedMonth, city: selectedCity })}
                       disabled={isDeletingMonth}

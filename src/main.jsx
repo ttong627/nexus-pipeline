@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.jsx'
 import ErrorBoundary from './components/ErrorBoundary.jsx'
+import { ConfirmDeleteProvider } from './contexts/ConfirmDeleteContext.jsx'
 import { registerSW } from 'virtual:pwa-register'
 
 // 서비스워커 등록(autoUpdate). 워크박스 설정상 HTML(index)은 항상 네트워크 우선이라
@@ -20,7 +21,9 @@ window.addEventListener('beforeinstallprompt', (e) => {
 createRoot(document.getElementById('root')).render(
   <StrictMode>
     <ErrorBoundary>
-      <App />
+      <ConfirmDeleteProvider>
+        <App />
+      </ConfirmDeleteProvider>
     </ErrorBoundary>
   </StrictMode>,
 )
