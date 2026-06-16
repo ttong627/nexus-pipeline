@@ -589,26 +589,35 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
       const baseSnap = await getDocsFromServer(collection(db, `base_lists/${selectedCity}/records`));
       const baseRecs = baseSnap.docs.map(d => ({ id: d.id, ...d.data() }));
 
-      const byBirth = {}, byPhone = {};
+      const normDong = (v) => (v || '').replace(/\s/g, '').trim();
+      const byBirth = {}, byPhone = {}, byDongSet = {};
       baseRecs.forEach(r => {
         const name = (r.name || r.이름 || '').trim();
         const birth = r.birthKey || normalizeBirth(String(r.생년월일 || ''));
         const mobile = normPhone(r.mobile || r.휴대폰 || '');
+        const dong = normDong(r.dong || r.읍면동 || r.행정동 || '');
         const note = (r.note || r.특이사항 || '').trim();
         if (!name || !note) return;
         if (birth) byBirth[`${name}__${birth}`] = note;
         if (mobile.length >= 9) byPhone[`${name}__${mobile}`] = note;
+        if (dong) { const k = `${name}__${dong}`; (byDongSet[k] || (byDongSet[k] = new Set())).add(note); }
       });
+      // 읍면동+이름 fallback — 생년월일·휴대폰 없을 때 기본 매칭. 동명이인(서로 다른 특이사항)이면 모호 → 제외
+      const byDong = {};
+      Object.entries(byDongSet).forEach(([k, set]) => { if (set.size === 1) byDong[k] = [...set][0]; });
 
       const updates = [];
+      let dongMatched = 0;
       records.forEach(r => {
         if ((r.특이사항 || '').trim()) return;
         const name = (r.이름 || '').trim();
         const birth = normalizeBirth(String(r.생년월일 || ''));
         const mobile = normPhone(r.휴대폰 || '');
+        const dong = normDong(r.행정동 || r.읍면동 || '');
         let note = '';
         if (birth) note = byBirth[`${name}__${birth}`] || '';
         if (!note && mobile.length >= 9) note = byPhone[`${name}__${mobile}`] || '';
+        if (!note && dong) { note = byDong[`${name}__${dong}`] || ''; if (note) dongMatched++; }
         if (note) updates.push({ id: r.id, 특이사항: note });
       });
 
