@@ -7,8 +7,9 @@
     "dev": "vite",
     "version:bump": "node scripts/bump-version.cjs",
     "build": "vite build",
-    "deploy": "firebase deploy --only hosting",
-    "deploy:hosting": "firebase deploy --only hosting",
+    "deploy": "firebase deploy --only hosting --account ttong627@gmail.com",
+    "deploy:hosting": "firebase deploy --only hosting --account ttong627@gmail.com",
+    "deploy:rules": "firebase deploy --only firestore:rules --account ttong627@gmail.com",
     "lint": "eslint .",
     "preview": "vite preview"
   },
