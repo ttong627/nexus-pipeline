@@ -20,6 +20,7 @@ import ColumnEditBar from './ColumnEditBar.jsx';
 import ColHeaderEditControls from './ColHeaderEditControls.jsx';
 import { useColumnEditor } from '../hooks/useColumnEditor.js';
 import { processAddress, asyncPool } from '../engine/addressEngine.js';
+import { guardAddressDetail } from '../utils/addressFormat.js';
 import { canUseCoords, canUseCoordsBg } from '../utils/tierUtils.js';
 import { getCachedCoord, saveCoordCache } from '../utils/coordCache.js';
 import { idbGet, idbSet, idbDel } from '../utils/idbCache.js';
@@ -1289,7 +1290,8 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
         setRefineProgress({ current, total: records.length });
 
         const oldAddr = (rec.주소 || '').trim();
-        const newAddr = (refined.주소 || '').trim();
+        // 상세주소(동·호수) 손실 방지 — 정제 결과가 기존 동/호수를 잃으면 복원/보존
+        const newAddr = guardAddressDetail(oldAddr, (refined.주소 || '').trim());
         // 리(里) 백필: 주소가 안 바뀌어도 리가 비어있거나 다르면 채운다 (읍/면 배정 매칭용)
         const riNeedsUpdate = !!refined.리 && refined.리 !== (rec.리 || '');
         const addrChanged = !!newAddr && (newAddr !== oldAddr || refined.확인필요);

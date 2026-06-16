@@ -38,6 +38,9 @@ unsloth_compiled_cache/
 
 # Nationwide address source dumps (large local import files)
 202604_*/
+202605_*/
+juso/
+*.zip
 
 # Local lint/report artifacts
 lint-report.json

@@ -33,6 +33,29 @@ export const parseDisplayedAddress = (address) => {
   return { road, detail, paren };
 };
 
+// ── 상세주소(동·호수) 손실 방지 가드 ──────────────────────────────
+// 재처리(정제·재적용) 후 주소가 기존 동(棟)·호수를 잃으면 복원/보존한다.
+// "아파트 동이 통째로 삭제되는" 손실을 코드로 차단(절대 망가뜨리지 않음).
+const _detailNums = (a) => {
+  const s = String(a || '');
+  return {
+    dong: s.match(/(\d+)\s*동/)?.[1] || s.match(/(\d+)\s*-\s*\d+\s*호/)?.[1] || '', // "102동" 또는 A-10 "102- 302호"
+    ho: s.match(/(\d+)\s*호/)?.[1] || '',
+  };
+};
+export const guardAddressDetail = (oldAddr, newAddr) => {
+  if (!oldAddr || !newAddr) return newAddr || oldAddr || '';
+  const o = _detailNums(oldAddr), n = _detailNums(newAddr);
+  // ① 동이 손실됐고 호수는 동일 → 새 주소에 동 복원(A-10 형식: 102- 302호)
+  if (o.dong && !n.dong && o.ho && o.ho === n.ho) {
+    const pad = ' '.repeat(Math.max(0, 4 - o.ho.length));
+    return newAddr.replace(new RegExp(`${n.ho}\\s*호`), `${o.dong}-${pad}${o.ho}호`);
+  }
+  // ② 호수 자체가 손실 → 새 주소 신뢰 불가, 기존 주소 보존
+  if (o.ho && !n.ho) return oldAddr;
+  return newAddr;
+};
+
 /**
  * 주소 문자열을 표시 형식으로 재포맷.
  * @param {string} address 저장된 주소 문자열
