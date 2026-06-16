@@ -45,7 +45,18 @@ function extractCityCandidates(fileName, rawJsonSamples, bodyRows, addrColIdx) {
   for (const [key, value] of Object.entries(KOREA_REGION_MAP)) {
     if (fullText.includes(key) && !found.includes(value)) found.push(value);
   }
-  return found;
+  // ★ 시 뒤에 자치구가 붙어있으면(예: "안양시 동안구") 구까지 포함한 정식명을 '더 구체적인' 후보로 앞에 추가.
+  //   KOREA_REGION_MAP은 시 단위까지만 있어, 시군구 칼럼/주소의 "OO시 XX구"를 인식해 구 단위 지자체를 잡는다.
+  const result = [];
+  for (const value of found) {
+    const siTok = value.split(/\s+/).pop(); // "안양시"
+    if (/시$/.test(siTok)) {
+      const m = fullText.match(new RegExp(siTok.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*([가-힣]{1,4}구)'));
+      if (m) { const full = `${value} ${m[1]}`; if (!result.includes(full)) result.push(full); } // "경기도 안양시 동안구"
+    }
+    if (!result.includes(value)) result.push(value);
+  }
+  return result;
 }
 
 function parseSheet(name, rawJson, dynamicRules) {
@@ -415,9 +426,10 @@ function parseSheet(name, rawJson, dynamicRules) {
   // ─── 데이터 컬럼 값으로 수급 유형 자동 감지 ──────────────────────────
   let typeColIdx = -1;
   if (bodyRows.length > 0) {
-    const typeCandidateIdx = headers.findIndex(h =>
-      h.includes('구분') || h.includes('유형') || h.includes('계층') || h.includes('자격')
-    );
+    const typeCandidateIdx = headers.findIndex(h => {
+      const n = normalizeH(h); // "구 분" 같은 공백 헤더도 인식
+      return n.includes('구분') || n.includes('유형') || n.includes('계층') || n.includes('자격');
+    });
     if (typeCandidateIdx >= 0) {
       typeColIdx = typeCandidateIdx;
       const detected = new Set();
