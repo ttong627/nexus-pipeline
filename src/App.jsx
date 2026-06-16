@@ -692,17 +692,25 @@ export default function App() {
             }
           });
 
-          // 이번 업로드에 포함된 구분(수급자/차상위) — 모달의 기존현황 비교·교체경고용
-          const uploadGubuns = (() => {
-            const s = new Set();
-            sheetsData.forEach(sh => {
-              if (sh.type === '혼합') { s.add('기초수급자'); s.add('차상위'); }
-              else if (sh.type === '기초수급자' || sh.type === '차상위') s.add(sh.type);
-            });
-            return [...s];
-          })();
+          // 이번 업로드에 포함된 구분(수급자/차상위)별 인원 — 모달에서 "이번 업로드: 수급자 N명" 확인 + 기존현황 비교용
+          const uploadCounts = { 기초수급자: 0, 차상위: 0 };
+          sheetsData.forEach(sh => {
+            const rows = sh.bodyRows || [];
+            const ti = sh.typeColIdx;
+            if (sh.type === '혼합' && ti >= 0) {
+              rows.forEach(r => {
+                const v = String(r[ti] || '');
+                if (/차상위/.test(v)) uploadCounts.차상위++;
+                else if (/수급|기초|생계|의료/.test(v)) uploadCounts.기초수급자++;
+              });
+            } else if (sh.type === '기초수급자') uploadCounts.기초수급자 += rows.length;
+            else if (sh.type === '차상위') uploadCounts.차상위 += rows.length;
+          });
+          const uploadGubuns = [];
+          if (uploadCounts.기초수급자 > 0) uploadGubuns.push('기초수급자');
+          if (uploadCounts.차상위 > 0) uploadGubuns.push('차상위');
           // 지자체·적용월 확인 모달 표시 (허가지역 대조된 resolvedCity 사용)
-          setPendingSetup({ sheetsData, detectedCity: resolvedCity, monthStr, initialSel, analysisSummary, uploadGubuns });
+          setPendingSetup({ sheetsData, detectedCity: resolvedCity, monthStr, initialSel, analysisSummary, uploadGubuns, uploadCounts });
           setShowCityPicker(true);
         } else if (!evt.data.ok) {
           setGLoad({ show: false });
@@ -2653,6 +2661,7 @@ export default function App() {
             userCities={user?.citiesApproved || []}
             isAdmin={user?.role === 'admin'}
             uploadGubuns={pendingSetup?.uploadGubuns || []}
+            uploadCounts={pendingSetup?.uploadCounts || null}
             onConfirm={handleCityMonthConfirm}
             onCancel={handleCityMonthCancel}
           />

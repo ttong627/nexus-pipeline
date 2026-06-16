@@ -48,6 +48,7 @@ export default function CityMonthPickerModal({
   userCities = [],
   isAdmin,
   uploadGubuns = [],
+  uploadCounts = null,
   onConfirm,
   onCancel,
 }) {
@@ -127,6 +128,24 @@ export default function CityMonthPickerModal({
           <p className="text-gray-500 text-[11px] mt-0.5">
             지자체별 설정이 저장되어 다음 업로드 시 자동 적용됩니다
           </p>
+        </div>
+
+        {/* 이번 업로드 구분·인원 — 수급자/차상위 어떤 걸 올리는지 항상 명확히 확인 */}
+        <div className="px-6 pt-4">
+          <div className="rounded-xl bg-emerald-950/30 border border-emerald-700/40 px-3 py-2.5">
+            <div className="text-[10px] font-black text-emerald-500 uppercase tracking-wider mb-1">이번 업로드</div>
+            {(uploadCounts && (uploadCounts.기초수급자 > 0 || uploadCounts.차상위 > 0)) ? (
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[13px] font-black">
+                {uploadCounts.기초수급자 > 0 && <span className="text-purple-300">수급자 {uploadCounts.기초수급자.toLocaleString()}명</span>}
+                {uploadCounts.차상위 > 0 && <span className="text-sky-300">차상위 {uploadCounts.차상위.toLocaleString()}명</span>}
+                {uploadCounts.기초수급자 > 0 && uploadCounts.차상위 > 0 && <span className="text-gray-500 text-[11px] font-bold">(혼합)</span>}
+              </div>
+            ) : uploadGubuns.length > 0 ? (
+              <div className="text-[13px] font-black text-emerald-300">{uploadGubuns.map(g => g === '기초수급자' ? '수급자' : g === '차상위' ? '차상위' : g).join(' · ')}</div>
+            ) : (
+              <div className="flex items-center gap-1 text-[12px] text-amber-400 font-bold"><AlertCircle size={11} /> 구분(수급자/차상위) 자동감지 실패 — 파일의 구분 칼럼을 확인하세요</div>
+            )}
+          </div>
         </div>
 
         <div className="px-6 py-5 space-y-4">
