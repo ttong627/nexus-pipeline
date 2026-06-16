@@ -1314,6 +1314,45 @@ export default function App() {
     gDone(`재정제 완료 — ${fixed}건 해결 / ${remaining}건 남음`);
   };
 
+  // 도로명주소 규칙 재적용 — 특이사항은 보존하고 (법정동, 건물명)·띄어쓰기 등 형식만 통일(정렬 획일화)
+  const handleReapplyFormat = async () => {
+    if (!gridData.length) return;
+    if (!window.confirm(`전체 ${gridData.length}건에 도로명주소 규칙을 재적용해 형식을 통일합니다.\n· (법정동, 건물명) 괄호 형식, 띄어쓰기, 동호수 정규화 적용\n· 특이사항은 변경하지 않습니다\n계속할까요?`)) return;
+
+    gStart('도로명주소 규칙 재적용 중...', `0 / ${gridData.length}건`, 0);
+    let done = 0;
+
+    const reformatted = await asyncPool(10, gridData, async (row) => {
+      // inputNote '' 전달 → 특이사항 재생성 방지. 결과의 주소·형식 메타만 사용, 특이사항은 원본 보존
+      const res = await processAddress(row.주소, row.이름, row.행정동 || '', fileInfo?.city || '', '', { includeCoords: false });
+      done++;
+      gUpdate(Math.round(done / gridData.length * 100), `${done} / ${gridData.length}건`);
+      const updatedRow = {
+        ...row,
+        주소: res.주소 || row.주소,
+        // 특이사항: 보존(변경하지 않음). _에러도 보존(형식만 적용, 재검증 아님)
+        _lat: res.lat ?? row._lat ?? null,
+        _lng: res.lng ?? row._lng ?? null,
+        _isApt: res.isApt !== undefined ? res.isApt : row._isApt,
+        _standardRoadAddress: res.standardRoadAddress || row._standardRoadAddress || '',
+        _roadName: res.roadName || row._roadName || '',
+        _buildingMainNo: res.buildingMainNo ?? row._buildingMainNo ?? '',
+        _buildingSubNo: res.buildingSubNo ?? row._buildingSubNo ?? '',
+        _buildingName: res.buildingName || row._buildingName || '',
+        _legalDong: res.legalDong || row._legalDong || '',
+        _matchedSido: res.matchedSido || row._matchedSido || '',
+        _matchedSigungu: res.matchedSigungu || row._matchedSigungu || '',
+        _detailAddress: res.detailAddress || row._detailAddress || '',
+        _addressDisplayMode: addressDisplayMode,
+      };
+      updatedRow.주소 = formatAddressForDisplayMode(updatedRow, addressDisplayMode);
+      return updatedRow;
+    });
+
+    pushHistory(reformatted);
+    gDone(`도로명주소 규칙 재적용 완료 — ${gridData.length}건 형식 통일`);
+  };
+
   // ── 주소 없음 → 담당자 확인: 담당자가 입력한 이번달 실제 주소로 단건 재정제 ──
   const handleConfirmAddress = async (row, newAddress) => {
     const res = await processAddress(newAddress, row.이름, row.행정동 || '', fileInfo?.city || '', row.특이사항 || '', { includeCoords: false });
@@ -2632,7 +2671,7 @@ export default function App() {
           {step === 2 && <Step2_SheetSelect step={step} setStep={setStep} fileInfo={fileInfo} setFileInfo={setFileInfo} worksheets={worksheets} setWorksheets={setWorksheets} setSelectedSheets={setSelectedSheets} onHelp={onHelp} handleSecondFileUpload={handleSecondFileUpload} userCities={user?.citiesApproved || []} isAdmin={user?.role === 'admin'} />}
           {step === 3 && <Step3_Mapping step={step} setStep={setStep} selectedSheets={selectedSheets} worksheets={worksheets} mapDefs={mapDefs} setMapDefs={setMapDefs} startProcessing={handleAnalyzeAll} onHelp={onHelp} isBasePurifyMode={isBasePurifyMode} setIsBasePurifyMode={setIsBasePurifyMode} onOpenDbImport={() => setShowDbImport(true)} dbImportReady={dbImportReady} onUserMapping={handleUserMapping} city={fileInfo?.city || ''} />}
           {step === 4 && <LoadingScreen progress={engineProgress} logs={progressLogs} />}
-          {step === 5 && <ResultGrid step={step} setStep={setStep} fileInfo={fileInfo} filter={filter} setFilter={setFilter} dongList={gridDongList} driverList={gridDriverList} gridData={gridData} filteredData={filteredData} paginatedData={paginatedData} currentPage={currentPage} setCurrentPage={setCurrentPage} itemsPerPage={itemsPerPage} setItemsPerPage={setItemsPerPage} colVis={colVis} sortConfig={sortConfig} setSortConfig={setSortConfig} handleCellEdit={handleCellEdit} handleAddressKeyDown={handleAddressKeyDown} handleUpdateBaseList={handleUpdateBaseList} handleBatchSaveBaseList={handleBatchSaveBaseList} isSavingBaseList={isSavingBaseList} handleSaveMonthlyList={handleSaveMonthlyList} setShowExportSetting={setShowExportSetting} handleExport={handleExport} handleExportErrors={handleExportErrors} handleExportDongSummary={handleExportDongSummary} handleExportByDriver={handleExportByDriver} handleDeleteRows={handleDeleteRows} handleBatchSetNote={handleBatchSetNote} onHelp={onHelp} purifyResult={purifyResult} onClosePurifyResult={() => setPurifyResult(null)} onMovePhones={handleMovePhones} onRepurifyErrors={handleRepurifyErrors} onConfirmAddress={handleConfirmAddress} onMarkPhoneCheck={handleMarkPhoneCheck} onOpenRouteMap={openRouteFlow} onFetchBaseNotes={handleFetchBaseNotes} isFetchingNotes={isFetchingNotes} workflowMode={workflowMode} onWorkflowModeChange={changeWorkflowMode} stepStatus={stepStatus} addressDisplayMode={addressDisplayMode} onToggleAddressDisplayMode={handleToggleAddressDisplayMode} exportColOrder={exportColOrder} setExportColOrder={setExportColOrder} defaultExportCols={DEFAULT_EXPORT_COLS} />}
+          {step === 5 && <ResultGrid step={step} setStep={setStep} fileInfo={fileInfo} filter={filter} setFilter={setFilter} dongList={gridDongList} driverList={gridDriverList} gridData={gridData} filteredData={filteredData} paginatedData={paginatedData} currentPage={currentPage} setCurrentPage={setCurrentPage} itemsPerPage={itemsPerPage} setItemsPerPage={setItemsPerPage} colVis={colVis} sortConfig={sortConfig} setSortConfig={setSortConfig} handleCellEdit={handleCellEdit} handleAddressKeyDown={handleAddressKeyDown} handleUpdateBaseList={handleUpdateBaseList} handleBatchSaveBaseList={handleBatchSaveBaseList} isSavingBaseList={isSavingBaseList} handleSaveMonthlyList={handleSaveMonthlyList} setShowExportSetting={setShowExportSetting} handleExport={handleExport} handleExportErrors={handleExportErrors} handleExportDongSummary={handleExportDongSummary} handleExportByDriver={handleExportByDriver} handleDeleteRows={handleDeleteRows} handleBatchSetNote={handleBatchSetNote} onHelp={onHelp} purifyResult={purifyResult} onClosePurifyResult={() => setPurifyResult(null)} onMovePhones={handleMovePhones} onRepurifyErrors={handleRepurifyErrors} onReapplyFormat={handleReapplyFormat} onConfirmAddress={handleConfirmAddress} onMarkPhoneCheck={handleMarkPhoneCheck} onOpenRouteMap={openRouteFlow} onFetchBaseNotes={handleFetchBaseNotes} isFetchingNotes={isFetchingNotes} workflowMode={workflowMode} onWorkflowModeChange={changeWorkflowMode} stepStatus={stepStatus} addressDisplayMode={addressDisplayMode} onToggleAddressDisplayMode={handleToggleAddressDisplayMode} exportColOrder={exportColOrder} setExportColOrder={setExportColOrder} defaultExportCols={DEFAULT_EXPORT_COLS} />}
           {step === 10 && <ErrorListManager gridData={gridData} onBack={() => setStep(gridData.length ? 5 : 0)} handleCellEdit={handleCellEdit} handleAddressKeyDown={handleAddressKeyDown} handleExportErrors={handleExportErrors} onRepurifyErrors={handleRepurifyErrors} exportColOrder={exportColOrder} setExportColOrder={setExportColOrder} defaultExportCols={DEFAULT_EXPORT_COLS} />}
           {step === 11 && <ScheduleTab user={user} onBack={() => setStep(0)} />}
           {step === 6 && <BaseListManager user={user} initialCity={dbNavCity} onBack={() => { setStep(0); setDbNavCity(''); }} exportColOrder={exportColOrder} setExportColOrder={setExportColOrder} defaultExportCols={DEFAULT_EXPORT_COLS} />}

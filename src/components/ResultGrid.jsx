@@ -25,7 +25,7 @@ const ResultGrid = memo(function ResultGrid({
   handleCellEdit, handleAddressKeyDown, handleUpdateBaseList, handleBatchSaveBaseList, isSavingBaseList,
   handleSaveMonthlyList, handleExport, handleExportErrors, handleExportDongSummary,
   handleExportByDriver, handleDeleteRows, handleBatchSetNote, onHelp, onOpenRouteMap,
-  purifyResult, onClosePurifyResult, onMovePhones, onRepurifyErrors,
+  purifyResult, onClosePurifyResult, onMovePhones, onRepurifyErrors, onReapplyFormat,
   onConfirmAddress, onMarkPhoneCheck,
   onFetchBaseNotes, isFetchingNotes,
   workflowMode = 'cleaningOnly', onWorkflowModeChange,
@@ -513,6 +513,15 @@ const ResultGrid = memo(function ResultGrid({
                 className="px-3 py-1.5 bg-orange-950/70 border border-orange-500/50 text-orange-300 text-xs font-bold rounded-lg flex items-center gap-1.5 hover:bg-orange-900/70 hover:border-orange-400/70 hover:text-orange-200 transition-all shrink-0"
               >
                 ↺ 오류 재정제 <span className="font-mono font-black">{errorCount}</span>
+              </button>
+            )}
+            {gridData.length > 0 && onReapplyFormat && (
+              <button
+                onClick={onReapplyFormat}
+                title="전체 주소에 도로명주소 규칙((법정동, 건물명) 괄호·띄어쓰기·동호수)을 재적용해 형식을 통일합니다. 특이사항은 변경하지 않습니다."
+                className="px-3 py-1.5 bg-indigo-950/70 border border-indigo-500/50 text-indigo-300 text-xs font-bold rounded-lg flex items-center gap-1.5 hover:bg-indigo-900/70 hover:border-indigo-400/70 hover:text-indigo-200 transition-all shrink-0"
+              >
+                ↻ 도로명규칙 재적용
               </button>
             )}
             {addrConfirmRows.length > 0 && onConfirmAddress && (
