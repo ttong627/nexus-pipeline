@@ -46,18 +46,21 @@ const BLDG_SELECT = `SELECT sido, sigungu, legal_emd, legal_ri,
   FROM nexus_address.building_core`;
 
 // 단일 테이블 road_key 매칭: 1순위 정확 → 2순위 본번 동일·부번 임의
+// DB_VERSION 설정 시 version_id로 격리(버전 공존 시 활성버전만 매칭, 무중단 버전 전환 보장).
+const VER_COND = DB_VERSION ? 'version_id = $3 AND ' : '';
+const verParams = (cityKey, roadPart) => DB_VERSION ? [cityKey, roadPart, DB_VERSION] : [cityKey, roadPart];
 async function matchInTable(select, cityKey, roadPart) {
   // 1순위: 정확 매칭 (읍/면 emd는 % 와일드카드로 흡수)
   let r = await pool.query(
-    `${select} WHERE road_key LIKE $1 || '%' || $2 ORDER BY length(road_key) ASC LIMIT 1`,
-    [cityKey, roadPart]
+    `${select} WHERE ${VER_COND}road_key LIKE $1 || '%' || $2 ORDER BY length(road_key) ASC LIMIT 1`,
+    verParams(cityKey, roadPart)
   );
   if (r.rows[0]) return r.rows[0];
   // 2순위: 본번 동일 + 부번 임의 (상세 부번 누락 대응 — 법정동·도로명 동일 보장)
   if (!/-/.test(roadPart)) {
     r = await pool.query(
-      `${select} WHERE road_key LIKE $1 || '%' || $2 || '-%' ORDER BY length(road_key) ASC LIMIT 1`,
-      [cityKey, roadPart]
+      `${select} WHERE ${VER_COND}road_key LIKE $1 || '%' || $2 || '-%' ORDER BY length(road_key) ASC LIMIT 1`,
+      verParams(cityKey, roadPart)
     );
     if (r.rows[0]) return r.rows[0];
   }
@@ -204,7 +207,10 @@ app.use((req, res, next) => {
 
 app.get('/health', async (req, res) => {
   try {
-    const r = await pool.query('SELECT count(*) c FROM nexus_address.address_core');
+    // 활성버전(DB_VERSION) 행수 — 버전 전환 검증용
+    const r = DB_VERSION
+      ? await pool.query('SELECT count(*) c FROM nexus_address.address_core WHERE version_id = $1', [DB_VERSION])
+      : await pool.query('SELECT count(*) c FROM nexus_address.address_core');
     res.json({ ok: true, version: DB_VERSION, addressCount: Number(r.rows[0].c) });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
