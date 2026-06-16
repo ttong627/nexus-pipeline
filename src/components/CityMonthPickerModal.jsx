@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react';
-import { MapPin, Calendar, CheckCircle, AlertCircle, ChevronRight, Clock } from 'lucide-react';
+import { MapPin, Calendar, CheckCircle, AlertCircle, ChevronRight, Clock, Database, RefreshCw } from 'lucide-react';
+import { db } from '../config/firebase.js';
+import { doc, getDoc } from 'firebase/firestore';
 
 // ── 저장 구조: nexus_city_prefs_v2[userId][city] = { month, lastUsed }
 const PREF_KEY = 'nexus_city_prefs_v2';
@@ -45,6 +47,7 @@ export default function CityMonthPickerModal({
   detectedMonth,
   userCities = [],
   isAdmin,
+  uploadGubuns = [],
   onConfirm,
   onCancel,
 }) {
@@ -64,6 +67,29 @@ export default function CityMonthPickerModal({
   const [city, setCity] = useState(initCity);
   const [month, setMonth] = useState(initMonth);
   const [savedPref, setSavedPref] = useState(savedForInit);
+  const [existing, setExisting] = useState(null); // 선택 지자체·월의 기존 저장현황 { 수급자Count, 차상위Count, 수급자Qty, 차상위Qty, totalCount } | 'loading' | null
+
+  // 선택한 지자체·월에 이미 저장된 명단(구분별 명·포)을 조회 — 차상위/수급자 추가 업로드 유도용
+  useEffect(() => {
+    if (!city || city.trim().length < 2 || !/^\d{4}-\d{2}$/.test(month)) { setExisting(null); return; }
+    let cancelled = false;
+    setExisting('loading');
+    (async () => {
+      try {
+        const snap = await getDoc(doc(db, 'cloud_lists', city.trim(), 'months', month));
+        if (cancelled) return;
+        if (snap.exists()) {
+          const d = snap.data();
+          setExisting({
+            수급자Count: d.수급자Count || 0, 차상위Count: d.차상위Count || 0,
+            수급자Qty: d.수급자Qty || 0, 차상위Qty: d.차상위Qty || 0,
+            totalCount: d.totalCount || 0,
+          });
+        } else setExisting(null);
+      } catch { if (!cancelled) setExisting(null); }
+    })();
+    return () => { cancelled = true; };
+  }, [city, month]);
 
   // 지자체 변경 시 해당 지자체의 저장된 월로 자동 교체
   useEffect(() => {
@@ -184,6 +210,35 @@ export default function CityMonthPickerModal({
               </p>
             ) : null}
           </div>
+
+          {/* 기존 저장현황 + 교체/추가 안내 (수급자·차상위 명·포) */}
+          {existing === 'loading' ? (
+            <div className="flex items-center gap-1.5 text-[11px] text-gray-500"><RefreshCw size={11} className="animate-spin" /> 기존 저장현황 확인 중...</div>
+          ) : existing ? (
+            <div className="rounded-xl border border-[#1e2d3d] bg-[#060a0e] p-3 space-y-1.5">
+              <div className="flex items-center gap-1.5 text-[11px] font-black text-gray-300"><Database size={11} className="text-cyan-400" /> 이 지자체 {formatMonthLabel(month)} 기존 저장</div>
+              <div className="text-[11px] text-gray-400 flex flex-col gap-0.5">
+                <span>수급자 <b className={existing.수급자Count ? 'text-emerald-400' : 'text-gray-600'}>{existing.수급자Count.toLocaleString()}명 · {existing.수급자Qty.toLocaleString()}포</b></span>
+                <span>차상위 <b className={existing.차상위Count ? 'text-emerald-400' : 'text-gray-600'}>{existing.차상위Count.toLocaleString()}명 · {existing.차상위Qty.toLocaleString()}포</b></span>
+              </div>
+              {uploadGubuns.length > 0 && (() => {
+                const has = g => (g === '기초수급자' ? existing.수급자Count : existing.차상위Count) > 0;
+                const label = g => g === '기초수급자' ? '수급자' : '차상위';
+                const replace = uploadGubuns.filter(has).map(label);
+                const add = uploadGubuns.filter(g => !has(g)).map(label);
+                const otherMissing = ['기초수급자', '차상위'].filter(g => !uploadGubuns.includes(g) && !has(g)).map(label);
+                return (
+                  <div className="text-[11px] space-y-0.5 pt-1.5 border-t border-[#131d2e]">
+                    {replace.length > 0 && <p className="text-amber-400">⚠ {replace.join('·')}는 이미 있어 <b>새로 교체</b>됩니다.</p>}
+                    {add.length > 0 && <p className="text-emerald-400">＋ {add.join('·')}를 <b>추가</b> 저장(기존 구분 유지)합니다.</p>}
+                    {otherMissing.length > 0 && <p className="text-sky-400">💡 {otherMissing.join('·')}도 올리면 한 명단에 함께 저장됩니다.</p>}
+                  </div>
+                );
+              })()}
+            </div>
+          ) : (city.trim().length >= 2 && /^\d{4}-\d{2}$/.test(month)) ? (
+            <p className="flex items-center gap-1 text-[11px] text-gray-600"><Database size={10} /> 이 지자체·월에 저장된 명단이 아직 없습니다 (신규 저장).</p>
+          ) : null}
         </div>
 
         {/* 버튼 */}

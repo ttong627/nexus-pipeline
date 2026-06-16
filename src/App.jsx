@@ -692,8 +692,17 @@ export default function App() {
             }
           });
 
+          // 이번 업로드에 포함된 구분(수급자/차상위) — 모달의 기존현황 비교·교체경고용
+          const uploadGubuns = (() => {
+            const s = new Set();
+            sheetsData.forEach(sh => {
+              if (sh.type === '혼합') { s.add('기초수급자'); s.add('차상위'); }
+              else if (sh.type === '기초수급자' || sh.type === '차상위') s.add(sh.type);
+            });
+            return [...s];
+          })();
           // 지자체·적용월 확인 모달 표시 (허가지역 대조된 resolvedCity 사용)
-          setPendingSetup({ sheetsData, detectedCity: resolvedCity, monthStr, initialSel, analysisSummary });
+          setPendingSetup({ sheetsData, detectedCity: resolvedCity, monthStr, initialSel, analysisSummary, uploadGubuns });
           setShowCityPicker(true);
         } else if (!evt.data.ok) {
           setGLoad({ show: false });
@@ -1758,11 +1767,18 @@ export default function App() {
             `[${city}] 구월 데이터 정리\n\n이전 월 데이터: ${oldMonthNames}\n\n이 데이터를 삭제하시겠습니까?\n\n✅ 배송 이력은 별도 delivery_history에 보존됩니다.\n⚠️ 삭제 후 cloud_lists에서는 복구할 수 없습니다.`
           );
           if (!confirmDelete) {
-            gDone(`${city} ${monthStr} · 전체 ${allData.length.toLocaleString()}건 저장 완료 (구월 유지)`);
+            gDone(`${city} ${monthStr} · 전체 ${totalCountC.toLocaleString()}명 ${totalQty.toLocaleString()}포 저장 완료 (구월 유지)`);
             setTimeout(() => {
               /* 좌표 매칭은 서버 스케줄 함수(geocodeAuto)가 업로드 순서대로 자동 처리 — 브라우저 지오코딩 중단 */
             }, 300);
-            alert(`✅ ${city} ${monthStr} 월별 명단 전체 ${allData.length}건이 클라우드에 저장되었습니다.\n정상 ${validData.length}건 / 확인필요 ${errorData.length}건\n\n이전 월 데이터(${oldMonthNames})는 유지됩니다.`);
+            alert(
+              `✅ ${city} ${monthStr} 저장 완료\n\n` +
+              `전체 ${totalCountC.toLocaleString()}명 · ${totalQty.toLocaleString()}포\n` +
+              `· 수급자 ${수급자Count.toLocaleString()}명 · ${수급자Qty.toLocaleString()}포\n` +
+              `· 차상위 ${차상위Count.toLocaleString()}명 · ${차상위Qty.toLocaleString()}포\n\n` +
+              `정상 ${validCountC.toLocaleString()}건 / 확인필요 ${errorCountC.toLocaleString()}건\n` +
+              `이전 월 데이터(${oldMonthNames})는 유지됩니다.`
+            );
             return;
           }
           for (const oldMonth of oldMonths) {
@@ -1777,11 +1793,17 @@ export default function App() {
         }
       } catch { /* 구월 정리 실패는 무시 — 핵심 저장은 완료됨 */ }
 
-      gDone(`${city} ${monthStr} · 전체 ${allData.length.toLocaleString()}건 저장 완료`);
+      gDone(`${city} ${monthStr} · 전체 ${totalCountC.toLocaleString()}명 ${totalQty.toLocaleString()}포 저장 완료`);
       setTimeout(() => {
         /* 좌표 매칭은 서버 스케줄 함수(geocodeAuto)가 업로드 순서대로 자동 처리 — 브라우저 지오코딩 중단 */
       }, 300);
-      alert(`✅ ${city} ${monthStr} 월별 명단 전체 ${allData.length}건이 클라우드에 저장되었습니다.\n정상 ${validData.length}건 / 확인필요 ${errorData.length}건`);
+      alert(
+        `✅ ${city} ${monthStr} 저장 완료\n\n` +
+        `전체 ${totalCountC.toLocaleString()}명 · ${totalQty.toLocaleString()}포\n` +
+        `· 수급자 ${수급자Count.toLocaleString()}명 · ${수급자Qty.toLocaleString()}포\n` +
+        `· 차상위 ${차상위Count.toLocaleString()}명 · ${차상위Qty.toLocaleString()}포\n\n` +
+        `정상 ${validCountC.toLocaleString()}건 / 확인필요 ${errorCountC.toLocaleString()}건`
+      );
     } catch (e) {
       setGLoad({ show: false });
       console.error(e);
@@ -2630,6 +2652,7 @@ export default function App() {
             detectedMonth={pendingSetup?.monthStr || ''}
             userCities={user?.citiesApproved || []}
             isAdmin={user?.role === 'admin'}
+            uploadGubuns={pendingSetup?.uploadGubuns || []}
             onConfirm={handleCityMonthConfirm}
             onCancel={handleCityMonthCancel}
           />
