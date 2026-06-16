@@ -1517,32 +1517,60 @@ export default function App() {
         existingSnap = await getDocs(collection(db, 'cloud_lists', city, 'months', monthStr, 'records'));
       } catch (e) { throw new Error(`[1단계 기존명단 조회 권한 오류] ${e.message}\n계정: ${user?.email}`); }
 
+      // 유지(보존)되는 기존 레코드의 구분·포수·확인필요 — 메타 합산용. 병합 저장 시에만 채워짐.
+      let keptGubunData = [];
       if (existingSnap.docs.length > 0) {
-        const ok = window.confirm(
-          `[${city}] ${monthStr} 명단이 이미 ${existingSnap.docs.length}건 저장되어 있습니다.\n기존 데이터를 지우고 새로 저장하시겠습니까?`
-        );
-        if (!ok) return;
+        // 이번 업로드에 들어있는 구분(수급자/차상위) — 그 구분만 교체, 나머지 구분은 보존
+        const uploadGubuns = new Set(allData.map(r => r.구분).filter(Boolean));
+        const keptDocs = uploadGubuns.size > 0 ? existingSnap.docs.filter(d => !uploadGubuns.has(d.data().구분 || '')) : [];
+        let toDelete;
+        if (keptDocs.length > 0) {
+          const mergeOk = window.confirm(
+            `[${city}] ${monthStr}에 이미 ${existingSnap.docs.length}건이 저장되어 있습니다.\n\n` +
+            `▶ [확인] 분리 저장 — 이번 업로드 구분(${[...uploadGubuns].join('·')}) ${existingSnap.docs.length - keptDocs.length}건만 교체하고,\n` +
+            `   나머지 구분 ${keptDocs.length}건(예: 수급자↔차상위)은 그대로 유지합니다.\n\n` +
+            `▶ [취소] 전체 교체 — 기존 ${existingSnap.docs.length}건을 모두 삭제 후 새로 저장.`
+          );
+          if (mergeOk) {
+            toDelete = existingSnap.docs.filter(d => uploadGubuns.has(d.data().구분 || ''));
+            keptGubunData = keptDocs.map(d => { const x = d.data(); return { 구분: x.구분 || '', 포수: parseInt(x.포수) || 1, 확인필요: !!x.확인필요 }; });
+          } else {
+            if (!window.confirm(`전체 교체합니다. 기존 ${existingSnap.docs.length}건을 모두 삭제할까요?`)) return;
+            toDelete = existingSnap.docs;
+          }
+        } else {
+          if (!window.confirm(`[${city}] ${monthStr} 명단이 이미 ${existingSnap.docs.length}건 저장되어 있습니다.\n기존 데이터를 지우고 새로 저장하시겠습니까?`)) return;
+          toDelete = existingSnap.docs;
+        }
         try {
-          for (let i = 0; i < existingSnap.docs.length; i += 499) {
+          for (let i = 0; i < toDelete.length; i += 499) {
             const batch = writeBatch(db);
-            existingSnap.docs.slice(i, i + 499).forEach(d => batch.delete(d.ref));
+            toDelete.slice(i, i + 499).forEach(d => batch.delete(d.ref));
             await batch.commit();
           }
         } catch (e) { throw new Error(`[2단계 기존명단 삭제 권한 오류] ${e.message}\n계정: ${user?.email}`); }
       }
 
-      const 수급자Count = allData.filter(r => r.구분 === '기초수급자').length;
-      const 차상위Count = allData.filter(r => r.구분 === '차상위').length;
-      const totalQty   = allData.reduce((s, r) => s + (parseInt(r.포수) || 1), 0);
-      const 수급자Qty  = allData.filter(r => r.구분 === '기초수급자').reduce((s, r) => s + (parseInt(r.포수) || 1), 0);
-      const 차상위Qty  = allData.filter(r => r.구분 === '차상위').reduce((s, r) => s + (parseInt(r.포수) || 1), 0);
+      // 메타 합산 = 이번 업로드 + (분리 저장 시) 유지된 기존 구분 데이터 → 둘 다 카운트에 반영
+      const combinedMeta = [
+        ...allData.map(r => ({ 구분: r.구분 || '', 포수: parseInt(r.포수) || 1, 확인필요: !!r._에러 })),
+        ...keptGubunData,
+      ];
+      const totalCountC = combinedMeta.length;
+      const errorCountC = combinedMeta.filter(r => r.확인필요).length;
+      const validCountC = totalCountC - errorCountC;
+      const 수급자Count = combinedMeta.filter(r => r.구분 === '기초수급자').length;
+      const 차상위Count = combinedMeta.filter(r => r.구분 === '차상위').length;
+      const totalQty   = combinedMeta.reduce((s, r) => s + r.포수, 0);
+      const 수급자Qty  = combinedMeta.filter(r => r.구분 === '기초수급자').reduce((s, r) => s + r.포수, 0);
+      const 차상위Qty  = combinedMeta.filter(r => r.구분 === '차상위').reduce((s, r) => s + r.포수, 0);
 
       // [3단계] 도시 상위 문서
       try {
         await setDoc(doc(db, 'cloud_lists', city), {
           city, lastMonthId: monthStr, lastUpdatedAt: serverTimestamp(),
-          latestTotalCount: allData.length, latestValidCount: validData.length, latestErrorCount: errorData.length,
-          latestNeedCheckCount: errorData.length, latest수급자Count: 수급자Count, latest차상위Count: 차상위Count,
+          latestTotalCount: totalCountC, latestValidCount: validCountC, latestErrorCount: errorCountC,
+          latestNeedCheckCount: errorCountC, latest수급자Count: 수급자Count, latest차상위Count: 차상위Count,
           latestTotalQty: totalQty, latest수급자Qty: 수급자Qty, latest차상위Qty: 차상위Qty,
           latestWorkflowMeta: workflowMeta,
         }, { merge: true });
@@ -1553,7 +1581,7 @@ export default function App() {
         const metaRef = doc(db, 'cloud_lists', city, 'months', monthStr);
         await setDoc(metaRef, {
           city, monthId: monthStr,
-          totalCount: allData.length, validCount: validData.length, errorCount: errorData.length, needCheckCount: errorData.length,
+          totalCount: totalCountC, validCount: validCountC, errorCount: errorCountC, needCheckCount: errorCountC,
           수급자Count, 차상위Count,
           totalQty, 수급자Qty, 차상위Qty,
           uploadedAt: serverTimestamp(), uploadedBy: user?.email || 'unknown',
