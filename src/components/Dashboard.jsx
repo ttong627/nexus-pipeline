@@ -338,19 +338,19 @@ function CityCard({ item, onCloudCard, onBaseCard }) {
               <span className="text-[10px] text-gray-500 font-bold">{cloud.monthId}</span>
             </div>
             <span className={`text-[11px] font-black ${theme.text} tabular-nums shrink-0 pl-1`}>
-              {cloud.totalCount.toLocaleString()}포
+              {cloud.totalCount.toLocaleString()}명{cloud.totalQty > 0 ? ` · ${cloud.totalQty.toLocaleString()}포` : ''}
             </span>
           </div>
           <div className="flex items-center justify-between">
             <div className="flex flex-wrap gap-1">
               {cloud.suCount > 0 && (
                 <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-cyan-500/10 text-cyan-300 border border-cyan-500/15 font-bold">
-                  수급 {cloud.suCount.toLocaleString()}
+                  수급 {cloud.suCount.toLocaleString()}명{cloud.suQty > 0 ? `·${cloud.suQty.toLocaleString()}포` : ''}
                 </span>
               )}
               {cloud.chaCount > 0 && (
                 <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-amber-500/10 text-amber-300 border border-amber-500/15 font-bold">
-                  차상위 {cloud.chaCount.toLocaleString()}
+                  차상위 {cloud.chaCount.toLocaleString()}명{cloud.chaQty > 0 ? `·${cloud.chaQty.toLocaleString()}포` : ''}
                 </span>
               )}
             </div>
@@ -438,8 +438,11 @@ export default function Dashboard({ user, onStart, onCloudCard, onBaseCard, grid
           const cloud = latestMonth ? {
             monthId: latestMonth.id,
             totalCount: latestMonth.totalCount || 0,
+            totalQty: latestMonth.totalQty || 0,
             suCount: latestMonth['수급자Count'] || latestMonth.suCount || 0,
             chaCount: latestMonth['차상위Count'] || latestMonth.chaCount || 0,
+            suQty: latestMonth['수급자Qty'] || 0,
+            chaQty: latestMonth['차상위Qty'] || 0,
           } : null;
 
           const base = baseExists ? { updatedAt: null } : null;

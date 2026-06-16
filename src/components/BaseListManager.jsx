@@ -18,6 +18,7 @@ import ColHeaderEditControls from './ColHeaderEditControls.jsx';
 import { useColumnEditor } from '../hooks/useColumnEditor.js';
 import { orderFieldsByExport, getColWidth, colCellStyle } from '../utils/colOrder.js';
 import { idbGet, idbSet, idbDel } from '../utils/idbCache.js';
+import SpecialNoteImporter from './SpecialNoteImporter.jsx';
 
 const FIELDS = [
   { key: 'name',     label: '이름',     minW: '90px'  },
@@ -88,6 +89,7 @@ export default function BaseListManager({ user, onBack, initialCity = '', export
   const [filterDong, setFilterDong] = useState('');
   const [showOnlyWithNote, setShowOnlyWithNote] = useState(true);
   const [showUpload, setShowUpload] = useState(false);
+  const [showNoteImporter, setShowNoteImporter] = useState(false);
 
   const [uploading, setUploading] = useState(false);
   const [historyRecord, setHistoryRecord] = useState(null);
@@ -783,6 +785,13 @@ export default function BaseListManager({ user, onBack, initialCity = '', export
           </div>
         </div>
 
+        {isAdmin && (
+          <button onClick={() => setShowNoteImporter(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-bold bg-emerald-950/40 hover:bg-emerald-900/50 text-emerald-300 border border-emerald-500/30 transition-colors shrink-0">
+            <FileSpreadsheet size={13} /> 특이사항 이식
+          </button>
+        )}
+
         {selectedCity && hasCityAccess && (
           <div className="flex items-center gap-2 shrink-0 flex-wrap">
             {hasChanges && (
@@ -848,6 +857,8 @@ export default function BaseListManager({ user, onBack, initialCity = '', export
           </div>
         )}
       </div>
+
+      {showNoteImporter && <SpecialNoteImporter onClose={() => setShowNoteImporter(false)} />}
 
       <div className="flex-1 flex overflow-hidden">
 

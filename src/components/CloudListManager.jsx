@@ -1872,8 +1872,8 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
                   </button>
                 )}
                 <span className="text-[11px] text-gray-600">
-                  {displayRecords.length.toLocaleString()}건 표시
-                  {(searchText || filterGubun || filterDong) && ` (전체 ${records.filter(r => !deletedRecordIds.has(r.id)).length.toLocaleString()}건 중)`}
+                  {displayRecords.length.toLocaleString()}명 · {displayRecords.reduce((s, r) => s + (parseInt(r.포수) || 1), 0).toLocaleString()}포 표시
+                  {(searchText || filterGubun || filterDong) && ` (전체 ${records.filter(r => !deletedRecordIds.has(r.id)).length.toLocaleString()}명 중)`}
                 </span>
                 {records.length > 0 && (() => {
                   const withCoord = records.filter(r => r.lat && r.lng).length;
