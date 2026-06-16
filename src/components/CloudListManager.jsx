@@ -25,6 +25,7 @@ import { canUseCoords, canUseCoordsBg } from '../utils/tierUtils.js';
 import { getCachedCoord, saveCoordCache } from '../utils/coordCache.js';
 import { idbGet, idbSet, idbDel } from '../utils/idbCache.js';
 import { orderFieldsByExport, hasRi, getColWidth, colCellStyle } from '../utils/colOrder.js';
+import { getCityExportTemplate } from '../utils/cityExportTemplates.js';
 import { useConfirmDelete } from '../contexts/ConfirmDeleteContext.jsx';
 
 const KAKAO_REST_KEY = import.meta.env.VITE_KAKAO_REST_KEY;
@@ -1468,6 +1469,17 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
   // ── Download xlsx ─────────────────────────────────────────────────
   const handleDownloadXlsx = () => {
     if (!displayRecords.length) return alert('다운로드할 데이터가 없습니다.');
+    // 지자체 전용 칼럼 형식 (예: 안양시 동안구 원본 업로드 형식) — 있으면 그 형식으로 내보냄
+    const cityTpl = getCityExportTemplate(selectedCity);
+    if (cityTpl) {
+      const rows = cityTpl.buildRows(displayRecords, { sigungu: cityTpl.sigungu });
+      const ws = XLSX.utils.json_to_sheet(rows, { header: cityTpl.headers });
+      ws['!cols'] = cityTpl.colWidths.map((w) => ({ wch: w }));
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, cityTpl.sheetName);
+      XLSX.writeFile(wb, `${selectedCity}_${selectedMonth.id}_배송명단.xlsx`);
+      return;
+    }
     const data = displayRecords.map((r, i) => ({
       번호: i + 1,
       구분: r.구분 || '', 이름: r.이름 || '', 생년월일: r.생년월일 || '',
