@@ -151,6 +151,8 @@ CREATE INDEX IF NOT EXISTS address_links_road_exact
   ON address_building_links (version_id, road_code, underground_yn, building_main_no, building_sub_no);
 CREATE INDEX IF NOT EXISTS building_core_name_trgm
   ON building_core USING gin (building_name_key gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS building_core_road_key_trgm
+  ON building_core USING gin (road_key gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS building_core_road_exact
   ON building_core (version_id, road_code, underground_yn, building_main_no, building_sub_no);
 CREATE INDEX IF NOT EXISTS search_keys_road_trgm

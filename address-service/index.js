@@ -34,24 +34,29 @@ function buildRoadPart(query, cityLabel) {
   return mm ? mm[1] + mm[2] : '';
 }
 
-const SELECT_COLS = `SELECT sido, sigungu, legal_emd, legal_ri, jibun_san_yn, jibun_main_no, jibun_sub_no,
+// address_core: 지번 포함 표준주소(98만). building_core: 전국 건물주소(1072만) — road_key 동일 포맷.
+// 도시 주소 다수가 address_core에 없고 building_core에만 존재 → 둘 다 조회해야 DB 매칭율 극대화(JUSO 폴백 최소화).
+// building_core는 jibun_* 컬럼이 없으므로 NULL 캐스팅으로 toApiResult 스키마를 통일.
+const ADDR_SELECT = `SELECT sido, sigungu, legal_emd, legal_ri, jibun_san_yn, jibun_main_no, jibun_sub_no,
   road_name, road_address, building_name, building_main_no, building_sub_no, address_mgt_no
   FROM nexus_address.address_core`;
+const BLDG_SELECT = `SELECT sido, sigungu, legal_emd, legal_ri,
+  NULL::text AS jibun_san_yn, NULL::integer AS jibun_main_no, NULL::integer AS jibun_sub_no,
+  road_name, road_address, building_name, building_main_no, building_sub_no, building_mgt_no AS address_mgt_no
+  FROM nexus_address.building_core`;
 
-async function matchRow(query, cityLabel) {
-  const cityKey = norm(cityLabel);
-  const roadPart = buildRoadPart(query, cityLabel);
-  if (!roadPart || roadPart.length < 2) return null;
+// 단일 테이블 road_key 매칭: 1순위 정확 → 2순위 본번 동일·부번 임의
+async function matchInTable(select, cityKey, roadPart) {
   // 1순위: 정확 매칭 (읍/면 emd는 % 와일드카드로 흡수)
   let r = await pool.query(
-    `${SELECT_COLS} WHERE road_key LIKE $1 || '%' || $2 ORDER BY length(road_key) ASC LIMIT 1`,
+    `${select} WHERE road_key LIKE $1 || '%' || $2 ORDER BY length(road_key) ASC LIMIT 1`,
     [cityKey, roadPart]
   );
   if (r.rows[0]) return r.rows[0];
   // 2순위: 본번 동일 + 부번 임의 (상세 부번 누락 대응 — 법정동·도로명 동일 보장)
   if (!/-/.test(roadPart)) {
     r = await pool.query(
-      `${SELECT_COLS} WHERE road_key LIKE $1 || '%' || $2 || '-%' ORDER BY length(road_key) ASC LIMIT 1`,
+      `${select} WHERE road_key LIKE $1 || '%' || $2 || '-%' ORDER BY length(road_key) ASC LIMIT 1`,
       [cityKey, roadPart]
     );
     if (r.rows[0]) return r.rows[0];
@@ -59,12 +64,23 @@ async function matchRow(query, cityLabel) {
   return null;
 }
 
+async function matchRow(query, cityLabel) {
+  const cityKey = norm(cityLabel);
+  const roadPart = buildRoadPart(query, cityLabel);
+  if (!roadPart || roadPart.length < 2) return null;
+  // 지번 포함 표준주소(address_core) 우선 → 미스 시 전국 건물주소(building_core) 폴백
+  return (await matchInTable(ADDR_SELECT, cityKey, roadPart))
+      || (await matchInTable(BLDG_SELECT, cityKey, roadPart));
+}
+
 // DB row → 엔진 호환(JUSO 형식) 응답
 function toApiResult(row) {
   if (!row) return null;
   const san = row.jibun_san_yn === '1' ? '산 ' : '';
   const sub = row.jibun_sub_no ? `-${row.jibun_sub_no}` : '';
-  const jibun = `${row.sido} ${row.sigungu} ${row.legal_emd}${row.legal_ri ? ' ' + row.legal_ri : ''} ${san}${row.jibun_main_no}${sub}`.replace(/\s+/g, ' ').trim();
+  // building_core 매칭은 jibun_* 컬럼이 없음 → 지번주소 생략(빈 문자열)
+  const jibun = row.jibun_main_no == null ? '' :
+    `${row.sido} ${row.sigungu} ${row.legal_emd}${row.legal_ri ? ' ' + row.legal_ri : ''} ${san}${row.jibun_main_no}${sub}`.replace(/\s+/g, ' ').trim();
   return {
     roadAddrPart1: row.road_address,
     roadAddr: row.road_address,
