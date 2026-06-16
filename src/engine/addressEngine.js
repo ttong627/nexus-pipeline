@@ -496,6 +496,8 @@ const _setApiCache = (key, value) => {
 // ── 공통 패턴 상수 ─────────────────────────────────────────────────
 const DO_PATTERN    = /^(서울특별시|부산광역시|대구광역시|인천광역시|광주광역시|대전광역시|울산광역시|세종특별자치시|경기도|강원특별자치도|충청북도|충청남도|전라북도|전라남도|경상북도|경상남도|제주특별자치도)/;
 const REGION_SUFFIX = /^[가-힣\d]+(특별시|광역시|특별자치시|특별자치도|도|시|군|구)$/;
+// 카카오 등 축약 도명(경기·서울·충남 …) — 접미어가 없어 REGION_SUFFIX로 안 잡힘. 시도 선두 토큰 제거용.
+const REGION_LEAD   = /^(서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|제주)$/;
 const DONG_SUFFIX   = /^[가-힣\d]+(읍|면|동)$/;
 
 // 공공기관 감지 — A-5 토큰 삭제 방지 + Fallback A 트리거
@@ -852,7 +854,8 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
     const rParts = rawFinal.split(/\s+/);
     let keepIdx = 0;
     for (let i = 0; i < rParts.length; i++) {
-      if (REGION_SUFFIX.test(rParts[i])) keepIdx = i + 1; else break;
+      // 시도/시군구 토큰 제거 (축약 도명 '경기'·'충남' 등 포함 — 카카오 폴백 대응). 읍/면/동은 dongPart로 별도 처리.
+      if (REGION_SUFFIX.test(rParts[i]) || REGION_LEAD.test(rParts[i])) keepIdx = i + 1; else break;
     }
     let remain = rParts.slice(keepIdx);
     if (remain.length > 0 && DONG_SUFFIX.test(remain[0])) dongPart = remain.shift();
