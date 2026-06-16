@@ -94,6 +94,39 @@ function toApiResult(row) {
   };
 }
 
+// ── JUSO 폴백: 전국 DB에 없는 주소(신규·갱신분)를 JUSO API로 보완 ──
+const JUSO_KEYS = (process.env.JUSO_API_KEYS || '').split(/[,\s]+/).filter(Boolean);
+let jusoIdx = 0;
+async function jusoFallback(query, cityLabel) {
+  if (!JUSO_KEYS.length) return null;
+  const kw = `${cityLabel || ''} ${query || ''}`.replace(/\s+/g, ' ').trim();
+  if (kw.length < 2) return null;
+  for (let attempt = 0; attempt < JUSO_KEYS.length; attempt++) {
+    const key = JUSO_KEYS[jusoIdx % JUSO_KEYS.length];
+    try {
+      const res = await fetch(`https://business.juso.go.kr/addrlink/addrLinkApi.do?confmKey=${key}&currentPage=1&countPerPage=1&keyword=${encodeURIComponent(kw)}&resultType=json`);
+      if (!res.ok) { jusoIdx++; continue; }
+      const j = await res.json();
+      const code = j.results?.common?.errorCode;
+      if (code !== '0') { jusoIdx++; continue; } // 키 만료/오류 → 다음 키
+      const r = j.results.juso && j.results.juso[0];
+      if (!r) return null;
+      return {
+        roadAddrPart1: r.roadAddrPart1 || r.roadAddr,
+        roadAddr: r.roadAddr, standardRoadAddress: r.roadAddr,
+        emdNm: r.emdNm || '', liNm: r.liNm || '', legalDong: r.emdNm || '', legalRi: r.liNm || '',
+        bdNm: r.bdNm || '', buildingName: r.bdNm || '',
+        roadName: r.rn || '', rn: r.rn || '',
+        siNm: r.siNm || '', sggNm: r.sggNm || '', matchedSido: r.siNm || '', matchedSigungu: r.sggNm || '',
+        buildingMainNo: r.buldMnnm, buldMnnm: r.buldMnnm, buildingSubNo: r.buldSlno, buldSlno: r.buldSlno,
+        jibunAddr: r.jibunAddr || '', bdMgtSn: r.bdMgtSn || '', _addressMgtNo: r.bdMgtSn || '',
+        bdKdcd: r.bdKdcd || '0', _matchSource: 'juso', _matchConfidence: 0.9,
+      };
+    } catch { jusoIdx++; }
+  }
+  return null;
+}
+
 // ── 좌표: geocode_cache 우선, 미스 시 카카오 1회 + 저장 ──
 async function geocode(standardRoadAddress, buildingMgtNo) {
   const addr = String(standardRoadAddress || '').trim();
@@ -166,7 +199,10 @@ app.post('/v1/address/match', async (req, res) => {
   try {
     const { query, cityLabel } = req.body || {};
     const row = await matchRow(query, cityLabel);
-    res.json({ ok: !!row, data: toApiResult(row) });
+    if (row) return res.json({ ok: true, data: toApiResult(row) });
+    // 전국 DB 미매칭(신규·갱신 주소) → JUSO 주소검색 API 폴백
+    const juso = await jusoFallback(query, cityLabel);
+    res.json({ ok: !!juso, data: juso });
   } catch (e) {
     console.error('[match]', e.message);
     res.json({ ok: false, data: null });
