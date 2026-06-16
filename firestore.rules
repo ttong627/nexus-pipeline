@@ -72,7 +72,7 @@ service cloud.firestore {
     match /audit_logs/{document=**} {
       allow create: if isAuthenticated() &&
         request.resource.data.keys().hasOnly([
-          'action', 'targetName', 'updates', 'city', 'monthId',
+          'action', 'targetName', 'targetUid', 'targetEmail', 'updates', 'city', 'monthId',
           'count', 'validCount', 'errorCount', 'workflowMeta',
           'addCount', 'updateCount', 'successCount',
           'timestamp', 'adminEmail', 'expireAt', 'uid'
