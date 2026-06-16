@@ -644,6 +644,8 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
 
   // 공공기관 키워드 포함 여부 사전 감지 (A-5 동 토큰 삭제 방지)
   const hasCenterKw = CENTER_RE.test(text);
+  // A-2: 지번주소 판별 — 도로명(로/길/대로)+번호가 없으면 지번 → 읍/면 보존
+  const hasRoadName = /[가-힣\d]+(대로|로|길)\s*\d/.test(text);
 
   // ── A-5 + A-20: 지역 접두어 제거 ────────────────────────────────
   // 도로명·지번(동+숫자, 리+숫자) 발견 시 제거 중단
@@ -666,7 +668,10 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
     const isRegion     = REGION_TOKEN_RE.test(t) || KNOWN_CITY_RE.test(t);
     // 주민센터 주소의 동·읍·면 토큰 삭제 금지
     const isCenterDong = isRegion && /[동읍면리]$/.test(t) && (hasCenterKw || CENTER_RE.test(nextT));
-    if (!isRegion || isCenterDong) kept.push(t);
+    // A-2: 도로명(로/길/대로)이 없는 지번·건물명 주소면 읍/면/동(법정동) 보존
+    // 광덕면 신흥리 123 → 광덕면 유지 / 용두동 행복아파트 → 용두동 유지 (동 손실·오매칭 방지)
+    const isEmdInJibun = !hasRoadName && /[가-힣]{2,}(읍|면|동)$/.test(t);
+    if (!isRegion || isCenterDong || isEmdInJibun) kept.push(t);
   }
   text = kept.join(' ');
 
@@ -726,8 +731,18 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
     .match(/^(.+?(?:대로|로|길)[가-힣\d]*\s*\d+(?:-\d+)?)(?:\s+(.+))?$/);
   const inlineRoadOnly = inlineRoadMatch?.[1]?.trim() || '';
   const inlineTail = inlineRoadMatch?.[2]?.trim() || '';
-  if (inlineRoadOnly && inlineTail && !CENTER_RE.test(inlineTail) && !/^\d+\s*(동|호|층)$/.test(inlineTail)) {
-    inlineBuildingName = inlineTail.replace(/__P\d+__/g, '').trim();
+  if (inlineRoadOnly && inlineTail && !CENTER_RE.test(inlineTail)) {
+    // 상세주소(동/호/층) 또는 빌라 동(棟: 가동·B동·에이동)이면 건물명이 아니라 상세주소 — 동 손실 방지
+    const tailIsDetail = /\d+\s*(동|호|층)/.test(inlineTail)        // 101호·103동·가동 101호의 숫자
+      || /[가-힣A-Za-z]+동(?:\s|$)/.test(inlineTail)                // 가동·나동·B동·에이동 (단독/선두)
+      || /^\d+\s*(동|호|층)$/.test(inlineTail);
+    if (tailIsDetail) {
+      // 동(棟)+호수는 상세주소로 보존 (mainAddr는 도로명만 남겨 API 검색 정확도 유지)
+      detailAddr = `${inlineTail.replace(/__P\d+__/g, '').trim()} ${detailAddr}`.replace(/\s+/g, ' ').trim();
+      mainAddr   = inlineRoadOnly;
+    } else {
+      inlineBuildingName = inlineTail.replace(/__P\d+__/g, '').trim();
+    }
   }
 
   // ── A-13: API 조회 — 시/구 컨텍스트 포함으로 오지역 매칭 방지 ──────
@@ -959,16 +974,20 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
   // A-17: 층/F 표기 변환 제거 — B동·F동 등 건물동 명칭과 혼동 오탐 발생
   // (3F→3층, B1→지하1층 모두 적용 안 함)
 
-  // A-10: 동호 형식 정규화 + 호수 4자리 패딩
-  // "101동 203호"   → "101-  203호"  (3자리: 공백 1개)
-  // "101동 21호"    → "101-   21호"  (2자리: 공백 2개)
-  // "101동 1203호"  → "101-1203호"   (4자리: 패딩 없음)
-  // "101동 3층 203호" → "101-  203호 3층"
+  // A-10: 동호 형식 정규화
+  // 숫자 동(대단지 아파트) → 대시 + 호수 4자리 패딩: "101동 203호" → "101-  203호", "101동 1203호" → "101-1203호"
+  // 한글/영문 동(빌라·연립) → "동" 유지: "가동 101호" → "가동 101호", "B동 104호" → "B동 104호"
   finalDetail = finalDetail.replace(
     /([가-힣A-Za-z\d]+)동\s*(?:(지하|[Bb])?\s*(\d+)\s*층\s*)?(?:제\s*)?(\d+)\s*호/g,
     (_, dong, flrPfx, flr, ho) => {
-      const pad = ' '.repeat(Math.max(0, 4 - ho.length));
-      return `${dong}-${pad}${ho}호${flr ? ` ${flrPfx || ''}${flr}층` : ''}`;
+      const flrStr = flr ? ` ${flrPfx || ''}${flr}층` : '';
+      if (/^\d+$/.test(dong)) {
+        // 숫자 동: 대단지 아파트 — 대시 + 4자리 패딩
+        const pad = ' '.repeat(Math.max(0, 4 - ho.length));
+        return `${dong}-${pad}${ho}호${flrStr}`;
+      }
+      // 한글/영문 동: 빌라·연립 — "동" 그대로
+      return `${dong}동 ${ho}호${flrStr}`;
     }
   );
 

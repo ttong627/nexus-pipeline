@@ -897,7 +897,8 @@ export default function App() {
       }
       if (!bestBd) continue;
 
-      // 건물명만 통일 — 동명은 각 레코드 그대로 보존
+      // 건물명 보완 — 기존 건물명이 있으면 절대 덮어쓰지 않는다(은혜빌라↔밀림장 오변경 방지).
+      // 같은 지번에 여러 빌라동(밀림장·은혜빌라)이 공존할 수 있으므로 최빈값 통일은 '빈 레코드 보완'에만 적용.
       for (const { row } of entries) {
         const addr = row.주소 || '';
         const pm   = addr.match(/\(([^)]*)\)/);
@@ -906,7 +907,8 @@ export default function App() {
           row.주소 = `${addr}, (${bestBd})`;
           continue;
         }
-        const { dong } = splitParenInner(pm[1]);
+        const { dong, bd } = splitParenInner(pm[1]);
+        if (bd) continue; // 이미 건물명 있음 → 원본 그대로 보존 (덮어쓰기 금지)
         const newInner = [dong, bestBd].filter(Boolean).join(', ');
         if (newInner !== pm[1].trim()) {
           row.주소 = addr.replace(/\([^)]*\)/, `(${newInner})`);
