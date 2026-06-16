@@ -1314,43 +1314,20 @@ export default function App() {
     gDone(`재정제 완료 — ${fixed}건 해결 / ${remaining}건 남음`);
   };
 
-  // 도로명주소 규칙 재적용 — 특이사항은 보존하고 (법정동, 건물명)·띄어쓰기 등 형식만 통일(정렬 획일화)
-  const handleReapplyFormat = async () => {
+  // 도로명주소 규칙 재적용 — 저장된 데이터로 형식만 통일(정렬 획일화). DB 재조회 없음, 내용(도로명·세부주소·특이사항) 불변.
+  // formatAddressForDisplayMode: 현재 주소 + 메타(_legalDong/legalDong, _buildingName/buildingName 등)에서
+  // "도로명, 세부주소 (법정동, 건물명)" 형식을 재조립. 법정동은 DB 법정동(번호접미어 없음)이라 A-27도 충족.
+  const handleReapplyFormat = () => {
     if (!gridData.length) return;
-    if (!window.confirm(`전체 ${gridData.length}건에 도로명주소 규칙을 재적용해 형식을 통일합니다.\n· (법정동, 건물명) 괄호 형식, 띄어쓰기, 동호수 정규화 적용\n· 특이사항은 변경하지 않습니다\n계속할까요?`)) return;
-
-    gStart('도로명주소 규칙 재적용 중...', `0 / ${gridData.length}건`, 0);
-    let done = 0;
-
-    const reformatted = await asyncPool(10, gridData, async (row) => {
-      // inputNote '' 전달 → 특이사항 재생성 방지. 결과의 주소·형식 메타만 사용, 특이사항은 원본 보존
-      const res = await processAddress(row.주소, row.이름, row.행정동 || '', fileInfo?.city || '', '', { includeCoords: false });
-      done++;
-      gUpdate(Math.round(done / gridData.length * 100), `${done} / ${gridData.length}건`);
-      const updatedRow = {
-        ...row,
-        주소: res.주소 || row.주소,
-        // 특이사항: 보존(변경하지 않음). _에러도 보존(형식만 적용, 재검증 아님)
-        _lat: res.lat ?? row._lat ?? null,
-        _lng: res.lng ?? row._lng ?? null,
-        _isApt: res.isApt !== undefined ? res.isApt : row._isApt,
-        _standardRoadAddress: res.standardRoadAddress || row._standardRoadAddress || '',
-        _roadName: res.roadName || row._roadName || '',
-        _buildingMainNo: res.buildingMainNo ?? row._buildingMainNo ?? '',
-        _buildingSubNo: res.buildingSubNo ?? row._buildingSubNo ?? '',
-        _buildingName: res.buildingName || row._buildingName || '',
-        _legalDong: res.legalDong || row._legalDong || '',
-        _matchedSido: res.matchedSido || row._matchedSido || '',
-        _matchedSigungu: res.matchedSigungu || row._matchedSigungu || '',
-        _detailAddress: res.detailAddress || row._detailAddress || '',
-        _addressDisplayMode: addressDisplayMode,
-      };
-      updatedRow.주소 = formatAddressForDisplayMode(updatedRow, addressDisplayMode);
-      return updatedRow;
+    if (!window.confirm(`전체 ${gridData.length}건에 도로명주소 형식 규칙을 재적용해 정렬을 획일화합니다.\n· (법정동, 건물명) 괄호 위치·띄어쓰기 통일\n· 도로명·세부주소·특이사항은 변경하지 않습니다\n계속할까요?`)) return;
+    let changed = 0;
+    const reformatted = gridData.map((row) => {
+      const next = formatAddressForDisplayMode(row, addressDisplayMode);
+      if (next && next !== row.주소) changed++;
+      return { ...row, 주소: next || row.주소, _addressDisplayMode: addressDisplayMode };
     });
-
     pushHistory(reformatted);
-    gDone(`도로명주소 규칙 재적용 완료 — ${gridData.length}건 형식 통일`);
+    gDone(`도로명주소 형식 재적용 완료 — ${changed.toLocaleString()}건 형식 통일`);
   };
 
   // ── 주소 없음 → 담당자 확인: 담당자가 입력한 이번달 실제 주소로 단건 재정제 ──
