@@ -203,6 +203,8 @@ export default function App() {
   const [user, setUser] = useState(null);
   const [showAuth, setShowAuth] = useState(true);
   const [authStatus, setAuthStatus] = useState('checking');
+  const [guestMode, setGuestMode] = useState(false); // 무료 체험: 로그인 없이 정제+다운로드
+  const guestModeRef = useRef(false); // onAuthStateChanged 클로저에서 최신 guestMode 참조용
   const [authLoading, setAuthLoading] = useState(false);
   const [step, setStep] = useState(1); // 첫 화면 = 파일 업로드(명단 정제). 지자체 현황은 상단 버튼/홈으로 이동
   const [fileInfo, setFileInfo] = useState(null);
@@ -513,7 +515,7 @@ export default function App() {
       } else {
         if (userUnsubRef.current) { userUnsubRef.current(); userUnsubRef.current = null; }
         setUser(null);
-        setShowAuth(true);
+        if (!guestModeRef.current) setShowAuth(true); // 게스트 체험 중이면 로그인 화면으로 쫓아내지 않음
         setAuthStatus('unauthenticated');
         setAuthLoading(false);
       }
@@ -1480,6 +1482,7 @@ export default function App() {
   };
 
   const handleSaveMonthlyList = async () => {
+    if (guestMode) { requireLogin(); return; }
     const city = fileInfo?.city;
     if (!city) return alert('지자체 정보를 감지하지 못했습니다. 파일을 다시 확인해주세요.');
     const unconfirmedAddr = gridData.filter(r => r._에러 && !r._전화확인).length;
@@ -1759,6 +1762,7 @@ export default function App() {
   };
 
   const handleBatchSaveBaseList = async (rawValidData) => {
+    if (guestMode) { requireLogin(); return; }
     const city = fileInfo?.city;
     if (!city) return alert('지자체 정보를 감지하지 못했습니다. 파일을 다시 확인해주세요.');
     if (isSavingBaseListRef.current) return;
@@ -2208,10 +2212,25 @@ export default function App() {
     });
   };
   const onHelp = () => setShowHelp(true);
+  const enterGuest = () => {
+    guestModeRef.current = true;
+    setGuestMode(true);
+    setShowAuth(false);
+    setStep(1); // 업로드 화면으로 진입
+  };
+  // 게스트가 로그인 필요 기능 클릭 시: 작업(gridData) 유지한 채 로그인 화면으로
+  const requireLogin = () => {
+    guestModeRef.current = false;
+    setGuestMode(false);
+    setShowAuth(true);
+  };
+  const guardGuest = (fn) => () => { if (guestMode) { requireLogin(); return; } fn(); };
   const onLogout = async () => {
     try {
       await signOut(auth);
       setUser(null);
+      guestModeRef.current = false;
+      setGuestMode(false);
       setShowAuth(true);
       setAuthStatus('unauthenticated');
       setAuthLoading(false);
@@ -2232,7 +2251,7 @@ export default function App() {
     </ErrorBoundary>
   );
 
-  if (showAuth) return <AuthScreen authStatus={authStatus} authLoading={authLoading} handleGoogleLogin={handleGoogleLogin} />;
+  if (showAuth) return <AuthScreen authStatus={authStatus} authLoading={authLoading} handleGoogleLogin={handleGoogleLogin} onGuestStart={enterGuest} />;
 
   // Lazy 컴포넌트용 fallback — 투명하게 처리 (로딩 스피너 없음)
   const LazyFallback = null;
@@ -2286,7 +2305,7 @@ export default function App() {
         {/* ── V5.0 HEADER ── */}
         <header className="h-14 shrink-0 bg-[#080b0c] border-b border-[#17201f] flex items-center gap-4 px-4 z-50 shadow-[0_1px_0_rgba(45,212,191,0.05)]">
           {/* 로고 */}
-          <button onClick={() => setStep(0)} className="shrink-0 hover:opacity-80 transition-opacity outline-none" title="홈으로">
+          <button onClick={() => setStep(guestMode ? 1 : 0)} className="shrink-0 hover:opacity-80 transition-opacity outline-none" title="홈으로">
             <img src="/ttlogo1.png" alt="NEXUS PIPELINE" className="h-9 object-contain" />
           </button>
 
@@ -2361,7 +2380,13 @@ export default function App() {
             </button>
             <InstallButton />
             <div className="w-px h-5 bg-[#1a2a3a]" />
-            <span className="text-gray-600 text-xs truncate max-w-[130px] hidden xl:block">{user?.realName || user?.email?.split('@')[0]}</span>
+            {guestMode ? (
+              <button onClick={requireLogin} className="px-3 py-1.5 bg-emerald-500 hover:bg-emerald-400 text-black text-xs font-extrabold rounded-lg transition-colors flex items-center gap-1.5">
+                로그인하고 전체 기능
+              </button>
+            ) : (
+              <span className="text-gray-600 text-xs truncate max-w-[130px] hidden xl:block">{user?.realName || user?.email?.split('@')[0]}</span>
+            )}
           </div>
         </header>
 
@@ -2385,7 +2410,7 @@ export default function App() {
             <nav className="flex-1 overflow-y-auto overflow-x-hidden px-1.5 pb-2 space-y-0.5 scrollbar-none">
 
               {/* 홈 */}
-              <SidebarItem icon={Home} label="홈 / 대시보드" active={step === 0} onClick={() => setStep(0)} />
+              <SidebarItem icon={Home} label="홈 / 대시보드" active={step === 0} onClick={() => setStep(guestMode ? 1 : 0)} />
 
               {/* ── 파이프라인 ── */}
               <SidebarSection label="파이프라인" />
@@ -2425,7 +2450,7 @@ export default function App() {
 
               {/* ── 배송 관리 ── */}
               <SidebarSection label="배송 관리" />
-              <SidebarItem icon={Database} label="이번달 배송명단" active={step === 8} onClick={() => { setDbNavCity(''); setStep(8); }} />
+              <SidebarItem icon={Database} label="이번달 배송명단" active={step === 8} onClick={guardGuest(() => { setDbNavCity(''); setStep(8); })} />
               {(workflowMode === 'deliveryFull' || gridData.length === 0) ? (
                 <SidebarItem
                   icon={MapPin}
@@ -2444,11 +2469,11 @@ export default function App() {
                   locked={!canUseRouteMap(user)}
                 />
               )}
-              <SidebarItem icon={CalendarDays} label="배송일정" active={step === 11} onClick={() => setStep(11)} />
+              <SidebarItem icon={CalendarDays} label="배송일정" active={step === 11} onClick={guardGuest(() => setStep(11))} />
 
               {/* ── 데이터 관리 ── */}
               <SidebarSection label="데이터 관리" />
-              <SidebarItem icon={BookOpen} label="기본명단 관리" active={step === 6} onClick={() => { setDbNavCity(''); setStep(6); }} />
+              <SidebarItem icon={BookOpen} label="기본명단 관리" active={step === 6} onClick={guardGuest(() => { setDbNavCity(''); setStep(6); })} />
               <SidebarItem
                 icon={BarChart3}
                 label="DB 현황 조회"
@@ -2456,14 +2481,14 @@ export default function App() {
                 onClick={() => { if (!canUseDbOverview(user)) { setUpgradeReason('dbOverview'); setShowUpgrade(true); } else { setStep(9); setDbNavCity(''); } }}
                 locked={!canUseDbOverview(user)}
               />
-              <SidebarItem icon={Truck} label="기사 관리" active={showDriverRegistry} onClick={() => setShowDriverRegistry(true)} />
-              <SidebarItem icon={HardDrive} label="저장 내역" active={showSavedRecords} onClick={() => setShowSavedRecords(true)} />
+              <SidebarItem icon={Truck} label="기사 관리" active={showDriverRegistry} onClick={guardGuest(() => setShowDriverRegistry(true))} />
+              <SidebarItem icon={HardDrive} label="저장 내역" active={showSavedRecords} onClick={guardGuest(() => setShowSavedRecords(true))} />
 
               {/* ── 설정 ── */}
               <SidebarSection label="설정" />
               <SidebarItem icon={Layers} label="부가서비스" active={showUtils} onClick={() => setShowUtils(true)} />
-              <SidebarItem icon={Crown} label="회원등급" active={false} onClick={() => { setUpgradeReason('city_limit'); setShowUpgrade(true); }} />
-              <SidebarItem icon={UserCircle} label="내 프로필" active={profileModal.open} onClick={() => setProfileModal({ open: true, isNew: false })} />
+              <SidebarItem icon={Crown} label="회원등급" active={false} onClick={guardGuest(() => { setUpgradeReason('city_limit'); setShowUpgrade(true); })} />
+              <SidebarItem icon={UserCircle} label="내 프로필" active={profileModal.open} onClick={guardGuest(() => setProfileModal({ open: true, isNew: false }))} />
 
               {/* ── 관리자 ── */}
               {user?.role === 'admin' && (

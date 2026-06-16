@@ -8,11 +8,9 @@ import { getLocalCache, setLocalCache } from './dbCache.js';
 // ══════════════════════════════════════════════════════════════════
 
 // ── 환경 변수 ─────────────────────────────────────────────────────
-const JUSO_API_KEYS = [
-  import.meta.env.VITE_JUSO_API_KEY_1,
-  import.meta.env.VITE_JUSO_API_KEY_2,
-  import.meta.env.VITE_JUSO_API_KEY_3,
-].filter(Boolean);
+// 클라이언트 직접 juso 호출 비활성화 — 서버(address-service)가 DB + juso fallback 전담.
+// VITE_JUSO_API_KEY_* 참조를 제거해 빌드 번들에 키가 박히지 않도록 함 (키 노출 차단).
+const JUSO_API_KEYS = [];
 const KAKAO_REST_KEY = import.meta.env.VITE_KAKAO_REST_KEY;
 const ADDRESS_MATCH_API_URL = String(import.meta.env.VITE_ADDRESS_MATCH_API_URL || '').replace(/\/+$/, '');
 const ADDRESS_MATCH_TIMEOUT_MS = 3000; // 전국 DB가 1순위 — 대량(easy) burst·콜드스타트에 1200ms는 너무 짧아 JUSO로 새던 문제 해결

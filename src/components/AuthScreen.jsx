@@ -1,5 +1,5 @@
 
-export default function AuthScreen({ authStatus, authLoading, handleGoogleLogin }) {
+export default function AuthScreen({ authStatus, authLoading, handleGoogleLogin, onGuestStart }) {
   if (authStatus === 'checking') {
     return (
       <div className="h-screen w-full bg-[#060908] flex items-center justify-center">
@@ -62,6 +62,27 @@ export default function AuthScreen({ authStatus, authLoading, handleGoogleLogin 
           <p className="mt-5 text-gray-600 text-xs text-center leading-relaxed">
             구글 계정으로 로그인하면 즉시 이용할 수 있습니다
           </p>
+
+          {/* 무료 체험 — 로그인 없이 정제 + 다운로드 */}
+          {onGuestStart && (
+            <>
+              <div className="flex items-center gap-3 w-full my-5">
+                <div className="flex-1 h-px bg-emerald-500/10" />
+                <span className="text-gray-700 text-[10px] font-bold tracking-wide">또는</span>
+                <div className="flex-1 h-px bg-emerald-500/10" />
+              </div>
+              <button
+                onClick={onGuestStart}
+                className="w-full py-3 bg-white/5 hover:bg-white/10 border border-emerald-500/20 hover:border-emerald-500/40 text-emerald-300 font-bold rounded-xl transition-all text-[14px]"
+              >
+                로그인 없이 무료로 정제하기
+              </button>
+              <p className="mt-2.5 text-gray-600 text-[11px] text-center leading-relaxed">
+                명단 정제와 엑셀 다운로드를 무료로 체험하세요<br />
+                저장 · 지도 · 기사배정은 로그인이 필요합니다
+              </p>
+            </>
+          )}
         </div>
       </div>
     </div>
