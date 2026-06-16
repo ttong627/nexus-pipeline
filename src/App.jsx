@@ -230,7 +230,7 @@ export default function App() {
   });
   const [sortConfig, setSortConfig] = useState({ key: '', direction: 'asc' });
   const [currentPage, setCurrentPage] = useState(1);
-  const [itemsPerPage, setItemsPerPage] = useState(200);
+  const [itemsPerPage, setItemsPerPage] = useState(500);
 
   const isBaseUploading = false;
   const [engineProgress, setEngineProgress] = useState({ current: 0, total: 0, percent: 0 });
@@ -1319,22 +1319,65 @@ export default function App() {
 
   // 도로명주소 규칙 재적용 — 전국 DB 조회로 (법정동, 건물명) 채우고 형식 통일(정렬 획일화).
   // 매칭되면 DB 법정동/건물명, 미매칭이면 A-24로 행정동 fallback → 괄호 일관 표시. 특이사항은 보존(inputNote '').
-  // 도로명주소 규칙 재적용 — 저장된 데이터로 형식만 통일(정렬 획일화). DB 재조회 없음, 내용(도로명·세부주소·특이사항) 불변.
-  // [퇴행 방지·절대 되돌리지 말 것] processAddress 전체 재정제는 이미 정제된 주소를 비멱등 재파싱하고
-  //   DB 미매칭 행을 빈 값으로 덮어써 명단을 망가뜨린다(1577b94 점검에서 제거 → fac3fa6에서 잘못 부활).
-  //   formatAddressForDisplayMode: 현재 주소 + 메타에서 "도로명, 세부 (법정동, 건물명)" 형식만 재조립(동기·즉시).
-  //   guardAddressDetail: 형식화 과정의 동(棟)·호수 손실까지 이중 방어(fac3fa6 의도 보존).
-  const handleReapplyFormat = () => {
+  // 도로명주소 규칙 재적용 — 정제 규칙이 바뀌었을 때 "원본 입력 주소(_원주소)"에서 새 규칙으로 다시 정제한다.
+  // [핵심 안전설계·절대 되돌리지 말 것]
+  //   ① 재정제 입력은 반드시 _원주소(원본 엑셀 입력). 이미 정제된 row.주소를 재투입하면 비멱등 파싱으로 명단이 망가진다
+  //      (1577b94 점검 → fac3fa6 퇴행 → d6f7e36 복구 이력 참고). _원주소 없으면 재정제 안 하고 형식만 통일(안전 fallback).
+  //   ② 매칭 실패(빈 결과·3자 미만·확인필요)면 기존 주소를 그대로 보존 — DB 미매칭 시골/신규주소를 빈 값으로 덮어쓰지 않는다.
+  //   ③ guardAddressDetail로 동(棟)·호수 손실까지 이중 방어. 특이사항·전화·구분 등 나머지 필드는 항상 보존.
+  const handleReapplyFormat = async () => {
     if (!gridData.length) return;
-    if (!window.confirm(`전체 ${gridData.length}건에 도로명주소 형식 규칙을 재적용해 정렬을 획일화합니다.\n· (법정동, 건물명) 괄호 위치·띄어쓰기·동호수 형식 통일\n· 도로명·세부주소·특이사항은 변경하지 않습니다 (DB 재조회 없음)\n계속할까요?`)) return;
-    let changed = 0;
-    const reformatted = gridData.map((row) => {
-      const next = guardAddressDetail(row.주소, formatAddressForDisplayMode(row, addressDisplayMode));
-      if (next && next !== row.주소) changed++;
-      return { ...row, 주소: next || row.주소, _addressDisplayMode: addressDisplayMode };
+    if (!window.confirm(`전체 ${gridData.length}건에 최신 주소 정제 규칙을 재적용합니다.\n· 원본 입력 주소를 기준으로 새 규칙으로 다시 정제\n· 규칙으로 못 찾은 건은 기존 주소를 그대로 유지(망가뜨리지 않음)\n· 특이사항·전화·구분은 변경하지 않습니다\n계속할까요?`)) return;
+    gStart('최신 정제 규칙 재적용 중...', `0 / ${gridData.length}건`, 0);
+    let done = 0, changed = 0, kept = 0;
+    const tick = () => { done++; gUpdate(Math.round(done / gridData.length * 100), `${done} / ${gridData.length}건`); };
+    const reformatted = await asyncPool(8, gridData, async (row) => {
+      try {
+        const sourceAddr = String(row._원주소 || '').trim();
+        // _원주소 없음(저장 후 불러온 데이터 등) → 재정제 위험. 형식만 안전 통일.
+        if (!sourceAddr) {
+          const next = guardAddressDetail(row.주소, formatAddressForDisplayMode(row, addressDisplayMode));
+          if (next && next !== row.주소) changed++;
+          tick();
+          return { ...row, 주소: next || row.주소, _addressDisplayMode: addressDisplayMode };
+        }
+        // ① 원본 입력에서 새 규칙으로 재정제 (정제 결과 재투입 금지)
+        const res = await processAddress(sourceAddr, row.이름, row.행정동 || '', fileInfo?.city || '', '', { includeCoords: false });
+        const candidate = String(res.주소 || '').trim();
+        // ② 매칭 실패 보호 — 기존 주소 유지
+        if (!candidate || candidate.length < 3 || res.확인필요) {
+          kept++; tick();
+          return row;
+        }
+        const updatedRow = {
+          ...row,                                 // 특이사항·구분·전화 등 원본 보존
+          주소: candidate,
+          _원주소: sourceAddr,                     // 원본 유지(다음 재적용도 원본 기준)
+          _legalDong: res.legalDong || row._legalDong || '',
+          _buildingName: res.buildingName || row._buildingName || '',
+          _detailAddress: res.detailAddress || row._detailAddress || '',
+          _standardRoadAddress: res.standardRoadAddress || row._standardRoadAddress || '',
+          _roadName: res.roadName || row._roadName || '',
+          _buildingMainNo: res.buildingMainNo ?? row._buildingMainNo ?? '',
+          _buildingSubNo: res.buildingSubNo ?? row._buildingSubNo ?? '',
+          _matchedSido: res.matchedSido || row._matchedSido || '',
+          _matchedSigungu: res.matchedSigungu || row._matchedSigungu || '',
+          _lat: res.lat ?? row._lat ?? null,
+          _lng: res.lng ?? row._lng ?? null,
+          _addressDisplayMode: addressDisplayMode,
+        };
+        // ③ 동·호수 손실 이중 방어 + 표시형식 통일
+        updatedRow.주소 = guardAddressDetail(row.주소, formatAddressForDisplayMode(updatedRow, addressDisplayMode));
+        if (updatedRow.주소 !== row.주소) changed++;
+        tick();
+        return updatedRow;
+      } catch {
+        tick();
+        return row;                               // 에러 시 기존 보존
+      }
     });
     pushHistory(reformatted);
-    gDone(`도로명주소 형식 재적용 완료 — ${changed.toLocaleString()}건 형식 통일`);
+    gDone(`정제 규칙 재적용 완료 — ${changed.toLocaleString()}건 갱신 / ${kept.toLocaleString()}건 기존 유지(매칭 실패 보호)`);
   };
 
   // ── 주소 없음 → 담당자 확인: 담당자가 입력한 이번달 실제 주소로 단건 재정제 ──

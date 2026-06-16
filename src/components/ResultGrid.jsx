@@ -518,7 +518,7 @@ const ResultGrid = memo(function ResultGrid({
             {gridData.length > 0 && onReapplyFormat && (
               <button
                 onClick={onReapplyFormat}
-                title="전체 주소에 도로명주소 규칙((법정동, 건물명) 괄호·띄어쓰기·동호수)을 재적용해 형식을 통일합니다. 특이사항은 변경하지 않습니다."
+                title="원본 입력 주소를 기준으로 최신 정제 규칙을 다시 적용합니다. 규칙으로 못 찾은 건은 기존 주소를 그대로 유지하고(망가뜨리지 않음), 특이사항·전화·구분은 변경하지 않습니다."
                 className="px-3 py-1.5 bg-indigo-950/70 border border-indigo-500/50 text-indigo-300 text-xs font-bold rounded-lg flex items-center gap-1.5 hover:bg-indigo-900/70 hover:border-indigo-400/70 hover:text-indigo-200 transition-all shrink-0"
               >
                 ↻ 도로명규칙 재적용
