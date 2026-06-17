@@ -59,9 +59,11 @@ export default function Step1_Upload({
           <LayoutDashboard size={16} /> 지자체 현황 대시보드
         </button>
         <button
+          type="button"
           onClick={onHelp}
           className="w-9 h-9 rounded-full bg-[#080f0c] border border-emerald-500/30 text-emerald-400 font-black text-base hover:bg-emerald-500/15 hover:border-emerald-400/60 transition-all"
           title="1단계 도움말"
+          aria-label="1단계 도움말 열기"
         >?</button>
       </div>
 
