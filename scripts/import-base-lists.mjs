@@ -16,14 +16,14 @@ const FILE_FILTER = (() => { const i = ARGS.indexOf('--file'); return i >= 0 ? A
 
 const DIR = path.resolve('특이사항_기본명단');
 
-// 파일명 → 지자체(시군구). 특이사항 파일은 시군구 컬럼이 없어 파일명으로 확정.
+// 파일명 → 정규 지자체명(도 포함). base_lists/cloud_lists/delivery_history와 동일 키 필수(지자체 분리 방지).
 const FILE_CITY = {
-  '계룡특이사항': '계룡시',
-  '논산특이사항': '논산시',
-  '서천읍특이사항': '서천군',
-  '천안동남구특이사항': '천안시 동남구',
-  '천안서북구특이사항': '천안시 서북구',
-  '홍성특이사항': '홍성군',
+  '계룡특이사항': '충청남도 계룡시',
+  '논산특이사항': '충청남도 논산시',
+  '서천읍특이사항': '충청남도 서천군',
+  '천안동남구특이사항': '충청남도 천안시 동남구',
+  '천안서북구특이사항': '충청남도 천안시 서북구',
+  '홍성특이사항': '충청남도 홍성군',
 };
 
 const norm = (s) => String(s ?? '').replace(/\s+/g, ' ').trim();
@@ -66,7 +66,7 @@ function parseSheet(ws, sheetName, format) {
   if (format === 'B') {
     const h = rows[0].map(norm);
     const ci = {
-      sigungu: findCol(h, KW.sigungu), dong: findCol(h, KW.dong),
+      sido: findCol(h, KW.sido), sigungu: findCol(h, KW.sigungu), dong: findCol(h, KW.dong),
       name: findCol(h, KW.name), phone: findCol(h, KW.phone), addr: findCol(h, KW.addr),
       note: findCol(h, KW.note), qty: findCol(h, KW.qty),
       driver: findCol(h, ['기사']), seq: findCol(h, ['배송순번']),
@@ -75,9 +75,11 @@ function parseSheet(ws, sheetName, format) {
       const r = rows[i];
       const name = norm(r[ci.name]);
       if (!name || /^(성명|이름|수령자명)$/.test(name)) continue;
+      // 정규 지자체명 = 광역시도 + 시군구 (도 포함, 분리 방지)
+      const 시군구full = [ci.sido >= 0 ? norm(r[ci.sido]) : '', norm(r[ci.sigungu])].filter(Boolean).join(' ');
       out.push({
         이름: name, 주소: norm(r[ci.addr]), 행정동: norm(r[ci.dong]),
-        시군구: norm(r[ci.sigungu]), 전화a: norm(r[ci.phone]), 전화b: '',
+        시군구: 시군구full, 전화a: norm(r[ci.phone]), 전화b: '',
         양곡: norm(r[ci.qty]), 비고: norm(r[ci.note]),
         기사: ci.driver >= 0 ? norm(r[ci.driver]) : '', 배송순번: ci.seq >= 0 ? norm(r[ci.seq]) : '',
       });

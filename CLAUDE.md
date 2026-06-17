@@ -92,6 +92,8 @@
 | B-11 | 감사 로그 | `audit_logs` 컬렉션에 모든 배치 저장 기록 (action, city, addCount, updateCount, adminEmail) |
 | B-12 | 3분할 주소 저장 | 저장 시 `parseDisplayedAddress(주소)`로 도출: `roadAddr`(도로명)·`detailAddr`(상세)·`parenInfo`(법정동,건물명). BaseListManager 3컬럼 표시(저장값 없으면 `address`에서 파생). 도로명주소 기준 전월/기본명단 비교에 사용 |
 | B-13 | 대량 import 스크립트 | `scripts/import-base-lists.mjs` (vite-node로 실엔진 재사용 + firebase-admin 서비스계정 쓰기). `--count`(커버리지)/dry-run(기본)/`--write`. `특이사항_기본명단/` 7파일→base_lists. 무전화+무생년월일 행은 B-1로 스킵 |
+| B-14 | 정규 지자체명 (절대) | base_lists/cloud_lists/delivery_history **문서ID는 정규 지자체명 = 도(道) 포함 풀네임** (예 `충청남도 천안시 동남구`, `경기도 시흥시`). 비정규명(`천안시 동남구`)·URL인코딩·손상(`�`)명 금지 → **지자체 분리/중복 유발**. import 스크립트 city 키도 도 포함 필수 |
+| B-15 | 동일인 dedup·최신우선 | 매칭 시 동일인 = **이름 + (생년월일·휴대폰끝8·유선끝8 중 하나라도 일치)**. 매칭되면 최신(`updatedAt` 최대) 자료로 덮어쓰기, 과거 중복 삭제. 복구 스크립트 `scripts/repair-base-lists.mjs` (`--step A` 지자체통합 / `--step B` dedup, dry-run 기본·`--write` 실행) |
 
 ---
 
