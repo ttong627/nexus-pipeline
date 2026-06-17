@@ -68,8 +68,13 @@ const ROAD_ADDRESS_RE = new RegExp(`(^|[\\s,/\\(])(${ROAD_NAME_SOURCE})\\s*(\\uC
 // (길=길 추가. 누락 시 파서가 "홍양길"에서 끊겨 "번길 40-25"가 괄호로 오분류됨)
 const ROAD_BRANCH_SPACE_RE = new RegExp(`([${HANGUL}A-Za-z]+(?:\\uB300\\uB85C|\\uB85C|\\uAE38))\\s+(\\d+[${HANGUL}0-9]*${BRANCH_SUFFIX})`, 'gu');
 const ROAD_NUMBER_SPACE_RE = new RegExp(`([${HANGUL}A-Za-z0-9]+(?:\\uB300\\uB85C|\\uB85C|\\uAE38))\\s{2,}(\\d{1,5})(?![${HANGUL}A-Za-z0-9])`, 'gu');
-const DETAIL_START_RE = new RegExp(`^(?:\\uC9C0\\uD558|\\uC9C0\\uCE35|\\uC625\\uD0D1|\\d+\\s*(?:\\uB3D9|\\uCE35|\\uD638)|[A-Za-z]?\\d+\\s*\\uD638)`, 'u');
-const DETAIL_MARKER_RE = new RegExp(`__P\\d+__|\\uC9C0\\uD558|\\uC9C0\\uCE35|\\uC625\\uD0D1|\\d+\\s*(?:\\uB3D9|\\uCE35|\\uD638)|[A-Za-z]?\\d+\\s*\\uD638`, 'u');
+// 동(棟) 단위 토큰 — 상세주소(동호수)의 일부. 숫자동(101동)·대시동(1-1동)·영문동(B동)·단일한글동(가동~하동).
+// 뒤에 공백/숫자/호/콤마/끝이 와야 매칭(건물명 중간의 '하동' 등 오절단 방지). 건물명으로 새는 버그 차단.
+const DONG_UNIT_SRC = '(?:\\d+(?:-\\d+)?|[A-Za-z]+|[가나다라마바사아자차카타파하])\\uB3D9(?=\\s|\\d|\\uD638|,|$)';
+const DETAIL_START_RE = new RegExp(`^(?:\\uC9C0\\uD558|\\uC9C0\\uCE35|\\uC625\\uD0D1|${DONG_UNIT_SRC}|\\d+\\s*(?:\\uB3D9|\\uCE35|\\uD638)|[A-Za-z]?\\d+\\s*\\uD638)`, 'u');
+const DETAIL_MARKER_RE = new RegExp(`__P\\d+__|\\uC9C0\\uD558|\\uC9C0\\uCE35|\\uC625\\uD0D1|${DONG_UNIT_SRC}|\\d+\\s*(?:\\uB3D9|\\uCE35|\\uD638)|[A-Za-z]?\\d+\\s*\\uD638`, 'u');
+// 주소칸에 섞인 전화번호 패턴(지역번호 0XX 또는 휴대폰 01X) — 건물명/상세 오염 차단용. 한국 지번·건물번호는 0으로 시작 안 함.
+const PHONE_IN_ADDR_RE = /(?:0\d{1,2}|01[016789])[-.\s]?\d{3,4}[-.\s]?\d{4}/;
 
 const normalizeRoadAddressSpacing = (value) =>
   String(value || '')
@@ -551,23 +556,28 @@ const KNOWN_CITY_RE   = /^(부천|수원|성남|안양|안산|용인|고양|창�
 // A-8: 건물 유형어 (Fallback B 트리거)
 const BLDG_TYPE_RE = /(아파트|빌라|빌딩|타워|오피스텔|주공|단지|복지관|경로당|요양원|노인|의원|병원|학교|교회|성당|사찰|회관|고시원|원룸|연립|다세대|모텔|호텔|상가|센터|하우스|파크|캐슬|힐스|래미안|자이|푸르지오|롯데|현대|삼성|sk뷰|이편한세상)/i;
 
-// ── A-7: 주민센터 검색어 생성 (4단계 + 동명이인 보완) ─────────────
+// ── A-7: 주민센터 검색어 생성 — 정의: 지자체(시군구) + 행정동 + 주민센터 ─────
+// 주민센터는 반드시 "{시군구} {행정동} 주민센터" 형태로 검색한다(행정동 우선, 시군구 접두어 강제).
+// 전국 동명(예: 시흥시 군자동 vs 서울 광진구 군자동) 오매칭 방지.
 const generateCenterKeyword = (rawText, adminDong, cityLabel) => {
-  // 1순위: 행정동 컬럼 — 가장 신뢰도 높음
-  if (adminDong?.trim()) return `${adminDong.trim()} 주민센터`;
-  // 2순위: 분리형 "XX동 주민센터"
+  const sgg = extractSigungu(cityLabel);          // 시군구 토큰 (예: 시흥시)
+  const pfx = sgg ? `${sgg} ` : '';
+  // 1순위: 행정동 컬럼 — 지자체 + 행정동 + 주민센터 (가장 신뢰도 높음)
+  if (adminDong?.trim()) return `${pfx}${adminDong.trim()} 주민센터`;
+  // 2순위: 분리형 "XX동 주민센터" → 지자체 + 동 + 주민센터
   const sep = rawText.match(/([가-힣\d]+(동|읍|면|리))\s*(주민\s*센터|행정복지센터|동사무소|읍사무소|면사무소|복지센터)/);
-  if (sep) return `${sep[1]} 주민센터`;
+  if (sep) return `${pfx}${sep[1]} 주민센터`;
   // 3순위: 부착형 "청량리주민센터" → 동이름 분리
   const att = rawText.match(/([가-힣\d]{2,})(주민센터|행정복지센터|동사무소|읍사무소|면사무소|복지센터)/);
   if (att) {
     const dongName = /[동읍면리]$/.test(att[1]) ? att[1] : `${att[1]}동`;
-    return `${dongName} 주민센터`;
+    return `${pfx}${dongName} 주민센터`;
   }
-  // 4순위: 텍스트에서 동·읍·면 이름 직접 추출 (시군구보다 정확)
+  // 4순위: 텍스트에서 동·읍·면 이름 직접 추출
   const dongInText = rawText.match(/([가-힣\d]{2,}(동|읍|면))/);
-  if (dongInText) return `${dongInText[1]} 주민센터`;
-  // 5순위: cityLabel 마지막 레벨
+  if (dongInText) return `${pfx}${dongInText[1]} 주민센터`;
+  // 5순위: 시군구만 (행정동 불명)
+  if (sgg) return `${sgg} 주민센터`;
   if (cityLabel) {
     const local = cityLabel.trim().split(/\s+/).pop();
     if (local) return `${local} 주민센터`;
@@ -680,6 +690,17 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
         addSpecialChar(matchChar);
         text = text.slice(0, matchPos).replace(/\s+$/, '');
       }
+    }
+  }
+
+  // ── 주소칸에 섞인 전화번호 → 특이사항 분리 (괄호/상세 오염 차단) ─────
+  // 예: "대실길131,042-841-1633" → 주소 "대실길 131" + 특이사항 "042-841-1633"
+  {
+    const phoneRe = new RegExp(PHONE_IN_ADDR_RE.source, 'g');
+    const phones = text.match(phoneRe);
+    if (phones) {
+      phones.forEach(p => { result.특이사항 = appendUniqueNote(result.특이사항, p.trim()); });
+      text = text.replace(phoneRe, ' ').replace(/[,\s]+$/,'').replace(/\s+/g, ' ').trim();
     }
   }
 
@@ -805,41 +826,20 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
 
   // ── Fallback A: 주민센터·행정복지센터·읍·면·동사무소 ───────────────
   if (!apiResult && CENTER_RE.test(text)) {
+    // 주민센터 정의: 지자체(시군구) + 행정동 + 주민센터. smartKw가 이미 "{시군구} {행정동} 주민센터".
     const smartKw = generateCenterKeyword(text, adminDong, cityLabel);
-    const centerPrimaryQueries = [
-      cityLabel ? `${cityLabel.trim()} ${smartKw}` : '',
-      cityLabel && adminDong ? `${cityLabel.trim()} ${adminDong.trim()} 주민센터` : '',
-      cityLabel && adminDong ? `${cityLabel.trim()} ${adminDong.trim()} 행정복지센터` : '',
+    const sgg = extractSigungu(cityLabel);
+    const sggPfx = sgg ? `${sgg} ` : (cityLabel ? `${cityLabel.trim().split(/\s+/).pop()} ` : '');
+    const dong = adminDong?.trim();
+    // 지자체+행정동 + (주민센터/행정복지센터/동사무소…) 변형 — 모두 시군구 접두어 강제
+    const centerQueries = [
       smartKw,
+      ...(dong ? CENTER_KWDS.map(kw => `${sggPfx}${dong} ${kw}`) : []),
+      smartKw.replace(/주민센터/, '행정복지센터'),
     ].filter((q, i, arr) => q && arr.indexOf(q) === i);
-    for (const q of centerPrimaryQueries) {
+    for (const q of centerQueries) {
       apiResult = await lookupAddr(q, cityLabel);
       if (apiResult) break;
-    }
-
-    if (!apiResult) {
-      for (const kw of CENTER_KWDS) {
-        const v = smartKw.replace(/주민센터|행정복지센터|동사무소|읍사무소|면사무소|복지센터/, kw);
-        if (v !== smartKw) { apiResult = await lookupAddr(v, cityLabel); if (apiResult) break; }
-      }
-    }
-    if (!apiResult && adminDong && !smartKw.startsWith(adminDong.trim())) {
-      for (const kw of CENTER_KWDS) {
-        apiResult = await lookupAddr(`${adminDong.trim()} ${kw}`, cityLabel);
-        if (apiResult) break;
-      }
-    }
-    // 시군구 + 동 + 공공기관 (동명이인 disambiguation)
-    if (!apiResult && cityLabel) {
-      const localSuffix = cityLabel.trim().split(/\s+/).pop();
-      const dongMatch   = smartKw.match(/^([가-힣\d]+(동|읍|면|리))/);
-      const dongName    = dongMatch?.[1] || adminDong?.trim();
-      if (localSuffix && dongName) {
-        for (const kw of CENTER_KWDS) {
-          apiResult = await lookupAddr(`${localSuffix} ${dongName} ${kw}`, cityLabel);
-          if (apiResult) break;
-        }
-      }
     }
     // 최후 수단: Kakao POI → 도로명 취득 → JUSO 재조회 (JUSO 미인덱스 대응)
     if (!apiResult) {
@@ -950,6 +950,14 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
       const mainClean = mainAddr.replace(/__P\d+__/g, '').replace(/\s+/g, ' ').trim();
       const roadNumMatch = mainClean.match(/^[가-힣\d]+(대로|로|길)[가-힣\d]*\s*\d+(?:-\d+)?\s+(.*)/);
       if (roadNumMatch?.[2]) detailAddr = roadNumMatch[2].trim();
+      // 폴백: 도로명 오타(로/길 누락, 예 "대실남북82,401동104호")로 위 매칭 실패 시
+      //   콤마 뒤 동/호 패턴을 상세로 보존 (DB는 매칭됐는데 상세가 버려지는 손실 차단)
+      else {
+        const cm = mainClean.match(/[,\s]\s*((?:\d+(?:-\d+)?|[A-Za-z]|[가나다라마바사아자차카타파하])?동?\s*\d*\s*호?.*)$/);
+        const afterComma = mainClean.includes(',') ? mainClean.slice(mainClean.indexOf(',') + 1).trim() : '';
+        const cand = (afterComma && /\d+\s*호|\d+\s*동/.test(afterComma)) ? afterComma : (cm?.[1] || '');
+        if (cand && /\d+\s*호|\d+\s*동/.test(cand)) detailAddr = cand.replace(/^[,\s]+/, '').trim();
+      }
     }
   } else {
     // ── A-12 ②: 도로명 미발견 + API 실패 플래그 ─────────────────────
@@ -1020,6 +1028,13 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
     }
   }
 
+  // 버그수정: 건물명 슬롯이 전화번호면 특이사항으로 이동(주소 괄호 오염 차단)
+  if (buildingName && PHONE_IN_ADDR_RE.test(buildingName.replace(/\s/g, ''))) {
+    const ph = buildingName.trim();
+    result.특이사항 = appendUniqueNote(result.특이사항, ph);
+    buildingName = '';
+  }
+
   let finalDetail = detailAddr;
 
   // ── finalDetail 전처리 (A-18 → A-19 → A-17 → A-10 순서) ─────────
@@ -1029,7 +1044,7 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
 
   // A-19: 동호 붙여쓰기 분리 — 101동205호 → 101동 205호 (A-10에서 대시로 변환)
   finalDetail = finalDetail
-    .replace(/([가-힣A-Za-z\d]+동)(\d+호)/g, '$1 $2')
+    .replace(/([가-힣A-Za-z\d-]+동)(\d+호)/g, '$1 $2')
     .replace(/([가-힣A-Za-z\d]+호)(\d+층)/g, '$1 $2');
 
   // A-17: 층/F 표기 변환 제거 — B동·F동 등 건물동 명칭과 혼동 오탐 발생
@@ -1039,15 +1054,15 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
   // 숫자 동(대단지 아파트) → 대시 + 호수 4자리 패딩: "101동 203호" → "101-  203호", "101동 1203호" → "101-1203호"
   // 한글/영문 동(빌라·연립) → "동" 유지: "가동 101호" → "가동 101호", "B동 104호" → "B동 104호"
   finalDetail = finalDetail.replace(
-    /([가-힣A-Za-z\d]+)동\s*(?:(지하|[Bb])?\s*(\d+)\s*층\s*)?(?:제\s*)?(\d+)\s*호/g,
+    /([가-힣A-Za-z\d-]+)동\s*(?:(지하|[Bb])?\s*(\d+)\s*층\s*)?(?:제\s*)?(\d+)\s*호/g,
     (_, dong, flrPfx, flr, ho) => {
       const flrStr = flr ? ` ${flrPfx || ''}${flr}층` : '';
       if (/^\d+$/.test(dong)) {
-        // 숫자 동: 대단지 아파트 — 대시 + 4자리 패딩
+        // 순수 숫자 동(대단지 아파트)만 대시 + 4자리 패딩: "101동 203호" → "101- 203호"
         const pad = ' '.repeat(Math.max(0, 4 - ho.length));
         return `${dong}-${pad}${ho}호${flrStr}`;
       }
-      // 한글/영문 동: 빌라·연립 — "동" 그대로
+      // 한글/영문/대시 동(빌라·연립·1-1동): "동" 그대로 유지
       return `${dong}동 ${ho}호${flrStr}`;
     }
   );
@@ -1089,12 +1104,15 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
   const parenInner  = parenParts.join(', ').replace(/,\s*$/, '').trim();
   const parenStr    = parenInner ? `(${parenInner})` : '';
 
-  result.주소 = [finalRoadAddr, parenStr].filter(Boolean).join(ROAD_DETAIL_SEPARATOR);
+  // A-11 형식: "도로명주소, 상세주소 (법정동, 건물명)" (상세 먼저, 괄호 마지막)
+  result.주소 = finalRoadAddr || '';
   if (finalDetail) {
-    // 괄호 있으면 "(법정동, 건물명) 상세"(앞 공백), 괄호 없으면 "도로명, 상세"(쉼표).
-    // A-11: 도로명주소 바로 뒤 첫 구분자는 쉼표. 괄호 없을 때 공백으로 붙이면 표시단계에서 동호수 중복 유발.
-    const detailSep = parenStr ? ' ' : ROAD_DETAIL_SEPARATOR;
-    result.주소 += result.주소 ? `${detailSep}${finalDetail}` : finalDetail;
+    // 도로명 뒤 첫 구분자는 쉼표 (A-11). 상세주소를 쉼표로 붙임.
+    result.주소 += result.주소 ? `${ROAD_DETAIL_SEPARATOR}${finalDetail}` : finalDetail;
+    if (parenStr) result.주소 += ` ${parenStr}`;          // 상세 뒤 공백 + (법정동, 건물명)
+  } else if (parenStr) {
+    // 상세 없으면 "도로명, (법정동, 건물명)"
+    result.주소 += result.주소 ? `${ROAD_DETAIL_SEPARATOR}${parenStr}` : parenStr;
   }
 
   // ── 3분할 주소 노출 (기본명단 3컬럼 저장·도로명주소 비교용) ─────────
@@ -1195,8 +1213,8 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
   if (apiResult?.jibunAddr && !result.standardRoadAddress) {
     appendCheckReason(result, `지번주소만 확인됨: ${apiResult.jibunAddr}`);
   } else if (!apiResult && text && !result.확인필요) {
-    // A-12: '도로명 미발견 AND API실패'만 확인필요. 도로명(로/길/대로+번호)이 멀쩡히 파싱됐으면
-    // DB/JUSO가 일시 미확인(대량 burst 등)이어도 멀쩡한 주소를 확인명단에 넣지 않는다.
+    // A-12: 도로명(로/길/대로+번호)이 멀쩡히 파싱됐으면 DB 일시 미확인이어도 확인명단에 넣지 않는다(오탐 방지).
+    // 타지역(관할 밖) 판별은 엔진이 단정하지 않고, 비교기능(base_lists 법정동↔법정동)이 담당 → CL-4 주민센터배송.
     if (!/(대로|로|길)\s*\d+(?:-\d+)?/.test(result.주소 || '')) {
       appendCheckReason(result, '주소 없음: 전국 주소DB/JUSO에서 확인되지 않음');
     }

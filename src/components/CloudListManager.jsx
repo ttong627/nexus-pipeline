@@ -1271,7 +1271,9 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
         if (!name) return;
         const road = r.roadAddr || parseDisplayedAddress(r.address || r.주소 || '').road || '';
         const dong = r.dong || r.행정동 || r.legalDong || '';
-        const val = { road, dong };
+        // 법정동 — 동 단위 이사/주민센터배송 판정용(법정동↔법정동 비교, 행정동≠법정동 과탐 방지)
+        const legalDong = r.legalDong || parseDisplayedAddress(r.address || r.주소 || '').paren.split(',')[0]?.trim() || '';
+        const val = { road, dong, legalDong };
         const k1 = r.birthKey ? `${name}__${r.birthKey}` : null;
         const ph = digits(r.mobile || r.휴대폰 || '').slice(-7);
         const k2 = ph.length >= 7 ? `${name}__${ph}` : null;
@@ -1341,10 +1343,11 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
           const k2 = ph.length >= 7 ? `${rec.이름}__${ph}` : null;
           const prevAddr = (k1 && prevMap.get(k1)) || (k2 && prevMap.get(k2)) || null;
 
-          // 변경 유형 자동 감지 — 기본명단 도로명주소 비교 + 행정동 규칙
+          // 변경 유형 자동 감지 — 기본명단 도로명주소 비교 + 법정동 규칙
           //  · 도로명 같음 → 정제 (포맷/동호수만 변경)
-          //  · 도로명 다름 + 새 주소 동 == 배정 행정동 → 이사 (관할 내 이동)
-          //  · 도로명 다름 + 새 주소 동 != 배정 행정동 → 주민센터배송 (관할 밖 → 주민센터 전달)
+          //  · 도로명 다름 + 새 주소 법정동 == 기본명단 법정동 → 이사 (같은 동 내 이동)
+          //  · 도로명 다름 + 새 주소 법정동 != 기본명단 법정동 → 주민센터배송 (다른 동 → 관할 밖)
+          // 법정동↔법정동 비교(둘 다 주소DB 법정동, 100% 정확). 행정동≠법정동 과탐 방지.
           // 비교 기준: 기본명단(base_lists) 우선, 없으면 저번달.
           const baseEntry = (k1 && baseMap.get(k1)) || (k2 && baseMap.get(k2)) || null;
           const baseRoad = baseEntry?.road || prevAddr || '';
@@ -1352,9 +1355,10 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
           if (refined.확인필요) {
             changeType = '오류';
           } else if (baseRoad && hasRoadAddressChanged(baseRoad, newAddr)) {
-            const newDong = normDongName(refined.legalDong || (parseDisplayedAddress(newAddr).paren.split(',')[0] || ''));
-            const assignedDong = normDongName(rec.행정동 || baseEntry?.dong || '');
-            changeType = (newDong && assignedDong && newDong !== assignedDong) ? '주민센터배송' : '이사';
+            const newLegal = normDongName(refined.legalDong || (parseDisplayedAddress(newAddr).paren.split(',')[0] || ''));
+            const baseLegal = normDongName(baseEntry?.legalDong || '');
+            // 양쪽 법정동을 알 때만 동 비교 → 다르면 주민센터배송, 같거나 불명이면 이사
+            changeType = (newLegal && baseLegal && newLegal !== baseLegal) ? '주민센터배송' : '이사';
           }
 
           changes.push({
