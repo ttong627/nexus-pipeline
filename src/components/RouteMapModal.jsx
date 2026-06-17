@@ -1091,6 +1091,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
   // ── 좌표 삭제 브러시 모달
   const [showCoordBrush, setShowCoordBrush] = useState(false);
   const [showExportMenu, setShowExportMenu] = useState(false); // 내보내기 드롭다운(KML·엑셀·배송루트·공유 통합)
+  const [showSessionMenu, setShowSessionMenu] = useState(false); // 세션 드롭다운(이어서작업·저장본·이전달승계 통합 — 가끔 쓰는 동작 정리)
   const [savedView, setSavedView] = useState(null); // 저장본 보기 모달: null | { loading, rows, summary }
 
   // ── 소속사 기사 추가 피커
@@ -4084,11 +4085,11 @@ ${folders}
 
         <div className="ml-auto flex items-center gap-1.5">
 
-          {/* ── 그룹 1: 세션 관리 (클라우드 모드 전용) ─────────────── */}
+          {/* ── 그룹 1: 세션 (상태 뱃지는 유지, 가끔 쓰는 동작은 드롭다운으로 정리) ── */}
           {isCloudMode && (
             <div className="flex items-center gap-1 bg-[#0a0a0a] border border-[#1e1e1e] rounded-xl px-2 py-1">
               <span className="text-[8px] text-gray-700 font-black tracking-widest mr-1">세션</span>
-              {/* 저장 상태 뱃지 */}
+              {/* 저장 상태 뱃지 — 항상 보이게 유지 */}
               {hasUnsaved
                 ? <span className="text-[9px] text-amber-400 animate-pulse font-bold mr-1">● 미저장</span>
                 : sessionStatus
@@ -4097,38 +4098,44 @@ ${folders}
                     </span>
                   : null
               }
-              {/* 이어서 작업 */}
-              <button
-                onClick={handleLoadSession}
-                disabled={isLoadingSession}
-                title="저장된 배정 현황을 불러와 이어서 작업합니다"
-                className="px-2 py-1 bg-[#111] border border-[#2a2a2a] text-gray-400 hover:text-cyan-400 hover:border-cyan-500/40 rounded-lg text-[10px] font-bold flex items-center gap-1 transition-colors disabled:opacity-50"
-              >
-                {isLoadingSession ? <RefreshCw size={10} className="animate-spin" /> : <RefreshCw size={10} />}
-                {isLoadingSession ? '로딩...' : '이어서 작업'}
-              </button>
-              {/* 저장본 보기/편집 — DB에 저장된 기사·배송순번·좌표를 표로 보고, 불러와 편집 */}
-              {isCloudMode && (
+              {/* 이어서작업 · 저장본 · 이전달승계 — 드롭다운 통합 */}
+              <div className="relative">
                 <button
-                  onClick={handleOpenSavedView}
-                  title="DB에 저장된 배정(기사·배송순번·좌표)을 표로 보고, 불러와 편집할 수 있습니다"
-                  className="px-2 py-1 bg-[#0a1520] border border-cyan-600/40 text-cyan-400 hover:bg-cyan-900/20 rounded-lg text-[10px] font-bold flex items-center gap-1 transition-colors"
+                  onClick={() => setShowSessionMenu(v => !v)}
+                  title="이어서 작업 · 저장본 보기/편집 · 이전달 승계"
+                  className="px-2 py-1 bg-[#111] border border-[#2a2a2a] text-gray-400 hover:text-cyan-400 hover:border-cyan-500/40 rounded-lg text-[10px] font-bold flex items-center gap-1 transition-colors"
                 >
-                  <HardDrive size={10} /> 저장본
+                  {(isLoadingSession || isLoadingPrevMonth) ? <RefreshCw size={10} className="animate-spin" /> : <Clock size={10} />}
+                  세션 <span className="text-[8px] leading-none">▾</span>
                 </button>
-              )}
-              {/* 임시저장 */}
-              {/* 임시저장(수동)은 제거 — 5분 자동 임시저장이 상시 동작하므로 중복 */}
-              {/* 이전달 승계 */}
-              <button
-                onClick={handleLoadPrevMonth}
-                disabled={isLoadingPrevMonth}
-                title="전달 배정 데이터(좌표·기사)를 이번달 명단에 자동 이식합니다"
-                className="px-2 py-1 bg-[#0d1520] border border-blue-500/30 text-blue-400 hover:bg-blue-900/20 rounded-lg text-[10px] font-bold flex items-center gap-1 transition-colors disabled:opacity-50"
-              >
-                {isLoadingPrevMonth ? <RefreshCw size={10} className="animate-spin" /> : <Clock size={10} />}
-                {isLoadingPrevMonth ? '불러오는중...' : '이전달 승계'}
-              </button>
+                {showSessionMenu && (
+                  <>
+                    <div className="fixed inset-0 z-40" onClick={() => setShowSessionMenu(false)} />
+                    <div className="absolute right-0 mt-1 z-50 bg-[#0a0a0a] border border-[#2a2a2a] rounded-xl p-1 shadow-2xl min-w-[168px]">
+                      <button
+                        onClick={() => { setShowSessionMenu(false); handleLoadSession(); }}
+                        disabled={isLoadingSession}
+                        className="w-full text-left px-2.5 py-1.5 rounded-lg text-[11px] font-bold text-cyan-400 hover:bg-cyan-900/20 flex items-center gap-1.5 transition-colors disabled:opacity-50"
+                      >
+                        <RefreshCw size={11} /> 이어서 작업
+                      </button>
+                      <button
+                        onClick={() => { setShowSessionMenu(false); handleOpenSavedView(); }}
+                        className="w-full text-left px-2.5 py-1.5 rounded-lg text-[11px] font-bold text-cyan-400 hover:bg-cyan-900/20 flex items-center gap-1.5 transition-colors"
+                      >
+                        <HardDrive size={11} /> 저장본 보기·편집
+                      </button>
+                      <button
+                        onClick={() => { setShowSessionMenu(false); handleLoadPrevMonth(); }}
+                        disabled={isLoadingPrevMonth}
+                        className="w-full text-left px-2.5 py-1.5 rounded-lg text-[11px] font-bold text-blue-400 hover:bg-blue-900/20 flex items-center gap-1.5 transition-colors disabled:opacity-50"
+                      >
+                        <Clock size={11} /> 이전달 승계
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
             </div>
           )}
 
