@@ -48,6 +48,20 @@
 | A-26 | `()` 내 동명 토큰 필터 | `buildingName` 구성 시 한글 시작 + 동/읍/면 접미어 토큰 제거 (`답십리1동`, `용두동` 등). 숫자 시작 건물 동호(`101동`)는 유지. 입력 주소 괄호 안 동명이 API 결과 `dongPart`와 달라도 중복 동명 표시 방지 |
 | A-27 | 행정동 번호 접미어 제거 | 도로명주소 `()` 내 동명은 **법정동(번호 없음)** 표기. `답십리2동` → `답십리동`, `청량리3동` → `청량리동`. `행정동` 컬럼 값은 변경 안 함. `A-25 unifyParenContent`에서도 동일 정규화 적용 |
 | A-28 | 중첩 괄호 잔여 `)` 제거 | 입력에 `삼화에코빌(6차)` 같은 중첩 괄호가 포함된 경우, non-greedy `/\(.*?\)/g` 추출 후 바깥 `)` 가 text에 잔류하여 `103- 501호 ) (장안동)` 형태의 오출력 발생. **괄호 추출 직후 text 내 남은 `)` 를 모두 제거** (`text = text.replace(/\)/g, '')`). 구현: `src/engine/addressEngine.js` 괄호 추출 다음 줄. 절대 되돌리지 말 것 |
+| A-29 | 건물 동(棟) 괄호 침범 차단 | 괄호 `()` 는 **(법정동, 건물명)만** 담는다. 빌라/아파트 건물 동(가동·B동·101동·`푸르지오 101동` 등)이 `bdNm`/inline으로 buildingName에 섞이면 상세주소로 이동(A-10 일관 정규화). 규칙: 숫자동(101동)·영문동(B동)은 호수 무관 분리, 단일 한글동(가동)은 **호수 동반 시에만**(법정동 사동·본동 오인 방지). `푸르지오 101동`→상세 `101동`/건물명 `푸르지오`(앞 건물명 보존). 구현: `addressEngine.js` finalDetail 직전. 절대 되돌리지 말 것 |
+| A-30 | 주민센터/도로명 지역 오매칭 차단 | 전국 동명(시흥시 군자동 vs 서울 광진구 군자동) 오매칭 방지. ① `getMunicipalityMatch`가 **시군구 단독 cityLabel("시흥시")** 도 시군구 토큰으로 비교(과거엔 시도 없으면 필터 OFF였음) ② Kakao 폴백 `kakaoDocToApiResult` 직행을 **`kakaoDocInMunicipality` 지역검증**으로 차단 ③ 주민센터 검색어에 **지자체 접두어 강제**(`시흥시 군자동 주민센터`). `extractSido/extractSigungu` 헬퍼 사용. 절대 되돌리지 말 것 |
+
+### 1-3. 정제 주소 3분할 (도로명/상세/괄호)
+
+`processAddress` 결과는 정제 주소를 3조각으로도 노출한다 — 콤마 기준 분할(표시 함수 `parseDisplayedAddress` 와 동일):
+
+| result 필드 | 내용 |
+|---|---|
+| `result.도로명주소` | 콤마 앞 = 도로명주소(건물번호까지) |
+| `result.상세주소` | 나머지(동호수 등, 괄호 제외) |
+| `result.괄호정보` | `(법정동, 건물명)` 내부 텍스트(괄호 기호 제외) |
+
+용도: 기본명단 3컬럼 저장·표시 + 도로명주소 기준 비교. 기존 레코드는 `address`에서 `parseDisplayedAddress`로 즉시 파생(호환).
 
 ---
 
@@ -74,8 +88,10 @@
 | B-7 | 캐시 우회 | `getDocsFromServer` — 서버 최신 데이터 직접 조회 |
 | B-8 | 스키마 혼재 지원 | 구버전(한국어 키: 이름/휴대폰) + 신버전(영문 키: name/mobile) 동시 지원 |
 | B-9 | note 저장 | 기존 ◆ 이식 내용 제거 후 저장: `.replace(/\s*◆[^◆]*/g, '').trim()` |
-| B-10 | Payload 필드 | `name, birthKey, dong, address, mobile, landline, note, driver, seqNo, sms` |
+| B-10 | Payload 필드 | `name, birthKey, dong, address, mobile, landline, note, driver, seqNo, sms` + **3분할(`roadAddr, detailAddr, parenInfo`)** |
 | B-11 | 감사 로그 | `audit_logs` 컬렉션에 모든 배치 저장 기록 (action, city, addCount, updateCount, adminEmail) |
+| B-12 | 3분할 주소 저장 | 저장 시 `parseDisplayedAddress(주소)`로 도출: `roadAddr`(도로명)·`detailAddr`(상세)·`parenInfo`(법정동,건물명). BaseListManager 3컬럼 표시(저장값 없으면 `address`에서 파생). 도로명주소 기준 전월/기본명단 비교에 사용 |
+| B-13 | 대량 import 스크립트 | `scripts/import-base-lists.mjs` (vite-node로 실엔진 재사용 + firebase-admin 서비스계정 쓰기). `--count`(커버리지)/dry-run(기본)/`--write`. `특이사항_기본명단/` 7파일→base_lists. 무전화+무생년월일 행은 B-1로 스킵 |
 
 ---
 
@@ -86,7 +102,7 @@
 | CL-1 | 주소 정제 버튼 | 이번달 명단 보기 상태에서 **주소 정제** 버튼 클릭 → 저장된 레코드 전체에 `processAddress` 적용 (asyncPool 10, progress 표시) |
 | CL-2 | 변경 감지 | 정제 전 주소 ≠ 정제 후 주소인 레코드만 `addrChanges` 목록으로 추적 |
 | CL-3 | 저번달 비교 | `delivery_history/{city}/months/{YYYY-MM-1}/records` 에서 name+birthKey 또는 name+phone(끝7자리) 매칭 → `prevAddr` 필드로 비교 표시 |
-| CL-4 | 변경 유형 자동 감지 | `오류` (확인필요=true) > `이사` (저번달·신규 주소의 **도로명+번호** 불일치 — 공백·괄호·쉼표 무시 유사값 비교) > `정제` (도로명 동일, 포맷/동호수만 변경) |
+| CL-4 | 변경 유형 자동 감지 | **기본명단(base_lists) 도로명주소 비교 우선**(없으면 저번달). `오류`(확인필요) > 도로명 변경 시 **행정동 규칙**: 새 주소 동 == 배정 행정동(번호차 정규화 `normDongName`) → `이사`, 다르면 `주민센터배송`(관할 밖) > 도로명 동일 → `정제`. base_lists 매칭키: 이름+생년월일 또는 이름+휴대폰끝7. 모달에 정제/이사/주민센터/오류 집계 + 유형 수동변경(주민센터배송 포함) |
 | CL-5 | 주소변경확인 버튼 | 변경 건수를 배지로 표시. 클릭 시 모달 오픈 |
 | CL-6 | 모달 탭 구성 | **행정동 요약** (기본): 동별 정제/이사/오류 건수 + 이상 여부 / **전체 목록**: 기존주소·정제주소·저번달주소·유형·처리 |
 | CL-7 | 행정동 이상 경고 | 저번달 대비 주소 변경 10건 이상인 행정동 → 빨간 `⚠ {동} 이상 N건` 배지 + 모달 내 "행정동 주소이상" 표시 |
