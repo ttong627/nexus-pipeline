@@ -2,6 +2,10 @@
 .env
 .env.*
 !.env.example
+# 서비스계정 키 (import 스크립트용) — 절대 커밋 금지
+serviceAccountKey.json
+**/serviceAccountKey.json
+*serviceAccount*.json
 
 # Logs
 logs

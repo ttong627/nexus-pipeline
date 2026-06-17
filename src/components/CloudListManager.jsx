@@ -20,7 +20,7 @@ import ColumnEditBar from './ColumnEditBar.jsx';
 import ColHeaderEditControls from './ColHeaderEditControls.jsx';
 import { useColumnEditor } from '../hooks/useColumnEditor.js';
 import { processAddress, asyncPool } from '../engine/addressEngine.js';
-import { guardAddressDetail } from '../utils/addressFormat.js';
+import { guardAddressDetail, parseDisplayedAddress } from '../utils/addressFormat.js';
 import { canUseCoords, canUseCoordsBg } from '../utils/tierUtils.js';
 import { getCachedCoord, saveCoordCache } from '../utils/coordCache.js';
 import { idbGet, idbSet, idbDel } from '../utils/idbCache.js';
@@ -123,6 +123,9 @@ const addressCompareCore = (addr) => {
     .replace(/[\s·.\-'`]/g, '');
   return t.trim();
 };
+
+// 행정동/법정동 이름 정규화 — 끝 숫자 제거(정왕1동→정왕동), 공백 제거. 행정동↔법정동 번호차 흡수.
+const normDongName = (s) => String(s || '').replace(/\s+/g, '').replace(/([가-힣]+?)\d+(동|가|읍|면)$/, '$1$2').trim();
 
 // 저번달 대비 "이사(변동)" 판정 — 과탐 최소화(애매하면 변동 아님).
 const hasRoadAddressChanged = (prevAddr, currentAddr) => {
@@ -1257,6 +1260,26 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
       });
     } catch (e) { console.warn('[주소정제] 저번달 로드 실패:', e); }
 
+    // 기본명단(base_lists) 로드 — 도로명주소 비교 기준(이사/주민센터배송 판정)
+    const baseMap = new Map();
+    try {
+      const baseSnap = await getDocsFromServer(collection(db, `base_lists/${selectedCity}/records`));
+      baseSnap.docs.forEach(d => {
+        const r = d.data();
+        const digits = v => String(v || '').replace(/[^\d]/g, '');
+        const name = (r.name || r.이름 || '').trim();
+        if (!name) return;
+        const road = r.roadAddr || parseDisplayedAddress(r.address || r.주소 || '').road || '';
+        const dong = r.dong || r.행정동 || r.legalDong || '';
+        const val = { road, dong };
+        const k1 = r.birthKey ? `${name}__${r.birthKey}` : null;
+        const ph = digits(r.mobile || r.휴대폰 || '').slice(-7);
+        const k2 = ph.length >= 7 ? `${name}__${ph}` : null;
+        if (k1) baseMap.set(k1, val);
+        if (k2 && !baseMap.has(k2)) baseMap.set(k2, val);
+      });
+    } catch (e) { console.warn('[주소정제] 기본명단 로드 실패:', e); }
+
     const changes = [];
     const dirtyUpdates = {};
     let current = 0;
@@ -1318,11 +1341,21 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
           const k2 = ph.length >= 7 ? `${rec.이름}__${ph}` : null;
           const prevAddr = (k1 && prevMap.get(k1)) || (k2 && prevMap.get(k2)) || null;
 
-          // 변경 유형 자동 감지 — 도로명+번호 기준 유사값 비교
-          // 도로명+건물번호가 둘 다 잡힌 경우에만 이사로 본다. 상세주소/괄호/띄어쓰기는 무시.
+          // 변경 유형 자동 감지 — 기본명단 도로명주소 비교 + 행정동 규칙
+          //  · 도로명 같음 → 정제 (포맷/동호수만 변경)
+          //  · 도로명 다름 + 새 주소 동 == 배정 행정동 → 이사 (관할 내 이동)
+          //  · 도로명 다름 + 새 주소 동 != 배정 행정동 → 주민센터배송 (관할 밖 → 주민센터 전달)
+          // 비교 기준: 기본명단(base_lists) 우선, 없으면 저번달.
+          const baseEntry = (k1 && baseMap.get(k1)) || (k2 && baseMap.get(k2)) || null;
+          const baseRoad = baseEntry?.road || prevAddr || '';
           let changeType = '정제';
-          if (refined.확인필요) changeType = '오류';
-          else if (prevAddr && hasRoadAddressChanged(prevAddr, newAddr)) changeType = '이사';
+          if (refined.확인필요) {
+            changeType = '오류';
+          } else if (baseRoad && hasRoadAddressChanged(baseRoad, newAddr)) {
+            const newDong = normDongName(refined.legalDong || (parseDisplayedAddress(newAddr).paren.split(',')[0] || ''));
+            const assignedDong = normDongName(rec.행정동 || baseEntry?.dong || '');
+            changeType = (newDong && assignedDong && newDong !== assignedDong) ? '주민센터배송' : '이사';
+          }
 
           changes.push({
             rowId: rec.id,
@@ -2030,7 +2063,7 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
         const dongStats = {};
         addrChanges.forEach(c => {
           const d = c.행정동 || '미분류';
-          if (!dongStats[d]) dongStats[d] = { total: 0, 정제: 0, 이사: 0, 오류: 0, reverted: 0 };
+          if (!dongStats[d]) dongStats[d] = { total: 0, 정제: 0, 이사: 0, 주민센터배송: 0, 오류: 0, reverted: 0 };
           dongStats[d].total++;
           if (c.status === 'reverted') dongStats[d].reverted++;
           else dongStats[d][c.changeType] = (dongStats[d][c.changeType] || 0) + 1;
@@ -2093,6 +2126,7 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
                         <th className="text-center pb-2.5 font-bold">전체</th>
                         <th className="text-center pb-2.5 font-bold">정제</th>
                         <th className="text-center pb-2.5 font-bold">이사</th>
+                        <th className="text-center pb-2.5 font-bold">주민센터</th>
                         <th className="text-center pb-2.5 font-bold">오류</th>
                         <th className="text-center pb-2.5 font-bold">원복</th>
                         <th className="text-left pb-2.5 font-bold">상태</th>
@@ -2112,6 +2146,7 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
                               <td className="py-2 text-center text-gray-300 font-black">{s.total}</td>
                               <td className="py-2 text-center"><span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-blue-500/15 text-blue-400">{s.정제 || 0}</span></td>
                               <td className="py-2 text-center"><span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-orange-500/15 text-orange-400">{s.이사 || 0}</span></td>
+                              <td className="py-2 text-center"><span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-purple-500/15 text-purple-400">{s.주민센터배송 || 0}</span></td>
                               <td className="py-2 text-center"><span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-red-500/15 text-red-400">{s.오류 || 0}</span></td>
                               <td className="py-2 text-center text-gray-600">{s.reverted || 0}</td>
                               <td className="py-2">
@@ -2154,6 +2189,7 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
                             >
                               <option value="정제">🔧 정제</option>
                               <option value="이사">🚚 이사</option>
+                              <option value="주민센터배송">🏢 주민센터배송</option>
                               <option value="오류">⚠ 오류</option>
                             </select>
                           </td>

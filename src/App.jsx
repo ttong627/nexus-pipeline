@@ -1953,10 +1953,15 @@ export default function App() {
           .replace(/\s+/g, ' ')
           .trim();
 
+        const _spl = parseDisplayedAddress(row.주소 || '');
         const payload = {
           name, birthKey,
           dong:    row.행정동 || '',
           address: row.주소   || '',
+          // 3분할 주소(도로명주소 비교·표시용): 콤마앞=도로명 / 나머지=상세 / 괄호=법정동·건물명
+          roadAddr:   _spl.road   || '',
+          detailAddr: _spl.detail || '',
+          parenInfo:  _spl.paren  || '',
           mobile,  landline,
           note,
           driver:  row.기사 || '',

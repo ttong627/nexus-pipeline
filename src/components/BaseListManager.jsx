@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 
 import { normalizeBirth, parsePhoneNumbers, formatPhoneInput } from '../utils/parsers.js';
+import { parseDisplayedAddress } from '../utils/addressFormat.js';
 import { REGIONS } from '../utils/regions.js';
 import { useConfirmDelete } from '../contexts/ConfirmDeleteContext.jsx';
 import ColResizeHandle from './ColResizeHandle.jsx';
@@ -24,10 +25,16 @@ const FIELDS = [
   { key: 'name',     label: '이름',     minW: '90px'  },
   { key: 'birthKey', label: '생년월일', minW: '85px'  },
   { key: 'dong',     label: '읍면동',   minW: '75px'  },
+  { key: 'roadAddr',   label: '도로명주소',     minW: '150px' },
+  { key: 'detailAddr', label: '상세주소',       minW: '90px'  },
+  { key: 'parenInfo',  label: '(법정동,건물명)', minW: '160px' },
   { key: 'mobile',   label: '휴대폰',   minW: '110px' },
   { key: 'landline', label: '유선전화', minW: '110px' },
   { key: 'note',     label: '특이사항', minW: '220px' },
 ];
+
+// 3분할 컬럼 → parseDisplayedAddress 키 (저장값 없을 때 address에서 파생)
+const SPLIT_DERIVE = { roadAddr: 'road', detailAddr: 'detail', parenInfo: 'paren' };
 
 const ROW_HEIGHT = 36; // px — 가상스크롤 고정 행 높이
 
@@ -278,7 +285,9 @@ export default function BaseListManager({ user, onBack, initialCity = '', export
     const id = r.id;
     const isEditing = editingCell?.id === id && editingCell?.field === field;
     const isDirty = dirtyMap[id]?.[field] !== undefined;
-    const val = dirtyMap[id]?.[field] ?? r[field] ?? '';
+    let val = dirtyMap[id]?.[field] ?? r[field] ?? '';
+    // 3분할 컬럼: 저장값 없으면 address에서 즉시 파생(기존 레코드 호환)
+    if (!val && SPLIT_DERIVE[field] && r.address) val = parseDisplayedAddress(r.address)[SPLIT_DERIVE[field]] || '';
     if (isEditing) {
       return (
         <input
