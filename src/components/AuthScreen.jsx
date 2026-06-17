@@ -87,6 +87,16 @@ export default function AuthScreen({ authStatus, authLoading, handleGoogleLogin,
               </p>
             </>
           )}
+
+          {/* 사용 가이드 링크 — 처음 쓰는 분도 따라 할 수 있게 */}
+          <a
+            href="/manual-free.html"
+            target="_blank"
+            rel="noopener"
+            className="mt-5 inline-flex items-center gap-1.5 text-[12px] font-bold text-emerald-400/80 hover:text-emerald-300 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/60 rounded-md px-2 py-1"
+          >
+            📖 처음이신가요? 무료 사용 가이드 보기
+          </a>
         </div>
       </div>
     </div>

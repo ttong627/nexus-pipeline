@@ -198,7 +198,13 @@ import { canUseRouteMap, canUseDbOverview, getMonthlyLimit } from "./utils/tierU
 import { getCachedCoord, saveCoordCache } from "./utils/coordCache.js";
 import { guardAddressDetail } from "./utils/addressFormat.js";
 import { buildStepStatus, getVisibleWorkflowSteps, getWorkflowMeta, getWorkflowMode, WORKFLOW_STEP_LABELS } from "./utils/workflow.js";
-import { LogOut, ShieldCheck, Database, Crown, Layers, UserCircle, Undo2, BarChart3, MapPin, Truck, CalendarDays, FileSpreadsheet, Home, ChevronLeft, ChevronRight, BookOpen, HardDrive } from "lucide-react";
+import { LogOut, ShieldCheck, Database, Crown, Layers, UserCircle, Undo2, BarChart3, MapPin, Truck, CalendarDays, FileSpreadsheet, Home, ChevronLeft, ChevronRight, BookOpen, HardDrive, HelpCircle } from "lucide-react";
+
+// 등급별 사용설명서 열기 — 게스트/일반(무료)=무료가이드, VIP↑(유료)=유료가이드(따라하기). 두 문서는 상호 링크됨.
+const openManualFor = (tier) => {
+  const paid = ['vip', 'vvip', 'sapphire'].includes(tier);
+  window.open(paid ? '/manual-paid.html' : '/manual-free.html', '_blank', 'noopener');
+};
 
 export default function App() {
   const [user, setUser] = useState(null);
@@ -2616,6 +2622,7 @@ export default function App() {
               {/* ── 설정 ── */}
               <SidebarSection label="설정" />
               <SidebarItem icon={Layers} label="부가서비스" active={showUtils} onClick={() => setShowUtils(true)} />
+              <SidebarItem icon={HelpCircle} label="사용 가이드" active={false} onClick={() => openManualFor(user?.tier)} />
               <SidebarItem icon={Crown} label="회원등급" active={false} onClick={guardGuest(() => { setUpgradeReason('city_limit'); setShowUpgrade(true); })} />
               <SidebarItem icon={UserCircle} label="내 프로필" active={profileModal.open} onClick={guardGuest(() => setProfileModal({ open: true, isNew: false }))} />
 

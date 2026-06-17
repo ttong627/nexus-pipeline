@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>NEXUS PIPELINE — 유료 사용 가이드 (따라하기)</title>
+<style>
+  :root{
+    --bg:#070b0a; --panel:#0b1210; --panel2:#0e1715; --line:#1b2a27;
+    --emerald:#34d399; --cyan:#22d3ee; --blue:#60a5fa; --violet:#a78bfa; --amber:#fbbf24; --rose:#fb7185;
+    --text:#e6f2ee; --muted:#8aa39c; --muted2:#5f756f; --radius:16px;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  body{background:var(--bg);color:var(--text);line-height:1.75;font-size:16px;
+    font-family:'Pretendard','Apple SD Gothic Neo','Malgun Gothic',system-ui,sans-serif;
+    background-image:radial-gradient(ellipse 70% 50% at 50% -5%, rgba(34,211,238,.10), transparent 70%);}
+  a{color:var(--cyan);text-decoration:none}
+  .layout{display:flex;max-width:1180px;margin:0 auto;gap:30px;padding:0 20px}
+
+  /* 사이드 목차 */
+  aside{width:230px;flex:none;position:sticky;top:0;height:100dvh;overflow-y:auto;padding:28px 0;border-right:1px solid var(--line)}
+  aside .brand{font-weight:900;font-size:15px;margin-bottom:4px}
+  aside .brand b{color:var(--cyan)}
+  aside .v{color:var(--muted2);font-size:11px;margin-bottom:18px}
+  aside nav a{display:block;font-size:13.5px;color:var(--muted);padding:7px 12px;border-radius:9px;font-weight:600;margin:1px 0}
+  aside nav a:hover{color:var(--cyan);background:rgba(34,211,238,.06)}
+  aside nav .grp{font-size:10.5px;font-weight:900;letter-spacing:.14em;color:var(--muted2);text-transform:uppercase;margin:16px 0 4px;padding-left:12px}
+
+  main{flex:1;min-width:0;padding:40px 0 120px}
+  @media(max-width:860px){aside{display:none}.layout{padding:0 16px}}
+
+  header.hero{padding:30px 0 26px;border-bottom:1px solid var(--line);margin-bottom:30px}
+  .badge{display:inline-flex;align-items:center;gap:8px;font-size:12px;font-weight:800;letter-spacing:.16em;
+    color:var(--cyan);background:rgba(34,211,238,.10);border:1px solid rgba(34,211,238,.25);
+    padding:7px 16px;border-radius:999px;text-transform:uppercase;margin-bottom:18px}
+  h1.title{font-size:36px;font-weight:900;letter-spacing:-.02em;line-height:1.2;margin-bottom:12px}
+  h1.title b{background:linear-gradient(135deg,#22d3ee,#60a5fa 60%,#a78bfa);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+  .sub{color:var(--muted);font-size:16.5px;max-width:680px}
+
+  section{margin-top:54px;scroll-margin-top:18px}
+  .kicker{font-size:12px;font-weight:800;letter-spacing:.2em;color:var(--cyan);text-transform:uppercase;margin-bottom:8px}
+  h2{font-size:26px;font-weight:900;letter-spacing:-.01em;margin-bottom:8px;display:flex;align-items:center;gap:10px}
+  h2 .pill{font-size:11px;font-weight:800;padding:4px 10px;border-radius:8px;background:rgba(96,165,250,.14);color:var(--blue)}
+  h2 .pill.vvip{background:rgba(167,139,250,.14);color:var(--violet)}
+  h3{font-size:18px;font-weight:800;margin:24px 0 10px}
+  p{margin-bottom:12px}.lead{color:var(--muted)}
+
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:22px 24px;margin:16px 0;box-shadow:0 16px 44px rgba(0,0,0,.34)}
+
+  /* 따라하기 스텝 */
+  .do{display:flex;gap:16px;align-items:flex-start;margin:14px 0;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px 18px}
+  .do .n{flex:none;width:34px;height:34px;border-radius:10px;background:rgba(34,211,238,.12);border:1px solid rgba(34,211,238,.32);
+    color:var(--cyan);font-weight:900;display:flex;align-items:center;justify-content:center;font-size:15px}
+  .do .t{flex:1;min-width:0}
+  .do .t b{color:var(--text)}
+  .do .t .hint{color:var(--muted);font-size:14px;margin-top:3px}
+  .key{display:inline-block;background:#0a0f0e;border:1px solid var(--line);border-bottom-width:2px;border-radius:6px;padding:1px 8px;font-size:12.5px;font-weight:800;color:var(--cyan)}
+
+  .shot{margin:16px 0 6px;border-radius:14px;border:1px solid var(--line);overflow:hidden;background:var(--panel2);box-shadow:0 14px 40px rgba(0,0,0,.4)}
+  .shot .bar{display:flex;align-items:center;gap:7px;padding:9px 13px;background:#0a0f0e;border-bottom:1px solid var(--line)}
+  .shot .bar i{width:11px;height:11px;border-radius:50%}
+  .shot .bar .r{background:#ff5f57}.shot .bar .y{background:#febc2e}.shot .bar .g{background:#28c840}
+  .shot .bar span{margin-left:10px;font-size:11px;color:var(--muted2);font-weight:700}
+  .shot .screen{padding:20px}
+  .cap{font-size:13px;color:var(--muted);margin:2px 0 0;padding-left:4px}.cap b{color:var(--cyan)}
+
+  .mk-btn{display:inline-flex;align-items:center;gap:7px;padding:9px 16px;border-radius:11px;font-weight:800;font-size:13px}
+  .mk-btn.primary{background:#1a2e1a;color:#60a5fa;border:1px solid rgba(96,165,250,.5)}
+  .mk-btn.cyan{background:rgba(34,211,238,.1);border:1px solid rgba(34,211,238,.4);color:var(--cyan)}
+  .mk-btn.ghost{background:#111;border:1px solid #2a2a2a;color:var(--muted)}
+  .mk-toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .mk-grp{display:flex;gap:6px;align-items:center;background:#0a0a0a;border:1px solid #1e1e1e;border-radius:11px;padding:6px 9px}
+  .mk-grp .lbl{font-size:9px;color:var(--muted2);font-weight:900;letter-spacing:.1em}
+  .mk-map{display:flex;gap:14px;flex-wrap:wrap}
+  .mk-mapview{flex:2;min-width:220px;height:180px;border-radius:12px;border:1px solid var(--line);
+    background:linear-gradient(135deg,#0c1614,#0a1f1c);position:relative;overflow:hidden}
+  .pin{position:absolute;width:14px;height:14px;border-radius:50%;border:2px solid #07110f}
+  .mk-drivers{flex:1;min-width:160px;display:flex;flex-direction:column;gap:8px}
+  .drv{background:#0a1110;border:1px solid var(--line);border-radius:11px;padding:10px 12px;font-size:12.5px}
+  .drv .top{display:flex;justify-content:space-between;align-items:center;font-weight:800}
+  .dot{width:9px;height:9px;border-radius:50%;display:inline-block;margin-right:5px}
+
+  table.mk{width:100%;border-collapse:collapse;font-size:12.5px}
+  table.mk th,table.mk td{border:1px solid var(--line);padding:7px 9px;text-align:left}
+  table.mk th{background:#0a0f0e;color:var(--muted);font-weight:800}
+
+  .tip{border-left:3px solid var(--cyan);background:rgba(34,211,238,.06);padding:13px 17px;border-radius:0 12px 12px 0;margin:14px 0;font-size:14.5px}.tip b{color:var(--cyan)}
+  .warn{border-left:3px solid var(--amber);background:rgba(251,191,36,.06);padding:13px 17px;border-radius:0 12px 12px 0;margin:14px 0;font-size:14.5px}.warn b{color:var(--amber)}
+  .kid{border-left:3px solid var(--emerald);background:rgba(16,185,129,.06);padding:13px 17px;border-radius:0 12px 12px 0;margin:14px 0;font-size:14.5px}.kid b{color:var(--emerald)}
+
+  ul.clean{list-style:none;margin:8px 0}
+  ul.clean li{padding:6px 0 6px 26px;position:relative;font-size:15px}
+  ul.clean li::before{content:'✓';position:absolute;left:0;color:var(--cyan);font-weight:900}
+
+  .faq{border:1px solid var(--line);border-radius:12px;margin:9px 0;overflow:hidden;background:var(--panel)}
+  .faq summary{padding:14px 17px;font-weight:800;cursor:pointer;font-size:15px;list-style:none}
+  .faq summary::-webkit-details-marker{display:none}
+  .faq summary::before{content:'Q  ';color:var(--cyan);font-weight:900}
+  .faq[open] summary{border-bottom:1px solid var(--line);color:var(--cyan)}
+  .faq .a{padding:13px 17px;color:var(--muted);font-size:14.5px}
+
+  footer{margin-top:56px;text-align:center;color:var(--muted2);font-size:13px;border-top:1px solid var(--line);padding-top:24px}
+  @media(max-width:600px){h1.title{font-size:28px}}
+</style>
+</head>
+<body>
+<div class="layout">
+
+  <!-- 사이드 목차 -->
+  <aside>
+    <div class="brand">NEXUS <b>PIPELINE</b></div>
+    <div class="v">유료 사용 가이드 · 따라하기</div>
+    <nav>
+      <div class="grp">시작</div>
+      <a href="#intro">유료 기능 한눈에</a>
+      <a href="#flow">전체 흐름</a>
+      <a href="#login">1. 로그인·지자체</a>
+      <div class="grp">정제까지</div>
+      <a href="#upload">2. 파일 업로드</a>
+      <a href="#map">3. 시트·컬럼</a>
+      <a href="#refine">4. 주소 정제</a>
+      <a href="#save">5. 클라우드 저장</a>
+      <div class="grp">배송 준비 (VIP↑)</div>
+      <a href="#coord">6. 좌표 매칭</a>
+      <a href="#driver">7. 기사 등록</a>
+      <a href="#assign">8. 기사 자동배정</a>
+      <a href="#seq">9. 배송 순번</a>
+      <a href="#export">10. 공유·내보내기</a>
+      <div class="grp">관리</div>
+      <a href="#schedule">11. 배송 일정</a>
+      <a href="#base">고객 노트 DB</a>
+      <a href="#compare">전월 비교</a>
+      <a href="#faq">FAQ · 단축키</a>
+    </nav>
+  </aside>
+
+  <main>
+  <header class="hero">
+    <div class="badge">● 유료 사용 가이드 · STEP BY STEP</div>
+    <h1 class="title">누구나 따라 하는<br/><b>배송 명단 완성 가이드</b></h1>
+    <p class="sub">VIP 이상 유료 기능(좌표 매칭·기사 배정·루트맵·배송순번)까지, 화면을 보며 순서대로 따라 하면 완성됩니다. 처음 쓰는 분도, 컴퓨터가 서툰 분도 그대로 따라만 하세요.</p>
+  </header>
+
+  <!-- 유료 기능 -->
+  <section id="intro">
+    <div class="kicker">OVERVIEW</div>
+    <h2>💳 유료에서 열리는 기능</h2>
+    <p class="lead">무료(정제·다운로드·저장)에 더해, 유료 등급에서 ‘실제 배송 운영’ 기능이 열립니다.</p>
+    <table class="mk" style="margin-top:10px">
+      <tr><th>등급</th><th>추가로 열리는 기능</th><th>지자체</th></tr>
+      <tr><td>🔵 <b>VIP</b> (월 1만원)</td><td>좌표 매칭(Kakao) · 기사 배정 · 루트맵 · 배송순번 · 기사 공유 링크</td><td>5개</td></tr>
+      <tr><td>🟣 <b>VVIP</b> (협의)</td><td>VIP 전체 + AI 배송 최적화 + DB 현황(전체 조회)</td><td>20개</td></tr>
+      <tr><td>💎 <b>사파이어</b> (협의)</td><td>VVIP 전체 + 전담 지원 + 커스텀 설정</td><td>무제한</td></tr>
+    </table>
+    <div class="kid"><b>이 가이드 읽는 법:</b> 파란 <span class="key">①②③</span> 번호 순서대로 누르기만 하면 됩니다. <span class="key">단축키</span> 표시는 키보드로 빠르게 하는 방법이에요. 초록 ‘쉽게 설명’ 상자는 어려운 말을 쉬운 말로 풀어 줍니다.</div>
+  </section>
+
+  <!-- 전체 흐름 -->
+  <section id="flow">
+    <div class="kicker">BIG PICTURE</div>
+    <h2>🗺️ 전체 흐름 (이 순서대로 갑니다)</h2>
+    <div class="shot"><div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>파이프라인</span></div>
+      <div class="screen" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:13px;font-weight:800">
+        <span class="mk-btn ghost">1 로그인</span><span style="color:var(--muted2)">→</span>
+        <span class="mk-btn ghost">2 업로드</span><span style="color:var(--muted2)">→</span>
+        <span class="mk-btn ghost">3 컬럼확인</span><span style="color:var(--muted2)">→</span>
+        <span class="mk-btn ghost">4 정제</span><span style="color:var(--muted2)">→</span>
+        <span class="mk-btn ghost">5 저장</span><span style="color:var(--muted2)">→</span>
+        <span class="mk-btn cyan">6 좌표</span><span style="color:var(--muted2)">→</span>
+        <span class="mk-btn cyan">7 기사등록</span><span style="color:var(--muted2)">→</span>
+        <span class="mk-btn cyan">8 자동배정</span><span style="color:var(--muted2)">→</span>
+        <span class="mk-btn cyan">9 순번</span><span style="color:var(--muted2)">→</span>
+        <span class="mk-btn cyan">10 공유</span>
+      </div>
+    </div>
+    <p class="cap">회색 1~5는 무료에서도 되는 단계, <b>하늘색 6~10이 유료 배송 기능</b>입니다.</p>
+  </section>
+
+  <!-- 1 로그인 -->
+  <section id="login">
+    <div class="kicker">STEP 1</div>
+    <h2>🔑 로그인하고 지자체 정하기</h2>
+    <div class="do"><div class="n">1</div><div class="t"><b>“Google 계정으로 시작”</b>을 누릅니다.<div class="hint">구글 로그인 창이 뜨면 본인 계정을 고르세요.</div></div></div>
+    <div class="do"><div class="n">2</div><div class="t">처음이면 <b>이름·지자체</b>를 등록합니다.<div class="hint">예: 이름 “홍길동”, 지자체 “경기도 시흥시”. 유료 등급이면 지자체를 여러 개 등록할 수 있어요.</div></div></div>
+    <div class="do"><div class="n">3</div><div class="t">대시보드(첫 화면)에서 작업할 <b>지자체 카드</b>를 확인합니다.<div class="hint">카드를 누르면 그 지자체의 배송명단/기본명단으로 바로 갑니다.</div></div></div>
+    <div class="kid"><b>쉽게 설명:</b> ‘지자체’는 시·군·구예요. 내가 배송 명단을 다루는 지역을 정해 두는 거예요. 한 번 정하면 다음부터 자동으로 기억합니다.</div>
+  </section>
+
+  <!-- 2 업로드 -->
+  <section id="upload">
+    <div class="kicker">STEP 2</div>
+    <h2>📁 엑셀 파일 올리기</h2>
+    <div class="do"><div class="n">1</div><div class="t">왼쪽 메뉴 <b>“새 명단 처리”</b>를 누릅니다.</div></div>
+    <div class="do"><div class="n">2</div><div class="t">정제 방식에서 <b>“쉬운 정제”</b>를 고릅니다. <div class="hint">대부분 이걸로 충분합니다. 직접 조정하고 싶으면 “고급 정제”.</div></div></div>
+    <div class="do"><div class="n">3</div><div class="t">엑셀 파일을 <b>끌어다 놓거나 클릭</b>해서 올립니다.<div class="hint">.xlsx · .xls · .csv 가능. 여러 개 한 번에 OK.</div></div></div>
+    <div class="shot"><div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>업로드</span></div>
+      <div class="screen"><div style="border:2px dashed rgba(34,211,238,.4);border-radius:14px;padding:26px;text-align:center;background:rgba(34,211,238,.04)">
+        <div style="font-size:34px">☁️⬆️</div><div style="font-weight:900;margin-top:8px">엑셀 파일을 끌어다 놓거나 클릭하여 선택</div>
+      </div></div></div>
+    <div class="warn"><b>주의:</b> 업로드 후 <b>지자체·적용 월</b>을 확인하는 창이 뜹니다. 자동 감지되지만 맞는지 한 번 확인하고 <b>확인</b>을 누르세요.</div>
+  </section>
+
+  <!-- 3 컬럼 -->
+  <section id="map">
+    <div class="kicker">STEP 3</div>
+    <h2>🔗 시트·컬럼 확인</h2>
+    <div class="do"><div class="n">1</div><div class="t">시트가 여러 개면 정제할 <b>시트를 선택</b>합니다.<div class="hint">‘수급/의료/생계’는 기초수급자, ‘차상위’는 차상위로 자동 분류돼요.</div></div></div>
+    <div class="do"><div class="n">2</div><div class="t"><b>이름·주소·연락처·행정동·포수</b> 칸이 맞게 연결됐는지 봅니다.<div class="hint">자동으로 맞춰지고, 틀린 것만 드롭다운으로 바꾸면 됩니다.</div></div></div>
+    <div class="shot"><div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>컬럼 매핑</span></div>
+      <div class="screen"><table class="mk">
+        <tr><th>엑셀 칼럼</th><th>인식된 항목</th></tr>
+        <tr><td>성명</td><td style="color:var(--cyan)">이름 ✓</td></tr>
+        <tr><td>거주지</td><td style="color:var(--cyan)">주소 ✓</td></tr>
+        <tr><td>핸드폰</td><td style="color:var(--cyan)">연락처 ✓</td></tr>
+        <tr><td>신청수량</td><td style="color:var(--cyan)">포수 ✓</td></tr>
+      </table></div></div>
+    <div class="kid"><b>쉽게 설명:</b> ‘포수’는 배달할 물건(쌀 등)의 개수예요. 나중에 기사에게 일을 똑같이 나눌 때 기준이 됩니다.</div>
+  </section>
+
+  <!-- 4 정제 -->
+  <section id="refine">
+    <div class="kicker">STEP 4</div>
+    <h2>🔧 주소 정제 & 결과 검토</h2>
+    <div class="do"><div class="n">1</div><div class="t">잠깐 기다리면 주소가 <b>표준 도로명주소</b>로 정리된 표가 나옵니다.</div></div>
+    <div class="do"><div class="n">2</div><div class="t"><b>확인필요</b> 표시된 줄만 한 번 봐주세요.<div class="hint">원본 주소가 불완전한 경우예요. 칸을 클릭하면 바로 고칠 수 있습니다.</div></div></div>
+    <div class="do"><div class="n">3</div><div class="t">실수하면 <span class="key">Ctrl</span> + <span class="key">Z</span> (되돌리기)로 복원됩니다.</div></div>
+    <div class="shot"><div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>정제 결과</span></div>
+      <div class="screen"><table class="mk">
+        <tr><th>이름</th><th>정제 전</th><th>정제 후</th></tr>
+        <tr><td>홍길동</td><td style="color:var(--muted2)">왕산로72 101동205호</td><td style="color:var(--cyan)">왕산로 72, 101-205호 (전농동, 래미안)</td></tr>
+      </table></div></div>
+    <div class="tip"><b>자동 처리:</b> 이름 5자 초과 정리 · 오타 교정(자가학습) · 통/반 제거 · 동·호수 형식 통일 · 전화번호 정리 · 특수문자 뒤 메모 분리 — 손 안 대도 됩니다.</div>
+  </section>
+
+  <!-- 5 저장 -->
+  <section id="save">
+    <div class="kicker">STEP 5</div>
+    <h2>💾 클라우드에 저장 (이번달 명단)</h2>
+    <div class="do"><div class="n">1</div><div class="t">결과 화면에서 <b>“클라우드 저장”</b>을 누릅니다.</div></div>
+    <div class="do"><div class="n">2</div><div class="t">지자체·월을 확인하고 저장하면 <b>이번달 배송명단</b>에 보관됩니다.<div class="hint">다음에 왼쪽 메뉴 ‘이번달 배송명단’에서 언제든 다시 엽니다.</div></div></div>
+    <div class="kid"><b>쉽게 설명:</b> 저장하면 내 인터넷 보관함에 들어가요. 컴퓨터를 꺼도 사라지지 않고, 다음 달에 이어서 작업할 수 있어요.</div>
+  </section>
+
+  <!-- 6 좌표 -->
+  <section id="coord">
+    <div class="kicker">STEP 6</div>
+    <h2>📍 좌표 매칭 <span class="pill">VIP↑</span></h2>
+    <p class="lead">기사 배정·지도 표시를 하려면 각 주소를 지도 위 점(좌표)으로 바꿔야 합니다.</p>
+    <div class="do"><div class="n">1</div><div class="t">이번달 명단을 열고 <b>“루트맵”</b>을 엽니다.</div></div>
+    <div class="do"><div class="n">2</div><div class="t">상단 <b>좌표 → 매칭</b> 버튼을 누릅니다.<div class="hint">좌표 없는 주소를 카카오 지도에서 자동으로 찾아 점을 찍습니다.</div></div></div>
+    <div class="do"><div class="n">3</div><div class="t">잘못 찍힌 점은 <b>오류지정</b>으로 표시 후 삭제·재매칭합니다.</div></div>
+    <div class="shot"><div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>루트맵 — 좌표</span></div>
+      <div class="screen"><div class="mk-toolbar">
+        <div class="mk-grp"><span class="lbl">좌표</span><span class="mk-btn cyan">📍 매칭 ✓</span><span class="mk-btn ghost">오류지정</span></div>
+      </div></div></div>
+    <div class="warn"><b>중요:</b> 좌표가 다 찍혀야 다음 단계(자동 배정)가 켜집니다. ‘좌표없음’ 건수가 0이 될 때까지 매칭하세요.</div>
+  </section>
+
+  <!-- 7 기사 등록 -->
+  <section id="driver">
+    <div class="kicker">STEP 7</div>
+    <h2>🚚 기사 등록 (소속 기사 관리) <span class="pill">VIP↑</span></h2>
+    <div class="do"><div class="n">1</div><div class="t">왼쪽 메뉴 <b>“기사 관리”</b>를 엽니다.</div></div>
+    <div class="do"><div class="n">2</div><div class="t"><b>기사 추가</b>로 이름과 <b>용량(capacity %)</b>을 입력합니다.<div class="hint">용량은 그 기사가 감당할 일의 비율이에요. 100% 기준, 더 많이 하면 120%, 적게 하면 70%처럼.</div></div></div>
+    <div class="do"><div class="n">3</div><div class="t">등록한 기사는 루트맵에서 자동 배정·구역 나누기에 쓰입니다.</div></div>
+    <div class="shot"><div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>기사 관리</span></div>
+      <div class="screen"><table class="mk">
+        <tr><th>기사</th><th>용량</th><th>상태</th></tr>
+        <tr><td>김기사</td><td>100%</td><td style="color:var(--cyan)">활성</td></tr>
+        <tr><td>이기사</td><td>80%</td><td style="color:var(--cyan)">활성</td></tr>
+        <tr><td>박기사</td><td>100%</td><td style="color:var(--cyan)">활성</td></tr>
+      </table></div></div>
+    <div class="kid"><b>쉽게 설명:</b> 일할 기사들의 명단을 먼저 만들어 두는 단계예요. 용량을 다르게 주면, 일을 그 비율에 맞춰 자동으로 나눠 줍니다.</div>
+  </section>
+
+  <!-- 8 자동 배정 -->
+  <section id="assign">
+    <div class="kicker">STEP 8</div>
+    <h2>🧩 기사 자동 배정 (루트맵) <span class="pill">VIP↑</span></h2>
+    <p class="lead">버튼 하나로 모든 배송지를 기사별 구역으로 자동으로 나눕니다. 구역은 서로 겹치지 않고, 용량 비율대로 공평하게 나뉩니다.</p>
+    <div class="do"><div class="n">1</div><div class="t">(선택) 각 기사 카드의 <b>“핀 꽂기”</b>로 기사 거점을 지도에 찍습니다.<div class="hint">핀을 찍으면 그 위치를 기준으로 좌우/상하 구역이 깔끔하게 나뉩니다.</div></div></div>
+    <div class="do"><div class="n">2</div><div class="t">상단 <b>“자동 N등분”</b>을 누릅니다.<div class="hint">모든 배송지가 기사별 색으로 칠해집니다. 같은 아파트·같은 주소는 한 기사에게 묶입니다.</div></div></div>
+    <div class="do"><div class="n">3</div><div class="t">손볼 곳은 <b>브러시</b>로 지도를 드래그해 그 기사에게 다시 칠합니다.</div></div>
+    <div class="do"><div class="n">4</div><div class="t"><b>50포 이상 큰 아파트</b>는 좌측 ‘대형단지’에서 동 단위로 나눌 수 있습니다.</div></div>
+    <div class="shot"><div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>루트맵 — 자동 배정</span></div>
+      <div class="screen"><div class="mk-toolbar" style="margin-bottom:12px">
+        <span class="mk-btn cyan">⚡ 자동 N등분</span><span class="mk-btn ghost">🖌 브러시</span><span class="mk-btn ghost">📌 핀 꽂기</span>
+      </div>
+      <div class="mk-map">
+        <div class="mk-mapview">
+          <span class="pin" style="background:#34d399;left:22%;top:30%"></span><span class="pin" style="background:#34d399;left:30%;top:45%"></span><span class="pin" style="background:#34d399;left:18%;top:60%"></span>
+          <span class="pin" style="background:#60a5fa;left:55%;top:28%"></span><span class="pin" style="background:#60a5fa;left:63%;top:42%"></span><span class="pin" style="background:#60a5fa;left:58%;top:58%"></span>
+          <span class="pin" style="background:#fbbf24;left:80%;top:35%"></span><span class="pin" style="background:#fbbf24;left:85%;top:55%"></span>
+        </div>
+        <div class="mk-drivers">
+          <div class="drv"><div class="top"><span><span class="dot" style="background:#34d399"></span>김기사</span><span style="color:var(--muted)">373포</span></div></div>
+          <div class="drv"><div class="top"><span><span class="dot" style="background:#60a5fa"></span>이기사</span><span style="color:var(--muted)">307포</span></div></div>
+          <div class="drv"><div class="top"><span><span class="dot" style="background:#fbbf24"></span>박기사</span><span style="color:var(--muted)">290포</span></div></div>
+        </div>
+      </div></div></div>
+    <p class="cap">색마다 기사 한 명의 구역입니다. 색이 섞이지 않게(구역 겹침 0) 나뉘면 잘 된 거예요.</p>
+    <div class="tip"><b>AI 배송 최적화 <span style="color:var(--violet)">(VVIP↑)</span>:</b> 더 똑똑한 알고리즘으로 구역을 나눠 총 이동거리를 더 줄여 줍니다.</div>
+  </section>
+
+  <!-- 9 순번 -->
+  <section id="seq">
+    <div class="kicker">STEP 9</div>
+    <h2>🔢 배송 순번 자동 만들기 <span class="pill">VIP↑</span></h2>
+    <div class="do"><div class="n">1</div><div class="t">기사 배정이 끝난 뒤 상단 <b>“순번”</b>을 누릅니다.<div class="hint">기사별로 도는 순서(1·2·3…)를 도로 흐름·아파트 층 순서로 자동 계산합니다.</div></div></div>
+    <div class="do"><div class="n">2</div><div class="t"><b>“분석”</b>으로 점프(멀리 튐)·도보 후보를 점검합니다.</div></div>
+    <div class="do"><div class="n">3</div><div class="t">필요하면 목록에서 직접 드래그하거나 번호를 고칠 수 있습니다.</div></div>
+    <div class="kid"><b>쉽게 설명:</b> 기사가 “어디부터 어디 순서로 돌까?”를 자동으로 정해 줘요. 가까운 집끼리 이어서 돌도록 만들어 시간을 아낍니다.</div>
+  </section>
+
+  <!-- 10 공유 -->
+  <section id="export">
+    <div class="kicker">STEP 10</div>
+    <h2>📤 기사 공유 · 내보내기 <span class="pill">VIP↑</span></h2>
+    <div class="do"><div class="n">1</div><div class="t">상단 <b>“내보내기 ▾”</b>를 누릅니다.</div></div>
+    <div class="do"><div class="n">2</div><div class="t">필요한 것을 고릅니다:
+      <div class="hint"><b>담당자 엑셀</b>(배송표) · <b>KML 경로</b>(지도앱) · <b>배송루트 묶음</b> · <b>기사 공유 링크</b></div></div></div>
+    <div class="do"><div class="n">3</div><div class="t"><b>기사 공유 링크</b>를 카톡으로 보내면 기사가 폰으로 자기 배송 순서를 봅니다.</div></div>
+    <div class="shot"><div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>내보내기 메뉴</span></div>
+      <div class="screen"><div style="display:inline-flex;flex-direction:column;gap:4px;background:#0a0a0a;border:1px solid #2a2a2a;border-radius:12px;padding:6px;min-width:180px">
+        <span class="mk-btn ghost" style="justify-content:flex-start">📄 담당자 엑셀</span>
+        <span class="mk-btn ghost" style="justify-content:flex-start">🗺 KML 경로</span>
+        <span class="mk-btn ghost" style="justify-content:flex-start">📦 배송루트 묶음</span>
+        <span class="mk-btn ghost" style="justify-content:flex-start;color:var(--emerald)">🔗 기사 공유 링크</span>
+      </div></div></div>
+    <div class="do"><div class="n">4</div><div class="t">마지막으로 <b>“최종 저장”</b>을 눌러 배정을 확정합니다.<div class="hint">구역 겹침이 0건이어야 최종 저장됩니다.</div></div></div>
+  </section>
+
+  <!-- 11 일정 -->
+  <section id="schedule">
+    <div class="kicker">STEP 11</div>
+    <h2>📅 배송 일정 관리</h2>
+    <div class="do"><div class="n">1</div><div class="t">왼쪽 메뉴 <b>“배송일정”</b>에서 날짜별 배송 계획을 관리합니다.</div></div>
+    <div class="do"><div class="n">2</div><div class="t">지자체·월별로 일정을 잡고 진행 상태를 추적합니다.</div></div>
+  </section>
+
+  <!-- 기본명단 -->
+  <section id="base">
+    <div class="kicker">고객 노트 DB</div>
+    <h2>📒 기본명단(고객 노트) 관리</h2>
+    <p class="lead">자주 쓰는 고객 정보(특이사항·기사·배송순번)를 모아두면 다음 달 명단에 자동으로 붙습니다.</p>
+    <ul class="clean">
+      <li>왼쪽 메뉴 <b>“기본명단 관리”</b>에서 지자체별 고객 DB를 봅니다</li>
+      <li>이름+생년월일(또는 전화)로 같은 사람을 알아보고 <b>특이사항·기사·순번</b>을 이식합니다</li>
+      <li>“부재 시 경비실”, “문 앞 배송” 같은 메모를 한 번 저장하면 계속 재사용됩니다</li>
+    </ul>
+    <div class="kid"><b>쉽게 설명:</b> 단골 고객 수첩이에요. 한 번 적어두면 다음 달에 자동으로 옮겨 적어 줘서, 매번 다시 쓸 필요가 없어요.</div>
+  </section>
+
+  <!-- 전월 비교 -->
+  <section id="compare">
+    <div class="kicker">변경 확인</div>
+    <h2>🔄 전월 비교 · 주소 변경 확인</h2>
+    <div class="do"><div class="n">1</div><div class="t">이번달 명단에서 <b>“주소 정제”</b>를 누르면 저장된 명단을 다시 정제합니다.</div></div>
+    <div class="do"><div class="n">2</div><div class="t"><b>“주소변경확인”</b>으로 지난달과 달라진 주소를 확인합니다.<div class="hint">같은 행정동이면 ‘이사’, 다른 행정동이면 ‘주민센터 배송’으로 자동 분류돼요.</div></div></div>
+    <div class="do"><div class="n">3</div><div class="t">행정동별로 변경이 많으면 경고가 떠서, 한 번에 점검할 수 있습니다.</div></div>
+  </section>
+
+  <!-- FAQ -->
+  <section id="faq">
+    <div class="kicker">FAQ · 단축키</div>
+    <h2>❓ 자주 묻는 질문 & 단축키</h2>
+
+    <h3>단축키</h3>
+    <table class="mk">
+      <tr><th>키</th><th>기능</th></tr>
+      <tr><td><span class="key">Ctrl</span> + <span class="key">Z</span></td><td>되돌리기(Undo) — 최대 10단계</td></tr>
+      <tr><td><span class="key">Enter</span></td><td>(주소 칸) 재정제 + 오타 자동 학습</td></tr>
+      <tr><td>표 칸 <span class="key">클릭</span></td><td>해당 값 직접 수정</td></tr>
+    </table>
+
+    <h3 style="margin-top:22px">자주 묻는 질문</h3>
+    <details class="faq"><summary>‘자동 N등분’ 버튼이 회색이라 안 눌려요.</summary>
+      <div class="a">좌표 매칭이 끝나지 않았기 때문입니다. 먼저 상단 ‘좌표 → 매칭’으로 좌표없음 건수를 0으로 만드세요.</div></details>
+    <details class="faq"><summary>구역(색)이 서로 섞여요.</summary>
+      <div class="a">기사 핀을 장벽(큰길·하천·철도)의 올바른 쪽에 찍으면 구역이 깔끔히 나뉩니다. 그래도 섞이면 ‘혼재’ 버튼으로 해소 후, 브러시로 손봅니다. 겹침이 0이어야 최종 저장됩니다.</div></details>
+    <details class="faq"><summary>큰 아파트가 한 기사에게 너무 몰려요.</summary>
+      <div class="a">좌측 ‘대형단지’에서 50포 이상 단지를 동(棟) 단위로 여러 기사에게 나눌 수 있습니다.</div></details>
+    <details class="faq"><summary>지난달 기사 배정을 그대로 쓰고 싶어요.</summary>
+      <div class="a">루트맵 상단 ‘세션 ▾ → 이전달 승계’를 누르면 같은 이름 기사의 좌표·기사·순번을 이번달에 자동으로 가져옵니다.</div></details>
+    <details class="faq"><summary>기사가 순서를 바꿔 달라고 해요.</summary>
+      <div class="a">기사 공유 링크로 들어온 순번 요청은 ‘순번요청’에서 확인하고, 유선 확인 후 공식 명단에 반영합니다.</div></details>
+    <details class="faq"><summary>무료 기능만 보고 싶어요.</summary>
+      <div class="a"><a href="manual-free.html">무료 사용 가이드</a>를 참고하세요.</div></details>
+  </section>
+
+  <footer>
+    NEXUS PIPELINE · 유료 사용 가이드 &nbsp;·&nbsp; 문의 ttong627@gmail.com<br/>
+    화면 그림은 실제 화면을 단순화한 안내용 목업입니다. 버전 업데이트로 일부 버튼 위치가 다를 수 있습니다.
+  </footer>
+  </main>
+</div>
+</body>
+</html>

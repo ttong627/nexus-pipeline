@@ -526,12 +526,12 @@ export default function Dashboard({ user, onStart, onCloudCard, onBaseCard, grid
           </button>
           <button
             type="button"
-            onClick={() => window.open('/manual.html', '_blank')}
-            className="w-8 h-8 rounded-full bg-emerald-950/30 border border-emerald-500/30 text-emerald-400 font-black text-sm hover:bg-emerald-500/15 transition-all flex items-center justify-center"
-            title="사용설명서"
+            onClick={() => window.open(['vip','vvip','sapphire'].includes(user?.tier) ? '/manual-paid.html' : '/manual-free.html', '_blank', 'noopener')}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-950/30 border border-emerald-500/30 text-emerald-300 font-bold text-sm hover:bg-emerald-500/15 hover:border-emerald-400/50 transition-all"
+            title="사용설명서 (등급별 가이드)"
             aria-label="사용설명서 열기"
           >
-            ?
+            <BookOpen size={14} /> 사용설명서
           </button>
         </div>
       </div>
