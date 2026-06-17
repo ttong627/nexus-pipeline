@@ -62,6 +62,7 @@
   .shot .bar i{width:11px;height:11px;border-radius:50%}
   .shot .bar .r{background:#ff5f57}.shot .bar .y{background:#febc2e}.shot .bar .g{background:#28c840}
   .shot .bar span{margin-left:10px;font-size:11px;color:var(--muted2);font-weight:700}
+  .shot img{width:100%;display:block}
   .shot .screen{padding:20px}
   .cap{font-size:13px;color:var(--muted);margin:2px 0 0;padding-left:4px}.cap b{color:var(--cyan)}
 
@@ -181,6 +182,8 @@
   <section id="login">
     <div class="kicker">STEP 1</div>
     <h2>🔑 로그인하고 지자체 정하기</h2>
+    <div class="shot"><div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>logis-op.web.app — 로그인</span></div>
+      <img src="shots/01-login.png" alt="로그인 화면 — Google 계정으로 시작" loading="lazy" /></div>
     <div class="do"><div class="n">1</div><div class="t"><b>“Google 계정으로 시작”</b>을 누릅니다.<div class="hint">구글 로그인 창이 뜨면 본인 계정을 고르세요.</div></div></div>
     <div class="do"><div class="n">2</div><div class="t">처음이면 <b>이름·지자체</b>를 등록합니다.<div class="hint">예: 이름 “홍길동”, 지자체 “경기도 시흥시”. 유료 등급이면 지자체를 여러 개 등록할 수 있어요.</div></div></div>
     <div class="do"><div class="n">3</div><div class="t">대시보드(첫 화면)에서 작업할 <b>지자체 카드</b>를 확인합니다.<div class="hint">카드를 누르면 그 지자체의 배송명단/기본명단으로 바로 갑니다.</div></div></div>
@@ -194,10 +197,9 @@
     <div class="do"><div class="n">1</div><div class="t">왼쪽 메뉴 <b>“새 명단 처리”</b>를 누릅니다.</div></div>
     <div class="do"><div class="n">2</div><div class="t">정제 방식에서 <b>“쉬운 정제”</b>를 고릅니다. <div class="hint">대부분 이걸로 충분합니다. 직접 조정하고 싶으면 “고급 정제”.</div></div></div>
     <div class="do"><div class="n">3</div><div class="t">엑셀 파일을 <b>끌어다 놓거나 클릭</b>해서 올립니다.<div class="hint">.xlsx · .xls · .csv 가능. 여러 개 한 번에 OK.</div></div></div>
-    <div class="shot"><div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>업로드</span></div>
-      <div class="screen"><div style="border:2px dashed rgba(34,211,238,.4);border-radius:14px;padding:26px;text-align:center;background:rgba(34,211,238,.04)">
-        <div style="font-size:34px">☁️⬆️</div><div style="font-weight:900;margin-top:8px">엑셀 파일을 끌어다 놓거나 클릭하여 선택</div>
-      </div></div></div>
+    <div class="shot"><div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>명단 정제 시작하기</span></div>
+      <img src="shots/02-upload.png" alt="업로드 화면 — 쉬운/고급 정제 선택과 파일 드롭존, 왼쪽 메뉴" loading="lazy" /></div>
+    <p class="cap">실제 화면입니다. 왼쪽 메뉴에 <b>사용 가이드·회원등급</b>도 보입니다.</p>
     <div class="warn"><b>주의:</b> 업로드 후 <b>지자체·적용 월</b>을 확인하는 창이 뜹니다. 자동 감지되지만 맞는지 한 번 확인하고 <b>확인</b>을 누르세요.</div>
   </section>
 
@@ -226,10 +228,8 @@
     <div class="do"><div class="n">2</div><div class="t"><b>확인필요</b> 표시된 줄만 한 번 봐주세요.<div class="hint">원본 주소가 불완전한 경우예요. 칸을 클릭하면 바로 고칠 수 있습니다.</div></div></div>
     <div class="do"><div class="n">3</div><div class="t">실수하면 <span class="key">Ctrl</span> + <span class="key">Z</span> (되돌리기)로 복원됩니다.</div></div>
     <div class="shot"><div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>정제 결과</span></div>
-      <div class="screen"><table class="mk">
-        <tr><th>이름</th><th>정제 전</th><th>정제 후</th></tr>
-        <tr><td>홍길동</td><td style="color:var(--muted2)">왕산로72 101동205호</td><td style="color:var(--cyan)">왕산로 72, 101-205호 (전농동, 래미안)</td></tr>
-      </table></div></div>
+      <img src="shots/05-grid.png" alt="정제 결과 화면 — 이름·구분·행정동·통합주소·전화·포수 표와 상단 툴바" loading="lazy" /></div>
+    <p class="cap">실제 정제 결과 화면입니다. 주소가 <b>도로명 + 동·호수 + (법정동, 건물명)</b> 형식으로 정리됩니다.</p>
     <div class="tip"><b>자동 처리:</b> 이름 5자 초과 정리 · 오타 교정(자가학습) · 통/반 제거 · 동·호수 형식 통일 · 전화번호 정리 · 특수문자 뒤 메모 분리 — 손 안 대도 됩니다.</div>
   </section>
 

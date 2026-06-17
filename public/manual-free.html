@@ -14,16 +14,14 @@
   *{box-sizing:border-box;margin:0;padding:0}
   html{scroll-behavior:smooth}
   body{
-    background:var(--bg);
-    color:var(--text);
+    background:var(--bg);color:var(--text);
     font-family:'Pretendard','Apple SD Gothic Neo','Malgun Gothic',system-ui,sans-serif;
-    line-height:1.7; font-size:16px;
+    line-height:1.7;font-size:16px;
     background-image:radial-gradient(ellipse 70% 50% at 50% -5%, rgba(16,185,129,0.10), transparent 70%);
   }
   a{color:var(--emerald);text-decoration:none}
   .wrap{max-width:920px;margin:0 auto;padding:0 20px 120px}
 
-  /* 헤더 */
   header.hero{padding:64px 0 40px;text-align:center}
   .badge{display:inline-flex;align-items:center;gap:8px;font-size:12px;font-weight:800;letter-spacing:.18em;
     color:var(--emerald);background:rgba(16,185,129,.10);border:1px solid rgba(16,185,129,.25);
@@ -32,7 +30,6 @@
   h1.title b{background:linear-gradient(135deg,#34d399,#6ee7b7 55%,#a7f3d0);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
   .sub{color:var(--muted);font-size:17px;max-width:600px;margin:0 auto}
 
-  /* 목차 */
   nav.toc{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin:34px 0 10px}
   nav.toc a{font-size:13px;font-weight:700;color:var(--muted);background:var(--panel);
     border:1px solid var(--line);padding:8px 14px;border-radius:999px;transition:.15s}
@@ -45,10 +42,8 @@
   p{color:var(--text);margin-bottom:12px}
   .lead{color:var(--muted);font-size:16px}
 
-  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:24px 26px;margin:18px 0;
-    box-shadow:0 18px 50px rgba(0,0,0,.35)}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:24px 26px;margin:18px 0;box-shadow:0 18px 50px rgba(0,0,0,.35)}
 
-  /* 무료/유료 표 */
   table.scope{width:100%;border-collapse:collapse;margin:18px 0;font-size:14.5px;overflow:hidden;border-radius:14px;border:1px solid var(--line)}
   table.scope th,table.scope td{padding:13px 16px;text-align:left;border-bottom:1px solid var(--line)}
   table.scope thead th{background:var(--panel2);font-weight:800;font-size:13px;letter-spacing:.03em;color:var(--muted)}
@@ -58,7 +53,6 @@
   .no{color:var(--lock);font-weight:800}
   .paid{color:var(--amber);font-weight:800}
 
-  /* 단계 */
   .step{display:flex;gap:18px;align-items:flex-start;margin:26px 0}
   .step .n{flex:none;width:44px;height:44px;border-radius:14px;background:rgba(16,185,129,.12);
     border:1px solid rgba(16,185,129,.32);color:var(--emerald);font-weight:900;font-size:18px;
@@ -66,44 +60,23 @@
   .step .body{flex:1;min-width:0}
   .step h3{margin-top:4px}
 
-  /* UI 목업(스크린샷 대용) */
-  .shot{margin:16px 0 6px;border-radius:14px;border:1px solid var(--line);overflow:hidden;background:var(--panel2);box-shadow:0 14px 40px rgba(0,0,0,.4)}
+  /* 실제 스크린샷 프레임 */
+  .shot{margin:16px 0 6px;border-radius:14px;border:1px solid var(--line);overflow:hidden;background:var(--panel2);box-shadow:0 18px 50px rgba(0,0,0,.5)}
   .shot .bar{display:flex;align-items:center;gap:7px;padding:9px 13px;background:#0a0f0e;border-bottom:1px solid var(--line)}
   .shot .bar i{width:11px;height:11px;border-radius:50%;display:inline-block}
   .shot .bar .r{background:#ff5f57}.shot .bar .y{background:#febc2e}.shot .bar .g{background:#28c840}
   .shot .bar span{margin-left:10px;font-size:11px;color:var(--muted2);font-weight:700}
-  .shot .screen{padding:22px;min-height:120px}
-  .cap{font-size:13px;color:var(--muted);margin:2px 0 0;padding-left:4px}
+  .shot img{width:100%;display:block}
+  .cap{font-size:13px;color:var(--muted);margin:8px 0 0;padding-left:4px}
   .cap b{color:var(--emerald)}
 
-  /* 목업 내부 컴포넌트 */
-  .mk-btn{display:inline-flex;align-items:center;gap:8px;padding:11px 20px;border-radius:12px;font-weight:800;font-size:14px}
-  .mk-btn.primary{background:var(--emerald);color:#06120d;box-shadow:0 0 22px rgba(16,185,129,.3)}
-  .mk-btn.ghost{background:rgba(255,255,255,.05);border:1px solid rgba(16,185,129,.3);color:var(--emerald)}
-  .mk-btn.lock{background:rgba(248,113,113,.08);border:1px solid rgba(248,113,113,.3);color:var(--lock)}
-  .mk-drop{border:2px dashed rgba(16,185,129,.4);border-radius:16px;padding:30px;text-align:center;background:rgba(16,185,129,.04)}
-  .mk-drop .ico{font-size:38px}
-  .mk-card{background:#0a1110;border:1px solid var(--line);border-radius:13px;padding:16px;flex:1}
-  .mk-card.sel{border-color:rgba(16,185,129,.6);background:rgba(16,185,129,.08)}
-  .mk-row{display:flex;gap:12px;flex-wrap:wrap}
-  table.mk{width:100%;border-collapse:collapse;font-size:12.5px}
-  table.mk th,table.mk td{border:1px solid var(--line);padding:7px 9px;text-align:left}
-  table.mk th{background:#0a0f0e;color:var(--muted);font-weight:800}
-  .tag{display:inline-block;font-size:11px;font-weight:800;padding:3px 9px;border-radius:7px}
-  .tag.g{background:rgba(16,185,129,.12);color:var(--emerald)}
-  .tag.a{background:rgba(251,191,36,.12);color:var(--amber)}
-
-  .tip{border-left:3px solid var(--emerald);background:rgba(16,185,129,.06);padding:14px 18px;border-radius:0 12px 12px 0;margin:16px 0;font-size:14.5px}
-  .tip b{color:var(--emerald)}
-  .warn{border-left:3px solid var(--amber);background:rgba(251,191,36,.06);padding:14px 18px;border-radius:0 12px 12px 0;margin:16px 0;font-size:14.5px}
-  .warn b{color:var(--amber)}
-  .lockbox{border-left:3px solid var(--lock);background:rgba(248,113,113,.06);padding:14px 18px;border-radius:0 12px 12px 0;margin:16px 0;font-size:14.5px}
-  .lockbox b{color:var(--lock)}
+  .tip{border-left:3px solid var(--emerald);background:rgba(16,185,129,.06);padding:14px 18px;border-radius:0 12px 12px 0;margin:16px 0;font-size:14.5px}.tip b{color:var(--emerald)}
+  .warn{border-left:3px solid var(--amber);background:rgba(251,191,36,.06);padding:14px 18px;border-radius:0 12px 12px 0;margin:16px 0;font-size:14.5px}.warn b{color:var(--amber)}
+  .lockbox{border-left:3px solid var(--lock);background:rgba(248,113,113,.06);padding:14px 18px;border-radius:0 12px 12px 0;margin:16px 0;font-size:14.5px}.lockbox b{color:var(--lock)}
 
   ul.clean{list-style:none;margin:10px 0}
   ul.clean li{padding:7px 0 7px 28px;position:relative;color:var(--text);font-size:15px}
   ul.clean li::before{content:'✓';position:absolute;left:0;color:var(--emerald);font-weight:900}
-  ul.x li::before{content:'✕';color:var(--lock)}
 
   .faq{border:1px solid var(--line);border-radius:12px;margin:10px 0;overflow:hidden;background:var(--panel)}
   .faq summary{padding:15px 18px;font-weight:800;cursor:pointer;font-size:15px;list-style:none}
@@ -115,14 +88,12 @@
   .cta{margin-top:60px;text-align:center;background:linear-gradient(135deg,rgba(16,185,129,.1),rgba(34,211,238,.06));
     border:1px solid rgba(16,185,129,.25);border-radius:22px;padding:44px 28px}
   .cta h2{justify-content:center}
-  .cta .mk-btn{margin:8px 6px 0}
+  .mk-btn{display:inline-flex;align-items:center;gap:8px;padding:11px 22px;border-radius:12px;font-weight:800;font-size:14px;margin:8px 6px 0}
+  .mk-btn.primary{background:var(--emerald);color:#06120d}
+  .mk-btn.ghost{background:rgba(255,255,255,.05);border:1px solid rgba(16,185,129,.3);color:var(--emerald)}
 
   footer{margin-top:60px;text-align:center;color:var(--muted2);font-size:13px;border-top:1px solid var(--line);padding-top:26px}
-
-  @media(max-width:600px){
-    h1.title{font-size:30px}.wrap{padding:0 14px 80px}.step{gap:12px}
-    .step .n{width:36px;height:36px;font-size:15px}
-  }
+  @media(max-width:600px){h1.title{font-size:30px}.wrap{padding:0 14px 80px}.step{gap:12px}.step .n{width:36px;height:36px;font-size:15px}}
 </style>
 </head>
 <body>
@@ -145,12 +116,11 @@
     </nav>
   </header>
 
-  <!-- ── 무료 범위 ── -->
+  <!-- 무료 범위 -->
   <section id="scope">
     <div class="kicker">FREE SCOPE</div>
     <h2>🆓 무료로 할 수 있는 것</h2>
     <p class="lead">NEXUS PIPELINE은 <b style="color:var(--emerald)">로그인 없이</b> 핵심 기능인 ‘주소 정제’와 ‘엑셀 다운로드’를 무료로 제공합니다. 회원가입(무료)을 하면 저장·고객노트 같은 편의 기능이 더 열립니다.</p>
-
     <table class="scope">
       <thead><tr><th>기능</th><th>게스트<br/>(로그인 안 함)</th><th>일반 회원<br/>(무료 가입)</th><th>유료<br/>(VIP↑)</th></tr></thead>
       <tbody>
@@ -165,48 +135,32 @@
         <tr><td>AI 배송 최적화 · DB 현황</td><td class="no">✕</td><td class="no">✕</td><td class="paid">VVIP↑</td></tr>
       </tbody>
     </table>
-    <div class="tip"><b>핵심:</b> “명단 주소만 깔끔하게 정리해서 받고 싶다”면 <b>무료</b>로 충분합니다. “저장하고 매달 이어서 쓰고 싶다”면 <b>무료 회원가입</b>, “기사 배정·지도·배송순번까지” 필요하면 <b>유료(VIP↑)</b>입니다.</p></div>
+    <div class="tip"><b>핵심:</b> “명단 주소만 깔끔하게 정리해서 받고 싶다”면 <b>무료</b>로 충분합니다. “저장하고 매달 이어서 쓰고 싶다”면 <b>무료 회원가입</b>, “기사 배정·지도·배송순번까지” 필요하면 <b>유료(VIP↑)</b>입니다.</div>
   </section>
 
-  <!-- ── 시작하기 ── -->
+  <!-- 시작하기 -->
   <section id="start">
     <div class="kicker">STEP 1</div>
     <h2>🚀 시작하기</h2>
     <p class="lead">접속 후 두 가지 방법 중 하나를 고릅니다.</p>
-
     <div class="shot">
       <div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>logis-op.web.app — 로그인 화면</span></div>
-      <div class="screen" style="text-align:center">
-        <div style="width:64px;height:64px;border-radius:50%;border:2px solid rgba(16,185,129,.5);margin:0 auto 14px;display:flex;align-items:center;justify-content:center;font-weight:900;color:var(--emerald);font-size:24px;background:rgba(16,185,129,.08)">N</div>
-        <div style="font-weight:900;font-size:18px;margin-bottom:4px">NEXUS PIPELINE</div>
-        <div style="color:var(--muted2);font-size:12px;margin-bottom:18px">지자체 명단 정제 및 배송 관리 시스템</div>
-        <div class="mk-btn primary" style="width:80%">G  Google 계정으로 시작</div>
-        <div style="color:var(--muted2);font-size:11px;margin:14px 0 10px">또는</div>
-        <div class="mk-btn ghost" style="width:80%">로그인 없이 무료로 정제하기</div>
-      </div>
+      <img src="shots/01-login.png" alt="NEXUS PIPELINE 로그인 화면 — Google 로그인 / 무료 정제 / 무료 가이드 보기 버튼" loading="lazy" />
     </div>
     <p class="cap"><b>①</b> 빠르게 체험만 → <b>“로그인 없이 무료로 정제하기”</b> · <b>②</b> 저장까지 쓰려면 → <b>“Google 계정으로 시작”</b> (무료 가입)</p>
-
     <div class="tip"><b>추천:</b> 처음이라면 <b>“로그인 없이 무료로 정제하기”</b>로 바로 체험해 보세요. 마음에 들면 그때 무료 가입해도 작업 내용이 유지됩니다.</div>
   </section>
 
-  <!-- ── 파일 올리기 ── -->
+  <!-- 파일 올리기 -->
   <section id="upload">
     <div class="kicker">STEP 2</div>
     <h2>📁 엑셀 파일 올리기</h2>
     <p class="lead">정제할 명단 파일을 화면에 끌어다 놓거나 클릭해서 선택합니다.</p>
-
     <div class="shot">
       <div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>명단 정제 시작하기</span></div>
-      <div class="screen">
-        <div class="mk-drop">
-          <div class="ico">☁️⬆️</div>
-          <div style="font-weight:900;font-size:16px;margin-top:8px">엑셀 파일을 끌어다 놓거나 클릭하여 선택</div>
-          <div style="color:var(--muted2);font-size:12px;margin-top:6px">.xlsx · .xls · .csv · 복수 파일 동시 업로드 가능</div>
-        </div>
-      </div>
+      <img src="shots/02-upload.png" alt="업로드 화면 — 쉬운 정제/고급 정제 선택과 파일 드롭존" loading="lazy" />
     </div>
-    <p class="cap">파일을 끌어다 놓으면 <b>전체 시트를 자동 분석</b>해 진짜 명단만 골라냅니다.</p>
+    <p class="cap">파일을 끌어다 놓으면 <b>전체 시트를 자동 분석</b>해 진짜 명단만 골라냅니다. 왼쪽 메뉴에서 <b>사용 가이드</b>도 언제든 열 수 있습니다.</p>
 
     <h3>지원 형식</h3>
     <ul class="clean">
@@ -215,114 +169,67 @@
       <li>여러 파일을 한 번에 올려도 됩니다</li>
     </ul>
 
-    <div class="warn"><b>올리기 전 확인:</b> 이름·주소 칸이 들어있는 명단 파일이면 됩니다. 머리글(헤더)이 몇 번째 줄에 있어도 프로그램이 알아서 찾습니다. 빈 파일·이미지뿐인 파일은 안 됩니다.</div>
+    <h3>업로드 후 — 지자체·월 확인</h3>
+    <p class="lead">파일을 올리면 프로그램이 지자체와 월을 자동으로 감지합니다. 맞는지 확인하고 넘어가세요.</p>
+    <div class="shot">
+      <div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>지자체 · 적용 월 확인</span></div>
+      <img src="shots/03-citypicker.png" alt="지자체와 적용 월을 확인하는 창" loading="lazy" />
+    </div>
+    <p class="cap">예시에서는 주소를 보고 <b>경기도 시흥시 · 2026-06</b>을 자동으로 감지했습니다.</p>
   </section>
 
-  <!-- ── 정제 방식 ── -->
+  <!-- 정제 방식 -->
   <section id="mode">
     <div class="kicker">STEP 3</div>
-    <h2>⚙️ 정제 방식 고르기</h2>
-    <p class="lead">두 가지 방식이 있습니다. 대부분은 <b>쉬운 정제</b>면 충분합니다.</p>
-
+    <h2>⚙️ 정제 방식 — “쉬운 정제”면 끝</h2>
+    <p class="lead">대부분은 <b>쉬운 정제</b>면 충분합니다. 칼럼이 자동으로 맞춰졌는지 확인하고 <b>정제 시작</b>만 누르면 됩니다.</p>
     <div class="shot">
-      <div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>정제 방식 선택</span></div>
-      <div class="screen">
-        <div class="mk-row">
-          <div class="mk-card sel">
-            <div style="font-weight:900;color:var(--emerald);margin-bottom:6px">✨ 쉬운 정제 <span class="tag g">추천</span></div>
-            <div style="color:var(--muted);font-size:13px">파일만 올리면 칼럼 자동 매칭 → 애매한 것만 확인 → 바로 정제</div>
-          </div>
-          <div class="mk-card">
-            <div style="font-weight:900;margin-bottom:6px">⚙️ 고급 정제</div>
-            <div style="color:var(--muted);font-size:13px">시트 선택·컬럼 매핑을 직접 확인하고 조정</div>
-          </div>
-        </div>
-      </div>
+      <div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>쉬운 정제 — 확인만 하면 끝!</span></div>
+      <img src="shots/04-confirm.png" alt="쉬운 정제 확인 창 — 총 10명, 칼럼 자동 매칭, 정제 시작 버튼" loading="lazy" />
     </div>
-    <p class="cap"><b>쉬운 정제</b>: 자동으로 다 해줍니다(추천). <b>고급 정제</b>: 시트·컬럼을 직접 확인하고 싶을 때.</p>
-
-    <h3>고급 정제를 고르면 (선택)</h3>
-    <div class="step">
-      <div class="n">A</div>
-      <div class="body">
-        <h3 style="margin-top:0">시트 선택</h3>
-        <p class="lead">파일에 시트가 여러 개면 정제할 시트를 고릅니다. (수급/의료/생계 → 기초수급자, 차상위 → 차상위로 자동 분류)</p>
-      </div>
-    </div>
-    <div class="step">
-      <div class="n">B</div>
-      <div class="body">
-        <h3 style="margin-top:0">컬럼 매핑 확인</h3>
-        <p class="lead">‘이름·주소·연락처·행정동’ 칸이 제대로 연결됐는지 확인합니다. 자동으로 맞춰지며, 틀린 것만 드롭다운으로 바꾸면 됩니다.</p>
-        <div class="shot">
-          <div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>컬럼 매핑</span></div>
-          <div class="screen">
-            <table class="mk">
-              <tr><th>엑셀 칼럼</th><th>인식된 항목</th></tr>
-              <tr><td>성명</td><td><span class="tag g">이름 ✓</span></td></tr>
-              <tr><td>거주지</td><td><span class="tag g">주소 ✓</span></td></tr>
-              <tr><td>핸드폰</td><td><span class="tag g">연락처 ✓</span></td></tr>
-              <tr><td>읍면동</td><td><span class="tag g">행정동 ✓</span></td></tr>
-            </table>
-          </div>
-        </div>
-      </div>
-    </div>
+    <p class="cap"><b>총 10명 · 칼럼 자동 매칭 완료</b>가 보이면 <b>“정제 시작”</b>을 누르세요. 직접 조정하려면 <b>“직접 매핑(고급)”</b>.</p>
+    <div class="tip"><b>고급 정제</b>를 고르면 시트 선택과 컬럼 매핑(이름·주소·연락처·행정동·포수)을 직접 확인·수정할 수 있습니다. 틀린 칸만 드롭다운으로 바꾸면 됩니다.</div>
   </section>
 
-  <!-- ── 결과 확인 ── -->
+  <!-- 결과 확인 -->
   <section id="result">
     <div class="kicker">STEP 4</div>
     <h2>🔍 정제 결과 확인하기</h2>
     <p class="lead">잠깐 기다리면 주소가 표준 도로명주소로 정리된 표가 나옵니다.</p>
-
     <div class="shot">
       <div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>정제 결과</span></div>
-      <div class="screen">
-        <table class="mk">
-          <tr><th>이름</th><th>정제 전 주소</th><th>정제 후 주소</th></tr>
-          <tr><td>홍길동</td><td style="color:var(--muted2)">동대문구 왕산로 72 101동205호</td><td style="color:var(--emerald)">왕산로 72, 101-205호 (전농동, 래미안)</td></tr>
-          <tr><td>김영희</td><td style="color:var(--muted2)">시흥시 군자동 행복아파트 가동 101</td><td style="color:var(--emerald)">군자동 행복아파트, 가동 101호</td></tr>
-        </table>
-      </div>
+      <img src="shots/05-grid.png" alt="정제 결과 화면 — 이름·구분·행정동·통합주소·전화·포수 표" loading="lazy" />
     </div>
-    <p class="cap">왼쪽이 원본, 오른쪽이 <b>정제된 주소</b>입니다. 표준 도로명주소 + 동·호수 + (법정동, 건물명) 형식으로 정리됩니다.</p>
+    <p class="cap">주소가 <b>도로명주소 + 동·호수 + (법정동, 건물명)</b> 형식으로 정리됩니다. 표의 칸을 클릭하면 바로 고칠 수 있습니다.</p>
 
     <h3>직접 수정도 가능</h3>
     <ul class="clean">
       <li>표의 칸을 클릭하면 바로 고칠 수 있습니다</li>
-      <li><b>확인필요</b>로 표시된 줄은 원본 주소가 불완전한 경우이니 한 번 봐주세요</li>
-      <li>실수했다면 <b>되돌리기(Undo)</b>로 이전 상태로 복원됩니다</li>
+      <li><b>확인필요</b>로 표시된 줄은 원본 주소가 불완전한 경우이니 한 번 봐주세요 (위 예시에서는 10명 중 9명 정상, 1명 확인필요)</li>
+      <li>실수했다면 <b>되돌리기(Ctrl+Z)</b>로 이전 상태로 복원됩니다</li>
     </ul>
-
     <div class="tip"><b>자동으로 해주는 것:</b> 이름 5자 초과 정리 · 오타 교정 · 통/반 제거 · 동·호수 형식 통일 · 전화번호 형식 정리 · 특수문자 뒤 내용을 특이사항으로 분리 — 손댈 필요 없이 알아서 정리됩니다.</div>
   </section>
 
-  <!-- ── 다운로드 ── -->
+  <!-- 다운로드 -->
   <section id="download">
     <div class="kicker">STEP 5</div>
     <h2>⬇️ 엑셀로 다운로드</h2>
-    <p class="lead">정제가 끝나면 결과를 엑셀 파일로 바로 받을 수 있습니다. <b>무료에서도 다운로드는 자유롭게</b> 됩니다.</p>
-
+    <p class="lead">정제가 끝나면 결과 화면 <b>오른쪽 위 “엑셀 다운로드”</b> 버튼으로 바로 받을 수 있습니다. <b>무료에서도 다운로드는 자유롭게</b> 됩니다.</p>
     <div class="shot">
-      <div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>내보내기</span></div>
-      <div class="screen" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
-        <div class="mk-btn primary">⬇ 엑셀 다운로드</div>
-        <div class="mk-btn ghost">[확인필요]만</div>
-        <div class="mk-btn ghost">[행정동요약]</div>
-      </div>
+      <div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>결과 화면 — 엑셀 다운로드</span></div>
+      <img src="shots/05-grid.png" alt="결과 화면 상단의 엑셀 다운로드 버튼" loading="lazy" />
     </div>
+    <p class="cap">상단 툴바의 <b>“명단 다운로드 / 엑셀 다운로드”</b>를 누르면 됩니다. <b>[확인필요]만</b>, <b>[행정동요약]</b> 형태로도 받을 수 있습니다.</p>
     <p class="cap">파일명은 <b>지자체-N월-기초N,차상위M,전체T-날짜시간.xlsx</b> 형식으로 자동 생성됩니다.</p>
-
     <div class="lockbox"><b>여기까지가 게스트(비로그인) 무료 범위입니다.</b> 정제 결과를 클라우드에 저장하거나 매달 이어서 작업하려면 아래 <b>무료 회원가입</b>이 필요합니다.</div>
   </section>
 
-  <!-- ── 무료 계정 혜택 ── -->
+  <!-- 무료 계정 혜택 -->
   <section id="account">
     <div class="kicker">STEP 6 · 무료 회원</div>
     <h2>🎁 무료 회원가입하면 더 열리는 것</h2>
     <p class="lead">Google 계정으로 무료 가입(일반 등급)하면 정제·다운로드에 더해 다음이 가능합니다. <b>요금 없이</b> 쓸 수 있는 일반 등급 기능입니다.</p>
-
     <div class="card">
       <ul class="clean">
         <li><b>이번달 배송명단 저장/조회</b> — 정제 결과를 클라우드에 저장하고 언제든 다시 엽니다</li>
@@ -331,11 +238,10 @@
         <li><b>지자체 1개</b> 관리 · <b>지자체당 월 1만 건</b> 처리</li>
       </ul>
     </div>
-
     <div class="warn"><b>참고:</b> 일반(무료) 등급은 <b>좌표 매칭·기사 배정·루트맵</b>은 포함하지 않습니다. 이 기능들은 유료(VIP 이상)입니다. 아래 비교표를 보세요.</div>
   </section>
 
-  <!-- ── 무료 vs 유료 ── -->
+  <!-- 무료 vs 유료 -->
   <section id="compare">
     <div class="kicker">PLANS</div>
     <h2>💳 무료 vs 유료 한눈에 비교</h2>
@@ -349,31 +255,25 @@
         <tr><td>💎 사파이어</td><td class="paid">협의</td><td>+ 전담 지원 · 커스텀</td><td>무제한</td></tr>
       </tbody>
     </table>
-    <p class="lead">앱 안에서 <b>왼쪽 메뉴 → 회원등급</b>을 누르면 같은 비교표와 업그레이드 문의를 볼 수 있습니다.</p>
+    <p class="lead">앱 안에서 <b>왼쪽 메뉴 → 회원등급</b>을 누르면 같은 비교표와 업그레이드 문의를 볼 수 있습니다. 유료 기능 사용법은 <a href="manual-paid.html">유료 사용 가이드</a>에서 따라 할 수 있습니다.</p>
   </section>
 
-  <!-- ── FAQ ── -->
+  <!-- FAQ -->
   <section id="faq">
     <div class="kicker">FAQ</div>
     <h2>❓ 자주 묻는 질문</h2>
-
     <details class="faq"><summary>로그인 없이 정말 무료로 쓸 수 있나요?</summary>
       <div class="a">네. ‘로그인 없이 무료로 정제하기’를 누르면 가입·결제 없이 주소 정제와 엑셀 다운로드를 바로 쓸 수 있습니다. 다만 저장 기능은 무료 회원가입이 필요합니다.</div></details>
-
     <details class="faq"><summary>내 명단 데이터는 안전한가요?</summary>
       <div class="a">게스트 모드에서는 데이터가 서버에 저장되지 않고 브라우저에서만 처리됩니다. 저장 기능을 쓰려면 로그인해야 하며, 본인 계정의 데이터만 접근됩니다.</div></details>
-
     <details class="faq"><summary>정제가 이상하게 된 주소가 있어요.</summary>
       <div class="a">표에서 해당 칸을 클릭해 직접 고칠 수 있습니다. ‘확인필요’로 표시된 줄은 원본 주소 자체가 불완전한 경우가 많으니 원본을 확인해 주세요. Enter로 재정제하면 오타는 자동 학습됩니다.</div></details>
-
     <details class="faq"><summary>여러 지자체 명단을 쓰고 싶어요.</summary>
       <div class="a">일반(무료) 등급은 지자체 1개입니다. 여러 지자체가 필요하면 VIP(5개)·VVIP(20개)·사파이어(무제한)로 업그레이드하세요. 앱의 ‘회원등급’ 메뉴에서 문의할 수 있습니다.</div></details>
-
     <details class="faq"><summary>기사 배정·배송 지도는 무료로 안 되나요?</summary>
       <div class="a">좌표 매칭·기사 배정·루트맵은 VIP 이상 유료 기능입니다. 자세한 사용법은 <a href="manual-paid.html">유료 사용 가이드</a>를 참고하세요.</div></details>
   </section>
 
-  <!-- ── CTA ── -->
   <div class="cta">
     <h2>지금 바로 무료로 정제해 보세요</h2>
     <p class="lead">설치 없이, 가입 없이 — 5분이면 명단 주소가 깔끔해집니다.</p>
@@ -383,7 +283,7 @@
 
   <footer>
     NEXUS PIPELINE · 무료 사용 가이드 &nbsp;·&nbsp; 문의 ttong627@gmail.com<br/>
-    이 화면의 그림은 실제 화면을 단순화한 안내용 목업입니다.
+    화면은 실제 프로그램(logis-op.web.app)을 캡처한 것입니다. 업데이트로 일부 버튼 위치가 다를 수 있습니다.
   </footer>
 
 </div>
