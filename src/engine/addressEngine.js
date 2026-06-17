@@ -156,22 +156,49 @@ const appendCheckReason = (result, reason) => {
 };
 
 // ── A-13: 캐시 레이어 ─────────────────────────────────────────────
+// 시도 토큰 판별 — "경기도/서울특별시/세종특별자치시" 또는 축약 도명("경기·서울")
+const SIDO_HEAD_RE = /(특별시|광역시|특별자치시|특별자치도|도)$/;
+const SIDO_LEAD_RE = /^(서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|제주)$/;
+
+// cityLabel/주소에서 시군구 토큰 추출 — 자유 입력(시도 유무·순서 무관) 견고 대응.
+// "경기도 시흥시"→"시흥시", "시흥시"→"시흥시", "안양시 동안구"→"안양시 동안구", "강원 춘천"(시 누락)→"춘천"
+const extractSigungu = (label) => {
+  const toks = String(label || '').trim().split(/\s+/).filter(Boolean);
+  const body = toks.filter(t => !(SIDO_HEAD_RE.test(t) || SIDO_LEAD_RE.test(t)));
+  for (let i = 0; i < body.length; i++) {
+    if (/시$/.test(body[i]) && body[i + 1] && /구$/.test(body[i + 1])) return `${body[i]} ${body[i + 1]}`;
+  }
+  const single = body.find(t => /(시|군|구)$/.test(t));
+  if (single) return single;
+  // 시/군/구 접미어가 없는 단독 토큰(예: "춘천")도 비교 후보로 사용 — includes 양방향 매칭이 흡수
+  return body.length === 1 ? body[0] : '';
+};
+const extractSido = (label) => {
+  const toks = String(label || '').trim().split(/\s+/).filter(Boolean);
+  return toks.find(t => SIDO_HEAD_RE.test(t) || SIDO_LEAD_RE.test(t)) || '';
+};
+
+// 선택 지자체(cityLabel) vs 매칭 결과(matchedSido/Sigungu) 동일 지역 판정.
+// cityLabel은 자유 입력이라 시도가 없을 수 있음 → 시군구 토큰으로 비교, 시도는 둘 다 있을 때만 보조 비교.
 const getMunicipalityMatch = (cityLabel, matchedSido, matchedSigungu) => {
-  const cityParts = String(cityLabel || '').trim().split(/\s+/).filter(Boolean);
-  const selectedSido = cityParts[0] || '';
-  const selectedSigungu = cityParts.slice(1).join(' ');
-  if (!selectedSido || !selectedSigungu || !matchedSido || !matchedSigungu) {
+  const selectedSido = extractSido(cityLabel);
+  const selectedSigungu = extractSigungu(cityLabel);
+
+  // 시군구를 못 뽑거나(예: "세종특별자치시" 단독·빈값) 매칭 결과 시군구가 없으면 비교 불가 → 통과(안전)
+  if (!selectedSigungu || !matchedSigungu) {
     return { comparable: false, ok: true, selectedSido, selectedSigungu };
   }
 
-  const selectedSidoKey = normalizePlaceKey(selectedSido);
   const selectedSigunguKey = normalizePlaceKey(selectedSigungu);
-  const matchedSidoKey = normalizePlaceKey(matchedSido);
   const matchedSigunguKey = normalizePlaceKey(matchedSigungu);
-  const sidoOk = selectedSidoKey === matchedSidoKey;
   const sigunguOk = selectedSigunguKey === matchedSigunguKey
     || selectedSigunguKey.includes(matchedSigunguKey)
     || matchedSigunguKey.includes(selectedSigunguKey);
+
+  // 시도는 cityLabel에 명시됐고 매칭 결과에도 있을 때만 비교 — 시군구 단독 입력이면 시군구로만 판정
+  const sidoOk = (!selectedSido || !matchedSido)
+    ? true
+    : normalizePlaceKey(selectedSido) === normalizePlaceKey(matchedSido);
 
   return { comparable: true, ok: sidoOk && sigunguOk, selectedSido, selectedSigungu };
 };
@@ -407,6 +434,18 @@ const kakaoDocToApiResult = (d) => {
     bdKdcd:        '0',
     _fromKakao:    true,
   };
+};
+
+// Kakao POI 문서가 선택 지자체에 속하는지 검사 — kakaoDocToApiResult 직행(지역필터 우회) 방지.
+// Kakao address_name/road_address_name 문자열에서 시도·시군구 토큰을 뽑아 getMunicipalityMatch로 대조.
+const kakaoDocInMunicipality = (d, cityLabel) => {
+  if (!d) return false;
+  const addr = `${d.address_name || ''} ${d.road_address_name || ''}`.trim();
+  if (!addr) return false;
+  return isCandidateInSelectedMunicipality(
+    { matchedSido: extractSido(addr), matchedSigungu: extractSigungu(addr) },
+    cityLabel
+  );
 };
 
 // ── A-13: JUSO API (3개 키 로테이션) ──────────────────────────────
@@ -812,7 +851,8 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
       for (const q of queries) {
         const kd = await searchKakaoFull(q);
         if (kd?.road_address_name) {
-          apiResult = await lookupAddr(kd.road_address_name, cityLabel) || kakaoDocToApiResult(kd);
+          apiResult = await lookupAddr(kd.road_address_name, cityLabel)
+            || (kakaoDocInMunicipality(kd, cityLabel) ? kakaoDocToApiResult(kd) : null);
           if (apiResult) break;
         }
       }
@@ -962,6 +1002,24 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
     detailAddr    = detailAddr.replace(/\s+/g, ' ').trim();
   }
 
+  // ── 버그수정 #3/#4: 괄호(건물명)에서 건물 동(棟) 분리 → 상세주소로 이동 ──
+  // 괄호 `()` 는 (법정동, 건물명)만 담는다. 빌라/아파트 건물 동(가동·B동·101동 등)이
+  // bdNm/inline으로 buildingName에 섞이면, 같은 "101동"이 어떤 건 괄호(미변환)·어떤 건
+  // 상세(A-10 대시변환)로 갈려 표기가 뒤죽박죽된다. 건물 동은 항상 detailAddr로 보내
+  // A-10이 일관 정규화하도록 한다(법정동 dongPart·진짜 건물명은 보존).
+  if (buildingName) {
+    const bn = buildingName.trim();
+    // 끝에 붙은 건물 동(棟)[+호] 분리:
+    //  - 숫자동(101동)·영문동(B동)은 호수 동반 무관하게 건물 동으로 확정
+    //  - 단일 한글동(가동·나동)은 "호수 동반" 시에만 — 법정동(사동·본동 등) 오인 방지
+    //  - 앞 건물명은 보존: "푸르지오 101동" → 상세 "101동" / 괄호 건물명 "푸르지오"
+    const m = bn.match(/^(.*?)\s*((?:\d+|[A-Za-z]+)동(?:\s*제?\s*\d+\s*호)?|[가-힣]동\s*제?\s*\d+\s*호)$/);
+    if (m && m[2]) {
+      detailAddr = `${m[2].trim()} ${detailAddr}`.replace(/\s+/g, ' ').trim();
+      buildingName = m[1].trim();
+    }
+  }
+
   let finalDetail = detailAddr;
 
   // ── finalDetail 전처리 (A-18 → A-19 → A-17 → A-10 순서) ─────────
@@ -1039,6 +1097,12 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
     result.주소 += result.주소 ? `${detailSep}${finalDetail}` : finalDetail;
   }
 
+  // ── 3분할 주소 노출 (기본명단 3컬럼 저장·도로명주소 비교용) ─────────
+  // 도로명주소(콤마 앞) / 상세주소(동호수) / 괄호정보(법정동, 건물명). 표시 함수 parseDisplayedAddress 와 동일 분할.
+  result.도로명주소 = finalRoadAddr || '';
+  result.상세주소   = finalDetail || '';
+  result.괄호정보   = parenInner || '';   // "법정동, 건물명" (괄호 기호 제외 내부 텍스트)
+
   // ── A-12 ③: 변환 후 주소 3자 미만 플래그 ────────────────────────
   if (result.주소.length < 3) {
     result.확인필요 = true;
@@ -1049,7 +1113,11 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
   // 단, 주소 자체가 이미 주민센터 주소인 경우(CENTER_RE) 중복 방지
   if (normalizedInputNote && CENTER_RE.test(normalizedInputNote) && result.주소 && !CENTER_RE.test(text)) {
     const referenceDong = (adminDong || dongPart || '').trim();
-    const ckw = referenceDong ? `${referenceDong} 주민센터` : generateCenterKeyword(normalizedInputNote, adminDong, cityLabel);
+    // A-13/A-22: 주민센터 검색어에 지자체(시군구) 접두어 강제 — 전국 동명(예: 시흥시 군자동 vs 서울 군자동) 오매칭 방지
+    const districtPfx = (extractSigungu(cityLabel) || (cityLabel || '').trim().split(/\s+/).pop() || '').trim();
+    const ckw = referenceDong
+      ? `${districtPfx ? `${districtPfx} ` : ''}${referenceDong} 주민센터`
+      : generateCenterKeyword(normalizedInputNote, adminDong, cityLabel);
     let cres = await lookupAddr(ckw, cityLabel);
     // JUSO 실패 시 Kakao POI 검색으로 주민센터 도로명 취득 후 재조회
     if (!cres) {
@@ -1064,7 +1132,8 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
       for (const q of queries) {
         const kd = await searchKakaoFull(q);
         if (kd?.road_address_name) {
-          cres = await lookupAddr(kd.road_address_name, cityLabel) || kakaoDocToApiResult(kd);
+          cres = await lookupAddr(kd.road_address_name, cityLabel)
+            || (kakaoDocInMunicipality(kd, cityLabel) ? kakaoDocToApiResult(kd) : null);
           if (cres) break;
         }
       }
