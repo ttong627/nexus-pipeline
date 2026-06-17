@@ -175,13 +175,16 @@ function TiltCard({ title, desc, icon: Icon, num, theme: themeKey = 'sky' }) {
 
 export default function IntroScreen({ user, reason = 'new', meta = {}, onComplete }) {
   const [stage, setStage] = useState(0);
+  const reduceMotion = typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
 
   useEffect(() => {
+    // 접근성: 모션 최소화 설정 시 3D 게이트 연출 생략하고 즉시 콘텐츠 표시
+    if (reduceMotion) { setStage(2); return; }
     // 순차적인 3D 연출 스테이지 제어
     const t1 = setTimeout(() => setStage(1), 1200); // 3D 게이트 활짝 오픈
     const t2 = setTimeout(() => setStage(2), 2400); // 메인 콘텐츠 페이드인 & 3D 공간 배치
     return () => { clearTimeout(t1); clearTimeout(t2); };
-  }, []);
+  }, [reduceMotion]);
 
   const handleStart = () => {
     setStage(3); // 아웃트로 페이드아웃 시작
@@ -220,7 +223,7 @@ export default function IntroScreen({ user, reason = 'new', meta = {}, onComplet
           transformOrigin: '50% 0%',
           maskImage: 'linear-gradient(to bottom, rgba(0,0,0,1) 0%, rgba(0,0,0,0) 80%)',
           zIndex: 2,
-          animation: 'grid-flow 25s linear infinite'
+          animation: reduceMotion ? 'none' : 'grid-flow 25s linear infinite'
         }}
       />
 
@@ -369,14 +372,16 @@ export default function IntroScreen({ user, reason = 'new', meta = {}, onComplet
           <div className="text-center relative mt-4" style={{ transformStyle: 'preserve-3d' }}>
             <div className="absolute inset-0 bg-gradient-to-r from-cyan-500 to-blue-500 blur-[120px] opacity-25 rounded-full pointer-events-none" />
             <button
+              type="button"
               onClick={handleStart}
-              className="relative inline-flex items-center gap-5 px-20 py-6 bg-gradient-to-r from-cyan-500 to-blue-600 text-white font-black rounded-[2rem] text-lg uppercase tracking-widest hover:from-cyan-400 hover:to-blue-500 hover:scale-105 active:scale-95 transition-all duration-300 shadow-[0_0_60px_rgba(6,182,212,0.45)] hover:shadow-[0_0_90px_rgba(6,182,212,0.7)]"
-              style={{ 
+              aria-label="시스템 가동 시작 — 인트로 닫고 시작"
+              className="relative inline-flex items-center gap-5 px-20 py-6 bg-gradient-to-r from-cyan-500 to-blue-600 text-white font-black rounded-[2rem] text-lg uppercase tracking-widest hover:from-cyan-400 hover:to-blue-500 hover:scale-105 active:scale-95 motion-reduce:hover:scale-100 motion-reduce:transition-none transition-all duration-300 shadow-[0_0_60px_rgba(6,182,212,0.45)] hover:shadow-[0_0_90px_rgba(6,182,212,0.7)] cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 focus-visible:ring-offset-2 focus-visible:ring-offset-[#010307]"
+              style={{
                 transform: 'translateZ(80px)',
                 letterSpacing: '0.25em'
               }}
             >
-              <Play size={22} fill="currentColor" className="text-white" />
+              <Play size={22} fill="currentColor" aria-hidden="true" className="text-white" />
               시스템 가동 시작
             </button>
           </div>

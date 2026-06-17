@@ -525,9 +525,11 @@ export default function Dashboard({ user, onStart, onCloudCard, onBaseCard, grid
             <ChevronRight size={13} />
           </button>
           <button
+            type="button"
             onClick={() => window.open('/manual.html', '_blank')}
             className="w-8 h-8 rounded-full bg-emerald-950/30 border border-emerald-500/30 text-emerald-400 font-black text-sm hover:bg-emerald-500/15 transition-all flex items-center justify-center"
             title="사용설명서"
+            aria-label="사용설명서 열기"
           >
             ?
           </button>

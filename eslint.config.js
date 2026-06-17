@@ -30,6 +30,10 @@ export default defineConfig([
       'react-hooks/preserve-manual-memoization': 'off',
       'react-hooks/static-components': 'warn',
       'react-hooks/immutability': 'warn',
+      // react-hooks/refs(v6 실험): 이벤트핸들러 팩토리 패턴을 렌더중 ref접근으로 오탐 → warn
+      'react-hooks/refs': 'warn',
+      // react-refresh: 컴포넌트+훅 동일파일 export는 개발모드 HMR 경고일 뿐(런타임 무관) → warn
+      'react-refresh/only-export-components': 'warn',
     },
   },
   {

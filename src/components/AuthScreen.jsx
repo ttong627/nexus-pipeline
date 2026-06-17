@@ -2,25 +2,26 @@
 export default function AuthScreen({ authStatus, authLoading, handleGoogleLogin, onGuestStart }) {
   if (authStatus === 'checking') {
     return (
-      <div className="h-screen w-full bg-[#060908] flex items-center justify-center">
-        <div className="w-12 h-12 rounded-full border-2 border-emerald-500/30 border-t-emerald-400 animate-spin" />
+      <div className="h-screen w-full bg-[#060908] flex items-center justify-center" role="status" aria-label="로그인 상태 확인 중">
+        <div className="w-12 h-12 rounded-full border-2 border-emerald-500/30 border-t-emerald-400 animate-spin motion-reduce:animate-none" />
+        <span className="sr-only">로그인 상태 확인 중…</span>
       </div>
     );
   }
 
   return (
-    <div className="h-screen w-full overflow-hidden bg-[#060908] flex items-center justify-center p-4"
+    <div className="min-h-dvh w-full overflow-hidden bg-[#060908] flex items-center justify-center p-4"
       style={{ backgroundImage: 'radial-gradient(ellipse 80% 60% at 50% 0%, rgba(16,185,129,0.07) 0%, transparent 70%)' }}
     >
       <div className="w-full max-w-sm relative">
         {/* subtle glow — static, no animation */}
-        <div className="absolute -inset-px bg-gradient-to-b from-emerald-500/20 to-transparent rounded-3xl blur-xl pointer-events-none" />
+        <div aria-hidden="true" className="absolute -inset-px bg-gradient-to-b from-emerald-500/20 to-transparent rounded-3xl blur-xl pointer-events-none" />
 
         <div className="relative bg-[#0a0f0d]/90 backdrop-blur-xl border border-emerald-500/15 rounded-3xl shadow-[0_24px_64px_rgba(0,0,0,0.7)] p-10 flex flex-col items-center">
 
           {/* 로고 */}
           <div className="relative mb-7">
-            <div className="absolute inset-0 rounded-full bg-emerald-400/20 blur-xl" />
+            <div aria-hidden="true" className="absolute inset-0 rounded-full bg-emerald-400/20 blur-xl" />
             <img
               src="ttlogo.jpg"
               alt="NEXUS Logo"
@@ -46,11 +47,13 @@ export default function AuthScreen({ authStatus, authLoading, handleGoogleLogin,
 
           {/* 로그인 버튼 */}
           <button
+            type="button"
             onClick={handleGoogleLogin}
             disabled={authLoading}
-            className="w-full py-3.5 bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 disabled:cursor-not-allowed text-black font-extrabold rounded-xl shadow-[0_0_20px_rgba(16,185,129,0.25)] hover:shadow-[0_0_28px_rgba(16,185,129,0.4)] transition-all flex items-center justify-center gap-3 text-[15px]"
+            aria-busy={authLoading}
+            className="w-full py-3.5 bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 disabled:cursor-not-allowed text-black font-extrabold rounded-xl shadow-[0_0_20px_rgba(16,185,129,0.25)] hover:shadow-[0_0_28px_rgba(16,185,129,0.4)] transition-all flex items-center justify-center gap-3 text-[15px] cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0a0f0d]"
           >
-            <svg className="w-5 h-5 shrink-0" viewBox="0 0 48 48">
+            <svg aria-hidden="true" className="w-5 h-5 shrink-0" viewBox="0 0 48 48">
               <path fill="#FFC107" d="M43.611,20.083H42V20H24v8h11.303c-1.649,4.657-6.08,8-11.303,8c-6.627,0-12-5.373-12-12c0-6.627,5.373-12,12-12c3.059,0,5.842,1.154,7.961,3.039l5.657-5.657C34.046,6.053,29.268,4,24,4C12.955,4,4,12.955,4,24c0,11.045,8.955,20,20,20c11.045,0,20-8.955,20-20C44,22.659,43.862,21.35,43.611,20.083z" />
               <path fill="#FF3D00" d="M6.306,14.691l6.571,4.819C14.655,15.108,18.961,12,24,12c3.059,0,5.842,1.154,7.961,3.039l5.657-5.657C34.046,6.053,29.268,4,24,4C16.318,4,9.656,8.337,6.306,14.691z" />
               <path fill="#4CAF50" d="M24,44c5.166,0,9.86-1.977,13.409-5.192l-6.19-5.238C29.211,35.091,26.715,36,24,36c-5.202,0-9.619-3.317-11.283-7.946l-6.522,5.025C9.505,39.556,16.227,44,24,44z" />
@@ -72,8 +75,9 @@ export default function AuthScreen({ authStatus, authLoading, handleGoogleLogin,
                 <div className="flex-1 h-px bg-emerald-500/10" />
               </div>
               <button
+                type="button"
                 onClick={onGuestStart}
-                className="w-full py-3 bg-white/5 hover:bg-white/10 border border-emerald-500/20 hover:border-emerald-500/40 text-emerald-300 font-bold rounded-xl transition-all text-[14px]"
+                className="w-full py-3 bg-white/5 hover:bg-white/10 border border-emerald-500/20 hover:border-emerald-500/40 text-emerald-300 font-bold rounded-xl transition-all text-[14px] cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/60 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0a0f0d]"
               >
                 로그인 없이 무료로 정제하기
               </button>

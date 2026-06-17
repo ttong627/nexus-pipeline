@@ -1,5 +1,41 @@
 ﻿@import "tailwindcss";
 
+/* ── 전역 접근성(A11y) — 전 페이지 일괄 적용 ──────────────────────────
+   1) 키보드 포커스 링: 마우스 클릭엔 안 뜨고 Tab 이동 시에만 표시(:focus-visible).
+   2) 활성 버튼/클릭요소 커서 통일.
+   3) prefers-reduced-motion: 모션 최소화 사용자에겐 애니메이션/전환 비활성. */
+@layer base {
+  button:focus-visible,
+  a:focus-visible,
+  [role="button"]:focus-visible,
+  [tabindex]:focus-visible,
+  input:focus-visible,
+  select:focus-visible,
+  textarea:focus-visible {
+    outline: 2px solid rgba(52, 211, 153, 0.75); /* emerald-400 */
+    outline-offset: 2px;
+    border-radius: 6px;
+  }
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]),
+  label[for],
+  summary {
+    cursor: pointer;
+  }
+  button:disabled {
+    cursor: not-allowed;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
 @keyframes slideUpToast {
   from { opacity: 0; transform: translate(-50%, 16px); }
   to   { opacity: 1; transform: translate(-50%, 0); }
