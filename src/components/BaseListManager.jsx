@@ -495,19 +495,51 @@ export default function BaseListManager({ user, onBack, initialCity = '', export
     finally { setSaving(false); }
   };
 
+  // 분리 저장된 주소(roadAddr/detailAddr/parenInfo)를 정제 형식으로 합체: "도로명, 상세 (법정동, 건물명)".
+  // 이미 합쳐진 address가 있으면 그대로 사용(정제 결과 원본).
+  const combineAddr = (r) => {
+    if (String(r.address || '').trim()) return r.address;
+    const road = String(r.roadAddr || '').trim();
+    const detail = String(r.detailAddr || '').trim();
+    const paren = String(r.parenInfo || '').trim();
+    let s = [road, detail].filter(Boolean).join(', ');
+    if (paren) s += `${s ? ' ' : ''}(${paren})`;
+    return s.trim();
+  };
+  // 정제결과(exportColOrder) 칼럼 키 → base_lists 영문 필드 값
+  const baseVal = (r, key, idx) => {
+    switch (key) {
+      case 'NO':       return idx + 1;
+      case '이름':     return r.name || '';
+      case '생년월일': return r.birthKey || '';
+      case '행정동':   return r.dong || '';
+      case '리':       return r.리 || '';
+      case '주소':     return combineAddr(r);
+      case '휴대폰':   return r.mobile || '';
+      case '유선전화': return r.landline || '';
+      case '포수':     return r.qty ?? '';
+      case '특이사항': return r.note || '';
+      case '문자수신': return r.sms || '';
+      case '기사':     return r.driver || '';
+      case '배송순번': return r.seqNo ?? '';
+      default:         return ''; // 구분·사유·품명 등 base_lists에 없는 칼럼
+    }
+  };
+
   const handleDownload = () => {
     if (!displayRecords.length) return alert('다운로드할 데이터가 없습니다.');
-    const data = displayRecords.map((r, i) => ({
-      번호: i + 1,
-      성명: r.name || '',
-      생년월일: r.birthKey || '',
-      행정동: r.dong || '',
-      휴대폰: r.mobile || '',
-      유선전화: r.landline || '',
-      특이사항: r.note || '',
-    }));
+    // 정제결과 화면과 동일한 칼럼 구성(전역 exportColOrder 공유). 리는 읍/면 데이터 있을 때만.
+    const hasEM = displayRecords.some(r => /(읍|면)$/.test(String(r.dong ?? '').trim()));
+    const riOn = hasEM && displayRecords.some(r => String(r.리 ?? '').trim());
+    const cols = (exportColOrder.length ? exportColOrder : defaultExportCols)
+      .filter(c => c.on && (c.key !== '리' || riOn));
+    const data = displayRecords.map((r, i) => {
+      const row = {};
+      cols.forEach(c => { row[c.label] = baseVal(r, c.key, i); });
+      return row;
+    });
     const ws = XLSX.utils.json_to_sheet(data);
-    ws['!cols'] = Object.keys(data[0] || {}).map(k => ({ wch: Math.max(k.length, 10) }));
+    ws['!cols'] = cols.map(c => ({ wch: c.key === '주소' ? 34 : Math.max(c.label.length + 2, 9) }));
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, '기본명단');
     const today = new Date();
