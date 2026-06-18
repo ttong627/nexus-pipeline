@@ -1442,6 +1442,48 @@ self.onmessage = ({ data }) => {
       return parseSheet(name, rawJson, data.dynamicRules);
     });
 
+    // ── 시트간 동일 명단(인물) 중복 감지 — 같은 사람을 여러 시트로 담았으면 기본 1개만 선택 ──
+    // 예: 수급자+차상위 ≡ 명단 ≡ 읍/면별. 전부 합치면 2~3중 중복 → 가장 완전한 시트만 기본 선택하고 그룹 정보를 UI에 넘김.
+    let overlapGroups = [];
+    try {
+      const _digit = v => String(v ?? '').replace(/[^\d]/g, '');
+      const _idSet = (s) => {
+        const ni = s.colIndices?.['이름'], pi = s.colIndices?.['연락처'];
+        const set = new Set();
+        if (ni == null || ni < 0) return set;
+        for (const row of (s.bodyRows || [])) {
+          const nm = String(row[ni] ?? '').trim(); if (!nm) continue;
+          set.add(`${nm}|${pi != null && pi >= 0 ? _digit(row[pi]).slice(-7) : ''}`);
+        }
+        return set;
+      };
+      const rosters = sheetsData.filter(s => s.isRosterSheet && (s.rowsCount || 0) > 0);
+      if (rosters.length >= 2) {
+        const sets = new Map(rosters.map(s => [s.name, _idSet(s)]));
+        const overlaps = (a, b) => { // 인물집합이 한쪽이 다른쪽에 85%+ 포함 → 동일 모집단
+          const A = sets.get(a), B = sets.get(b); if (!A.size || !B.size) return false;
+          const [sm, lg] = A.size <= B.size ? [A, B] : [B, A];
+          let inter = 0; for (const x of sm) if (lg.has(x)) inter++;
+          return inter / sm.size >= 0.85;
+        };
+        const names = rosters.map(s => s.name);
+        const par = names.map((_, i) => i);
+        const find = x => { while (par[x] !== x) { par[x] = par[par[x]]; x = par[x]; } return x; };
+        for (let i = 0; i < names.length; i++) for (let j = i + 1; j < names.length; j++) {
+          if (overlaps(names[i], names[j])) { const a = find(i), b = find(j); if (a !== b) par[a] = b; }
+        }
+        const gmap = new Map();
+        names.forEach((n, i) => { const r = find(i); if (!gmap.has(r)) gmap.set(r, []); gmap.get(r).push(n); });
+        const rich = (n) => { const s = sheetsData.find(x => x.name === n); return [s.rowsCount || 0, (s.headers || []).filter(Boolean).length, /생년|주민/.test((s.headers || []).join('')) ? 1 : 0]; };
+        for (const grp of gmap.values()) {
+          if (grp.length < 2) continue; // 겹치는 시트군만 대상
+          const recommended = [...grp].sort((a, b) => { const ra = rich(a), rb = rich(b); return rb[0] - ra[0] || rb[1] - ra[1] || rb[2] - ra[2]; })[0];
+          overlapGroups.push({ recommended, sheets: grp.map(n => ({ name: n, rows: sheetsData.find(x => x.name === n)?.rowsCount || 0 })) });
+          grp.forEach(n => { const s = sheetsData.find(x => x.name === n); if (s) s.selected = (n === recommended); }); // 추천만 기본 선택
+        }
+      }
+    } catch { /* 중복 감지 실패해도 업로드는 그대로 진행 */ }
+
     const firstSheet = sheetsData[0];
     const cityCandidates = extractCityCandidates(
       fileName,
@@ -1465,6 +1507,7 @@ self.onmessage = ({ data }) => {
       excludedSheets,
       totalRows: rosterSheetsArr.reduce((a, s) => a + (s.rowsCount || 0), 0),
       droppedRows: sheetsData.reduce((a, s) => a + (s.skippedRowCount || 0), 0),
+      overlapGroups, // 동일 명단 중복 시트군 (UI 선택용)
     };
 
     const monthMatch = fileName.match(/(\d+)월/);

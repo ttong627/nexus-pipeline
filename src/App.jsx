@@ -743,9 +743,10 @@ export default function App() {
     setShowCityPicker(false);
     setPendingSetup(null);
     if (cleanMode === 'easy') {
-      // 명단으로 분류된 시트만 자동 선택(통계·안내 등 잡음 시트 자동 제외). 명단 0개면 전체 폴백.
-      const roster = sheetsData.filter(s => s.isRosterSheet);
-      setSelectedSheets(roster.length ? roster : sheetsData);
+      // 명단 시트만 자동 선택(통계·안내 제외) + 워커의 중복시트 해제(selected===false) 반영 → 동일명단 2~3중 중복 방지.
+      const roster = sheetsData.filter(s => s.isRosterSheet && s.selected !== false);
+      const rosterAll = sheetsData.filter(s => s.isRosterSheet);
+      setSelectedSheets(roster.length ? roster : (rosterAll.length ? rosterAll : sheetsData));
       setShowEasyConfirm(true);       // 쉬운 정제 확인 카드(요약 + 노랑만 확인)
     } else {
       setStep(2);                     // 고급: 시트선택 → 매핑 검토
@@ -753,8 +754,13 @@ export default function App() {
   };
 
   // 쉬운 정제 확인 카드 → [정제 시작]: 매핑 확정 후 자동 분석
-  const handleEasyConfirm = (finalMapDefs) => {
+  const handleEasyConfirm = (finalMapDefs, chosenSheetNames) => {
     if (finalMapDefs) setMapDefs(finalMapDefs);
+    // 중복 시트군에서 사용자가 고른 시트만 처리(동일명단 2~3중 중복 방지)
+    if (Array.isArray(chosenSheetNames) && chosenSheetNames.length) {
+      const pick = worksheets.filter(s => chosenSheetNames.includes(s.name));
+      if (pick.length) setSelectedSheets(pick);
+    }
     setShowEasyConfirm(false);
     setEasyRun(true); // selectedSheets 준비되면 useEffect가 handleAnalyzeAll 실행
   };
@@ -2751,6 +2757,7 @@ export default function App() {
             city={fileInfo?.city || ''}
             month={fileInfo?.month || ''}
             sheets={selectedSheets}
+            allSheets={worksheets}
             mapDefs={mapDefs}
             analysis={analysisSummary}
             onConfirm={handleEasyConfirm}

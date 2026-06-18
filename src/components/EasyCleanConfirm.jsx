@@ -18,12 +18,22 @@ const sheetKeyOf = (s) => (s.fileSource ? `${s.fileSource}::${s.name}` : s.name)
 
 // ── 쉬운 정제 확인 카드 ───────────────────────────────────────────────────────
 // 자동 매칭된 칼럼은 그냥 보여주고, 애매(노랑)한 칼럼만 1클릭으로 확인/수정 후 [정제 시작].
-export default function EasyCleanConfirm({ city, month, sheets = [], mapDefs = {}, analysis = null, onConfirm, onAdvanced, onCancel }) {
+export default function EasyCleanConfirm({ city, month, sheets = [], allSheets = [], mapDefs = {}, analysis = null, onConfirm, onAdvanced, onCancel }) {
   const [draft, setDraft] = useState(() => JSON.parse(JSON.stringify(mapDefs || {})));
 
+  // 동일 명단 중복 시트군 — 그룹별로 1개만 사용(기본 추천). 같은 사람이 여러 시트(수급자/차상위/명단/읍면)에 있을 때.
+  const overlapGroups = analysis?.overlapGroups || [];
+  const [chosen, setChosen] = useState(() => overlapGroups.map(g => g.recommended));
+  const groupNames = useMemo(() => new Set(overlapGroups.flatMap(g => g.sheets.map(s => s.name))), [overlapGroups]);
+  const effSheets = useMemo(() => {
+    if (!overlapGroups.length) return sheets;
+    const base = (allSheets.length ? allSheets : sheets).filter(s => s.isRosterSheet);
+    return base.filter(s => !groupNames.has(s.name) || chosen.includes(s.name));
+  }, [overlapGroups, allSheets, sheets, groupNames, chosen]);
+
   const totalCount = useMemo(
-    () => sheets.reduce((a, s) => a + (s.bodyRows?.length || s.rowsCount || 0), 0),
-    [sheets]
+    () => effSheets.reduce((a, s) => a + (s.bodyRows?.length || s.rowsCount || 0), 0),
+    [effSheets]
   );
 
   const setMap = (sk, fieldKey, header) => {
@@ -52,7 +62,7 @@ export default function EasyCleanConfirm({ city, month, sheets = [], mapDefs = {
     return fallback;
   };
 
-  const yellowBySheet = sheets.map(s => {
+  const yellowBySheet = effSheets.map(s => {
     const sk = sheetKeyOf(s);
     const amb = (s.ambiguousKeys || [])
       .map(lab => (LABEL_TO_KEY[lab] ? { label: lab, key: LABEL_TO_KEY[lab] } : null))
@@ -78,8 +88,44 @@ export default function EasyCleanConfirm({ city, month, sheets = [], mapDefs = {
           <span className="px-3 py-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/25 text-emerald-200 font-black">{city || '지자체 미정'}</span>
           {month && <span className="px-3 py-1.5 rounded-lg bg-[#11201c] border border-[#1c3a32] text-gray-300 font-bold">{month}</span>}
           <span className="px-3 py-1.5 rounded-lg bg-[#11201c] border border-[#1c3a32] text-gray-300 font-bold">총 {totalCount.toLocaleString()}명</span>
-          <span className="px-3 py-1.5 rounded-lg bg-[#11201c] border border-[#1c3a32] text-gray-300 font-bold">시트 {sheets.length}개</span>
+          <span className="px-3 py-1.5 rounded-lg bg-[#11201c] border border-[#1c3a32] text-gray-300 font-bold">시트 {effSheets.length}개</span>
         </div>
+
+        {/* 동일 명단이 여러 시트에 — 그룹별 1개만 선택(중복 방지). 형 요청: 사용자가 선택·결정 */}
+        {overlapGroups.length > 0 && (
+          <div className="mb-5 rounded-2xl bg-amber-950/15 border border-amber-500/30 p-4">
+            <div className="flex items-center gap-2 text-amber-300 text-sm font-black mb-1">
+              <AlertTriangle size={16} /> 같은 명단이 여러 시트에 들어있어요
+            </div>
+            <p className="text-[12px] text-gray-400 leading-relaxed mb-3">
+              같은 사람을 여러 시트로 담은 게 감지됐어요. <b className="text-amber-200">중복을 막기 위해 그룹마다 1개만</b> 쓰세요. (가장 완전한 시트를 추천 선택해 뒀어요)
+            </p>
+            <div className="space-y-3">
+              {overlapGroups.map((g, gi) => (
+                <div key={gi} className="rounded-xl border border-amber-500/20 bg-black/20 p-3">
+                  <div className="text-[11px] text-amber-300/80 font-bold mb-1.5">중복 그룹 {gi + 1} — 하나만 선택</div>
+                  <div className="flex flex-col gap-1.5">
+                    {g.sheets.map(sh => (
+                      <label key={sh.name} className="flex items-center gap-2 cursor-pointer text-sm">
+                        <input
+                          type="radio"
+                          name={`ovl-${gi}`}
+                          checked={chosen[gi] === sh.name}
+                          onChange={() => setChosen(prev => prev.map((c, i) => i === gi ? sh.name : c))}
+                          className="accent-emerald-400"
+                        />
+                        <span className={chosen[gi] === sh.name ? 'text-emerald-200 font-bold' : 'text-gray-400'}>
+                          {sh.name} <span className="text-gray-600">({sh.rows.toLocaleString()}명)</span>
+                          {sh.name === g.recommended && <span className="ml-1 text-[10px] text-emerald-400">추천</span>}
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {analysis && (
           <div className="mb-4 rounded-2xl bg-[#0c1418] border border-cyan-500/25 p-4">
@@ -150,7 +196,7 @@ export default function EasyCleanConfirm({ city, month, sheets = [], mapDefs = {
 
         <div className="flex items-center gap-2">
           <button
-            onClick={() => onConfirm(draft)}
+            onClick={() => onConfirm(draft, effSheets.map(s => s.name))}
             className="flex-1 py-3.5 bg-emerald-400 text-black font-black rounded-xl hover:bg-emerald-300 transition-all shadow-[0_0_24px_rgba(52,211,153,0.3)] flex items-center justify-center gap-2"
           >
             <Sparkles size={16} /> 정제 시작
