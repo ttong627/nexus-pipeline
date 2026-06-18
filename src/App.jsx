@@ -993,7 +993,8 @@ export default function App() {
       const CHUNK_SIZE = 500;
       for (let i = 0; i < sheet.bodyRows.length; i += CHUNK_SIZE) {
         const chunk = sheet.bodyRows.slice(i, i + CHUNK_SIZE);
-        const chunkResults = await asyncPool(20, chunk, async (row) => {
+        // 동시성 30 — 정제는 includeCoords:false(좌표 서킷브레이커 무관)이고 매칭 API(Cloud Run)는 오토스케일이라 안전. 처리량 ↑
+        const chunkResults = await asyncPool(30, chunk, async (row) => {
           let addr = getVal(row, 'address');
           let name = getVal(row, 'name');
           let adminDong = getVal(row, 'admin') || "";
