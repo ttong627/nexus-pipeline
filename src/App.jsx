@@ -2050,10 +2050,37 @@ export default function App() {
               liveByBirth[`${name}__${birthKey}`] = { ...matched, ...payload };
             }
           } else {
-            const entry = { _isInFlight: true, data: payload };
-            addEntries.push(entry);
-            liveByBirth[`${name}__${birthKey}`] = entry;
-            birthKeyedNames.add(name);
+            // 동일인 교차 확인(중복 방지): 같은 사람이 기존엔 생년월일 없이 휴대폰/유선으로만
+            // 저장돼 있던 경우, 생년월일이 새로 들어오면 1순위로는 안 잡혀 신규 추가→중복이 된다.
+            // → 휴대폰/유선으로 동일인을 찾으면 새로 추가하지 않고 그 레코드에 병합 업데이트한다.
+            const xMatch = (mKey.length >= 9 && liveByPhone[`${name}__${mKey}`])
+                        || (lKey.length >= 9 && liveByLandline[`${name}__${lKey}`])
+                        || null;
+            if (xMatch) {
+              if (xMatch._isInFlight) {
+                // 같은 배치에서 먼저 휴대폰/유선으로 추가된 신규 → 같은 객체에 생년월일 병합
+                xMatch.data = {
+                  ...xMatch.data, ...payload,
+                  mobile:   payload.mobile   || xMatch.data.mobile,
+                  landline: payload.landline || xMatch.data.landline,
+                };
+                liveByBirth[`${name}__${birthKey}`] = xMatch;
+              } else {
+                // 기존 DB의 전화전용 레코드 → 생년월일 보강 업데이트(연락처는 빈값이면 기존값 보존)
+                updates.push({ id: xMatch.id, data: {
+                  ...payload,
+                  mobile:   payload.mobile   || xMatch.mobile   || xMatch.휴대폰  || '',
+                  landline: payload.landline || xMatch.landline || xMatch.유선전화 || '',
+                } });
+                liveByBirth[`${name}__${birthKey}`] = { ...xMatch, ...payload };
+              }
+              birthKeyedNames.add(name);
+            } else {
+              const entry = { _isInFlight: true, data: payload };
+              addEntries.push(entry);
+              liveByBirth[`${name}__${birthKey}`] = entry;
+              birthKeyedNames.add(name);
+            }
           }
 
         } else if (mKey.length >= 9) {
