@@ -1181,6 +1181,20 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
     }
   }
 
+  // ── 지역 가드: 타지역 도로명 충돌 매칭 폐기 (예: 홍성 "문화로" → 인천 "부평문화로") ──
+  // matchedSigungu가 비어도 standardRoadAddress/jibunAddr에서 시군구를 추출해 입력 지자체와 대조.
+  // 다르면 매칭 자체를 폐기 → 타지역 좌표·법정동·리가 붙는 것을 원천 차단. 절대 되돌리지 말 것.
+  let crossRegionRejected = false;
+  if (apiResult && extractSigungu(cityLabel)) {
+    // 실제 매칭된 주소 텍스트(standardRoadAddress/jibun)의 시군구를 '우선' 신뢰.
+    // matchedSigungu/sggNm은 입력 지자체로 잘못 채워질 수 있어 후순위.
+    const refAddr = apiResult.standardRoadAddress || apiResult.roadAddr || apiResult.jibunAddr || '';
+    const mSido = extractSido(refAddr) || apiResult.matchedSido || apiResult.siNm || '';
+    const mSgg  = extractSigungu(refAddr) || apiResult.matchedSigungu || apiResult.sggNm || '';
+    const region = getMunicipalityMatch(cityLabel, mSido, mSgg);
+    if (region.comparable && !region.ok) { apiResult = null; crossRegionRejected = true; }
+  }
+
   // ── 좌표 취득 (Kakao Geocoding) ──────────────────────────────────
   result.isApt = apiResult?.bdKdcd === '1';
   result.standardRoadAddress = apiResult?.standardRoadAddress || apiResult?.roadAddr || '';
@@ -1215,6 +1229,7 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
   result.matchConfidence = apiResult?._matchConfidence || null;
   result.routeHints = apiResult?._routeHints || null;
   appendCheckReason(result, getAreaIssue(cityLabel, adminDong, result.matchedSido, result.matchedSigungu, result.legalDong));
+  if (crossRegionRejected) appendCheckReason(result, '타지역 오매칭 폐기: 도로명이 타 시군구와 충돌 — 지자체 확인 필요');
   if (apiResult?.jibunAddr && !result.standardRoadAddress) {
     appendCheckReason(result, `지번주소만 확인됨: ${apiResult.jibunAddr}`);
   } else if (!apiResult && text && !result.확인필요) {

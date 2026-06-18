@@ -43,9 +43,9 @@ for (const m of months) {
   await asyncPool(15, targets, async (doc) => {
     const r = doc.data();
     const roadPart = String(r.주소 || '').split(',')[0].trim();
-    const input = `${r.행정동} ${roadPart}`.trim();
     try {
-      const res = await processAddress(input, '', CITY);
+      // cityLabel은 4번째 인자(필수) — 지역안전 매칭. 3번째 adminDong엔 행정동.
+      const res = await processAddress(roadPart, '', r.행정동 || '', CITY);
       const ri = String(res.리 || '').trim();
       if (ri) { updates.push({ ref: doc.ref, ri }); if (samples.length < 12) samples.push(`${r.행정동} ${roadPart.slice(0, 26)} → ${ri}`); }
     } catch { /* 개별 실패는 건너뜀 */ }
