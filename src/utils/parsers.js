@@ -79,7 +79,7 @@ export const parseSMS = (val) => {
   if (/거부|거절|불가|불허|미동의|미수신|수신\s*불가/.test(s)) return 'N';
   if (/^(N|n|X|x|×|0|아니오?|불|없음)$/.test(s)) return 'N';
   // 수신 패턴
-  if (/^(Y|y|O|o|○|ㅇ|1|예|동의|수신|가능|허용|yes|YES)$/.test(s)) return 'Y';
+  if (/^(Y|y|O|o|○|ㅇ|1|예|여|동의|수신|가능|허용|yes|YES)$/.test(s)) return 'Y';
   if (/동의|수신|가능|허용/.test(s)) return 'Y';
   return 'N';
 };
