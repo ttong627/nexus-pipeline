@@ -73,14 +73,15 @@ export const parsePhoneNumbers = (p1, p2) => {
 };
 
 export const parseSMS = (val) => {
-  const s = String(val || '').trim();
+  const s = String(val || '').replace(/\s+/g, '').trim(); // 내부 공백 제거("수신 함"→"수신함")
   if (!s || s === '-') return 'N';
-  // 거부 패턴 우선 (수신거부가 수신보다 먼저 걸려야 함)
-  if (/거부|거절|불가|불허|미동의|미수신|수신\s*불가/.test(s)) return 'N';
-  if (/^(N|n|X|x|×|0|아니오?|불|없음)$/.test(s)) return 'N';
-  // 수신 패턴
-  if (/^(Y|y|O|o|○|ㅇ|1|예|여|동의|수신|가능|허용|yes|YES)$/.test(s)) return 'Y';
-  if (/동의|수신|가능|허용/.test(s)) return 'Y';
+  // 1) 거부·미동의·안함 — 부정 우선 (수신보다 먼저 걸려야 함)
+  if (/거부|거절|불가|불허|미동의|미수신|미신청|부동의|비동의|수신안|안받|안함|미함|무응답|해지|중지/.test(s)) return 'N';
+  if (/^(N|n|X|x|×|0|F|f|아니오?|불|없음|부|무|미|안|×)$/.test(s)) return 'N';
+  // 2) 수신 동의 — 단일 표기 + 변형
+  if (/^(Y|y|O|o|○|ㅇ|1|T|t|예|여|유|함|동의|수신|가능|허용|신청|승낙|찬성|yes|YES|true)$/.test(s)) return 'Y';
+  if (/동의|수신|가능|허용|신청|승낙|찬성/.test(s)) return 'Y';
+  // 3) 기본값 N
   return 'N';
 };
 
