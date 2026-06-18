@@ -306,10 +306,11 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
   const [records, setRecords] = useState([]);
   const [loadingRecords, setLoadingRecords] = useState(false);
 
-  // 리(里)는 행정구역이 '군'(읍·면 보유)일 때만 표시. 시/구 명단은 데이터에 리 값이 섞여도 숨긴다.
-  const isGunCity = useMemo(() => String(selectedCity || '').split(/\s+/).some(t => /군$/.test(t)), [selectedCity]);
+  // 리(里)는 데이터에 읍/면(리 보유 지역)이 있을 때만 표시. 동 지역(시/구 동만)은 리가 없으므로 숨긴다.
+  // city 이름('군')이 아니라 '데이터의 읍/면 존재'로 판정 — 천안시·여주시처럼 시 안에 읍/면이 섞인 경우도 정확히 표시.
+  const hasEupMyeon = useMemo(() => records.some(r => /(읍|면)$/.test(String(r.행정동 ?? '').trim())), [records]);
   const riPresent = useMemo(() => hasRi(records), [records]);
-  const showRi = isGunCity && riPresent;
+  const showRi = hasEupMyeon && riPresent;
   const displayFields = useMemo(
     () => (showRi ? orderedFields : orderedFields.filter(c => c.key !== '리')),
     [orderedFields, showRi]

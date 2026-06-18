@@ -88,11 +88,11 @@ const ResultGrid = memo(function ResultGrid({
   // 화면 칼럼은 exportColOrder(엑셀 다운로드 소스)의 순서·표시(on)를 그대로 따른다.
   // 체크박스 + NO는 sticky 고정이라 reorder 대상에서 제외한다.
   // 리(里)는 데이터가 있을 때만 표시(군 지역). 시/구 명단에선 숨김.
-  // 리(里)는 데이터가 있을 때만 표시(군 지역). 편집 중엔 숨김 칼럼(on=false)도 흐리게 표시.
-  // 리(里)는 행정구역이 '군'(읍·면 보유)일 때만 표시. 시/구 명단은 데이터에 리 값이 섞여 있어도 숨긴다.
-  const isGunCity = String(fileInfo?.city || '').split(/\s+/).some(t => /군$/.test(t));
+  // 리(里)는 데이터에 읍/면(리 보유 지역)이 있고 리 값이 있을 때만 표시. 동 지역(시/구 동만)은 숨긴다.
+  // city 이름('군')이 아니라 '데이터의 읍/면 존재'로 판정 — 천안시·여주시처럼 시 안에 읍/면 섞인 경우 대응.
+  const hasEupMyeon = gridData.some(r => /(읍|면)$/.test(String(r.행정동 ?? '').trim()));
   const riPresent = hasRi(gridData);
-  const showRi = isGunCity && riPresent;
+  const showRi = hasEupMyeon && riPresent;
   const visibleCols = editor.cols
     .filter(c => c.key !== 'NO' && (editor.editing || c.on !== false) && !(c.key === '리' && !showRi))
     .map(c => c.key);

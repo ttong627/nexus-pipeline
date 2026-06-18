@@ -2275,10 +2275,11 @@ export default function App() {
     worker.postMessage(payload);
   };
 
-  // 내보내기 칼럼: 리(里)는 행정구역이 '군'(읍·면)이고 실제 리 데이터가 있을 때만 포함(화면 규칙과 동일).
+  // 내보내기 칼럼: 리(里)는 데이터에 읍/면(리 보유 지역)이 실제로 있고 리 값이 있을 때만 포함(화면 규칙과 동일).
+  // 동 지역(시/구 동만)은 리가 없으므로 칼럼 숨김. city 이름이 아니라 '데이터의 읍/면 존재'로 판정(천안시·여주시 등 시 안의 읍/면 대응).
   const _activeExportCols = () => {
-    const isGunCity = String(fileInfo?.city || '').split(/\s+/).some(t => /군$/.test(t));
-    const showRi = isGunCity && gridData.some(r => String(r.리 ?? '').trim() !== '');
+    const hasEupMyeon = gridData.some(r => /(읍|면)$/.test(String(r.행정동 ?? '').trim()));
+    const showRi = hasEupMyeon && gridData.some(r => String(r.리 ?? '').trim() !== '');
     return exportColOrder.filter(c => c.on && (c.key !== '리' || showRi));
   };
 
