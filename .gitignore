@@ -48,3 +48,6 @@ juso/
 
 # Local lint/report artifacts
 lint-report.json
+
+# 로컬 데이터 준비용(명단 원본·스크립트) — 저장소 제외
+특이사항_기본명단/
