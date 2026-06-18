@@ -1196,10 +1196,15 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
     const m = String(apiResult.jibunAddr).match(/([가-힣]{2,5}리)(?=\s|\d|,|$)/);
     if (m) result.리 = m[1];
   }
-  // 입력 지번주소(도로명 없음) 폴백
+  // 입력 지번주소(도로명 없음) 폴백 — 읍/면 다음의 OO리(산번지·번지없음 포함) 우선, 그다음 리+(산)번지.
+  // '거리/처리/우리' 등 오탐 방지: ①읍/면 토큰 직후 리만, 또는 ②리 뒤 (산)숫자 동반일 때만.
   if (!result.리 && !/(대로|로|길)\s*\d/.test(inputAddr || '')) {
-    const liMatch = (inputAddr || '').match(/([가-힣]{2,4}리)\s*\d/);
-    if (liMatch) result.리 = liMatch[1];
+    const ia = inputAddr || '';
+    const liMatch = ia.match(/(?:읍|면)\s*([가-힣]{2,4}리)(?=\s|\d|산|,|$)/)
+                 || ia.match(/([가-힣]{2,4}리)\s*(?:산\s*)?\d/);
+    // '거리/우리/머리/다리' 등 리로 끝나는 비(非)법정리 단어 오탐 제외
+    const RI_FALSE = /(거리|우리|머리|다리|항아리|보따리|마무리|소쿠리|자리|무리|꼬리|뿌리)$/;
+    if (liMatch && !RI_FALSE.test(liMatch[1])) result.리 = liMatch[1];
   }
   result.matchedSido = apiResult?.matchedSido || apiResult?.siNm || '';
   result.matchedSigungu = apiResult?.matchedSigungu || apiResult?.sggNm || '';
