@@ -19,26 +19,43 @@ const months = await db.collection('cloud_lists').doc(CITY).collection('months')
 for (const m of months){
   const rs = await m.collection('records').get();
   const recs = rs.docs.map(d=>({ref:d.ref, id:d.id, d:d.data()}));
-  const groups = {};
-  for (const x of recs){ const r=x.d; const name=(r.이름||'').trim();
-    if(!name) continue; // 이름없는 건 건드리지 않음
-    const key=`${name}|${digit(r.생년월일)}|${digit(r.휴대폰)}|${digit(r.유선전화)}`; (groups[key]=groups[key]||[]).push(x); }
-  const delRefs=[]; let grpCnt=0; const samples=[];
-  for (const [,g] of Object.entries(groups)){
+  // B-15 동일인 union-find: 이름 + (생년월일8 | 휴대폰8 | 유선8 중 하나라도 일치).
+  // 시트마다 생년월일 유무가 달라도(명단엔 있고 수급자엔 없음) 휴대폰으로 묶여 교차-시트 중복까지 제거.
+  const named = recs.filter(x => (x.d.이름||'').trim());
+  const parent = named.map((_,i)=>i);
+  const find = x => { while(parent[x]!==x){ parent[x]=parent[parent[x]]; x=parent[x]; } return x; };
+  const uni = (a,b)=>{ const ra=find(a),rb=find(b); if(ra!==rb) parent[ra]=rb; };
+  const byKey = new Map();
+  named.forEach((x,i)=>{ const r=x.d; const nm=(r.이름||'').trim();
+    const b=digit(r.생년월일), mo=digit(r.휴대폰), l=digit(r.유선전화);
+    const keys=[]; if(b)keys.push(`b:${nm}:${b}`); if(mo.length>=8)keys.push(`m:${nm}:${mo.slice(-8)}`); if(l.length>=8)keys.push(`l:${nm}:${l.slice(-8)}`);
+    for(const k of keys){ if(byKey.has(k)) uni(i,byKey.get(k)); else byKey.set(k,i); } });
+  const gmap = new Map();
+  named.forEach((_,i)=>{ const r=find(i); if(!gmap.has(r))gmap.set(r,[]); gmap.get(r).push(named[i]); });
+  const groups = [...gmap.values()].map(g=>['',g]);
+  const delRefs=[]; const mergeUpd=[]; let grpCnt=0; const samples=[];
+  for (const [,g] of groups){
     if (g.length<2) continue; grpCnt++;
     const sorted=[...g].sort((a,b)=>score(b.d)-score(a.d)); // 최고점 보존
     const keep=sorted[0]; const dels=sorted.slice(1);
+    // 보존 레코드에 빠진 값(생년월일·연락처·특이사항·리)을 형제에서 보강 — 데이터 손실 방지
+    const fill={};
+    for (const f of ['생년월일','휴대폰','유선전화','특이사항','리','구분']) {
+      if (!String(keep.d[f]||'').trim()) { const src=sorted.find(s=>String(s.d[f]||'').trim()); if(src) fill[f]=src.d[f]; }
+    }
+    if (Object.keys(fill).length) mergeUpd.push({ ref:keep.ref, fill });
     dels.forEach(x=>delRefs.push(x.ref));
-    if (samples.length<8) samples.push(`${keep.d.이름}: 보존[${(keep.d.주소||'').slice(0,24)} ·점${score(keep.d)}] / 삭제 ${dels.length}건`);
+    if (samples.length<8) samples.push(`${keep.d.이름}: 보존[${(keep.d.주소||'').slice(0,22)} ·점${score(keep.d)}]${Object.keys(fill).length?' +보강'+Object.keys(fill).join(','):''} / 삭제 ${dels.length}`);
   }
   console.log(`[${m.id}] 총 ${recs.length} · 중복그룹 ${grpCnt} · 삭제대상 ${delRefs.length} → 정리후 ${recs.length-delRefs.length}`);
   samples.forEach(s=>console.log('   -',s));
-  if (WRITE && delRefs.length){
+  console.log(`   (보존 레코드 필드 보강 ${mergeUpd.length}건)`);
+  if (WRITE){
+    for (let i=0;i<mergeUpd.length;i+=400){ const b=db.batch(); mergeUpd.slice(i,i+400).forEach(u=>b.set(u.ref,u.fill,{merge:true})); await b.commit(); }
     for (let i=0;i<delRefs.length;i+=400){ const b=db.batch(); delRefs.slice(i,i+400).forEach(r=>b.delete(r)); await b.commit(); }
-    // 메타 totalCount 보정
     const after = recs.length - delRefs.length;
     await m.set({ totalCount: after, dedupAt: admin.firestore.FieldValue.serverTimestamp() }, { merge:true }).catch(()=>{});
-    console.log(`[${m.id}] ✅ ${delRefs.length}건 삭제 · 메타 totalCount=${after} 보정`);
+    console.log(`[${m.id}] ✅ 보강 ${mergeUpd.length} · 삭제 ${delRefs.length} · 메타 totalCount=${after}`);
   }
 }
 await admin.app().delete().catch(()=>{}); process.exit(0);
