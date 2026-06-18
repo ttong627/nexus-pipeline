@@ -26,6 +26,11 @@ const FILE_CITY = {
   '홍성특이사항': '충청남도 홍성군',
 };
 
+// 하위폴더명 → 정규 지자체명 (Format B 폴더 단위 import: 기준명단+명단관리)
+const FOLDER_CITY = {
+  '성남중원구': '경기도 성남시 중원구',
+};
+
 const norm = (s) => String(s ?? '').replace(/\s+/g, ' ').trim();
 const KW = {
   name: ['성명', '이름', '대상자', '수령자'],
@@ -64,14 +69,20 @@ function parseSheet(ws, sheetName, format) {
   if (rows.length < 2) return [];
   const out = [];
   if (format === 'B') {
-    const h = rows[0].map(norm);
+    // 헤더행 자동 탐지: 상위 6행 중 (광역시도|시군구) + (수령자명|성명|이름) 동시 포함 행. 제목행 건너뜀.
+    let hdrIdx = 0;
+    for (let i = 0; i < Math.min(6, rows.length); i++) {
+      const joined = (rows[i] || []).map(norm).join(' ');
+      if (/광역시도|시군구/.test(joined) && /수령자|성명|이름/.test(joined)) { hdrIdx = i; break; }
+    }
+    const h = rows[hdrIdx].map(norm);
     const ci = {
       sido: findCol(h, KW.sido), sigungu: findCol(h, KW.sigungu), dong: findCol(h, KW.dong),
       name: findCol(h, KW.name), phone: findCol(h, KW.phone), addr: findCol(h, KW.addr),
       note: findCol(h, KW.note), qty: findCol(h, KW.qty),
       driver: findCol(h, ['기사']), seq: findCol(h, ['배송순번']),
     };
-    for (let i = 1; i < rows.length; i++) {
+    for (let i = hdrIdx + 1; i < rows.length; i++) {
       const r = rows[i];
       const name = norm(r[ci.name]);
       if (!name || /^(성명|이름|수령자명)$/.test(name)) continue;
@@ -111,14 +122,17 @@ function parseSheet(ws, sheetName, format) {
   return out;
 }
 
-function loadFile(fp) {
+function loadFile(fp, folder = '') {
   const base = path.basename(fp).replace(/\.(xlsx?|xls)$/i, '');
+  // 파일 역할: 명단관리=권위(기사·순번 기록), 기준명단=베이스(기사·순번 신뢰불가→비움)
+  const role = /명단관리/.test(base) ? 'manage' : (/기준명단/.test(base) ? 'base' : '');
   const wb = XLSX.read(fs.readFileSync(fp), { type: 'buffer' });
+  // Format B 감지: 1행만이 아니라 상위 6행 스캔(제목행 대응)
   const isB = wb.SheetNames.some(sn => {
     const rows = XLSX.utils.sheet_to_json(wb.Sheets[sn], { header: 1, defval: '' });
-    return /광역시도|시군구|수령자명/.test((rows[0] || []).join(' '));
+    return rows.slice(0, 6).some(row => /광역시도|시군구|수령자명/.test((row || []).join(' ')));
   });
-  const fileCity = FILE_CITY[base] || '';
+  const fileCity = FILE_CITY[base] || FOLDER_CITY[folder] || '';
   const recs = [];
   for (const sn of wb.SheetNames) {
     if (/^(Sheet\d+|xxxxxxxx|XL4Poppy)$/i.test(sn)) continue; // 빈 템플릿 시트 제외
@@ -126,7 +140,8 @@ function loadFile(fp) {
     for (const p of parsed) {
       const city = isB ? (p.시군구 || fileCity) : fileCity;
       if (!city) continue;
-      recs.push({ ...p, _city: city, _file: base, _sheet: sn });
+      if (role === 'base') { p.기사 = ''; p.배송순번 = ''; }  // 기준명단: 변형간 충돌(58%)로 신뢰불가 → 비움
+      recs.push({ ...p, _city: city, _file: base, _role: role, _sheet: sn });
     }
   }
   return recs;
@@ -150,12 +165,12 @@ function buildPayload(r, res) {
   const { mobile, landline } = classifyPhones(r.전화a, r.전화b);
   const note = [String(res.특이사항 || '').trim(), String(r.비고 || '').trim()].filter(Boolean).join(' ')
     .replace(/\s*◆[^◆]*/g, '').replace(/\s+/g, ' ').trim();
-  return {
+  const payload = {
     name: r.이름, birthKey: '',
     dong: r.행정동 || res.legalDong || '',
     address: res.주소 || r.주소,
     roadAddr: res.도로명주소 || '', detailAddr: res.상세주소 || '', parenInfo: res.괄호정보 || '',
-    mobile, landline, note, qty: 1, sms: '', driver: r.기사 || '', seqNo: r.배송순번 || '',
+    mobile, landline, note, qty: 1, sms: '',
     lat: res.lat ?? null, lng: res.lng ?? null, isApt: !!res.isApt,
     roadName: res.roadName || '', buildingName: res.buildingName || '', legalDong: res.legalDong || '',
     standardRoadAddress: res.standardRoadAddress || '',
@@ -166,6 +181,12 @@ function buildPayload(r, res) {
     확인필요: !!res.확인필요, 확인사유: res.확인사유 || '',
     importedFrom: r._file, updatedAt: admin.firestore.FieldValue.serverTimestamp(),
   };
+  // 기사·배송순번: 값이 있을 때만 기록(빈값은 생략 → merge 시 기존값·명단관리 값 보존). '명단관리 우선'의 핵심.
+  const driver = String(r.기사 || '').trim();
+  const seqNo = String(r.배송순번 ?? '').trim();
+  if (driver) payload.driver = driver;
+  if (seqNo) payload.seqNo = seqNo;
+  return payload;
 }
 async function matchAndWrite(fsdb, city, refined) {
   const colRef = fsdb.collection('base_lists').doc(city).collection('records');
@@ -217,13 +238,42 @@ async function matchAndWrite(fsdb, city, refined) {
   return { existing: existing.length, updates: deduped.size, adds: adds.length, ok };
 }
 
+// 하위폴더 재귀 수집: { full: 절대경로, folder: 직속 폴더명(없으면 '') }. Excel 잠금파일(~$) 제외.
+function walkFiles(dir, folder = '') {
+  const out = [];
+  for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (ent.isDirectory()) { out.push(...walkFiles(path.join(dir, ent.name), ent.name)); continue; }
+    if (/^~\$/.test(ent.name)) continue;                       // Excel 임시 잠금파일
+    if (/기본명단/.test(ent.name)) continue;                   // 생성 산출물(예: 'OO 기본명단.xlsx') 재수집 방지
+    if (/\.(xlsx?|xls)$/i.test(ent.name)) out.push({ full: path.join(dir, ent.name), folder });
+  }
+  return out;
+}
+
+// 동일 raw행(이름+휴대폰+공백제거주소) 사전 제거 — processAddress API 호출 절감(49k→~10k)
+function prededupe(recs) {
+  const seen = new Set();
+  const out = [];
+  for (const r of recs) {
+    const key = `${r.이름}__${digitKey(r.전화a)}__${String(r.주소 || '').replace(/\s+/g, '')}`;
+    if (seen.has(key)) continue;
+    seen.add(key); out.push(r);
+  }
+  return out;
+}
+
 async function main() {
-  const files = fs.readdirSync(DIR).filter(f => /\.(xlsx?|xls)$/i.test(f) && (!FILE_FILTER || f.includes(FILE_FILTER)));
-  // 도시별 그룹화
+  const files = walkFiles(DIR).filter(x => !FILE_FILTER || x.full.includes(FILE_FILTER));
+  // 도시별 그룹화 (기준명단 먼저 → 명단관리 나중: 명단관리 기사·순번이 마지막에 반영)
   const byCity = new Map();
-  for (const f of files) for (const r of loadFile(path.join(DIR, f))) {
+  for (const f of files) for (const r of loadFile(f.full, f.folder)) {
     if (!byCity.has(r._city)) byCity.set(r._city, []);
     byCity.get(r._city).push(r);
+  }
+  for (const [city, recs] of byCity) {
+    const order = { base: 0, '': 1, manage: 2 };               // 기준명단 → 일반 → 명단관리 순
+    recs.sort((a, b) => (order[a._role] ?? 1) - (order[b._role] ?? 1));
+    byCity.set(city, prededupe(recs));
   }
   console.log(`\n파일 ${files.length}개 → 지자체 ${byCity.size}개 | 모드: ${COUNT ? '카운트' : WRITE ? '★실제쓰기★' : 'dry-run'} | limit/지자체: ${LIMIT}\n`);
 

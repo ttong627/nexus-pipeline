@@ -91,6 +91,16 @@ const normalizeAddressDetail = (value) =>
     .replace(/\s*\/\s*/g, ' ')
     .replace(/\s+/g, ' '));
 
+// 상세주소에 동일 호/동 토큰이 두 번 들어간 원본 오타만 1개로 정리.
+// "201호, 201호"·"201호 201호"·"1층102호,1층102호" → 1개. 서로 다른 토큰(101동 502호)은 보존.
+const _DETAIL_DUP_RE = /([0-9A-Za-z가-힣-]+[호동])\s*,?\s*\1(?![0-9A-Za-z가-힣])/gi;
+const dedupeDetailTokens = (detail) => {
+  let res = String(detail || '');
+  let prev;
+  do { prev = res; res = res.replace(_DETAIL_DUP_RE, '$1'); } while (prev !== res);
+  return res;
+};
+
 const appendUniqueNote = (base, note) => {
   const cleanNote = String(note || '').trim();
   if (!cleanNote) return base || '';
@@ -1086,6 +1096,7 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
   }
 
   finalDetail = normalizeAddressDetail(finalDetail);
+  finalDetail = dedupeDetailTokens(finalDetail);   // 원본 오타로 상세가 두 번 들어간 경우 1개로 정리
 
   if (correctionLogs.length) {
     result.주소추정 = true;
