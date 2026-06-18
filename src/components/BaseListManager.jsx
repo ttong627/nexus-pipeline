@@ -31,6 +31,8 @@ const FIELDS = [
   { key: 'mobile',   label: '휴대폰',   minW: '110px' },
   { key: 'landline', label: '유선전화', minW: '110px' },
   { key: 'note',     label: '특이사항', minW: '220px' },
+  { key: 'driver',   label: '기사',     minW: '70px'  },
+  { key: 'seqNo',    label: '배송순번', minW: '70px'  },
 ];
 
 // 3분할 컬럼 → parseDisplayedAddress 키 (저장값 없을 때 address에서 파생)

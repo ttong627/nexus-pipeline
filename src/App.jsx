@@ -41,6 +41,7 @@ const isChunkLoadError = (error) => {
   return /Failed to fetch dynamically imported module|dynamically imported module|Importing a module script failed|Loading chunk|ChunkLoadError/i.test(message);
 };
 
+let latestWorkSnapshot = null; // 진행 중 작업 스냅샷 — 스테일청크 복구 새로고침 시 보존(첫 화면 리셋 방지)
 const recoverFromStaleChunk = async () => {
   const key = `nexus_chunk_recovery_${APP_VERSION}`;
   try {
@@ -62,6 +63,12 @@ const recoverFromStaleChunk = async () => {
     }
   } catch { /* ignore */ }
 
+  // 새로고침 후 진행 중이던 작업을 복구하도록 저장(정제하던 명단·단계가 첫 화면으로 날아가는 문제 방지)
+  try {
+    if (latestWorkSnapshot && latestWorkSnapshot.gridData?.length) {
+      sessionStorage.setItem('nexus_work_recover', JSON.stringify(latestWorkSnapshot));
+    }
+  } catch { /* 용량 초과 등 무시 — 복구 없이 새로고침 */ }
   window.location.reload();
   return true;
 };
@@ -407,6 +414,32 @@ export default function App() {
       return prev.slice(0, -1);
     });
   };
+
+  // ── 작업 보존: 스테일청크 복구 새로고침 대비 진행상태 스냅샷(module 변수에 최신 유지) ──
+  useEffect(() => {
+    if (gridData.length || step >= 2) latestWorkSnapshot = { gridData, fileInfo, step, mapDefs };
+  }, [gridData, fileInfo, step, mapDefs]);
+
+  // ── 복구 새로고침 후 진행상태 복원(로그인 확정 후 1회). workflowMode는 localStorage로 이미 생존 ──
+  const workRestoredRef = useRef(false);
+  useEffect(() => {
+    if (workRestoredRef.current || !user) return;
+    let raw = null;
+    try { raw = sessionStorage.getItem('nexus_work_recover'); } catch { /* ignore */ }
+    if (!raw) return;
+    workRestoredRef.current = true;
+    try {
+      sessionStorage.removeItem('nexus_work_recover');
+      const w = JSON.parse(raw);
+      if (w?.gridData?.length) {
+        setGridData(w.gridData);
+        if (w.fileInfo) setFileInfo(w.fileInfo);
+        if (w.mapDefs) setMapDefs(w.mapDefs);
+        setStep(Number(w.step) || 5);
+        // 복원 완료 — App엔 토스트 시스템이 없어 조용히 복구(작업이 그대로 돌아옴)
+      }
+    } catch { /* 복원 실패 무시 */ }
+  }, [user]);
 
   useEffect(() => {
     let link = document.querySelector("link[rel~='icon']");
