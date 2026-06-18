@@ -308,6 +308,28 @@ function parseSheet(name, rawJson, dynamicRules) {
     assignByFormat('문자수신', isYNOX, 0.6);       // Y/N/O/X/○/×/예/아니오
     assignByFormat('이름', isKoreanName, 0.7);     // 2~5자 한글
     assignByFormat('주소', isRoad, 0.5);           // 도로명/지번 긴 텍스트
+
+    // ── 분할 주소 보정 (병합 헤더 "주소"가 구/동/상세로 쪼개진 경우) ──
+    // 주소 칸 데이터가 시/군/구 단편(예: "중원구")이면 도로/지번이 든 칼럼을 찾아 주소로 재지정.
+    // 행정동(동)은 그대로 두고, 상세(도로) 칼럼을 주소로 → 정제 엔진이 완전 주소를 받게 한다.
+    if (colIndices['주소'] !== undefined) {
+      const ai = colIndices['주소'];
+      const av = fSample.map(r => String(r?.[ai] ?? '').trim()).filter(Boolean);
+      const bareRegion = av.length >= 3 &&
+        av.filter(v => /^[가-힣]{2,10}(시|군|구|도)$/.test(v.replace(/\s/g, ''))).length / av.length >= 0.6;
+      if (bareRegion) {
+        const used2 = new Set(Object.values(colIndices));
+        let best = -1, bestR = 0;
+        headers.forEach((h, i) => {
+          if (i === ai || used2.has(i)) return; // 행정동(동) 등 이미 쓰는 칼럼 제외
+          const vs = colVals(i);
+          if (vs.length < 3) return;
+          const r = vs.filter(v => v.length >= 5 && /(로|길|번지|\d+-\d+|\d+호|\d+번길|아파트|\d+동)/.test(v)).length / vs.length;
+          if (r > bestR) { bestR = r; best = i; }
+        });
+        if (best >= 0 && bestR >= 0.4) colIndices['주소'] = best; // 도로/지번 칼럼을 주소로 확정
+      }
+    }
   }
 
   // 매핑되지 않은 컬럼 찾기 (빈 컬럼 무시, 알려진 키워드 없는 컬럼)
@@ -432,15 +454,20 @@ function parseSheet(name, rawJson, dynamicRules) {
     });
     if (typeCandidateIdx >= 0) {
       typeColIdx = typeCandidateIdx;
-      const detected = new Set();
-      bodyRows.slice(0, 30).forEach(r => {
-        const v = String(r[typeCandidateIdx] || '').trim();
-        if (v.includes('차상위')) detected.add('차상위');
-        if (v.includes('수급') || v.includes('기초')) detected.add('기초수급자');
-      });
-      if (detected.size > 1) type = '혼합';
-      else if (detected.has('차상위')) type = '차상위';
-      else if (detected.has('기초수급자')) type = '기초수급자';
+      // 시트명이 명시적(수급자/의료/생계/차상위)이면 그 유형을 신뢰 — 구분 컬럼에 '주거급여 수급자' 등이 섞여도
+      // 혼합으로 오감지하지 않는다. (차상위 시트가 혼합→기초수급자로 잘못 분류되던 문제 차단)
+      const nameExplicit = /수급|의료|생계|차상위/.test(name);
+      if (!nameExplicit) {
+        const detected = new Set();
+        bodyRows.slice(0, 30).forEach(r => {
+          const v = String(r[typeCandidateIdx] || '').trim();
+          if (v.includes('차상위')) detected.add('차상위');
+          if (v.includes('수급') || v.includes('기초')) detected.add('기초수급자');
+        });
+        if (detected.size > 1) type = '혼합';
+        else if (detected.has('차상위')) type = '차상위';
+        else if (detected.has('기초수급자')) type = '기초수급자';
+      }
     }
   }
   // ─────────────────────────────────────────────────────────────────────
