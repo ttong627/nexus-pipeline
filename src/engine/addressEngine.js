@@ -1077,6 +1077,14 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
     }
   );
 
+  // A-10 확장: 동(棟) 없이 호수만 있는 건물(예: RYUJIN VILL 302호~1009호)도 4자리 우측정렬 패딩.
+  //   3자리 호수 앞에 빈칸을 넣어 정렬 시 302 < 1008 자연 정렬. 이미 패딩된 동-호("101- 203호")는 가드로 제외.
+  finalDetail = finalDetail.replace(/(^|[\s,(])(\d{1,3})\s*호/g, (m, pre, ho, off) => {
+    const before = finalDetail.slice(Math.max(0, off - 2), off + pre.length);
+    if (/[동\-]/.test(before)) return m;   // 동-호 또는 이미 패딩된 숫자동-호는 건드리지 않음
+    return `${pre}${' '.repeat(Math.max(0, 4 - ho.length))}${ho}호`;
+  });
+
   // A-9 2차: 상세주소에 남아있는 특수문자 재처리
   if (_specialCharRegex) {
     const spMatch2 = finalDetail.match(_specialCharRegex);
@@ -1230,6 +1238,16 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
     // '거리/우리/머리/다리' 등 리로 끝나는 비(非)법정리 단어 오탐 제외
     const RI_FALSE = /(거리|우리|머리|다리|항아리|보따리|마무리|소쿠리|자리|무리|꼬리|뿌리)$/;
     if (liMatch && !RI_FALSE.test(liMatch[1])) result.리 = liMatch[1];
+  }
+  // 도로명 폴백 — 읍/면 지역 도로명은 보통 '법정리+번호+길' 형태(예: 신덕리1길 → 신덕리).
+  // API가 리를 안 주고 지번도 없을 때, 도로명 앞부분의 'OO리'를 법정리로 사용. 동(洞) 지역은 제외(오탐 방지).
+  if (!result.리) {
+    const ctx = `${adminDong || ''} ${inputAddr || ''} ${result.legalDong || ''}`;
+    if (/(읍|면)/.test(ctx)) {
+      const rm = String(inputAddr || '').match(/([가-힣]{2,4}리)\s*\d/);  // 신덕리1길 → 신덕리
+      const RI_FALSE2 = /(거리|우리|머리|다리|항아리|보따리|마무리|소쿠리|자리|무리|꼬리|뿌리)$/;
+      if (rm && !RI_FALSE2.test(rm[1])) result.리 = rm[1];
+    }
   }
   result.matchedSido = apiResult?.matchedSido || apiResult?.siNm || '';
   result.matchedSigungu = apiResult?.matchedSigungu || apiResult?.sggNm || '';

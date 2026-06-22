@@ -46,14 +46,15 @@ const ROW_HEIGHT = 36; // px — 가상스크롤 고정 행 높이
 const BASE_RECS_CACHE_KEY = 'base_recs_v2';
 const BASE_RECS_CACHE_TTL = 24 * 60 * 60 * 1000;
 const baseKey = (city) => `${BASE_RECS_CACHE_KEY}_${city}`;
+// rev: 저장 버전. 불러올 때 도시문서 rev와 비교해 같으면 무거운 전체 재조회를 생략(읽기 비용↓).
 async function readBaseCache(city) {
   const rec = await idbGet(baseKey(city));
   if (!rec || !rec.data) return null;
   if (Date.now() - rec.ts > BASE_RECS_CACHE_TTL) { idbDel(baseKey(city)); return null; }
-  return rec.data;
+  return rec; // { ts, data, rev }
 }
-function writeBaseCache(city, data) {
-  idbSet(baseKey(city), { ts: Date.now(), data }); // fire-and-forget(비동기)
+function writeBaseCache(city, data, rev = null) {
+  idbSet(baseKey(city), { ts: Date.now(), data, rev }); // fire-and-forget(비동기)
 }
 
 const fmtDate = (ts) => {
@@ -83,6 +84,7 @@ export default function BaseListManager({ user, onBack, initialCity = '', export
   const [loadingCities, setLoadingCities] = useState(false);
 
   const [records, setRecords] = useState([]);
+  const loadedBaseRevRef = useRef(null);   // 현재 지자체 기본명단 저장 버전(rev) — 동시편집 충돌 검사용
   const [loading, setLoading] = useState(false);
   const [lastUpdatedAt, setLastUpdatedAt] = useState('');
   const [userRequests, setUserRequests] = useState({});
@@ -221,20 +223,24 @@ export default function BaseListManager({ user, onBack, initialCity = '', export
     } catch (e) { console.error('[BaseListManager] loadUserRequests:', e); }
   };
 
-  const fetchRecords = async (cityId) => {
-    // 캐시 우선 즉시 표시(체감 로딩 0) → 백그라운드에서 서버 최신값으로 갱신
-    const cached = await readBaseCache(cityId);
-    if (cached) { setRecords(cached); setLoading(false); }
+  const fetchRecords = async (cityId, force = false) => {
+    // 캐시 우선 즉시 표시(체감 로딩 0) → 백그라운드에서 서버 최신값으로 갱신. force면 rev-skip 무시(항상 전체 조회).
+    const cached = force ? null : await readBaseCache(cityId);
+    if (cached) { setRecords(cached.data); setLoading(false); }
     else setLoading(true);
     try {
+      // 도시문서 1건으로 updatedAt + rev 동시 획득(추가 읽기 없음). rev가 캐시와 같으면 전체 재조회 생략.
       const cityDoc = await getDoc(doc(db, 'base_lists', cityId));
+      const serverRev = (cityDoc.exists() ? (cityDoc.data().rev ?? null) : null);
       if (cityDoc.exists() && cityDoc.data().updatedAt) {
         setLastUpdatedAt(fmtDate(cityDoc.data().updatedAt));
       } else setLastUpdatedAt('');
+      loadedBaseRevRef.current = serverRev;
+      if (cached && serverRev != null && cached.rev === serverRev) { setLoading(false); return; }
       const snap = await getDocsFromServer(collection(db, `base_lists/${cityId}/records`));
       const recs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
       setRecords(recs);
-      writeBaseCache(cityId, recs);
+      writeBaseCache(cityId, recs, serverRev);
     } catch (e) {
       console.error(e);
       if (!cached) alert('데이터를 불러오는데 실패했습니다.');
@@ -332,10 +338,23 @@ export default function BaseListManager({ user, onBack, initialCity = '', export
       : _saveMsg)) return;
     setSaving(true);
     try {
+      // 동시편집 충돌 검사 — 내가 불러온 후 다른 담당자가 먼저 저장했는지 확인
+      let serverRev = null;
+      try {
+        const cityDoc = await getDoc(doc(db, 'base_lists', selectedCity));
+        serverRev = cityDoc.exists() ? (cityDoc.data().rev ?? null) : null;
+      } catch { serverRev = null; }
+      if (loadedBaseRevRef.current != null && serverRev != null && serverRev !== loadedBaseRevRef.current) {
+        const ok = window.confirm('⚠️ 다른 담당자가 이 기본명단을 먼저 저장했습니다.\n\n[확인] 내 변경사항으로 덮어쓰기\n[취소] 저장 중단 (최신 명단을 다시 불러오는 것을 권장)');
+        if (!ok) { setSaving(false); return; }
+      }
+      const nextRev = (serverRev ?? loadedBaseRevRef.current ?? 0) + 1;
+
       const allOps = [
         ...modifiedEntries.map(([id, changes]) => ({ type: 'update', id, changes })),
         ...deletedArr.map(id => ({ type: 'delete', id })),
       ];
+      const batches = [];
       for (let i = 0; i < allOps.length; i += 499) {
         const batch = writeBatch(db);
         allOps.slice(i, i + 499).forEach(op => {
@@ -343,13 +362,23 @@ export default function BaseListManager({ user, onBack, initialCity = '', export
           if (op.type === 'update') batch.update(ref, op.changes);
           else batch.delete(ref);
         });
-        await batch.commit();
+        batches.push(batch);
       }
-      await setDoc(doc(db, 'base_lists', selectedCity), { updatedAt: serverTimestamp() }, { merge: true });
+      await Promise.all(batches.map(b => b.commit()));  // 499 청크 유지, commit만 병렬 → 대기시간 단축
+      await setDoc(doc(db, 'base_lists', selectedCity), { updatedAt: serverTimestamp(), rev: nextRev }, { merge: true });
+
+      // 저장 성공 → 서버 전체 재조회 대신 로컬 state·캐시 즉시 반영 (체감 속도 ↑, 결과 동일)
+      const deletedSet = new Set(deletedArr);
+      const changeById = Object.fromEntries(modifiedEntries);
+      const merged = records
+        .filter(r => !deletedSet.has(r.id))
+        .map(r => changeById[r.id] ? { ...r, ...changeById[r.id] } : r);
+      loadedBaseRevRef.current = nextRev;
+      setRecords(merged);
+      writeBaseCache(selectedCity, merged, nextRev);
       setDirtyMap({});
       setDeletedIds(new Set());
-      await fetchRecords(selectedCity);
-      await fetchStoredCities();
+      fetchStoredCities().catch(() => {});  // 도시 목록·카운트는 백그라운드 동기화 (대기 X)
       alert(`저장 완료! (수정 ${modifiedEntries.length}건, 삭제 ${deletedArr.length}건)`);
     } catch (e) { alert('저장 오류: ' + e.message); }
     finally { setSaving(false); }
@@ -392,7 +421,7 @@ export default function BaseListManager({ user, onBack, initialCity = '', export
         await batch.commit();
       }
       await setDoc(doc(db, 'base_lists', selectedCity), { updatedAt: serverTimestamp() }, { merge: true });
-      await fetchRecords(selectedCity);
+      await fetchRecords(selectedCity, true);
       await fetchStoredCities();
       alert(`특이사항 없는 레코드 ${targets.length.toLocaleString()}건 삭제 완료`);
     } catch (e) { alert('삭제 오류: ' + e.message); }
@@ -435,7 +464,7 @@ export default function BaseListManager({ user, onBack, initialCity = '', export
         ghosts.slice(i, i + 499).forEach(d => batch.delete(d.ref));
         await batch.commit();
       }
-      await fetchRecords(selectedCity);
+      await fetchRecords(selectedCity, true);
       alert(`유령 데이터 ${ghosts.length}건 삭제 완료`);
     } catch (e) { alert('유령 정리 오류: ' + e.message); }
     finally { setSaving(false); }
@@ -489,7 +518,7 @@ export default function BaseListManager({ user, onBack, initialCity = '', export
         await batch.commit();
       }
       await setDoc(doc(db, 'base_lists', selectedCity), { updatedAt: serverTimestamp() }, { merge: true });
-      await fetchRecords(selectedCity);
+      await fetchRecords(selectedCity, true);
       alert(`✅ 전화번호 이동 완료: ${updates.length.toLocaleString()}건\n유선전화 → 휴대폰으로 이동했습니다.`);
     } catch (e) { alert('처리 오류: ' + e.message); }
     finally { setSaving(false); }
@@ -675,7 +704,7 @@ export default function BaseListManager({ user, onBack, initialCity = '', export
       }
       await setDoc(doc(db, 'base_lists', selectedCity), { updatedAt: serverTimestamp() }, { merge: true });
       alert(`특이사항 업데이트 완료!\n업데이트: ${updates.length}건 / 처리 대상: ${totalNoteRows}건`);
-      await fetchRecords(selectedCity);
+      await fetchRecords(selectedCity, true);
       await fetchStoredCities();
     } catch (e) { alert('DB 저장 오류: ' + e.message); }
     finally { setUploading(false); }

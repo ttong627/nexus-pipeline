@@ -7,6 +7,7 @@ import {
   ref, getDownloadURL, deleteObject,
 } from '../config/firebase.js';
 import { normalizeBirth, formatPhoneInput } from '../utils/parsers.js';
+import { deliveryCompare } from '../utils/sortRecords.js';
 import {
   Cloud, Trash2, ArrowLeft, Download, Calendar, FileSpreadsheet,
   AlertCircle, Search, Save, RotateCcw, X, CheckCircle, MapPin,
@@ -38,14 +39,15 @@ const RECS_CACHE_KEY = 'cloud_recs_v3';
 const RECS_CACHE_TTL = 24 * 60 * 60 * 1000;
 const recsKey = (city, monthId) => `${RECS_CACHE_KEY}_${city}_${monthId}`;
 
+// rev: 저장 버전. 불러올 때 메타 rev와 비교해 같으면 무거운 전체 재조회를 생략(읽기 비용↓).
 async function readRecsCache(city, monthId) {
   const rec = await idbGet(recsKey(city, monthId));
   if (!rec || !rec.data) return null;
   if (Date.now() - rec.ts > RECS_CACHE_TTL) { idbDel(recsKey(city, monthId)); return null; }
-  return rec.data;
+  return rec; // { ts, data, rev }
 }
-function writeRecsCache(city, monthId, data) {
-  idbSet(recsKey(city, monthId), { ts: Date.now(), data }); // fire-and-forget(비동기)
+function writeRecsCache(city, monthId, data, rev = null) {
+  idbSet(recsKey(city, monthId), { ts: Date.now(), data, rev }); // fire-and-forget(비동기)
 }
 function bustRecsCache(city, monthId) {
   idbDel(recsKey(city, monthId));
@@ -168,6 +170,7 @@ const CellInput = memo(function CellInput({ type, opts, initial, onCommit, onCan
 
 const VirtualTable = memo(function VirtualTable({ fields, exportColOrder, onColResize, editing, isOn, onToggle, dragProps, displayRecords, dirtyRecords, deletedRecordIds, loadingRecords, records, renderCell, setDeletedRecordIds }) {
   const scrollRef = useRef(null);
+  const loadedRevRef = useRef(null);   // 현재 보고 있는 월의 저장 버전(rev) — 동시편집 충돌 검사용
 
   const virtualizer = useVirtualizer({
     count: displayRecords.length,
@@ -412,16 +415,7 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
         return [r.이름, r.행정동, r.주소, r.휴대폰, r.특이사항]
           .some(v => String(v || '').toLowerCase().includes(q));
       })
-      .sort((a, b) => {
-        let cmp = (a.행정동 ?? '').localeCompare(b.행정동 ?? '', 'ko', { numeric: true });
-        if (cmp !== 0) return cmp;
-        // 리(里): 읍/면 하위 단위. 리 없으면 빈값으로 자연 통과
-        cmp = (a.리 ?? '').localeCompare(b.리 ?? '', 'ko', { numeric: true });
-        if (cmp !== 0) return cmp;
-        cmp = (a.주소 ?? '').localeCompare(b.주소 ?? '', 'ko', { numeric: true });
-        if (cmp !== 0) return cmp;
-        return (a.이름 ?? '').localeCompare(b.이름 ?? '', 'ko', { numeric: true });
-      });
+      .sort(deliveryCompare);   // 공용 비교자(행정동→리→주소→이름) 재사용
   }, [records, deletedRecordIds, searchText, orgDongs, filterGubun, filterDong]);
 
   // 시도별 그룹
@@ -497,13 +491,25 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
   const fetchRecordsFor = async (cityId, monthId, force = false) => {
     // 캐시 우선 즉시 표시(체감 0) → 서버 최신값으로 백그라운드 갱신(자가 치유). force면 캐시 무시.
     const cached = force ? null : await readRecsCache(cityId, monthId);
-    if (cached) { setRecords(cached); setLoadingRecords(false); }
+    if (cached) { setRecords(cached.data); setLoadingRecords(false); }
     else setLoadingRecords(true);
     try {
+      // 가벼운 메타 rev 1건만 읽어 캐시와 비교 → 같으면 무거운 전체 records 재조회 생략(읽기 비용↓)
+      let serverRev = null;
+      try {
+        const metaSnap = await getDoc(doc(db, 'cloud_lists', cityId, 'months', monthId));
+        serverRev = metaSnap.exists() ? (metaSnap.data().rev ?? null) : null;
+      } catch { serverRev = null; }
+      loadedRevRef.current = serverRev;
+      // 캐시가 있고 서버 rev와 동일하면 그대로 사용 (전체 조회 생략) — 단 rev가 있을 때만(구버전 월은 항상 조회)
+      if (cached && serverRev != null && cached.rev === serverRev) {
+        setLoadingRecords(false);
+        return;
+      }
       const snap = await getDocs(collection(db, 'cloud_lists', cityId, 'months', monthId, 'records'));
       const recs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
       setRecords(recs);
-      writeRecsCache(cityId, monthId, recs);
+      writeRecsCache(cityId, monthId, recs, serverRev);
     } catch (e) { console.error('[CloudListManager] fetchRecords:', e); }
     finally { setLoadingRecords(false); }
   };
@@ -830,18 +836,32 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
       : _saveMsg)) return;
     setSaving(true);
     try {
+      // 동시편집 충돌 검사 — 내가 불러온 후 다른 담당자가 먼저 저장했는지 확인
+      let serverRev = null;
+      try {
+        const metaSnap = await getDoc(doc(db, 'cloud_lists', selectedCity, 'months', selectedMonth.id));
+        serverRev = metaSnap.exists() ? (metaSnap.data().rev ?? null) : null;
+      } catch { serverRev = null; }
+      if (loadedRevRef.current != null && serverRev != null && serverRev !== loadedRevRef.current) {
+        const ok = window.confirm('⚠️ 다른 담당자가 이 명단을 먼저 저장했습니다.\n\n[확인] 내 변경사항으로 덮어쓰기\n[취소] 저장 중단 (최신 명단을 다시 불러오는 것을 권장)');
+        if (!ok) { setSaving(false); return; }
+      }
+      const nextRev = (serverRev ?? loadedRevRef.current ?? 0) + 1;
+
       const allOps = [
         ...Object.entries(dirtyRecords).map(([id, changes]) => ({ type: 'update', id, changes })),
         ...[...deletedRecordIds].map(id => ({ type: 'delete', id })),
       ];
+      const batches = [];
       for (let i = 0; i < allOps.length; i += 499) {
         const batch = writeBatch(db);
         allOps.slice(i, i + 499).forEach(op => {
           const r = doc(db, 'cloud_lists', selectedCity, 'months', selectedMonth.id, 'records', op.id);
           if (op.type === 'update') batch.update(r, op.changes); else batch.delete(r);
         });
-        await batch.commit();
+        batches.push(batch);
       }
+      await Promise.all(batches.map(b => b.commit()));  // 499 청크 유지, commit만 병렬 → 대기시간 단축
       // Update month meta counts
       const remaining = records
         .filter(r => !deletedRecordIds.has(r.id))
@@ -849,19 +869,23 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
       const totalCount = remaining.length;
       const 수급자Count = remaining.filter(r => r.구분 === '기초수급자').length;
       const 차상위Count = remaining.filter(r => r.구분 === '차상위').length;
-      await setDoc(doc(db, 'cloud_lists', selectedCity, 'months', selectedMonth.id), { totalCount, 수급자Count, 차상위Count }, { merge: true });
-      // 최상위 city 문서 캐시도 동기화
-      await setDoc(doc(db, 'cloud_lists', selectedCity), {
-        latestTotalCount: totalCount,
-        'latest수급자Count': 수급자Count,
-        'latest차상위Count': 차상위Count,
-        lastUpdatedAt: serverTimestamp(),
-      }, { merge: true });
+      // 월 메타 + 최상위 city 캐시 문서를 병렬 기록
+      await Promise.all([
+        setDoc(doc(db, 'cloud_lists', selectedCity, 'months', selectedMonth.id), { totalCount, 수급자Count, 차상위Count, rev: nextRev }, { merge: true }),
+        setDoc(doc(db, 'cloud_lists', selectedCity), {
+          latestTotalCount: totalCount,
+          'latest수급자Count': 수급자Count,
+          'latest차상위Count': 차상위Count,
+          lastUpdatedAt: serverTimestamp(),
+        }, { merge: true }),
+      ]);
+      // 저장 성공 → 서버 강제 재조회 대신 로컬 state·캐시 즉시 반영 (체감 속도 ↑, 결과 동일)
+      loadedRevRef.current = nextRev;
+      setRecords(remaining);
+      writeRecsCache(selectedCity, selectedMonth.id, remaining, nextRev);
       setDirtyRecords({});
       setDeletedRecordIds(new Set());
-      bustRecsCache(selectedCity, selectedMonth.id);
-      await fetchRecords(selectedMonth.id, true);
-      await fetchMonths();
+      fetchMonths().catch(() => {});  // 월 목록·메타는 백그라운드 동기화 (대기 X)
       alert(`저장 완료! (수정 ${modCount}건, 삭제 ${delCount}건)`);
     } catch (e) { alert('저장 오류: ' + e.message); }
     finally { setSaving(false); }
@@ -1314,7 +1338,8 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
           normAddr, rec.이름 || '', rec.행정동 || '', selectedCity, normNote, { includeCoords: false }
         );
         current++;
-        setRefineProgress({ current, total: records.length });
+        // 진행률 갱신은 25건마다(또는 마지막)만 — 건마다 setState 시 대형 테이블 전체 리렌더 폭발
+        if (current % 25 === 0 || current === records.length) setRefineProgress({ current, total: records.length });
 
         const oldAddr = (rec.주소 || '').trim();
         // 상세주소(동·호수) 손실 방지 — 정제 결과가 기존 동/호수를 잃으면 복원/보존
@@ -1385,7 +1410,8 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
         };
       } catch {
         current++;
-        setRefineProgress({ current, total: records.length });
+        // 진행률 갱신은 25건마다(또는 마지막)만 — 건마다 setState 시 대형 테이블 전체 리렌더 폭발
+        if (current % 25 === 0 || current === records.length) setRefineProgress({ current, total: records.length });
       }
     });
 
@@ -1449,7 +1475,7 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
         if (ri) { dirtyUpdates[rec.id] = { ...(dirtyUpdates[rec.id] || {}), 리: ri }; filled++; }
       } catch { /* skip */ }
       current++;
-      setRefineProgress({ current, total: targets.length });
+      if (current % 25 === 0 || current === targets.length) setRefineProgress({ current, total: targets.length });
     });
     if (Object.keys(dirtyUpdates).length) setDirtyRecords(prev => ({ ...prev, ...dirtyUpdates }));
     setIsFillingRi(false);

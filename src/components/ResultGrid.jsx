@@ -1,5 +1,5 @@
 ﻿import { useState, useRef, memo, cloneElement } from 'react';
-import { ChevronLeft, ChevronRight, AlertTriangle, CheckCircle, Columns, Download, Trash2, Edit3, Database, X, MapPin, Users, UserX, StickyNote, Phone, BookOpen, Sparkles, ArrowLeftRight } from 'lucide-react';
+import { ChevronLeft, ChevronRight, AlertTriangle, CheckCircle, Columns, Download, Trash2, Edit3, Database, X, MapPin, Users, UserX, StickyNote, Phone, BookOpen, Sparkles, ArrowLeftRight, Building2 } from 'lucide-react';
 import { formatPhoneInput } from '../utils/parsers.js';
 import { WORKFLOW_MODES } from '../utils/workflow.js';
 import ColResizeHandle from './ColResizeHandle.jsx';
@@ -7,6 +7,9 @@ import ColumnEditBar from './ColumnEditBar.jsx';
 import ColHeaderEditControls from './ColHeaderEditControls.jsx';
 import { useColumnEditor } from '../hooks/useColumnEditor.js';
 import AddressConfirmModal from './AddressConfirmModal.jsx';
+import OrgPresetModal from './OrgPresetModal.jsx';
+import { db, getDoc, doc } from '../config/firebase.js';
+import { downloadOrgReport } from '../utils/orgReport.js';
 import { hasRi, getColWidth, colCellStyle } from '../utils/colOrder.js';
 import { useVirtualizer } from '@tanstack/react-virtual';
 
@@ -37,8 +40,30 @@ const ResultGrid = memo(function ResultGrid({
   const [batchNoteValue, setBatchNoteValue] = useState('');
   const [updateModalRow, setUpdateModalRow] = useState(null);
   const [showAddrConfirm, setShowAddrConfirm] = useState(false);
+  const [showOrgPreset, setShowOrgPreset] = useState(false);
   const searchInputRef = useRef(null);
   const editor = useColumnEditor({ exportColOrder, setExportColOrder, defaultExportCols });
+
+  // 소속사 보고서 — 저장된 소속사 배분 있으면 즉시 엑셀 다운로드, 없으면 설정 모달
+  const handleDownloadOrgReport = async () => {
+    if (!fileInfo?.city) return alert('지자체 정보가 없어 소속사 보고서를 만들 수 없습니다.');
+    if (!gridData.length) return alert('내보낼 데이터가 없습니다.');
+    let orgs = [];
+    try {
+      const snap = await getDoc(doc(db, 'org_presets', fileInfo.city));
+      orgs = snap.exists() ? (snap.data().orgs || []) : [];
+    } catch { /* 무시 — 아래에서 미설정으로 처리 */ }
+    if (!orgs.length) {
+      alert('저장된 소속사 배분이 없습니다. 먼저 소속사와 담당 행정동을 설정해 주세요.');
+      setShowOrgPreset(true);
+      return;
+    }
+    const res = downloadOrgReport({ city: fileInfo.city, monthId: fileInfo.month || '미상', orgs, records: gridData });
+    if (!res.ok) {
+      if (res.reason === 'empty') { alert('소속사에 배정된 동에 해당하는 데이터가 없습니다. 배분을 확인해 주세요.'); setShowOrgPreset(true); }
+      else alert('내보낼 데이터가 없습니다.');
+    }
+  };
 
   // 가상화 스크롤 컨테이너 + 가상화기. Hooks 규칙상 조기 반환(step !== 5)보다 먼저 호출해야 한다.
   // 편집 중에는 기존 규칙대로 상위 20행만 가상화 대상으로 둔다(폭조절 즉응 유지).
@@ -628,6 +653,13 @@ const ResultGrid = memo(function ResultGrid({
             <button onClick={handleExportDongSummary} className="px-3 py-1.5 bg-[#111] border border-[#252525] text-gray-400 font-bold rounded-lg hover:bg-[#1a1a1a] hover:text-gray-200 transition-colors flex items-center gap-1.5 text-xs">
               <Download size={12}/> 행정동 보고서
             </button>
+            <button
+              onClick={handleDownloadOrgReport}
+              className="px-3 py-1.5 bg-[#111] border border-[#252525] text-gray-400 font-bold rounded-lg hover:bg-[#1a1a1a] hover:text-gray-200 transition-colors flex items-center gap-1.5 text-xs"
+              title="소속사별 담당 행정동을 묶어 엑셀 시트로 분리해 즉시 다운로드 (배분 미설정 시 설정창)"
+            >
+              <Building2 size={12}/> 소속사 보고서
+            </button>
             {workflowMode === 'deliveryFull' && (
               <button onClick={handleExportByDriver} className="px-3 py-1.5 bg-[#111] border border-[#252525] text-gray-400 font-bold rounded-lg hover:bg-[#1a1a1a] hover:text-gray-200 transition-colors flex items-center gap-1.5 text-xs">
                 <Users size={12}/> 기사별 배송표
@@ -899,6 +931,15 @@ const ResultGrid = memo(function ResultGrid({
           onConfirm={onConfirmAddress}
           onPhoneCheck={onMarkPhoneCheck}
           onClose={() => setShowAddrConfirm(false)}
+        />
+      )}
+
+      {showOrgPreset && fileInfo?.city && (
+        <OrgPresetModal
+          city={fileInfo.city}
+          records={gridData}
+          monthId={fileInfo.month || '미상'}
+          onClose={() => setShowOrgPreset(false)}
         />
       )}
     </>

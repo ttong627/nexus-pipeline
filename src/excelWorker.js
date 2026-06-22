@@ -368,7 +368,10 @@ function parseSheet(name, rawJson, dynamicRules) {
     if (colIndices['이름'] !== undefined) {
       const nameVal = String(r[colIndices['이름']] || '').trim();
       if (!nameVal || nameVal === '-') return false;
-      if (/합계|소계|총계|집계|가구$|세대$/.test(nameVal)) return false;
+      if (/^계$|합계|소계|총계|집계|가구$|세대$/.test(nameVal)) return false;
+      // 집계/구분 행이 이름칸에 들어온 경우(시트 통계표·매핑 어긋남) — 사람 이름이 아님
+      if (/^[가-힣]{1,6}(면|읍)$/.test(nameVal)) return false;          // 갈산면·광천읍 등 면/읍 단독
+      if (/^(수급자|차상위|기초수급자|차상위계층)$/.test(nameVal)) return false; // 구분값
       if (/^[\d,]+$/.test(nameVal)) return false;
       // 이름 컬럼 자리에 헤더 키워드가 그대로 들어온 경우 (헤더행 오인식 방지)
       if (/^(이름|성명|대상자|수령자명|성\s*명|이\s*름)$/.test(nameVal)) return false;

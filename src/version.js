@@ -1,6 +1,6 @@
-export const APP_VERSION = 'V6.44';
-export const APP_BUILD = '2026.06.19';
-export const APP_BUILD_TIME = '2026.06.19 00:17';
+export const APP_VERSION = 'V6.62';
+export const APP_BUILD = '2026.06.22';
+export const APP_BUILD_TIME = '2026.06.22 16:49';
 
 export const CHANGELOG = [
   { v: 'V5.5', date: '2026.05.26', items: [

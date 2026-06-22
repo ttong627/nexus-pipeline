@@ -1,9 +1,9 @@
 ﻿import { useState, useEffect, useMemo, useCallback } from 'react';
-import * as XLSX from 'xlsx';
 import {
   db,
   setDoc, doc, getDoc,
 } from '../config/firebase.js';
+import { downloadOrgReport } from '../utils/orgReport.js';
 import {
   X, Plus, Trash2, Save, Download, Building2, ChevronDown, ChevronUp,
   CheckSquare, Square,
@@ -153,29 +153,12 @@ export default function OrgPresetModal({ city, records, monthId, onClose }) {
   }, [editName]);
 
   const handleDownload = () => {
-    if (!records?.length) return alert('레코드가 없습니다.');
-    const wb = XLSX.utils.book_new();
-    const unassignedDongs = allDongs.filter(d => !assignedDongs[d]);
-    const makeSheetData = (recs) =>
-      recs.map((r, i) => ({
-        번호: i + 1, 구분: r.구분 || '', 이름: r.이름 || '', 생년월일: r.생년월일 || '',
-        행정동: r.행정동 || '', 주소: r.주소 || '', 휴대폰: r.휴대폰 || '',
-        유선전화: r.유선전화 || '', 포수: r.포수 || '', 특이사항: r.특이사항 || '',
-        기사: r.기사 || '', 배송순번: r.배송순번 || '',
-      }));
-
-    orgs.forEach(org => {
-      const orgRecs = records.filter(r => (org.dongs || []).includes((r.행정동 || '').trim()));
-      if (!orgRecs.length) return;
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(makeSheetData(orgRecs)), org.name.slice(0, 31));
-    });
-    if (unassignedDongs.length) {
-      const unRecs = records.filter(r => unassignedDongs.includes((r.행정동 || '').trim()));
-      if (unRecs.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(makeSheetData(unRecs)), '미배정');
+    const res = downloadOrgReport({ city, monthId, orgs, records });
+    if (!res.ok) {
+      if (res.reason === 'no-records') return alert('레코드가 없습니다.');
+      if (res.reason === 'no-orgs') return alert('먼저 소속사와 담당 행정동을 설정해 주세요.');
+      return alert('다운로드할 데이터가 없습니다.');
     }
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(makeSheetData(records)), '전체');
-    if (wb.SheetNames.length === 0) return alert('다운로드할 데이터가 없습니다.');
-    XLSX.writeFile(wb, `${city}_${monthId}_조직배분.xlsx`);
   };
 
   const totalAssigned = useMemo(() => {

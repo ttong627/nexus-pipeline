@@ -1,7 +1,7 @@
 ﻿import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { X, MapPin, Navigation2, Plus, Minus, RefreshCw, Save, AlertTriangle, Map as MapIcon, List, Building2, Clock, FileSpreadsheet, Download, HardDrive, Maximize2, Minimize2, Columns, AlertCircle, Search, Crosshair, Share2, Link, Eraser, ArrowLeftRight, ChevronLeft } from 'lucide-react';
 import { db, auth } from '../config/firebase.js';
-import { collection, serverTimestamp, Timestamp, getDocs, getDoc, setDoc, updateDoc, doc, writeBatch, query, where, limit } from 'firebase/firestore';
+import { collection, serverTimestamp, Timestamp, getDocs, getDoc, setDoc, updateDoc, doc, writeBatch, query, where, limit, increment } from 'firebase/firestore';
 import * as XLSX from 'xlsx';
 import CoordBrushModal from './CoordBrushModal.jsx';
 import { formatAddressDisplay } from '../utils/addressFormat.js';
@@ -26,17 +26,6 @@ const haversine = (lat1, lng1, lat2, lng2) => {
   const a = Math.sin(dLat / 2) ** 2 +
     Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-};
-
-const getLineSide = (lineStart, lineEnd, point) => {
-  const ax = Number(lineStart?.lng);
-  const ay = Number(lineStart?.lat);
-  const bx = Number(lineEnd?.lng);
-  const by = Number(lineEnd?.lat);
-  const px = Number(point?.lng);
-  const py = Number(point?.lat);
-  if (![ax, ay, bx, by, px, py].every(Number.isFinite)) return 0;
-  return (bx - ax) * (py - ay) - (by - ay) * (px - ax);
 };
 
 const parseAptDong = (addr) => {
@@ -322,40 +311,20 @@ const getMajorityDriverId = (records) => {
   return Object.entries(votes).sort((a, b) => b[1] - a[1])[0]?.[0] || '';
 };
 
+// 아파트 단지 배송단위 여부 (getRouteUnitKey의 apt 접두어)
+const isAptRouteUnitKey = (key) => typeof key === 'string' && (key.startsWith('apt:') || key.startsWith('apt-split:'));
+
 const getMixedRouteUnitIssues = (units) => {
   const issues = new Map();
+  // 혼재 = 아파트 단지 내로만 한정 — 같은 단지(또는 분할 동)가 여러 기사로 갈라진 경우만 센다.
+  // (도로/동일주소 단위, 권역 안 고립 "섬"은 혼재로 세지 않는다.)
   units.forEach(unit => {
+    if (!isAptRouteUnitKey(unit.key)) return;
     if (unit.driverIds.length <= 1) return;
     const targetDriverId = getMajorityDriverId(unit.records) || unit.driverId;
     if (!targetDriverId) return;
     if (unit.records.some(record => record._driverId !== targetDriverId)) {
       issues.set(unit.key, { type: 'split-unit', targetDriverId });
-    }
-  });
-  units.forEach(unit => {
-    if (issues.has(unit.key)) return;
-    let sameLoad = 0;
-    let otherLoad = 0;
-    let otherCount = 0;
-    const votes = {};
-    units.forEach(neighbor => {
-      if (neighbor.key === unit.key) return;
-      const dist = haversine(unit.lat, unit.lng, neighbor.lat, neighbor.lng);
-      if (dist <= 180) {
-        if (neighbor.driverId === unit.driverId) sameLoad += neighbor.load || 1;
-        else {
-          otherLoad += neighbor.load || 1;
-          otherCount++;
-        }
-      }
-      if (dist <= 450 && neighbor.driverId && neighbor.driverId !== unit.driverId) {
-        votes[neighbor.driverId] = (votes[neighbor.driverId] || 0) + (neighbor.load || 1);
-      }
-    });
-    if (otherCount < 3 || otherLoad <= Math.max(3, sameLoad * 1.6)) return;
-    const targetDriverId = Object.entries(votes).sort((a, b) => b[1] - a[1])[0]?.[0] || '';
-    if (targetDriverId && targetDriverId !== unit.driverId) {
-      issues.set(unit.key, { type: 'isolated-unit', targetDriverId });
     }
   });
   return issues;
@@ -1031,7 +1000,6 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
   const [autoSplitStrategy, setAutoSplitStrategy] = useState('dongGroup');
   const [routeAnalysis, setRouteAnalysis] = useState(null);
   const [showMapAnalysis, setShowMapAnalysis] = useState(false);
-  const [manualBoundaryAdjustments, setManualBoundaryAdjustments] = useState({});
   const [selectedDriverFilter, setSelectedDriverFilter] = useState('all');
   const [aptMultiModal, setAptMultiModal] = useState(null); // { aptName, dongs: [{dong, records, assignedDriverId}] }
 
@@ -1127,7 +1095,9 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
   const [isPaintMode, setIsPaintMode] = useState(false);
   const [paintDriverId, setPaintDriverId] = useState(null);
   const [paintRadiusPx, setPaintRadiusPx] = useState(50);
-  const [paintCursorPx, setPaintCursorPx] = useState(null);
+  const paintCursorRef = useRef(null);   // 브러시 커서 원 — state 없이 DOM 직접 이동 (전체 리렌더 차단)
+  const paintRafRef = useRef(0);          // applyPaint rAF 스로틀 (프레임당 1회)
+  const paintLastPtRef = useRef(null);    // 마지막 마우스 좌표 (rAF 콜백에서 사용)
   const isPaintingRef = useRef(false);
   const pendingPaintRef = useRef(new Map()); // id → newDriverId (드래그 중 누적, mouseup 시 commit)
   const recordsRef = useRef([]);             // stale-closure 방지용 최신 records 미러
@@ -1139,7 +1109,6 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
   const kakaoMapRef = useRef(null);
   const overlaysRef = useRef([]);
   const polylinesRef = useRef([]);
-  const boundaryOverlaysRef = useRef([]);
   const driverPinOverlaysRef = useRef([]);
   const mapClickListenerRef = useRef(null);
   const initialBoundsRef = useRef(null);
@@ -1694,7 +1663,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
         setLayoutMode(m => m === 'mapfull' ? 'split' : m);
         setPlacingPinForDriver(null);
         setIsPaintMode(false);
-        setPaintCursorPx(null);
+        if (paintRafRef.current) { cancelAnimationFrame(paintRafRef.current); paintRafRef.current = 0; }
         isPaintingRef.current = false;
         if (kakaoMapRef.current) kakaoMapRef.current.setDraggable(true);
       }
@@ -1768,279 +1737,12 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
     });
   }, [driverPins, drivers]);
 
-  const applyBoundaryGuide = useCallback((guide, adjusted) => {
-    if (isAssignmentLocked) {
-      showToast('error', '🔒 기사 배치가 잠겨 있습니다. 잠금을 해제하세요.');
-      return;
-    }
-    const lineStart = adjusted?.lineStart || guide.lineStart || guide.from;
-    const lineEnd = adjusted?.lineEnd || guide.lineEnd || guide.to;
-    const fromProbe = getLineSide(lineStart, lineEnd, guide.from);
-    if (!fromProbe) return;
-    const pair = new Set([guide.fromDriverId, guide.toDriverId]);
-    const scopeIds = new Set(filteredRecords.map(r => r.id));
-    let changed = 0;
-    setRecords(prev => {
-      const sourceUnits = buildAssignedRouteUnits(
-        prev.filter(r => scopeIds.has(r.id) && pair.has(r._driverId)),
-        drivers
-      );
-      const updates = new Map();
-      sourceUnits.forEach(unit => {
-        const side = getLineSide(lineStart, lineEnd, { lat: unit.lat, lng: unit.lng });
-        if (!side) return;
-        const targetDriverId = Math.sign(side) === Math.sign(fromProbe)
-          ? guide.fromDriverId
-          : guide.toDriverId;
-        unit.ids.forEach(id => updates.set(id, targetDriverId));
-      });
-      if (!updates.size) return prev;
-      return prev.map(record => {
-        const nextDriverId = updates.get(record.id);
-        if (!nextDriverId || record._driverId === nextDriverId) return record;
-        changed++;
-        return { ...record, _driverId: nextDriverId };
-      });
-    });
-    setTimeout(() => {
-      showToast(changed ? 'success' : 'info', changed
-        ? `경계 이동 적용 — ${changed.toLocaleString()}건 재배정`
-        : '경계 이동 완료 — 변경된 배송지가 없습니다.');
-    }, 0);
-  }, [drivers, filteredRecords, isAssignmentLocked, showToast]);
-
-  const startBoundaryDrag = useCallback((event, guide) => {
-    if (!mapRef.current || !window.kakao?.maps || !guide?.id) return;
-    event.preventDefault();
-    event.stopPropagation();
-    const rect = mapRef.current.getBoundingClientRect();
-    const base = manualBoundaryAdjustments[guide.id] || {};
-    const startLineStart = base.lineStart || guide.lineStart || guide.from;
-    const startLineEnd = base.lineEnd || guide.lineEnd || guide.to;
-    const startMid = base.mid || guide.mid;
-    const startClient = { x: event.clientX, y: event.clientY };
-    let latest = { lineStart: startLineStart, lineEnd: startLineEnd, mid: startMid };
-
-    const pointToLatLng = (clientX, clientY) => {
-      const projection = kakaoMapRef.current?.getProjection?.();
-      if (projection?.coordsFromContainerPoint) {
-        const point = new window.kakao.maps.Point(clientX - rect.left, clientY - rect.top);
-        const coord = projection.coordsFromContainerPoint(point);
-        return { lat: coord.getLat(), lng: coord.getLng() };
-      }
-      const bounds = kakaoMapRef.current.getBounds();
-      const sw = bounds.getSouthWest();
-      const ne = bounds.getNorthEast();
-      const x = (clientX - rect.left) / Math.max(1, rect.width);
-      const y = (clientY - rect.top) / Math.max(1, rect.height);
-      return {
-        lat: ne.getLat() + y * (sw.getLat() - ne.getLat()),
-        lng: sw.getLng() + x * (ne.getLng() - sw.getLng()),
-      };
-    };
-
-    const onMove = (moveEvent) => {
-      const from = pointToLatLng(startClient.x, startClient.y);
-      const to = pointToLatLng(moveEvent.clientX, moveEvent.clientY);
-      const delta = { lat: to.lat - from.lat, lng: to.lng - from.lng };
-      latest = {
-        lineStart: { lat: startLineStart.lat + delta.lat, lng: startLineStart.lng + delta.lng },
-        lineEnd: { lat: startLineEnd.lat + delta.lat, lng: startLineEnd.lng + delta.lng },
-        mid: { lat: startMid.lat + delta.lat, lng: startMid.lng + delta.lng },
-      };
-      setManualBoundaryAdjustments(prev => ({ ...prev, [guide.id]: latest }));
-    };
-    const onUp = () => {
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
-      applyBoundaryGuide(guide, latest);
-    };
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-  }, [applyBoundaryGuide, manualBoundaryAdjustments]);
-
-  const startBoundaryEndpointDrag = useCallback((event, guide, endpoint) => {
-    if (!mapRef.current || !window.kakao?.maps || !guide?.id) return;
-    event.preventDefault();
-    event.stopPropagation();
-    const rect = mapRef.current.getBoundingClientRect();
-    let latest = manualBoundaryAdjustments[guide.id] || {};
-
-    const pointToLatLng = (clientX, clientY) => {
-      const projection = kakaoMapRef.current?.getProjection?.();
-      if (projection?.coordsFromContainerPoint) {
-        const point = new window.kakao.maps.Point(clientX - rect.left, clientY - rect.top);
-        const coord = projection.coordsFromContainerPoint(point);
-        return { lat: coord.getLat(), lng: coord.getLng() };
-      }
-      const bounds = kakaoMapRef.current.getBounds();
-      const sw = bounds.getSouthWest();
-      const ne = bounds.getNorthEast();
-      const x = (clientX - rect.left) / Math.max(1, rect.width);
-      const y = (clientY - rect.top) / Math.max(1, rect.height);
-      return {
-        lat: ne.getLat() + y * (sw.getLat() - ne.getLat()),
-        lng: sw.getLng() + x * (ne.getLng() - sw.getLng()),
-      };
-    };
-
-    const onMove = (moveEvent) => {
-      const lineStart = latest.lineStart || guide.lineStart || guide.from;
-      const lineEnd = latest.lineEnd || guide.lineEnd || guide.to;
-      const movedPoint = pointToLatLng(moveEvent.clientX, moveEvent.clientY);
-      const next = endpoint === 'start'
-        ? { lineStart: movedPoint, lineEnd }
-        : { lineStart, lineEnd: movedPoint };
-      next.mid = {
-        lat: (next.lineStart.lat + next.lineEnd.lat) / 2,
-        lng: (next.lineStart.lng + next.lineEnd.lng) / 2,
-      };
-      latest = next;
-      setManualBoundaryAdjustments(prev => ({ ...prev, [guide.id]: next }));
-    };
-    const onUp = () => {
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
-      applyBoundaryGuide(guide, latest);
-    };
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-  }, [applyBoundaryGuide, manualBoundaryAdjustments]);
-
-  // ── 자동배정 경계선 오버레이: 실제 배정이 바뀌는 배송단위 사이를 표시
-  useEffect(() => {
-    if (!kakaoMapRef.current || !window.kakao?.maps) return;
-    boundaryOverlaysRef.current.forEach(o => o.setMap(null));
-    boundaryOverlaysRef.current = [];
-    const canEditBoundaries = routeAnalysis?.strategy === 'dongGroup' || routeAnalysis?.strategy === 'seedVoronoi';
-    const guides = showMapAnalysis && canEditBoundaries ? (routeAnalysis?.boundaryGuides || []) : [];
-    if (!guides.length) return;
-
-    guides.forEach((guide, idx) => {
-      const fromDriver = drivers.find(d => d.id === guide.fromDriverId);
-      const toDriver = drivers.find(d => d.id === guide.toDriverId);
-      const fromColor = fromDriver?.color || '#f59e0b';
-      const toColor = toDriver?.color || '#38bdf8';
-      const adjusted = manualBoundaryAdjustments[guide.id] || {};
-      const lineStart = adjusted.lineStart || guide.lineStart || guide.from;
-      const lineEnd = adjusted.lineEnd || guide.lineEnd || guide.to;
-      const mid = adjusted.mid || guide.mid;
-      const path = [
-        new window.kakao.maps.LatLng(lineStart.lat, lineStart.lng),
-        new window.kakao.maps.LatLng(lineEnd.lat, lineEnd.lng),
-      ];
-      const line = new window.kakao.maps.Polyline({
-        path,
-        strokeWeight: 14,
-        strokeColor: '#000000',
-        strokeOpacity: 0.82,
-        strokeStyle: 'solid',
-        zIndex: 90,
-      });
-      line.setMap(kakaoMapRef.current);
-      boundaryOverlaysRef.current.push(line);
-
-      const core = new window.kakao.maps.Polyline({
-        path,
-        strokeWeight: 9,
-        strokeColor: '#ffffff',
-        strokeOpacity: 1,
-        strokeStyle: 'shortdash',
-        zIndex: 91,
-      });
-      core.setMap(kakaoMapRef.current);
-      boundaryOverlaysRef.current.push(core);
-
-      const accent = new window.kakao.maps.Polyline({
-        path,
-        strokeWeight: 4,
-        strokeColor: idx % 2 ? toColor : fromColor,
-        strokeOpacity: 1,
-        strokeStyle: 'solid',
-        zIndex: 92,
-      });
-      accent.setMap(kakaoMapRef.current);
-      boundaryOverlaysRef.current.push(accent);
-
-      const label = document.createElement('div');
-      label.style.cssText = [
-        'background:rgba(0,0,0,0.86)',
-        'border:1px solid rgba(255,255,255,0.42)',
-        'box-shadow:0 6px 18px rgba(0,0,0,0.45)',
-        'border-radius:8px',
-        'padding:7px 10px',
-        'font-size:12px',
-        'font-weight:900',
-        'color:white',
-        'white-space:nowrap',
-        'cursor:grab',
-        'user-select:none',
-        'pointer-events:auto',
-      ].join(';');
-      label.title = '드래그해서 경계를 이동합니다. 놓으면 선 양쪽 배송지가 다시 배정됩니다.';
-      label.innerHTML = `<span style="color:#facc15">이동 경계</span><span style="color:#94a3b8"> · </span><span style="color:${fromColor}">${escHtml(guide.fromDriverName)}</span><span style="color:#94a3b8"> ↔ </span><span style="color:${toColor}">${escHtml(guide.toDriverName)}</span>`;
-      label.addEventListener('mousedown', (event) => startBoundaryDrag(event, guide));
-      const labelOverlay = new window.kakao.maps.CustomOverlay({
-        position: new window.kakao.maps.LatLng(mid.lat, mid.lng),
-        content: label,
-        yAnchor: 0.5,
-        xAnchor: 0.5,
-        zIndex: 50,
-      });
-      labelOverlay.setMap(kakaoMapRef.current);
-      boundaryOverlaysRef.current.push(labelOverlay);
-
-      [
-        {
-          endpoint: 'start',
-          point: {
-            lat: mid.lat + (lineStart.lat - mid.lat) * 0.38,
-            lng: mid.lng + (lineStart.lng - mid.lng) * 0.38,
-          },
-        },
-        {
-          endpoint: 'end',
-          point: {
-            lat: mid.lat + (lineEnd.lat - mid.lat) * 0.38,
-            lng: mid.lng + (lineEnd.lng - mid.lng) * 0.38,
-          },
-        },
-      ].forEach(({ endpoint, point }) => {
-        const handle = document.createElement('div');
-        handle.style.cssText = [
-          `width:18px`,
-          `height:18px`,
-          `border-radius:999px`,
-          `background:${endpoint === 'start' ? fromColor : toColor}`,
-          `border:3px solid white`,
-          `box-shadow:0 0 0 3px rgba(0,0,0,0.8),0 4px 14px rgba(0,0,0,0.55)`,
-          `cursor:grab`,
-          `pointer-events:auto`,
-        ].join(';');
-        handle.title = '드래그해서 경계선 기울기를 조정합니다.';
-        handle.addEventListener('mousedown', (event) => startBoundaryEndpointDrag(event, guide, endpoint));
-        const handleOverlay = new window.kakao.maps.CustomOverlay({
-          position: new window.kakao.maps.LatLng(point.lat, point.lng),
-          content: handle,
-          yAnchor: 0.5,
-          xAnchor: 0.5,
-          zIndex: 95,
-        });
-        handleOverlay.setMap(kakaoMapRef.current);
-        boundaryOverlaysRef.current.push(handleOverlay);
-      });
-    });
-
-    return () => {
-      boundaryOverlaysRef.current.forEach(o => o.setMap(null));
-      boundaryOverlaysRef.current = [];
-    };
-  }, [showMapAnalysis, routeAnalysis, drivers, manualBoundaryAdjustments, startBoundaryDrag, startBoundaryEndpointDrag]);
+  // [제거됨] 경계선 짝대기(이동 경계) 기능 — 무거운 오버레이/드래그 재배정 로직 삭제.
+  // 기사 구역 나누기는 자동 N등분(PCA 연속분할) + 브러시 수동보정으로 대체한다.
 
   // ── 변경 감지 ─────────────────────────────────────────────────────
   useEffect(() => { setHasUnsaved(true); }, [records, drivers]);
   useEffect(() => { recordsRef.current = records; }, [records]);
-  useEffect(() => { setManualBoundaryAdjustments({}); }, [routeAnalysis]);
   useEffect(() => {
     if (!['dongGroup', 'hilbert'].includes(autoSplitStrategy)) setAutoSplitStrategy('dongGroup');
   }, [autoSplitStrategy]);
@@ -2103,9 +1805,9 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
       coordRecsMap.get(key).push(r);
     });
 
+    const driverColorById = new Map(drivers.map(d => [d.id, d.color]));
     mapRecords.forEach(r => {
-      const driver = drivers.find(d => d.id === r._driverId);
-      const color = r._에러 ? '#ef4444' : (driver?.color || '#6b7280');
+      const color = r._에러 ? '#ef4444' : (driverColorById.get(r._driverId) || '#6b7280');
       const seq = r.배송순번 || '';
       const name = escHtml((r.이름 || '').slice(0, 5));
       const dong = escHtml((r.행정동 || '').replace(/동$/, '').slice(0, 5));
@@ -2777,15 +2479,18 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
       if (isFinal) alert('클라우드 명단 로드 후 저장 가능합니다.');
       return;
     }
-    const unassignedCount = records.filter(r => !r._driverId).length;
+    // 동별 확정 — 미배정 검사는 현재 작업 동(filteredRecords) 기준 (좌측 카운트와 통일).
+    const unassignedCount = filteredRecords.filter(r => !r._driverId).length;
     if (isFinal && unassignedCount > 0) {
-      showToast('error', `미배정 ${unassignedCount}건이 남아 최종 저장할 수 없습니다.`);
+      const scopeLabel = activeDong ? `${activeDong} ` : '';
+      showToast('error', `${scopeLabel}미배정 ${unassignedCount}건이 남아 확정할 수 없습니다.`);
       return;
     }
-    // R-0: 최종 저장 시 기사 구역 혼재 차단
+    // R-0(완화): 혼재가 있어도 담당자 확인 후 최종 저장 허용 — 저장은 항상 가능해야 함.
+    //   혼재 = 같은 아파트/동일주소 묶음이 여러 기사에 갈라졌거나, 한 기사 핀이 다른 기사 권역 안에 고립된 "섬".
     if (isFinal && overlapCount > 0) {
-      showToast('error', `기사 구역 혼재 ${overlapCount}건이 남아 최종 저장할 수 없습니다.`);
-      return;
+      const ok = window.confirm(`기사 구역 혼재 ${overlapCount}건이 있습니다.\n(같은 아파트·주소 묶음이 여러 기사에 갈라졌거나, 한 기사 핀이 다른 기사 권역 안에 고립된 상태)\n\n그래도 최종 저장할까요?`);
+      if (!ok) return;
     }
     setIsSavingSession(true);
     try {
@@ -2807,14 +2512,16 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
         },
         { merge: true }
       );
-      // cloud_lists 레코드에 기사/순번/좌표 동기화
+      // cloud_lists 레코드에 기사/순번/좌표 동기화 — 499 청크 유지, commit만 병렬
       const CHUNK = 499;
+      const driverNameById = new Map(drivers.map(d => [d.id, d.name || '']));
+      const syncBatches = [];
       for (let i = 0; i < records.length; i += CHUNK) {
         const batch = writeBatch(db);
         let hasOps = false;
         records.slice(i, i + CHUNK).forEach(r => {
           if (!r._cloudDocId) return;
-          const driverName = drivers.find(d => d.id === r._driverId)?.name || '';
+          const driverName = driverNameById.get(r._driverId) || '';
           const ref = doc(db, 'cloud_lists', cloudCity, 'months', cloudMonthId, 'records', r._cloudDocId);
           const patch = { 기사: driverName, 배송순번: r.배송순번 ? String(r.배송순번) : '' };
           if (r._lat !== undefined && r._lat !== null) { patch.lat = r._lat; patch.lng = r._lng; }
@@ -2822,8 +2529,11 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
           batch.set(ref, patch, { merge: true });
           hasOps = true;
         });
-        if (hasOps) await batch.commit();
+        if (hasOps) syncBatches.push(batch.commit());
       }
+      await Promise.all(syncBatches);
+      // 이번달 명단 화면이 방금 저장한 기사배정을 즉시 보도록 월 메타 rev +1 (캐시 stale 방지)
+      await setDoc(doc(db, 'cloud_lists', cloudCity, 'months', cloudMonthId), { rev: increment(1) }, { merge: true });
       // driver_assignments 동기화 — RouteSetupModal에서 다음번 기사구성 자동 로드용
       // ★ 근본 수정: 기존 저장본(전체 매핑·전체 기사)을 읽어 베이스로 삼고, 이번 세션에서 '작업한 동'만 갱신.
       //   "행정동별 작업"으로 일부 동만 작업·저장해도 전체 매핑이 부분집합으로 덮어써지지 않게 함(나머지 동·기사 전부 보존).
@@ -2894,7 +2604,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
         } catch (e) {
           console.error('delivery_history 적재 실패:', e);
         }
-        showToast('success', `최종 저장 완료 — ${cloudCity} ${cloudMonthId} · ${records.filter(r => r._driverId).length}건 배정 확정`, 5000);
+        showToast('success', `${activeDong ? activeDong + ' ' : ''}저장·확정 완료 — 명단·기본명단 반영 ${filteredRecords.filter(r => r._driverId).length}건 (전체 확정 ${records.filter(r => r._driverId).length}건)`, 5000);
       } else {
         showToast('success', `임시저장 완료 — 배정현황이 저장되었습니다 (기본명단 미반영)`);
       }
@@ -2903,7 +2613,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
     } finally {
       setIsSavingSession(false);
     }
-  }, [isCloudMode, cloudCity, cloudMonthId, drivers, records, showToast, overlapCount, activeDong, completedDongs]);
+  }, [isCloudMode, cloudCity, cloudMonthId, drivers, records, filteredRecords, showToast, overlapCount, activeDong, completedDongs]);
 
   // ── 1단계: 세션 불러오기 (이어서 작업) ──────────────────────────────
   const handleLoadSession = useCallback(async () => {
@@ -4251,18 +3961,6 @@ ${folders}
 
           {/* ── 그룹 4: 내보내기 ─────────────────────────────────────── */}
           <div className="flex items-center gap-1 bg-[#0a0a0a] border border-[#1e1e1e] rounded-xl px-2 py-1">
-            {/* DB 저장 (cloud_lists에 기사/순번 반영) */}
-            {isCloudMode && (
-              <button
-                onClick={handleSaveToCloud}
-                disabled={isSavingCloud}
-                title="기사 배정과 배송 순번을 클라우드 월별 명단(cloud_lists)에 저장합니다"
-                className="px-2 py-1 bg-[#0a1520] border border-cyan-600/40 text-cyan-400 hover:bg-cyan-900/20 rounded-lg text-[10px] font-bold flex items-center gap-1 transition-colors disabled:opacity-50"
-              >
-                {isSavingCloud ? <RefreshCw size={10} className="animate-spin" /> : <HardDrive size={10} />}
-                {isSavingCloud ? '저장중...' : 'DB 저장'}
-              </button>
-            )}
             {/* 내보내기·공유 통합 드롭다운 (KML·담당자엑셀·배송루트·공유) */}
             <div className="relative">
               <button
@@ -4316,10 +4014,10 @@ ${folders}
             <button
               onClick={() => handleSaveSession(true)}
               disabled={isSavingSession}
-              title="배정을 최종 확정합니다 — 기본명단(base_lists)에도 기사/좌표 정보가 반영됩니다"
+              title="현재 동의 기사배정을 이번달 명단·기본명단에 즉시 반영하고 그 동을 확정합니다"
               className="px-3 py-1.5 bg-[#1a2e1a] text-[#3b82f6] border border-[#3b82f6]/50 hover:bg-[#3b82f6]/20 rounded-xl text-xs font-black flex items-center gap-1.5 disabled:opacity-50 transition-colors"
             >
-              {isSavingSession ? <><RefreshCw size={12} className="animate-spin" />저장중...</> : <><Save size={12} />최종 저장</>}
+              {isSavingSession ? <><RefreshCw size={12} className="animate-spin" />저장중...</> : <><Save size={12} />{activeDong ? '이 동 저장·확정' : '저장·확정'}</>}
             </button>
           ) : (
             <button
@@ -4711,7 +4409,7 @@ ${folders}
               onClick={() => {
                 const next = !isPaintMode;
                 setIsPaintMode(next);
-                setPaintCursorPx(null);
+                if (paintRafRef.current) { cancelAnimationFrame(paintRafRef.current); paintRafRef.current = 0; }
                 isPaintingRef.current = false;
                 // 브러시 ON → 지도 드래그 잠금, OFF → 복원
                 if (kakaoMapRef.current) kakaoMapRef.current.setDraggable(!next);
@@ -5000,8 +4698,25 @@ ${folders}
                   style={{ position: 'absolute', inset: 0, zIndex: 200, cursor: 'none' }}
                   onMouseMove={e => {
                     const rect = e.currentTarget.getBoundingClientRect();
-                    setPaintCursorPx({ x: e.clientX - rect.left, y: e.clientY - rect.top });
-                    if (isPaintingRef.current) applyPaint(e.clientX, e.clientY);
+                    const x = e.clientX - rect.left;
+                    const y = e.clientY - rect.top;
+                    // 커서 원: state 변경 없이 DOM transform 직접 갱신 → 전체 리렌더 차단
+                    const cur = paintCursorRef.current;
+                    if (cur) {
+                      cur.style.transform = `translate(${x - paintRadiusPx}px, ${y - paintRadiusPx}px)`;
+                      cur.style.opacity = '1';
+                    }
+                    // 색칠: requestAnimationFrame으로 프레임당 1회만 (970+건 거리계산 폭주 방지)
+                    if (isPaintingRef.current) {
+                      paintLastPtRef.current = { x: e.clientX, y: e.clientY };
+                      if (!paintRafRef.current) {
+                        paintRafRef.current = requestAnimationFrame(() => {
+                          paintRafRef.current = 0;
+                          const p = paintLastPtRef.current;
+                          if (p) applyPaint(p.x, p.y);
+                        });
+                      }
+                    }
                   }}
                   onMouseDown={e => {
                     if (!paintDriverId) return;
@@ -5009,21 +4724,29 @@ ${folders}
                     isPaintingRef.current = true;
                     applyPaint(e.clientX, e.clientY);
                   }}
-                  onMouseUp={() => { commitPaint(); }}
-                  onMouseLeave={() => { commitPaint(); setPaintCursorPx(null); }}
+                  onMouseUp={() => {
+                    if (paintRafRef.current) { cancelAnimationFrame(paintRafRef.current); paintRafRef.current = 0; }
+                    commitPaint();
+                  }}
+                  onMouseLeave={() => {
+                    if (paintRafRef.current) { cancelAnimationFrame(paintRafRef.current); paintRafRef.current = 0; }
+                    commitPaint();
+                    if (paintCursorRef.current) paintCursorRef.current.style.opacity = '0';
+                  }}
                 >
-                  {/* 브러시 커서 원 */}
-                  {paintCursorPx && (() => {
+                  {/* 브러시 커서 원 — 위치는 ref로 직접 제어, 색/크기만 React가 렌더 */}
+                  {(() => {
                     const d = drivers.find(dr => dr.id === paintDriverId);
                     const color = d?.color || '#ffffff';
                     return (
-                      <div className="absolute pointer-events-none rounded-full"
+                      <div ref={paintCursorRef} className="absolute top-0 left-0 pointer-events-none rounded-full"
                         style={{
-                          left: paintCursorPx.x - paintRadiusPx, top: paintCursorPx.y - paintRadiusPx,
                           width: paintRadiusPx * 2, height: paintRadiusPx * 2,
                           border: `2.5px solid ${color}`,
                           background: `${color}22`,
                           boxShadow: `0 0 0 1px rgba(0,0,0,0.6), 0 0 20px ${color}55`,
+                          opacity: 0,
+                          willChange: 'transform',
                         }}
                       />
                     );

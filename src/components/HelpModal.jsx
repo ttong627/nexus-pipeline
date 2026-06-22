@@ -569,6 +569,55 @@ const CONTENT = {
         ),
       },
       {
+        id: 'three-modes', icon: '🧭', title: '3가지 정제 방식',
+        render: () => (
+          <div>
+            <p className="text-gray-300 text-sm leading-relaxed mb-4">
+              상황에 맞게 <span className="text-emerald-300 font-black">3가지 방식</span> 중 하나로 작업합니다.
+            </p>
+            <div className="space-y-3">
+              {[
+                {
+                  icon: '⚡', name: '① 쉬운 정제 (자동 저장)', color: 'border-emerald-500/40 bg-emerald-950/15',
+                  desc: '파일만 올리면 지자체·월 자동 인식 → 바로 정제 → 정제 엑셀이 다운로드 폴더로 자동 저장. 업로드 화면 하단 체크박스로 동작을 고릅니다.',
+                  bullets: [
+                    '체크 없음 → 정제 엑셀 바로 다운로드',
+                    '「리스트 보기」/「후편집하기」 체크 → 결과 화면으로',
+                    '저장 직전 「기초명단(특이사항 파일)」을 추가하면 특이사항·배송순번을 자동 매칭 이식 (없으면 단순 정제만)',
+                  ],
+                },
+                {
+                  icon: '📝', name: '② 리스트 보기 · 후편집', color: 'border-cyan-500/40 bg-cyan-950/15',
+                  desc: '정제 결과를 화면 표에서 직접 보고 수정합니다. 셀 클릭 편집, 오류만 모아보기, 행정동·소속사 보고서, 기본명단/월별명단 저장까지.',
+                  bullets: ['주소 직접 수정 후 Enter로 재정제', '행정동 보고서 / 소속사 보고서 엑셀 분리', '기본명단·이번달 명단 클라우드 저장'],
+                },
+                {
+                  icon: '🗺️', name: '③ 배송 구역 배정 (루트맵)', color: 'border-blue-500/40 bg-blue-950/15',
+                  desc: '정제된 명단을 지도에 띄워 기사별 구역을 자동/수동 배분하고 배송순번을 만듭니다.',
+                  bullets: ['자동 N등분 + 브러시 수동 보정', '혼재(같은 아파트 단지 갈라짐)만 점검', '기사 공유 링크로 전달'],
+                },
+              ].map(m => (
+                <div key={m.name} className={`rounded-xl border p-4 ${m.color}`}>
+                  <div className="flex items-center gap-2 mb-1.5">
+                    <span className="text-lg">{m.icon}</span>
+                    <span className="text-white font-black text-sm">{m.name}</span>
+                  </div>
+                  <p className="text-gray-400 text-xs leading-relaxed mb-2">{m.desc}</p>
+                  <ul className="space-y-1">
+                    {m.bullets.map(b => (
+                      <li key={b} className="text-gray-500 text-[11px] flex items-start gap-1.5">
+                        <span className="text-emerald-400 mt-0.5">•</span><span>{b}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+            </div>
+            <TIP>오른쪽 아래 초록색 「도움말」 버튼은 어느 화면에서든 누르면 그 화면에 맞는 설명이 열립니다.</TIP>
+          </div>
+        ),
+      },
+      {
         id: 'pipeline', icon: '🔄', title: '7단계 처리 흐름',
         render: () => (
           <div>

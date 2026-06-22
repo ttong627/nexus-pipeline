@@ -558,57 +558,6 @@ const calculateStats = (records, clusterMap, drivers) => {
   return { totalLoad: Math.round(totalLoad * 10) / 10, totalQty, stats, maxAbsDiffPct };
 };
 
-const buildBoundaryGuides = (orderedUnits, clusterMap, activeDrivers) => {
-  const driverNameById = Object.fromEntries(activeDrivers.map(d => [d.id, d.name || d.id]));
-  const lats = orderedUnits.map(u => u.lat).filter(Boolean);
-  const lngs = orderedUnits.map(u => u.lng).filter(Boolean);
-  if (!lats.length || !lngs.length) return [];
-  const minLat = Math.min(...lats);
-  const maxLat = Math.max(...lats);
-  const minLng = Math.min(...lngs);
-  const maxLng = Math.max(...lngs);
-  const span = Math.max(maxLat - minLat, maxLng - minLng, 0.002) * 0.8;
-  const guideByPair = new Map();
-  for (let i = 1; i < orderedUnits.length; i++) {
-    const prev = orderedUnits[i - 1];
-    const next = orderedUnits[i];
-    const prevDriverId = clusterMap[prev.recordIds[0]];
-    const nextDriverId = clusterMap[next.recordIds[0]];
-    if (!prevDriverId || !nextDriverId || prevDriverId === nextDriverId) continue;
-    if (!prev.lat || !prev.lng || !next.lat || !next.lng) continue;
-    const mid = { lat: (prev.lat + next.lat) / 2, lng: (prev.lng + next.lng) / 2 };
-    const dx = next.lng - prev.lng;
-    const dy = next.lat - prev.lat;
-    let px = -dy;
-    let py = dx;
-    const normLen = Math.sqrt(px * px + py * py) || 1;
-    px /= normLen;
-    py /= normLen;
-    const distance = haversine(prev.lat, prev.lng, next.lat, next.lng);
-    const pairKey = [prevDriverId, nextDriverId].sort().join('__');
-    const guide = {
-      id: `boundary_${pairKey}`,
-      fromDriverId: prevDriverId,
-      toDriverId: nextDriverId,
-      fromDriverName: driverNameById[prevDriverId] || prevDriverId,
-      toDriverName: driverNameById[nextDriverId] || nextDriverId,
-      from: { lat: prev.lat, lng: prev.lng },
-      to: { lat: next.lat, lng: next.lng },
-      mid,
-      lineStart: { lat: mid.lat - py * span, lng: mid.lng - px * span },
-      lineEnd: { lat: mid.lat + py * span, lng: mid.lng + px * span },
-      fromLoad: Math.round((prev.load || 0) * 10) / 10,
-      toLoad: Math.round((next.load || 0) * 10) / 10,
-      distance,
-    };
-    const old = guideByPair.get(pairKey);
-    if (!old || distance > old.distance) guideByPair.set(pairKey, guide);
-  }
-  return [...guideByPair.values()]
-    .sort((a, b) => b.distance - a.distance)
-    .slice(0, Math.max(0, activeDrivers.length - 1));
-};
-
 // ── qualityScore 계산 (0–100, 높을수록 좋음) ─────────────────────────────
 const calcQualityScore = ({
   splitUnitCount, totalMandatoryUnits,
@@ -632,7 +581,6 @@ const calcQualityScore = ({
 // ── 14개 진단 항목 ────────────────────────────────────────────────────────
 const buildDiagnostics = ({ records, units, orderedUnits, clusterMap, activeDrivers, driverPins, strategy = 'pca', forcedAssignCount = 0, coordFailCount = 0 }) => {
   const load = calculateStats(records, clusterMap, activeDrivers);
-  const boundaryGuides = buildBoundaryGuides(orderedUnits, clusterMap, activeDrivers);
 
   // ── 도로 통계 (기존 8개 + 도로측면 순수도) ───────────────────────────────
   const roadMap = {};
@@ -818,7 +766,6 @@ const buildDiagnostics = ({ records, units, orderedUnits, clusterMap, activeDriv
     islandCount,
     roadSideMixCount,
     boundaryUnitCount,
-    boundaryGuides,
     forcedAssignCount,
     coordFailCount,
     dongPurity,

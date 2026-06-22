@@ -1,9 +1,10 @@
 import { useState } from 'react';
-import { UploadCloud, Loader2, Sparkles, Settings2, LayoutDashboard, ScanSearch } from 'lucide-react';
+import { UploadCloud, Loader2, Sparkles, Settings2, LayoutDashboard, ScanSearch, Check } from 'lucide-react';
 
 export default function Step1_Upload({
   handleDragOver, handleFileUpload, handleUnifiedDrop, isBaseUploading, step, onHelp, onOpenDashboard,
   cleanMode = 'easy', setCleanMode, analyzing = false,
+  easyResultMode = { list: false, edit: false }, onChangeEasyResultMode,
 }) {
   // Hooks는 항상 최상단에서 무조건 호출 (React Hooks 규칙 — 조기 반환 이전)
   const [tilt, setTilt] = useState({ rx: 0, ry: 0 });
@@ -185,6 +186,39 @@ export default function Step1_Upload({
               disabled={isBaseUploading}
             />
           </label>
+
+          {/* 쉬운 정제: 정제 후 동작 선택 (체크 없으면 정제 엑셀 자동 다운로드) */}
+          {isEasy && (
+            <div style={{ transform: 'translateZ(15px)' }}>
+              <div className="flex items-center justify-center gap-6">
+                <span className="text-[11px] font-black text-gray-600 tracking-widest uppercase">정제 후</span>
+                {[
+                  { key: 'list', label: '리스트 보기' },
+                  { key: 'edit', label: '후편집하기' },
+                ].map(opt => {
+                  const on = !!easyResultMode?.[opt.key];
+                  return (
+                    <button
+                      key={opt.key}
+                      type="button"
+                      onClick={() => onChangeEasyResultMode?.({ ...easyResultMode, [opt.key]: !on })}
+                      className={`flex items-center gap-2 text-sm font-bold transition-colors ${on ? 'text-emerald-300' : 'text-gray-500 hover:text-gray-300'}`}
+                    >
+                      <span className={`w-5 h-5 rounded-md border flex items-center justify-center transition-colors ${on ? 'bg-emerald-500/20 border-emerald-400/60' : 'border-white/15 bg-black/30'}`}>
+                        {on && <Check size={13} className="text-emerald-300" />}
+                      </span>
+                      {opt.label}
+                    </button>
+                  );
+                })}
+              </div>
+              {!easyResultMode?.list && !easyResultMode?.edit && (
+                <p className="text-center text-[11px] text-gray-600 mt-2">
+                  체크 없이 파일을 올리면 정제 엑셀이 <b className="text-gray-400">다운로드 폴더로 바로 저장</b>됩니다.
+                </p>
+              )}
+            </div>
+          )}
 
           {/* 정밀 분석 오버레이 */}
           {analyzing && (

@@ -31,6 +31,10 @@ import CityMonthPickerModal from "./components/CityMonthPickerModal.jsx";
 import EasyCleanConfirm from "./components/EasyCleanConfirm.jsx";
 import LoadingScreen from "./components/LoadingScreen.jsx";
 import ResultGrid from "./components/ResultGrid.jsx";
+import { sortByDeliveryOrder, deliveryCompare } from "./utils/sortRecords.js";
+import BaseNoteFileModal from "./components/BaseNoteFileModal.jsx";
+import WelcomeTour from "./components/WelcomeTour.jsx";
+import { extractNoteRows, dedupNoteRows, matchNotesToRoster, applyNotesToRoster, downloadNoteImportWorkbook } from "./utils/noteImport.js";
 import ErrorBoundary from "./components/ErrorBoundary.jsx";
 import GlobalLoadingBar from "./components/GlobalLoadingBar.jsx";
 import IntroScreen from "./components/IntroScreen.jsx";
@@ -227,6 +231,21 @@ export default function App() {
   const [pendingSetup, setPendingSetup] = useState(null); // { sheetsData, detectedCity, monthStr, initialSel }
   const [selectedSheets, setSelectedSheets] = useState([]);
   const [cleanMode, setCleanMode] = useState('easy');      // 'easy'(초보) | 'advanced'(고급)
+  // 쉬운 정제 후 동작: 체크 없으면 정제 엑셀 자동 다운로드 / list=결과 리스트 보기 / edit=후편집
+  const [easyResultMode, setEasyResultMode] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('nexus_easy_result_mode_v1')) || { list: false, edit: false }; }
+    catch { return { list: false, edit: false }; }
+  });
+  const changeEasyResultMode = (next) => {
+    setEasyResultMode(next);
+    try { localStorage.setItem('nexus_easy_result_mode_v1', JSON.stringify(next)); } catch { /* ignore */ }
+  };
+  // 자동저장 직전 기초명단(특이사항 파일) 선택 단계
+  const [baseNoteModal, setBaseNoteModal] = useState(null);       // null | { results }
+  const [baseNoteProcessing, setBaseNoteProcessing] = useState(false);
+  const [baseNoteResult, setBaseNoteResult] = useState(null);     // null | { appliedCount, ambiguousCount, unmatchedCount }
+  const [showWelcomeTour, setShowWelcomeTour] = useState(false);  // 첫 진입 가이드 투어 (1회)
+  const closeWelcomeTour = () => { setShowWelcomeTour(false); try { localStorage.setItem('nexus_welcome_tour_v2', '1'); } catch { /* ignore */ } };
   const [showEasyConfirm, setShowEasyConfirm] = useState(false); // 쉬운 정제 확인 카드
   const [easyRun, setEasyRun] = useState(false);           // 쉬운 정제: 상태 세팅 후 자동 분석 트리거
   const [operatorName, setOperatorName] = useState('');    // 담당자 이름(업로드 전 확인)
@@ -254,7 +273,6 @@ export default function App() {
   const [purifyResult, setPurifyResult] = useState(null);
   const [prevMonthCompare, setPrevMonthCompare] = useState(null); // { warnings, changes, newCount, leftCount }
   const [showPrevCompare, setShowPrevCompare] = useState(false);
-  const [colVis] = useState({});
   const [baseCount, setBaseCount] = useState(0);
   const [baseMap, setBaseMap] = useState(null);
   const [importFields, setImportFields] = useState(null); // null = 전체 이식, Set = 선택 필드만
@@ -602,25 +620,16 @@ export default function App() {
   };
 
   const sortedData = useMemo(() => {
-    let result = [...gridData];
     if (sortConfig.key) {
+      const result = [...gridData];
       result.sort((a, b) => {
-        let cmp = String(a[sortConfig.key] || "").localeCompare(String(b[sortConfig.key] || ""), undefined, { numeric: true, sensitivity: 'base' });
+        const cmp = String(a[sortConfig.key] || "").localeCompare(String(b[sortConfig.key] || ""), 'ko', { numeric: true, sensitivity: 'base' });
         return sortConfig.direction === 'asc' ? cmp : -cmp;
       });
-    } else {
-      result.sort((a, b) => {
-        let cmp = String(a.행정동 || "").localeCompare(String(b.행정동 || ""), undefined, { numeric: true, sensitivity: 'base' });
-        if (cmp !== 0) return cmp;
-        // 리(里): 읍/면 하위 단위. 리 없으면 빈값으로 자연 통과(다음 키로 정렬)
-        cmp = String(a.리 || "").localeCompare(String(b.리 || ""), undefined, { numeric: true, sensitivity: 'base' });
-        if (cmp !== 0) return cmp;
-        cmp = String(a.주소 || "").localeCompare(String(b.주소 || ""), undefined, { numeric: true, sensitivity: 'base' });
-        if (cmp !== 0) return cmp;
-        return String(a.이름 || "").localeCompare(String(b.이름 || ""), undefined, { numeric: true, sensitivity: 'base' });
-      });
+      return result;
     }
-    return result;
+    // 기본 정렬(행정동→리→주소→이름) — 공용 비교자 재사용
+    return [...gridData].sort(deliveryCompare);
   }, [gridData, sortConfig]);
 
   const gridDongList = useMemo(() =>
@@ -749,9 +758,14 @@ export default function App() {
           const uploadGubuns = [];
           if (uploadCounts.기초수급자 > 0) uploadGubuns.push('기초수급자');
           if (uploadCounts.차상위 > 0) uploadGubuns.push('차상위');
+          // 쉬운 정제 + 지자체·적용월이 확실히 감지(허가지역 포함)되면 확인 모달 생략하고 바로 진행.
+          // 불확실하면(지자체 미매칭·월 미감지·관리자 다지역) 안전을 위해 기존대로 모달 표시 → 오배정 방지.
+          const userCitiesList = user?.citiesApproved || [];
+          const autoConfirm = cleanMode === 'easy' && !!resolvedCity && !!monthStr && userCitiesList.includes(resolvedCity);
           // 지자체·적용월 확인 모달 표시 (허가지역 대조된 resolvedCity 사용)
-          setPendingSetup({ sheetsData, detectedCity: resolvedCity, monthStr, initialSel, analysisSummary, uploadGubuns, uploadCounts });
-          setShowCityPicker(true);
+          setPendingSetup({ sheetsData, detectedCity: resolvedCity, monthStr, initialSel, analysisSummary, uploadGubuns, uploadCounts, autoConfirm });
+          if (autoConfirm) setGLoad({ show: false });   // 로딩 닫고 아래 useEffect가 즉시 정제 진행
+          else setShowCityPicker(true);
         } else if (!evt.data.ok) {
           setGLoad({ show: false });
           setAnalyzing(false);
@@ -780,7 +794,8 @@ export default function App() {
       const roster = sheetsData.filter(s => s.isRosterSheet && s.selected !== false);
       const rosterAll = sheetsData.filter(s => s.isRosterSheet);
       setSelectedSheets(roster.length ? roster : (rosterAll.length ? rosterAll : sheetsData));
-      setShowEasyConfirm(true);       // 쉬운 정제 확인 카드(요약 + 노랑만 확인)
+      // 확인 카드 생략 → 바로 정제 실행 (selectedSheets 준비되면 easyRun useEffect가 분석 시작)
+      setEasyRun(true);
     } else {
       setStep(2);                     // 고급: 시트선택 → 매핑 검토
     }
@@ -1105,6 +1120,26 @@ export default function App() {
       r.주소 = formatAddressForDisplayMode(r, addressDisplayMode);
       r._addressDisplayMode = addressDisplayMode;
     });
+    // 동일인 중복 제거 — 업로드 명단에 같은 사람이 여러 시트/행으로 중복돼도 1명으로 정리
+    // (이름+생년월일 또는 이름+휴대폰끝8 동일 = 동일인. 둘 다 없으면 합치지 않음 → 동명이인 보호)
+    {
+      const seen = new Map();        // key → out index
+      const deduped = [];
+      const score = (r) => (String(r.주소 || '').trim() ? 2 : 0) + (r._에러 ? 0 : 1); // 주소있고 정상인 행 우선 보존
+      for (const r of results) {
+        const name = String(r.이름 || '').replace(/\s/g, '');
+        const bd = String(r.생년월일 || '').replace(/[^\d]/g, '');
+        const bk = bd.length >= 6 ? bd.slice(-6) : '';
+        const pd = String(r.휴대폰 || '').replace(/[^\d]/g, '');
+        const pk = pd.length >= 8 ? pd.slice(-8) : '';
+        const key = name && bk ? `b:${name}:${bk}` : (name && pk ? `p:${name}:${pk}` : null);
+        if (!key) { deduped.push(r); continue; }
+        if (!seen.has(key)) { seen.set(key, deduped.length); deduped.push(r); continue; }
+        const idx = seen.get(key);
+        if (score(r) > score(deduped[idx])) deduped[idx] = r;  // 더 나은 행으로 교체
+      }
+      if (deduped.length !== results.length) { results.length = 0; results.push(...deduped); }
+    }
     pushHistory(results);
 
     // 정제 결과 요약
@@ -1149,7 +1184,34 @@ export default function App() {
       }, { merge: true }).catch(e => console.warn('[정제 누적 통계 업데이트 실패]', e));
     }
 
-    setStep(5);
+    // 쉬운 정제 + 체크 없음 → 결과 화면 생략하고 정제 엑셀을 바로 다운로드(폴더 저장)
+    const showResultScreen = cleanMode !== 'easy' || easyResultMode.list || easyResultMode.edit;
+    if (showResultScreen) {
+      setStep(5);
+    } else {
+      // 품질 게이트 — 비정상 비율이 높으면(시트/컬럼 매핑 오류 의심) 자동 다운로드를 막고 결과 화면으로
+      const totalN = results.length || 1;
+      const emptyAddrN = results.filter(r => !String(r.주소 || '').trim()).length;
+      const badNameN = results.filter(r => {
+        const n = String(r.이름 || '').trim();
+        return /(면|읍|동|리)$/.test(n) || /^(수급자|차상위|기초수급자|계|합계|소계|총계|가정)$/.test(n);
+      }).length;
+      const errN = results.filter(r => r._에러).length;
+      if (errN / totalN > 0.5 || emptyAddrN / totalN > 0.5 || badNameN / totalN > 0.1) {
+        setStep(5); // 결과 화면으로 — 쓰레기 파일을 모르고 받는 것 차단
+        setGLoad({ show: false });
+        setTimeout(() => alert(
+          `⚠️ 정제 결과가 비정상으로 보여 자동 저장을 멈췄습니다.\n\n· 주소 공란 ${emptyAddrN.toLocaleString()}건\n· 오류 ${errN.toLocaleString()}건\n· 이름 이상(통계행 등) ${badNameN.toLocaleString()}건\n(총 ${results.length.toLocaleString()}건)\n\n시트 선택·컬럼 매핑이 잘못됐을 수 있습니다. 결과 화면에서 확인 후 진행하세요.`
+        ), 100);
+        return;
+      }
+      // 자동저장 모드: 다운로드 직전 1단계 — 기초명단(특이사항 파일) 선택(선택사항)
+      setStep(1); // 업로드 화면 유지
+      setGLoad({ show: false });
+      setBaseNoteResult(null);
+      setBaseNoteProcessing(false);
+      setBaseNoteModal({ results });
+    }
 
     // 전월 delivery_history 로드 → 전월 비교 (비동기, 결과 화면 표시 후 실행)
     try {
@@ -1244,12 +1306,27 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [easyRun, selectedSheets]);
 
+  // 쉬운 정제 + 지자체·월 자동확정 → 확인 모달/카드 없이 곧바로 정제 진행
+  // handleCityMonthConfirm가 pendingSetup을 null로 비우므로 1회만 실행됨(루프 없음).
+  useEffect(() => {
+    if (pendingSetup?.autoConfirm) {
+      handleCityMonthConfirm(pendingSetup.detectedCity, pendingSetup.monthStr);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingSetup]);
+
   // 담당자 이름·지자체 기본값을 로그인 프로필에서 초기화(업로드 전 확인용)
   useEffect(() => {
     if (!user) return;
     setOperatorName(prev => prev || user.realName || '');
     setSelectedCity(prev => prev || (user.citiesApproved?.length === 1 ? user.citiesApproved[0] : ''));
   }, [user]);
+
+  // 첫 진입 가이드 투어 — 로그인 후 1회만(신규회원 인트로와 겹치지 않게 인트로 종료 후)
+  useEffect(() => {
+    if (!user || showIntro) return;
+    try { if (!localStorage.getItem('nexus_welcome_tour_v2')) setShowWelcomeTour(true); } catch { /* ignore */ }
+  }, [user, showIntro]);
 
   const handleCellEdit = (id, field, value) => {
     // 타이핑마다 pushHistory 호출 시 stale closure + setHistory·setGridData 동시발동으로
@@ -2337,11 +2414,84 @@ export default function App() {
   };
 
   // 내보내기 칼럼: 리(里)는 데이터에 읍/면(리 보유 지역)이 실제로 있고 리 값이 있을 때만 포함(화면 규칙과 동일).
-  // 동 지역(시/구 동만)은 리가 없으므로 칼럼 숨김. city 이름이 아니라 '데이터의 읍/면 존재'로 판정(천안시·여주시 등 시 안의 읍/면 대응).
-  const _activeExportCols = () => {
-    const hasEupMyeon = gridData.some(r => /(읍|면)$/.test(String(r.행정동 ?? '').trim()));
-    const showRi = hasEupMyeon && gridData.some(r => String(r.리 ?? '').trim() !== '');
+  // 내보내기 활성 컬럼 계산 — 공용 헬퍼.
+  // 리(里) 칼럼: 리 값이 하나라도 있으면 무조건 포함(읍/면 판정 실패로 리가 누락되던 버그 방지).
+  // 동만 있는 명단(리 전부 빈값)에서만 숨김 → 노이즈 없음.
+  const _filterExportCols = (rows) => {
+    const showRi = (rows || []).some(r => String(r.리 ?? '').trim() !== '');
     return exportColOrder.filter(c => c.on && (c.key !== '리' || showRi));
+  };
+  const _activeExportCols = () => _filterExportCols(gridData);
+  const _activeColsFor = (rows) => _filterExportCols(rows);
+
+  // 정제 결과 배열을 받아 정렬·컬럼 매핑 후 엑셀 즉시 다운로드 (쉬운정제 자동 저장용)
+  const _exportResultRows = (rows) => {
+    if (!rows?.length) return;
+    const activeCols = _filterExportCols(rows);
+    const sorted = sortByDeliveryOrder(rows);   // 정렬기준(행정동→리→주소→이름) 적용
+    const finalRows = sorted.map((r, i) => {
+      const row = {};
+      activeCols.forEach(c => {
+        if (c.key === 'NO') row[c.label] = i + 1;
+        else if (c.key === '사유') row[c.label] = r._에러 ? r._사유 : '정상';
+        else row[c.label] = r[c.key] ?? '';
+      });
+      return row;
+    });
+    _runExportWorker({ finalRows, exportCols: activeCols.map(c => c.label), fileName: _buildExportFileName() });
+  };
+
+  // 기초명단(특이사항 파일) 건너뛰기 → 단순 정제 엑셀만 다운로드
+  const handleBaseNoteSkip = () => {
+    if (!baseNoteModal) return;
+    _exportResultRows(baseNoteModal.results);
+    setBaseNoteModal(null);
+    setTimeout(() => alert('정제 완료! 엑셀이 다운로드되었습니다.'), 100);
+  };
+  const handleBaseNoteClose = () => { setBaseNoteModal(null); setBaseNoteResult(null); setBaseNoteProcessing(false); };
+
+  // 기초명단(특이사항 파일) 선택 → 본명단과 동일 엔진으로 파싱 → 정밀 매칭 이식 → 다중시트 다운로드
+  const handleBaseNoteFile = async (file) => {
+    if (!file || !baseNoteModal) return;
+    const rosterRows = baseNoteModal.results;   // 진입 시점에 캡처 (비동기 중 state 변경 방어)
+    if (!rosterRows?.length) return;
+    setBaseNoteProcessing(true);
+    try {
+      const buffer = await file.arrayBuffer();
+      const worker = new Worker(new URL("./excelWorker.js", import.meta.url), { type: "module" });
+      worker.postMessage({ action: "PARSE_TARGET", buffer, fileName: file.name, dynamicRules: aiRules });
+      worker.onmessage = (evt) => {
+        worker.terminate();
+        try {
+          if (!(evt.data.ok && evt.data.action === "PARSE_TARGET")) {
+            setBaseNoteProcessing(false);
+            alert("특이사항 파일 분석에 실패했습니다. 엑셀 파일인지 확인하세요.");
+            return;
+          }
+          const noteRows = dedupNoteRows(extractNoteRows(evt.data.sheetsData));
+          const { applied, ambiguous, appliedCount } = matchNotesToRoster(rosterRows, noteRows);
+          const merged = applyNotesToRoster(rosterRows, applied);
+          pushHistory(merged); // 보기/저장 일관성 위해 gridData에도 반영
+          downloadNoteImportWorkbook({
+            city: fileInfo?.city || '지자체',
+            monthId: fileInfo?.month || '',
+            rosterRows: merged,
+            ambiguous,
+            activeCols: _activeColsFor(merged),
+          });
+          setBaseNoteResult({ appliedCount, ambiguousCount: ambiguous.length });
+        } catch (e) {
+          console.error('[기초명단 이식 오류]', e);
+          alert('특이사항 이식 중 오류: ' + e.message);
+        } finally {
+          setBaseNoteProcessing(false);
+        }
+      };
+      worker.onerror = () => { worker.terminate(); setBaseNoteProcessing(false); alert('파일 분석 워커 오류'); };
+    } catch (e) {
+      setBaseNoteProcessing(false);
+      alert('파일을 읽지 못했습니다: ' + e.message);
+    }
   };
 
   const handleExport = () => {
@@ -2774,11 +2924,11 @@ export default function App() {
 
         <main className="flex-1 relative overflow-hidden bg-[#070807] flex flex-col">
           {step === 0 && <Dashboard user={user} onLogout={onLogout} onStart={(s) => setStep(typeof s === 'number' ? s : 1)} onHelp={onHelp} setFileInfo={setFileInfo} setWorksheets={setWorksheets} setBaseCount={setBaseCount} gridData={gridData} setGridData={setGridData} fileInfo={fileInfo} onCloudCard={(city) => { setDbNavCity(city); setStep(8); }} onBaseCard={(city) => { setDbNavCity(city); setStep(6); }} onOpenRouteMap={() => { if (!canUseRouteMap(user)) { setUpgradeReason('routeMap'); setShowUpgrade(true); } else setShowRouteQuick(true); }} workflowMode={workflowMode} onWorkflowModeChange={changeWorkflowMode} stepStatus={stepStatus} onOpenIntro={() => { setIntroReason('new'); setShowIntro(true); }} />}
-          {step === 1 && <Step1_Upload handleDragOver={handleDragOver} handleDrop={handleDrop} handleFileUpload={handleFileUpload} handleUnifiedDrop={handleUnifiedDrop} isBaseUploading={isBaseUploading} step={step} onHelp={onHelp} onOpenDashboard={() => setStep(0)} cleanMode={cleanMode} setCleanMode={setCleanMode} analyzing={analyzing} />}
+          {step === 1 && <Step1_Upload handleDragOver={handleDragOver} handleDrop={handleDrop} handleFileUpload={handleFileUpload} handleUnifiedDrop={handleUnifiedDrop} isBaseUploading={isBaseUploading} step={step} onHelp={onHelp} onOpenDashboard={() => setStep(0)} cleanMode={cleanMode} setCleanMode={setCleanMode} analyzing={analyzing} easyResultMode={easyResultMode} onChangeEasyResultMode={changeEasyResultMode} />}
           {step === 2 && <Step2_SheetSelect step={step} setStep={setStep} fileInfo={fileInfo} setFileInfo={setFileInfo} worksheets={worksheets} setWorksheets={setWorksheets} setSelectedSheets={setSelectedSheets} onHelp={onHelp} handleSecondFileUpload={handleSecondFileUpload} userCities={user?.citiesApproved || []} isAdmin={user?.role === 'admin'} />}
           {step === 3 && <Step3_Mapping step={step} setStep={setStep} selectedSheets={selectedSheets} worksheets={worksheets} mapDefs={mapDefs} setMapDefs={setMapDefs} startProcessing={handleAnalyzeAll} onHelp={onHelp} isBasePurifyMode={isBasePurifyMode} setIsBasePurifyMode={setIsBasePurifyMode} onOpenDbImport={() => setShowDbImport(true)} dbImportReady={dbImportReady} onUserMapping={handleUserMapping} city={fileInfo?.city || ''} />}
           {step === 4 && <LoadingScreen progress={engineProgress} logs={progressLogs} />}
-          {step === 5 && <ResultGrid step={step} setStep={setStep} fileInfo={fileInfo} filter={filter} setFilter={setFilter} dongList={gridDongList} driverList={gridDriverList} gridData={gridData} filteredData={filteredData} paginatedData={paginatedData} currentPage={currentPage} setCurrentPage={setCurrentPage} itemsPerPage={itemsPerPage} setItemsPerPage={setItemsPerPage} colVis={colVis} sortConfig={sortConfig} setSortConfig={setSortConfig} handleCellEdit={handleCellEdit} handleAddressKeyDown={handleAddressKeyDown} handleUpdateBaseList={handleUpdateBaseList} handleBatchSaveBaseList={handleBatchSaveBaseList} isSavingBaseList={isSavingBaseList} handleSaveMonthlyList={handleSaveMonthlyList} setShowExportSetting={setShowExportSetting} handleExport={handleExport} handleExportErrors={handleExportErrors} handleExportDongSummary={handleExportDongSummary} handleExportByDriver={handleExportByDriver} handleDeleteRows={handleDeleteRows} handleBatchSetNote={handleBatchSetNote} onHelp={onHelp} purifyResult={purifyResult} onClosePurifyResult={() => setPurifyResult(null)} onMovePhones={handleMovePhones} onRepurifyErrors={handleRepurifyErrors} onReapplyFormat={handleReapplyFormat} onConfirmAddress={handleConfirmAddress} onMarkPhoneCheck={handleMarkPhoneCheck} onOpenRouteMap={openRouteFlow} onFetchBaseNotes={handleFetchBaseNotes} isFetchingNotes={isFetchingNotes} workflowMode={workflowMode} onWorkflowModeChange={changeWorkflowMode} stepStatus={stepStatus} addressDisplayMode={addressDisplayMode} onToggleAddressDisplayMode={handleToggleAddressDisplayMode} exportColOrder={exportColOrder} setExportColOrder={setExportColOrder} defaultExportCols={DEFAULT_EXPORT_COLS} />}
+          {step === 5 && <ResultGrid step={step} setStep={setStep} fileInfo={fileInfo} filter={filter} setFilter={setFilter} dongList={gridDongList} driverList={gridDriverList} gridData={gridData} filteredData={filteredData} paginatedData={paginatedData} currentPage={currentPage} setCurrentPage={setCurrentPage} itemsPerPage={itemsPerPage} setItemsPerPage={setItemsPerPage} sortConfig={sortConfig} setSortConfig={setSortConfig} handleCellEdit={handleCellEdit} handleAddressKeyDown={handleAddressKeyDown} handleUpdateBaseList={handleUpdateBaseList} handleBatchSaveBaseList={handleBatchSaveBaseList} isSavingBaseList={isSavingBaseList} handleSaveMonthlyList={handleSaveMonthlyList} setShowExportSetting={setShowExportSetting} handleExport={handleExport} handleExportErrors={handleExportErrors} handleExportDongSummary={handleExportDongSummary} handleExportByDriver={handleExportByDriver} handleDeleteRows={handleDeleteRows} handleBatchSetNote={handleBatchSetNote} onHelp={onHelp} purifyResult={purifyResult} onClosePurifyResult={() => setPurifyResult(null)} onMovePhones={handleMovePhones} onRepurifyErrors={handleRepurifyErrors} onReapplyFormat={handleReapplyFormat} onConfirmAddress={handleConfirmAddress} onMarkPhoneCheck={handleMarkPhoneCheck} onOpenRouteMap={openRouteFlow} onFetchBaseNotes={handleFetchBaseNotes} isFetchingNotes={isFetchingNotes} workflowMode={workflowMode} onWorkflowModeChange={changeWorkflowMode} stepStatus={stepStatus} addressDisplayMode={addressDisplayMode} onToggleAddressDisplayMode={handleToggleAddressDisplayMode} exportColOrder={exportColOrder} setExportColOrder={setExportColOrder} defaultExportCols={DEFAULT_EXPORT_COLS} />}
           {step === 10 && <ErrorListManager gridData={gridData} onBack={() => setStep(gridData.length ? 5 : 0)} handleCellEdit={handleCellEdit} handleAddressKeyDown={handleAddressKeyDown} handleExportErrors={handleExportErrors} onRepurifyErrors={handleRepurifyErrors} exportColOrder={exportColOrder} setExportColOrder={setExportColOrder} defaultExportCols={DEFAULT_EXPORT_COLS} />}
           {step === 11 && <ScheduleTab user={user} onBack={() => setStep(0)} />}
           {step === 6 && <BaseListManager user={user} initialCity={dbNavCity} onBack={() => { setStep(0); setDbNavCity(''); }} exportColOrder={exportColOrder} setExportColOrder={setExportColOrder} defaultExportCols={DEFAULT_EXPORT_COLS} />}
@@ -2813,6 +2963,17 @@ export default function App() {
           />
         )}
 
+        {/* 자동저장 직전: 기초명단(특이사항 파일) 선택 단계 */}
+        {baseNoteModal && (
+          <BaseNoteFileModal
+            processing={baseNoteProcessing}
+            result={baseNoteResult}
+            onPickFile={handleBaseNoteFile}
+            onSkip={handleBaseNoteSkip}
+            onClose={handleBaseNoteClose}
+          />
+        )}
+
         {/* 쉬운 정제 확인 카드 (초보 모드) */}
         {showEasyConfirm && (
           <EasyCleanConfirm
@@ -2828,8 +2989,22 @@ export default function App() {
           />
         )}
 
+        {/* 플로팅 도움말 버튼 — 어느 화면에서든 1클릭, 현재 화면에 맞는 설명서가 열림 */}
+        {!showHelp && step !== 4 && (
+          <button
+            onClick={onHelp}
+            title="사용설명서 — 지금 보는 화면에 맞는 도움말이 열립니다"
+            className="fixed bottom-5 right-5 z-[300] flex items-center gap-2 px-4 py-3 rounded-full bg-emerald-600 hover:bg-emerald-500 text-white font-black text-sm shadow-[0_8px_30px_rgba(16,185,129,0.45)] border border-emerald-300/40 transition-all hover:scale-105"
+          >
+            <HelpCircle size={18} /> 도움말
+          </button>
+        )}
+
+        {/* 첫 진입 가이드 투어 (1회) */}
+        {showWelcomeTour && <WelcomeTour onClose={closeWelcomeTour} />}
+
         {/* RESTORED MODAL RENDERS */}
-        {showHelp && <HelpModal onClose={() => setShowHelp(false)} />}
+        {showHelp && <HelpModal step={step === 8 ? 6 : step} onClose={() => setShowHelp(false)} />}
         {showUtils && <UtilsModal user={user} onClose={() => setShowUtils(false)} />}
         {showUpgrade && <UpgradeModal user={user} userTier={user?.tier || 'basic'} usedCount={baseCount} userMaxCities={user?.maxCities || 1} reason={upgradeReason} onClose={() => setShowUpgrade(false)} />}
         {showCloudBase && <CloudBaseModal user={user} onClose={() => setShowCloudBase(false)} onImport={(newBaseMap, _city, count) => { setBaseMap(newBaseMap); setBaseCount(count); setImportFields(null); setDbImportReady(null); setShowCloudBase(false); }} />}
