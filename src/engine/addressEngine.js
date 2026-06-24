@@ -897,6 +897,22 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
 
   let dongPart = '', buildingName = '', finalRoadAddr = mainAddr;
 
+  // ── 입력 건물번호 SSOT 가드 (유사매칭/변조 차단 · 절대 되돌리지 말 것) ──
+  // 입력이 도로명주소이고 API 결과의 도로명 뒤 건물번호가 입력과 다르면 → API 결과 전부 폐기.
+  // 도로명주소 건물번호는 절대 불변(이동·빈칸·법정동/건물명 보완만 허용). 서버 근사매칭이 뚫려도 여기서 최종 차단.
+  // 예: 입력 "박석로25번길 32" → API "박석로25번길 32-5"(인접 부번 건물) 반환 시, 32-5·신한타운 모두 거부하고 원본 32 유지.
+  if (apiResult && officialRoadParts && officialRoadParts.mainNo) {
+    const inputNo = `${officialRoadParts.mainNo}${officialRoadParts.subNo ? '-' + officialRoadParts.subNo : ''}`;
+    const rn = officialRoadParts.roadName || '';
+    const cleanFinal = String(apiResult.roadAddrPart1 || '').replace(/\s+/g, '');
+    const idx = rn ? cleanFinal.indexOf(rn) : -1;
+    const apiNo = idx >= 0 ? (cleanFinal.slice(idx + rn.length).match(/^(\d+(?:-\d+)?)/)?.[1] || '') : '';
+    if (apiNo && apiNo !== inputNo) {
+      appendCheckReason(result, `도로명 건물번호 불일치(입력 ${inputNo} ≠ API ${apiNo}) — 유사매칭 거부, 원본 주소 유지`);
+      apiResult = null; // API 결과 폐기 → 아래 else(원본 입력 유지) 경로로
+    }
+  }
+
   if (apiResult) {
     const rawFinal = apiResult.roadAddrPart1 || mainAddr;
     result.도 = DO_PATTERN.exec(rawFinal)?.[1] || result.도;

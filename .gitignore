@@ -51,3 +51,8 @@ lint-report.json
 
 # 로컬 데이터 준비용(명단 원본·스크립트) — 저장소 제외
 특이사항_기본명단/
+
+# admin SDK 키 · 복구 산출물 (개인정보 — git 제외)
+*firebase-adminsdk*.json
+복구리스트*.xlsx
+_tmp_*

@@ -35,14 +35,16 @@ const ttl90 = () => Timestamp.fromMillis(Date.now() + 90 * 24 * 60 * 60 * 1000);
 // ─── Records Cache (IndexedDB, 24h TTL) ───────────────────────────────────────
 // IndexedDB 비동기 저장 — 큰 JSON을 localStorage에 동기 저장/읽기하며 생기던 렉 제거.
 // 세션 간 지속 + 4MB 한계 없음(대형 명단도 캐시). 열 때마다 서버값으로 백그라운드 갱신(자가 치유).
-const RECS_CACHE_KEY = 'cloud_recs_v3';
+const RECS_CACHE_KEY = 'cloud_recs_v4';
 const RECS_CACHE_TTL = 24 * 60 * 60 * 1000;
 const recsKey = (city, monthId) => `${RECS_CACHE_KEY}_${city}_${monthId}`;
 
 // rev: 저장 버전. 불러올 때 메타 rev와 비교해 같으면 무거운 전체 재조회를 생략(읽기 비용↓).
 async function readRecsCache(city, monthId) {
   const rec = await idbGet(recsKey(city, monthId));
-  if (!rec || !rec.data) return null;
+  // 빈 배열 캐시는 무효 처리: []는 truthy(![] === false)라 과거엔 통과되어,
+  // 메타엔 N건인데 화면엔 0건으로 굳던 버그 차단. 빈 캐시면 항상 서버 재조회.
+  if (!rec || !Array.isArray(rec.data) || rec.data.length === 0) return null;
   if (Date.now() - rec.ts > RECS_CACHE_TTL) { idbDel(recsKey(city, monthId)); return null; }
   return rec; // { ts, data, rev }
 }
@@ -170,7 +172,6 @@ const CellInput = memo(function CellInput({ type, opts, initial, onCommit, onCan
 
 const VirtualTable = memo(function VirtualTable({ fields, exportColOrder, onColResize, editing, isOn, onToggle, dragProps, displayRecords, dirtyRecords, deletedRecordIds, loadingRecords, records, renderCell, setDeletedRecordIds }) {
   const scrollRef = useRef(null);
-  const loadedRevRef = useRef(null);   // 현재 보고 있는 월의 저장 버전(rev) — 동시편집 충돌 검사용
 
   const virtualizer = useVirtualizer({
     count: displayRecords.length,
@@ -332,6 +333,7 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
   const [filterGubun, setFilterGubun] = useState('');
   const [filterDong, setFilterDong] = useState('');
   const searchDebounceRef = useRef(null);
+  const loadedRevRef = useRef(null);   // 현재 보고 있는 월의 저장 버전(rev) — 동시편집 충돌 검사용 (CloudListManager 스코프)
   const handleSearchChange = useCallback((val) => {
     setSearchInput(val);
     clearTimeout(searchDebounceRef.current);
@@ -494,19 +496,26 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
     if (cached) { setRecords(cached.data); setLoadingRecords(false); }
     else setLoadingRecords(true);
     try {
-      // 가벼운 메타 rev 1건만 읽어 캐시와 비교 → 같으면 무거운 전체 records 재조회 생략(읽기 비용↓)
-      let serverRev = null;
+      // 가벼운 메타 rev + totalCount 1건만 읽어 캐시와 비교 → 같으면 무거운 전체 records 재조회 생략(읽기 비용↓)
+      let serverRev = null, serverTotal = null;
       try {
         const metaSnap = await getDoc(doc(db, 'cloud_lists', cityId, 'months', monthId));
-        serverRev = metaSnap.exists() ? (metaSnap.data().rev ?? null) : null;
+        if (metaSnap.exists()) {
+          serverRev = metaSnap.data().rev ?? null;
+          serverTotal = metaSnap.data().totalCount ?? null;
+        }
       } catch { serverRev = null; }
       loadedRevRef.current = serverRev;
       // 캐시가 있고 서버 rev와 동일하면 그대로 사용 (전체 조회 생략) — 단 rev가 있을 때만(구버전 월은 항상 조회)
-      if (cached && serverRev != null && cached.rev === serverRev) {
+      // + 정합성 가드: 메타 totalCount > 0 인데 캐시 건수가 그보다 적으면(빈/부분 캐시) rev가 같아도 전체 재조회
+      const cacheCovers = !serverTotal || (cached?.data?.length ?? 0) >= serverTotal;
+      if (cached && serverRev != null && cached.rev === serverRev && cacheCovers) {
         setLoadingRecords(false);
         return;
       }
-      const snap = await getDocs(collection(db, 'cloud_lists', cityId, 'months', monthId, 'records'));
+      // getDocsFromServer: Firestore SDK 로컬 캐시 우회 — 캐시에 빈 결과(0건)가 박혀도 항상 서버 최신을 읽는다.
+      // (기본명단은 정상인데 이번달만 0건이던 원인 = getDocs가 빈 캐시를 반환. B-7 동일 원칙.)
+      const snap = await getDocsFromServer(collection(db, 'cloud_lists', cityId, 'months', monthId, 'records'));
       const recs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
       setRecords(recs);
       writeRecsCache(cityId, monthId, recs, serverRev);
@@ -515,6 +524,21 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
   };
 
   const fetchRecords = (monthId, force = false) => fetchRecordsFor(selectedCity, monthId, force);
+
+  // ── 자가 치유(절대 되돌리지 말 것) ───────────────────────────────────────
+  // 월은 선택됐고 메타 건수(totalCount)>0 인데 records가 비어 있으면 = 경쟁조건(fetchMonths가
+  // 방금 채운 records를 비움)·일시 오류·스왑 등으로 비워진 상태 → 캐시 무시 강제 재조회.
+  // city-month당 1회만(무한루프 차단), 로딩 중에는 대기. "건수는 뜨는데 레코드가 없습니다" 박멸.
+  const healedKeyRef = useRef('');
+  useEffect(() => {
+    if (!selectedCity || !selectedMonth) return;
+    const key = `${selectedCity}__${selectedMonth.id}`;
+    const expected = selectedMonth.totalCount ?? 0;
+    if (expected > 0 && records.length === 0 && !loadingRecords && healedKeyRef.current !== key) {
+      healedKeyRef.current = key;
+      fetchRecordsFor(selectedCity, selectedMonth.id, true);
+    }
+  }, [selectedCity, selectedMonth, records.length, loadingRecords]);
 
   const fetchAllCities = useCallback(async () => {
     setLoadingCities(true);

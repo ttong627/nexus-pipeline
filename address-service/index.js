@@ -50,21 +50,15 @@ const BLDG_SELECT = `SELECT sido, sigungu, legal_emd, legal_ri,
 const VER_COND = DB_VERSION ? 'version_id = $3 AND ' : '';
 const verParams = (cityKey, roadPart) => DB_VERSION ? [cityKey, roadPart, DB_VERSION] : [cityKey, roadPart];
 async function matchInTable(select, cityKey, roadPart) {
-  // 1순위: 정확 매칭 (읍/면 emd는 % 와일드카드로 흡수)
-  let r = await pool.query(
+  // 정확 매칭만. `road_key LIKE cityKey%roadPart` 는 끝에 와일드카드가 없어 roadPart로 끝나는 행만 매칭한다
+  // (= "박석로25번길32" 검색에 "박석로25번길32-5" 는 안 잡히는 정확 경계).
+  // ⚠️ 유사매칭(근사매칭) 절대 금지 — 입력 건물번호와 다른 부번을 반환하면 도로명주소 변조가 된다.
+  //   (과거 2순위 "본번 동일·부번 임의" LIKE ...'-%' 가 "박석로25번길 32" → "32-5"로 둔갑시켜 제거함)
+  const r = await pool.query(
     `${select} WHERE ${VER_COND}road_key LIKE $1 || '%' || $2 ORDER BY length(road_key) ASC LIMIT 1`,
     verParams(cityKey, roadPart)
   );
-  if (r.rows[0]) return r.rows[0];
-  // 2순위: 본번 동일 + 부번 임의 (상세 부번 누락 대응 — 법정동·도로명 동일 보장)
-  if (!/-/.test(roadPart)) {
-    r = await pool.query(
-      `${select} WHERE ${VER_COND}road_key LIKE $1 || '%' || $2 || '-%' ORDER BY length(road_key) ASC LIMIT 1`,
-      verParams(cityKey, roadPart)
-    );
-    if (r.rows[0]) return r.rows[0];
-  }
-  return null;
+  return r.rows[0] || null;
 }
 
 async function matchRow(query, cityLabel) {
@@ -130,6 +124,10 @@ async function jusoFallback(query, cityLabel) {
       if (code !== '0') { jusoIdx++; continue; } // 키 만료/오류 → 다음 키
       const r = j.results.juso && j.results.juso[0];
       if (!r) return null;
+      // 유사매칭 차단: 입력 도로명+건물번호와 JUSO 결과 건물번호가 정확히 일치할 때만 채택
+      const reqPart = buildRoadPart(query, cityLabel);
+      const gotPart = norm(`${r.rn || ''}${r.buldMnnm || ''}${r.buldSlno && String(r.buldSlno) !== '0' ? '-' + r.buldSlno : ''}`);
+      if (reqPart && !gotPart.endsWith(reqPart)) return null;
       return {
         roadAddrPart1: r.roadAddrPart1 || r.roadAddr,
         roadAddr: r.roadAddr, standardRoadAddress: r.roadAddr,
@@ -144,6 +142,44 @@ async function jusoFallback(query, cityLabel) {
     } catch { jusoIdx++; }
   }
   return null;
+}
+
+// ── 카카오 주소검색 폴백: DB·JUSO 모두 미스 시 카카오 주소 API로 정확값 보완 ──
+// 좌표용 KAKAO_KEY 재사용. 입력 건물번호와 일치하는 결과만 채택(유사매칭 금지 — 형 지시).
+async function kakaoAddressFallback(query, cityLabel) {
+  if (!KAKAO_KEY) return null;
+  const kw = `${cityLabel || ''} ${query || ''}`.replace(/\s+/g, ' ').trim();
+  if (kw.length < 2) return null;
+  try {
+    const res = await fetch(`https://dapi.kakao.com/v2/local/search/address.json?query=${encodeURIComponent(kw)}&size=1`, {
+      headers: { Authorization: `KakaoAK ${KAKAO_KEY}` },
+    });
+    if (!res.ok) return null;
+    const j = await res.json();
+    const d = j.documents && j.documents[0];
+    const ra = d && d.road_address;
+    if (!ra || !ra.address_name) return null;
+    // 유사매칭 차단: 입력 도로명+건물번호와 카카오 결과 건물번호가 정확히 일치할 때만 채택
+    const reqPart = buildRoadPart(query, cityLabel);
+    const gotPart = norm(`${ra.road_name || ''}${ra.main_building_no || ''}${ra.sub_building_no ? '-' + ra.sub_building_no : ''}`);
+    if (reqPart && !gotPart.endsWith(reqPart)) return null;
+    const jb = d.address;
+    return {
+      roadAddrPart1: ra.address_name, roadAddr: ra.address_name, standardRoadAddress: ra.address_name,
+      emdNm: ra.region_3depth_name || '', liNm: '', legalDong: ra.region_3depth_name || '', legalRi: '',
+      bdNm: ra.building_name || '', buildingName: ra.building_name || '',
+      roadName: ra.road_name || '', rn: ra.road_name || '',
+      siNm: ra.region_1depth_name || '', sggNm: ra.region_2depth_name || '',
+      matchedSido: ra.region_1depth_name || '', matchedSigungu: ra.region_2depth_name || '',
+      buildingMainNo: ra.main_building_no || '', buldMnnm: ra.main_building_no || '',
+      buildingSubNo: ra.sub_building_no || '', buldSlno: ra.sub_building_no || '',
+      jibunAddr: jb ? jb.address_name : '', bdMgtSn: '', _addressMgtNo: '',
+      bdKdcd: '0', _matchSource: 'kakao', _matchConfidence: 0.8,
+    };
+  } catch (e) {
+    console.error('[kakao address fallback]', e.message);
+    return null;
+  }
 }
 
 // ── 좌표: geocode_cache 우선, 미스 시 카카오 1회 + 저장 ──
@@ -222,9 +258,11 @@ app.post('/v1/address/match', async (req, res) => {
     const { query, cityLabel } = req.body || {};
     const row = await matchRow(query, cityLabel);
     if (row) return res.json({ ok: true, data: toApiResult(row) });
-    // 전국 DB 미매칭(신규·갱신 주소) → JUSO 주소검색 API 폴백
+    // 정확값 폴백 체인 (유사매칭 없이): DB 미스 → JUSO API → 카카오 주소검색
     const juso = await jusoFallback(query, cityLabel);
-    res.json({ ok: !!juso, data: juso });
+    if (juso) return res.json({ ok: true, data: juso });
+    const kakao = await kakaoAddressFallback(query, cityLabel);
+    res.json({ ok: !!kakao, data: kakao });
   } catch (e) {
     console.error('[match]', e.message);
     res.json({ ok: false, data: null });
