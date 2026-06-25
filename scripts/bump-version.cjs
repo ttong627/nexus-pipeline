@@ -79,10 +79,66 @@ const updateVersionFile = ({ appVersion, buildDate, buildTime }) => {
   fs.writeFileSync(versionPath, source, 'utf8');
 };
 
+// CHANGELOG 맨 앞에 새 버전 블록을 삽입(append-only — 과거 항목은 절대 수정/삭제하지 않음).
+// items 가 비어 있으면 아무것도 하지 않고 false 반환.
+const prependChangelog = ({ appVersion, buildDate, items }) => {
+  if (!Array.isArray(items) || items.length === 0) return false;
+
+  let source = fs.readFileSync(versionPath, 'utf8');
+  const marker = 'export const CHANGELOG = [';
+  const idx = source.indexOf(marker);
+  if (idx === -1) {
+    console.warn('[changelog] CHANGELOG 배열을 찾지 못해 변경내역 삽입을 건너뜁니다.');
+    return false;
+  }
+
+  // 같은 버전 블록이 이미 있으면 중복 삽입 방지
+  if (new RegExp(`\\{\\s*v:\\s*['"\`]${appVersion.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}['"\`]`).test(source)) {
+    console.warn(`[changelog] ${appVersion} 블록이 이미 존재하여 삽입을 건너뜁니다.`);
+    return false;
+  }
+
+  const insertPos = idx + marker.length;
+  const itemLines = items
+    .map((it) => String(it).trim())
+    .filter(Boolean)
+    .map((it) => `    ${JSON.stringify(it)},`)
+    .join('\n');
+  const block = `\n  { v: ${JSON.stringify(appVersion)}, date: ${JSON.stringify(buildDate)}, items: [\n${itemLines}\n  ]},`;
+
+  source = source.slice(0, insertPos) + block + source.slice(insertPos);
+  fs.writeFileSync(versionPath, source, 'utf8');
+  return true;
+};
+
+// 인자 파싱: [patch|minor|major] "변경항목1" "변경항목2" ...
+//   - bump 종류: env VERSION_BUMP > 첫 위치인자 > 'minor'
+//   - 나머지 인자(또는 --note 뒤): CHANGELOG 항목(있으면 자동 삽입, 없으면 버전/빌드시간만 갱신)
+const parseArgs = () => {
+  const argv = process.argv.slice(2);
+  let bumpType = (process.env.VERSION_BUMP || '').toLowerCase();
+  const notes = [];
+
+  for (const raw of argv) {
+    const a = String(raw).trim();
+    if (!a) continue;
+    if (!bumpType && ['patch', 'minor', 'major'].includes(a.toLowerCase())) {
+      bumpType = a.toLowerCase();
+      continue;
+    }
+    if (a === '--note' || a === '--notes') continue; // 구분자(무시)
+    if (a.startsWith('--')) continue;                 // 기타 플래그 무시
+    notes.push(a);
+  }
+
+  if (!bumpType) bumpType = 'minor';
+  return { bumpType, notes };
+};
+
 const main = () => {
-  const bumpType = (process.env.VERSION_BUMP || 'minor').toLowerCase();
+  const { bumpType, notes } = parseArgs();
   if (!['patch', 'minor', 'major'].includes(bumpType)) {
-    throw new Error('VERSION_BUMP must be patch, minor, or major.');
+    throw new Error('bump 종류는 patch, minor, major 중 하나여야 합니다.');
   }
 
   const pkg = readJson(packagePath);
@@ -105,8 +161,14 @@ const main = () => {
   }
 
   updateVersionFile({ appVersion, buildDate, buildTime });
+  const wroteChangelog = prependChangelog({ appVersion, buildDate, items: notes });
 
   console.log(`[version] ${previousVersion} -> ${nextVersion} (${appVersion}, ${buildTime} KST)`);
+  if (wroteChangelog) {
+    console.log(`[changelog] ${appVersion} 변경내역 ${notes.length}건 추가됨`);
+  } else {
+    console.log('[changelog] 변경내역 인자 없음 — 버전/빌드시간만 갱신(CHANGELOG 유지)');
+  }
 };
 
 main();

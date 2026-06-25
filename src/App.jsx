@@ -38,6 +38,7 @@ import { extractNoteRows, dedupNoteRows, matchNotesToRoster, applyNotesToRoster,
 import ErrorBoundary from "./components/ErrorBoundary.jsx";
 import GlobalLoadingBar from "./components/GlobalLoadingBar.jsx";
 import IntroScreen from "./components/IntroScreen.jsx";
+import WhatsNewModal from "./components/WhatsNewModal.jsx";
 import ShareRouteView from "./components/ShareRouteView.jsx";
 
 const isChunkLoadError = (error) => {
@@ -299,6 +300,14 @@ export default function App() {
   const [showIntro, setShowIntro] = useState(false);
   const [introReason, setIntroReason] = useState('new'); // 'new' | 'region' | 'upgrade'
   const [introMeta, setIntroMeta] = useState({}); // { region, tier } 등 이유별 추가 정보
+
+  // 업데이트 내역 팝업 — null | { auto, startAll }
+  const [whatsNew, setWhatsNew] = useState(null);
+  const closeWhatsNew = () => {
+    try { localStorage.setItem('nexus_whatsnew_seen_v1', APP_VERSION); } catch { /* ignore */ }
+    setWhatsNew(null);
+  };
+  const openWhatsNew = () => setWhatsNew({ auto: false, startAll: true });
   const inqUnsubRef = useRef(null);
   const userUnsubRef = useRef(null); // user 문서 실시간 구독 해제용
 
@@ -1326,6 +1335,18 @@ export default function App() {
   useEffect(() => {
     if (!user || showIntro) return;
     try { if (!localStorage.getItem('nexus_welcome_tour_v2')) setShowWelcomeTour(true); } catch { /* ignore */ }
+  }, [user, showIntro]);
+
+  // 업데이트 내역 팝업 — 새 버전 첫 접속 시 1회 자동(인트로 종료 후, 기기별 localStorage)
+  // 신규 가입자는 첫 가이드 투어를 먼저 보도록 이번엔 양보(seen 미저장 → 다음 접속 때 표시)
+  useEffect(() => {
+    if (!user || showIntro) return;
+    try {
+      if (localStorage.getItem('nexus_whatsnew_seen_v1') !== APP_VERSION
+          && localStorage.getItem('nexus_welcome_tour_v2')) {
+        setWhatsNew({ auto: true });
+      }
+    } catch { /* ignore */ }
   }, [user, showIntro]);
 
   const handleCellEdit = (id, field, value) => {
@@ -2923,7 +2944,7 @@ export default function App() {
         )}
 
         <main className="flex-1 relative overflow-hidden bg-[#070807] flex flex-col">
-          {step === 0 && <Dashboard user={user} onLogout={onLogout} onStart={(s) => setStep(typeof s === 'number' ? s : 1)} onHelp={onHelp} setFileInfo={setFileInfo} setWorksheets={setWorksheets} setBaseCount={setBaseCount} gridData={gridData} setGridData={setGridData} fileInfo={fileInfo} onCloudCard={(city) => { setDbNavCity(city); setStep(8); }} onBaseCard={(city) => { setDbNavCity(city); setStep(6); }} onOpenRouteMap={() => { if (!canUseRouteMap(user)) { setUpgradeReason('routeMap'); setShowUpgrade(true); } else setShowRouteQuick(true); }} workflowMode={workflowMode} onWorkflowModeChange={changeWorkflowMode} stepStatus={stepStatus} onOpenIntro={() => { setIntroReason('new'); setShowIntro(true); }} />}
+          {step === 0 && <Dashboard user={user} onLogout={onLogout} onStart={(s) => setStep(typeof s === 'number' ? s : 1)} onHelp={onHelp} setFileInfo={setFileInfo} setWorksheets={setWorksheets} setBaseCount={setBaseCount} gridData={gridData} setGridData={setGridData} fileInfo={fileInfo} onCloudCard={(city) => { setDbNavCity(city); setStep(8); }} onBaseCard={(city) => { setDbNavCity(city); setStep(6); }} onOpenRouteMap={() => { if (!canUseRouteMap(user)) { setUpgradeReason('routeMap'); setShowUpgrade(true); } else setShowRouteQuick(true); }} workflowMode={workflowMode} onWorkflowModeChange={changeWorkflowMode} stepStatus={stepStatus} onOpenIntro={() => { setIntroReason('new'); setShowIntro(true); }} onOpenWhatsNew={openWhatsNew} />}
           {step === 1 && <Step1_Upload handleDragOver={handleDragOver} handleDrop={handleDrop} handleFileUpload={handleFileUpload} handleUnifiedDrop={handleUnifiedDrop} isBaseUploading={isBaseUploading} step={step} onHelp={onHelp} onOpenDashboard={() => setStep(0)} cleanMode={cleanMode} setCleanMode={setCleanMode} analyzing={analyzing} easyResultMode={easyResultMode} onChangeEasyResultMode={changeEasyResultMode} />}
           {step === 2 && <Step2_SheetSelect step={step} setStep={setStep} fileInfo={fileInfo} setFileInfo={setFileInfo} worksheets={worksheets} setWorksheets={setWorksheets} setSelectedSheets={setSelectedSheets} onHelp={onHelp} handleSecondFileUpload={handleSecondFileUpload} userCities={user?.citiesApproved || []} isAdmin={user?.role === 'admin'} />}
           {step === 3 && <Step3_Mapping step={step} setStep={setStep} selectedSheets={selectedSheets} worksheets={worksheets} mapDefs={mapDefs} setMapDefs={setMapDefs} startProcessing={handleAnalyzeAll} onHelp={onHelp} isBasePurifyMode={isBasePurifyMode} setIsBasePurifyMode={setIsBasePurifyMode} onOpenDbImport={() => setShowDbImport(true)} dbImportReady={dbImportReady} onUserMapping={handleUserMapping} city={fileInfo?.city || ''} />}
@@ -3002,6 +3023,15 @@ export default function App() {
 
         {/* 첫 진입 가이드 투어 (1회) */}
         {showWelcomeTour && <WelcomeTour onClose={closeWelcomeTour} />}
+
+        {whatsNew && (
+          <WhatsNewModal
+            auto={!!whatsNew.auto}
+            startAll={!!whatsNew.startAll}
+            onClose={closeWhatsNew}
+            onDontShowAgain={closeWhatsNew}
+          />
+        )}
 
         {/* RESTORED MODAL RENDERS */}
         {showHelp && <HelpModal step={step === 8 ? 6 : step} onClose={() => setShowHelp(false)} />}

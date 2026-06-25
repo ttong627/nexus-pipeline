@@ -759,3 +759,29 @@ handleCityMonthConfirm(city, month)
 | CM-2 | 같은 지자체 다음 업로드 시 저장된 매핑 자동 적용 |
 | CM-3 | 저장 키에 지자체명 포함 — 지자체마다 다른 엑셀 포맷 지원 |
 | CM-4 | 키 형식: `nexus_col_map_v1_${city}` (city는 공백 포함 원문 그대로) |
+
+---
+
+## 22. 버전 관리·업데이트 내역 자동화 (배포 표준 절차)
+
+> 버전 번호·빌드시간·CHANGELOG·사용자 팝업이 하나로 맞물려 자동 동작한다. 손으로 `version.js`를 직접 수정하지 말 것.
+
+### 배포 단위 작업이 끝나면 반드시 release 실행
+
+```bash
+# 형식: node scripts/bump-version.cjs [minor|patch|major] "변경항목1" "변경항목2" ...
+node scripts/bump-version.cjs minor "쉬운정제 자동저장 추가" "이번달 명단 0건 표시 해결"
+# 또는 npm 별칭(인자 앞 -- 필요)
+npm run release -- minor "항목1" "항목2"
+```
+
+| 규칙 | 내용 |
+| --- | --- |
+| VER-1 | `bump-version.cjs` 한 번 실행으로 ① `package.json`/`lock` semver ② `version.js`의 `APP_VERSION`·`APP_BUILD`·`APP_BUILD_TIME`(KST) ③ `CHANGELOG` 맨 앞 새 버전 블록 — 전부 자동 갱신 |
+| VER-2 | bump 종류 기본 `minor`(빠른 버전업, 표기 `V{major}.{minor}` 2자리). minor가 100 도달 시 major 롤오버. 큰 변경만 `major`, 핫픽스만 `patch` |
+| VER-3 | CHANGELOG 항목은 **형(사용자)이 이해하는 한국어 기능 설명**으로 작성(기술용어·파일명 최소). 인자로 넘긴 항목이 그대로 사용자 팝업에 노출됨 |
+| VER-4 | CHANGELOG는 **append-only** — 과거 버전 항목 절대 수정·삭제 금지. 같은 버전 블록 중복 삽입은 스크립트가 자동 차단 |
+| VER-5 | 변경항목 인자를 생략하면 버전/빌드시간만 갱신되고 CHANGELOG는 보존(긴급 빌드용). 정상 배포는 **항상 항목을 넘긴다** |
+| VER-6 | 사용자는 새 버전 첫 접속 시 `WhatsNewModal` 자동 팝업으로 변경내역 확인(기기별 `localStorage` 키 `nexus_whatsnew_seen_v1`). 헤더 버전 배지 클릭 시 전체 내역 재열람 |
+| VER-7 | release 직후 `npm run build && npm run deploy`(= `firebase deploy --only hosting --account ttong627@gmail.com`). 운영 배포는 형 확인 후 |
+| VER-8 | `WhatsNewModal`/자동표시 useEffect 수정 시 `nexus_whatsnew_seen_v1` 키 구조 유지(인트로·웰컴투어와 표시 순서 충돌 방지 로직 보존) |

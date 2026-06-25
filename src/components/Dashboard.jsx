@@ -390,7 +390,7 @@ function CityCard({ item, onCloudCard, onBaseCard }) {
 }
 
 // ─── Dashboard ────────────────────────────────────────────────────────────────
-export default function Dashboard({ user, onStart, onCloudCard, onBaseCard, gridData = [], fileInfo = null, onOpenRouteMap, workflowMode = 'cleaningOnly', onWorkflowModeChange, stepStatus, onOpenIntro }) {
+export default function Dashboard({ user, onStart, onCloudCard, onBaseCard, gridData = [], fileInfo = null, onOpenRouteMap, workflowMode = 'cleaningOnly', onWorkflowModeChange, stepStatus, onOpenIntro, onOpenWhatsNew }) {
   const totalRows = getProcessedRows(user);
   const totalFiles = getProcessedFiles(user);
   const isAdmin = user?.role === 'admin';
@@ -490,7 +490,14 @@ export default function Dashboard({ user, onStart, onCloudCard, onBaseCard, grid
         <div className="flex items-center gap-3">
           <h1 className="text-lg font-black text-white flex items-center gap-2.5">
             NEXUS <span className="text-emerald-300">PIPELINE</span>
-            <span className="bg-emerald-500/10 text-emerald-300 px-2 py-0.5 rounded text-[10px] tracking-widest border border-emerald-500/20">{APP_VERSION}</span>
+            <button
+              type="button"
+              onClick={onOpenWhatsNew}
+              title="업데이트 내역 보기"
+              className="bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded text-[10px] tracking-widest border border-emerald-500/20 hover:border-emerald-500/40 transition-all cursor-pointer"
+            >
+              {APP_VERSION}
+            </button>
           </h1>
         </div>
         <div className="flex items-center gap-3">
