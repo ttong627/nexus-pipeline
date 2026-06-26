@@ -555,15 +555,24 @@ export default function ShareRouteView({ shareId, driverId }) {
       const fg = isSelected ? driverColor : '#fff';
       const size = isSelected ? 30 : 22;
       const shadow = isSelected ? `0 0 0 3px ${driverColor}, 0 4px 12px rgba(0,0,0,0.7)` : '0 2px 6px rgba(0,0,0,0.5)';
+      // 순번은 발행됐을 때(hasOrder)만 원 안에 표시. 이름·포수 라벨은 항상 표시.
+      const seqText = hasOrder ? (r._displaySeq || '') : '';
+      const qty = parseInt(r.포수) || 1;
+      const label = `${r.이름 || ''}${qty ? `·${qty}포` : ''}`;
       const content = `
         <div onclick="window._shareSelectRecord('${r._uid}')"
-          style="display:flex;align-items:center;justify-content:center;
+          style="display:flex;flex-direction:column;align-items:center;cursor:pointer;transition:all 0.2s;"
+          title="${r.이름} | ${r.주소}">
+          <div style="display:flex;align-items:center;justify-content:center;
             width:${size}px;height:${size}px;border-radius:50%;
             background:${bg};border:2px solid ${isSelected ? driverColor : 'white'};
-            box-shadow:${shadow};cursor:pointer;
-            font-size:${isSelected ? 11 : 9}px;font-weight:900;color:${fg};
-            transition:all 0.2s;"
-          title="${r.이름} | ${r.주소}">${r._displaySeq || ''}</div>`;
+            box-shadow:${shadow};
+            font-size:${isSelected ? 11 : 9}px;font-weight:900;color:${fg};">${seqText}</div>
+          <div style="margin-top:2px;padding:1px 5px;
+            background:rgba(0,0,0,0.78);color:#fff;
+            font-size:10px;font-weight:800;border-radius:5px;
+            white-space:nowrap;line-height:1.4;box-shadow:0 1px 3px rgba(0,0,0,0.4);">${label}</div>
+        </div>`;
       const overlay = new window.kakao.maps.CustomOverlay({
         position: new window.kakao.maps.LatLng(r.lat, r.lng),
         content, yAnchor: 0.5, xAnchor: 0.5, zIndex: isSelected ? 99 : 1,
