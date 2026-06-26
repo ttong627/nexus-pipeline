@@ -1,8 +1,11 @@
-export const APP_VERSION = 'V6.71';
-export const APP_BUILD = '2026.06.25';
-export const APP_BUILD_TIME = '2026.06.25 12:25';
+export const APP_VERSION = 'V6.72';
+export const APP_BUILD = '2026.06.26';
+export const APP_BUILD_TIME = '2026.06.26 17:46';
 
 export const CHANGELOG = [
+  { v: "V6.72", date: "2026.06.26", items: [
+    "기사 지도 공유 — 배송순번을 아직 정하지 않은 기사는 지도에 순번 번호와 이동 경로선이 표시되지 않음(순번 확정 후에만 노출)",
+  ]},
   { v: "V6.70", date: "2026.06.25", items: [
     "업데이트 내역 팝업 신설 — 새 버전 첫 접속 시 바뀐 내용을 자동 안내(헤더 버전 배지 클릭 시 전체 내역 다시 보기)",
     "버전 관리 자동화 — 배포할 때마다 버전 번호·날짜·변경내역·사용자 팝업이 한 번에 자동 갱신(손으로 version.js 수정 불필요)",

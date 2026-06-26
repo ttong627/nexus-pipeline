@@ -395,13 +395,16 @@ export default function ShareRouteView({ shareId, driverId }) {
   const remoteOrderIds = Array.isArray(shareData?.driverOrder?.[driver?.id]) ? shareData.driverOrder[driver.id] : [];
   const activeOrderIds = localOrderIds.length ? localOrderIds : remoteOrderIds;
   const orderIndex = new Map(activeOrderIds.map((id, i) => [id, i]));
+  // 배송순번 발행 여부: 담당자 발행(driverOrder)·기사 편집(localOrderIds) 또는 저장된 배송순번이 있을 때만.
+  // 미발행이면 순번 번호·이동선을 표시하지 않는다.
+  const hasOrder = activeOrderIds.length > 0 || baseRecords.some(r => parseInt(r.배송순번, 10) > 0);
   const allRecords = baseRecords
     .sort((a, b) => {
       const ai = orderIndex.has(a._uid) ? orderIndex.get(a._uid) : 100000 + (parseInt(a.배송순번) || 9999);
       const bi = orderIndex.has(b._uid) ? orderIndex.get(b._uid) : 100000 + (parseInt(b.배송순번) || 9999);
       return ai - bi;
     })
-    .map((r, i) => ({ ...r, _displaySeq: i + 1 }));
+    .map((r, i) => ({ ...r, _displaySeq: hasOrder ? i + 1 : null }));
   const mapRecords = allRecords.filter(r => r.lat && r.lng);
 
   useEffect(() => {
@@ -538,7 +541,7 @@ export default function ShareRouteView({ shareId, driverId }) {
     overlaysRef.current = [];
     if (!mapRecords.length) return;
     const driverColor = driver.color || '#3b82f6';
-    if (mapRecords.length > 1) {
+    if (mapRecords.length > 1 && hasOrder) {
       const polyline = new window.kakao.maps.Polyline({
         path: mapRecords.map(r => new window.kakao.maps.LatLng(r.lat, r.lng)),
         strokeWeight: 2, strokeColor: driverColor, strokeOpacity: 0.5, strokeStyle: 'solid',
@@ -560,7 +563,7 @@ export default function ShareRouteView({ shareId, driverId }) {
             box-shadow:${shadow};cursor:pointer;
             font-size:${isSelected ? 11 : 9}px;font-weight:900;color:${fg};
             transition:all 0.2s;"
-          title="${r.이름} | ${r.주소}">${r._displaySeq || r.배송순번 || '?'}</div>`;
+          title="${r.이름} | ${r.주소}">${r._displaySeq || ''}</div>`;
       const overlay = new window.kakao.maps.CustomOverlay({
         position: new window.kakao.maps.LatLng(r.lat, r.lng),
         content, yAnchor: 0.5, xAnchor: 0.5, zIndex: isSelected ? 99 : 1,
@@ -577,7 +580,7 @@ export default function ShareRouteView({ shareId, driverId }) {
       kakaoMapRef.current.setBounds(bounds, 50, 50, 50, 50);
       lastBoundsKeyRef.current = boundsKey;
     }
-  }, [isMapReady, shareData, driverId, selectedId]); // eslint-disable-line
+  }, [isMapReady, shareData, driverId, selectedId, hasOrder]); // eslint-disable-line
 
   useEffect(() => {
     const t = setTimeout(() => kakaoMapRef.current?.relayout(), 200);
@@ -776,8 +779,8 @@ export default function ShareRouteView({ shareId, driverId }) {
           </div>
         </div>
 
-        {/* ── 3행: 다음 배송지 ─────────────────────────── */}
-        {nextRecord && (
+        {/* ── 3행: 다음 배송지 (순번 발행 시에만) ─────────── */}
+        {hasOrder && nextRecord && (
           <div className="flex items-center gap-2 px-3 pt-1 pb-2 border-t border-[#111]">
             <div className="w-5 h-5 rounded-full shrink-0 flex items-center justify-center text-[10px] font-black border"
               style={{ background: `${driverColor}22`, color: driverColor, borderColor: `${driverColor}44` }}>
@@ -898,7 +901,7 @@ export default function ShareRouteView({ shareId, driverId }) {
             {selectedRecord && (
               <div className="absolute bg-[#0f1a0f] border border-[#2a2a2a] rounded-full px-3 py-0.5 flex items-center gap-2 text-[10px] z-10">
                 <div className="w-2 h-2 rounded-full shrink-0" style={{ background: driverColor }} />
-                <span className="font-black text-white">{selectedRecord._displaySeq || selectedRecord.배송순번}번</span>
+                {selectedRecord._displaySeq && <span className="font-black text-white">{selectedRecord._displaySeq}번</span>}
                 <span className="text-gray-400">{selectedRecord.이름}</span>
                 <span className="text-gray-600 max-w-[100px] truncate">{selectedRecord.주소}</span>
               </div>
@@ -955,7 +958,7 @@ export default function ShareRouteView({ shareId, driverId }) {
                     border: `2px solid ${isSelected ? driverColor : `${driverColor}44`}`,
                     boxShadow: isSelected ? `0 0 10px ${driverColor}60` : 'none',
                   }}>
-                  {r._displaySeq || r.배송순번 || '?'}
+                  {r._displaySeq || ''}
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-0.5">
