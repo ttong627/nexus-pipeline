@@ -1,8 +1,11 @@
-export const APP_VERSION = 'V6.73';
+export const APP_VERSION = 'V6.74';
 export const APP_BUILD = '2026.06.26';
-export const APP_BUILD_TIME = '2026.06.26 17:50';
+export const APP_BUILD_TIME = '2026.06.26 17:53';
 
 export const CHANGELOG = [
+  { v: "V6.74", date: "2026.06.26", items: [
+    "기사 배송순번 — 한 도로를 끝까지 방문한 뒤 다음 도로로 이동하도록 개선(같은 도로를 두 번 지나는 동선을 없애 이동거리 단축)",
+  ]},
   { v: "V6.72", date: "2026.06.26", items: [
     "기사 지도 공유 — 배송순번을 아직 정하지 않은 기사는 지도에 순번 번호와 이동 경로선이 표시되지 않음(순번 확정 후에만 노출)",
   ]},

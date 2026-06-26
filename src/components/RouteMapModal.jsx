@@ -736,79 +736,193 @@ const twoOptRoads = (roads) => {
   }
 };
 
-// ── 도로 기반 TSP + 2-opt 교차 제거 + 진입 방향 최적화 ─────────────────────
-// ① 도로명 그룹화 → ② 건물번호 오름차순 → ③ 최근접 이웃 초기 순서
-// ④ 2-opt 교차 제거 → ⑤ 각 도로 진입 방향(정/역방향) 최소거리로 선택
+// ── 도로 우선 순번: 한 도로를 끝까지 방문한 뒤 다음 도로로 이동 ─────────────
+// 기존 구현은 도로의 홀/짝 측을 별도 TSP 단위로 다뤄, 가까운 옆 도로를 거친 뒤
+// 같은 도로의 반대편으로 돌아오는 경우가 있었다. 도로 전체를 하나의 corridor로
+// 묶고 한쪽 끝 → 반대쪽 끝의 뱀형 순서로 통과해 도로 재방문을 원천 차단한다.
+const getRoadStopKey = (record, roadInfo) => {
+  const managedBuilding = record?._buildingMgtNo || record?.buildingMgtNo || record?._addressMgtNo || record?.addressMgtNo;
+  // parseRoadInfo가 도로를 반환한 경우 건물번호는 항상 존재한다.
+  const building = managedBuilding || `${roadInfo.num}-${roadInfo.sub || 0}`;
+  return `${roadInfo.road}:${roadInfo.side || 'both'}:${building}`;
+};
+
+const hasRouteCoord = (item) => {
+  const lat = item?.lat ?? item?._lat;
+  const lng = item?.lng ?? item?._lng;
+  return lat !== null && lat !== undefined && lat !== ''
+    && lng !== null && lng !== undefined && lng !== ''
+    && Number.isFinite(Number(lat)) && Number.isFinite(Number(lng));
+};
+
+const getRouteCoord = (item) => {
+  if (!hasRouteCoord(item)) return null;
+  return { lat: Number(item.lat ?? item._lat), lng: Number(item.lng ?? item._lng) };
+};
+
+const getRouteDistance = (from, to) => {
+  const a = getRouteCoord(from);
+  const b = getRouteCoord(to);
+  return a && b ? haversine(a.lat, a.lng, b.lat, b.lng) : Infinity;
+};
+
+const buildRoadCorridors = (points) => {
+  const roads = new Map();
+  const fallback = [];
+
+  points.forEach(record => {
+    const roadInfo = parseRoadInfo(getSequenceAddress(record));
+    if (!roadInfo.road) {
+      fallback.push(record);
+      return;
+    }
+    if (!roads.has(roadInfo.road)) roads.set(roadInfo.road, new Map());
+    const stops = roads.get(roadInfo.road);
+    const key = getRoadStopKey(record, roadInfo);
+    if (!stops.has(key)) stops.set(key, { key, roadInfo, records: [] });
+    stops.get(key).records.push(record);
+  });
+
+  const corridors = [...roads.entries()].map(([road, stops]) => {
+    const normalizedStops = [...stops.values()].map(stop => {
+      const records = sortSequenceUnitRecords(stop.records);
+      const withCoord = records.filter(record => hasRouteCoord(record));
+      const load = withCoord.reduce((sum, record) => sum + getEffectiveLoad(record), 0) || withCoord.length || 1;
+      const lat = withCoord.length
+        ? withCoord.reduce((sum, record) => sum + Number(record._lat) * getEffectiveLoad(record), 0) / load
+        : null;
+      const lng = withCoord.length
+        ? withCoord.reduce((sum, record) => sum + Number(record._lng) * getEffectiveLoad(record), 0) / load
+        : null;
+      return {
+        ...stop,
+        records,
+        lat,
+        lng,
+        hasCoord: withCoord.length > 0,
+      };
+    });
+    const withCoord = normalizedStops.filter(stop => stop.hasCoord);
+    const weight = withCoord.length || 1;
+    return {
+      road,
+      stops: normalizedStops,
+      hasCoord: withCoord.length > 0,
+      lat: withCoord.length ? withCoord.reduce((sum, stop) => sum + stop.lat, 0) / weight : null,
+      lng: withCoord.length ? withCoord.reduce((sum, stop) => sum + stop.lng, 0) / weight : null,
+    };
+  });
+
+  return { corridors, fallback };
+};
+
+const compareRoadStops = (a, b) => {
+  if (a.roadInfo.num !== b.roadInfo.num) return a.roadInfo.num - b.roadInfo.num;
+  if (a.roadInfo.sub !== b.roadInfo.sub) return a.roadInfo.sub - b.roadInfo.sub;
+  return a.key.localeCompare(b.key, 'ko', { numeric: true });
+};
+
+const buildCorridorVariants = (corridor) => {
+  const sides = { left: [], right: [], both: [] };
+  corridor.stops.forEach(stop => sides[stop.roadInfo.side || 'both'].push(stop));
+  Object.values(sides).forEach(stops => stops.sort(compareRoadStops));
+  const asc = stops => [...stops];
+  const desc = stops => [...stops].reverse();
+  const variants = [];
+
+  // 대로/로: 홀수·짝수를 각각 한 방향으로 훑고 반대편은 역방향으로 훑는다.
+  if (sides.left.length && sides.right.length) {
+    variants.push([...asc(sides.left), ...asc(sides.both), ...desc(sides.right)]);
+    variants.push([...desc(sides.left), ...desc(sides.both), ...asc(sides.right)]);
+    variants.push([...asc(sides.right), ...asc(sides.both), ...desc(sides.left)]);
+    variants.push([...desc(sides.right), ...desc(sides.both), ...asc(sides.left)]);
+  } else {
+    // 길·주소 누락 등 방향이 없는 stop도 같은 도로 corridor에서 건물번호 순으로 처리한다.
+    const oneWay = [...sides.left, ...sides.right, ...sides.both].sort(compareRoadStops);
+    variants.push(asc(oneWay));
+    variants.push(desc(oneWay));
+  }
+
+  const seen = new Set();
+  return variants.filter(variant => {
+    const key = variant.map(stop => stop.key).join('|');
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+};
+
+const getVariantEndpoint = (variant, isLast = false) => {
+  const stops = isLast ? [...variant].reverse() : variant;
+  return stops.find(stop => stop.hasCoord) || null;
+};
+
+const chooseCorridorVariant = (corridor, previous, next) => {
+  const variants = buildCorridorVariants(corridor);
+  if (variants.length <= 1) return variants[0] || [];
+  let best = variants[0];
+  let bestScore = Infinity;
+  variants.forEach(variant => {
+    const first = getVariantEndpoint(variant);
+    const last = getVariantEndpoint(variant, true);
+    const entry = previous ? getRouteDistance(previous, first) : (first ? -first.lat * 100000 : 0);
+    // 다음 도로로 빠져나가기 좋은 방향을 함께 고려하되, 현재 도로의 연속 방문을 우선한다.
+    const exit = next ? getRouteDistance(last, next) : 0;
+    const score = (Number.isFinite(entry) ? entry : 0) + (Number.isFinite(exit) ? exit * 0.35 : 0);
+    if (score < bestScore) {
+      bestScore = score;
+      best = variant;
+    }
+  });
+  return best;
+};
+
+const appendRoadStop = (result, stop, previous) => {
+  const forward = stop.records;
+  const reverse = [...stop.records].reverse();
+  const first = forward.find(record => hasRouteCoord(record));
+  const last = [...forward].reverse().find(record => hasRouteCoord(record));
+  const useReverse = previous && first && last && getRouteDistance(previous, last) < getRouteDistance(previous, first);
+  const records = useReverse ? reverse : forward;
+  result.push(...records);
+  return [...records].reverse().find(record => hasRouteCoord(record)) || previous;
+};
+
+const orderRoadCorridors = (corridors, startPoint) => {
+  const coordCorridors = corridors.filter(corridor => corridor.hasCoord);
+  const noCoordCorridors = corridors.filter(corridor => !corridor.hasCoord)
+    .sort((a, b) => a.road.localeCompare(b.road, 'ko', { numeric: true }));
+  if (!coordCorridors.length) return noCoordCorridors;
+
+  const remaining = [...coordCorridors];
+  const startIndex = startPoint
+    ? remaining.reduce((best, corridor, index) => getRouteDistance(startPoint, corridor) < getRouteDistance(startPoint, remaining[best]) ? index : best, 0)
+    : remaining.reduce((best, corridor, index) => corridor.lat > remaining[best].lat ? index : best, 0);
+  const ordered = [remaining.splice(startIndex, 1)[0]];
+  while (remaining.length) {
+    const last = ordered[ordered.length - 1];
+    const nextIndex = remaining.reduce((best, corridor, index) => getRouteDistance(last, corridor) < getRouteDistance(last, remaining[best]) ? index : best, 0);
+    ordered.push(remaining.splice(nextIndex, 1)[0]);
+  }
+  twoOptRoads(ordered);
+  return [...ordered, ...noCoordCorridors];
+};
+
 const roadAwareTSP = (points, startPoint = null) => {
   if (!points.length) return [];
-
-  // buildSequenceUnits 1회만 호출 → coordUnits / noCoordUnits 분리
-  const allUnits = buildSequenceUnits(points);
-  const coordUnits = allUnits.filter(u => u.hasCoord).map(u => ({ ...u, group: u.records }));
-  const noCoordUnits = allUnits.filter(u => !u.hasCoord);
-
-  if (!coordUnits.length) return noCoordUnits.flatMap(u => u.records);
-
-  if (coordUnits.length === 1) {
-    return [...coordUnits[0].group, ...noCoordUnits.flatMap(u => u.records)];
-  }
-
-  // ③ 최근접 이웃 초기 순서 (출발점 지정 시 출발점 기준, 없으면 가장 북쪽)
-  const rem = [...coordUnits];
-  const startIdx = startPoint
-    ? rem.reduce((mi, r, i) => haversine(startPoint.lat, startPoint.lng, r.lat, r.lng) < haversine(startPoint.lat, startPoint.lng, rem[mi].lat, rem[mi].lng) ? i : mi, 0)
-    : rem.reduce((mi, r, i) => r.lat > rem[mi].lat ? i : mi, 0);
-  const ordered = [rem.splice(startIdx, 1)[0]];
-  while (rem.length) {
-    const last = ordered[ordered.length - 1];
-    let minD = Infinity, minI = 0;
-    rem.forEach((r, i) => {
-      const d = haversine(last.lat, last.lng, r.lat, r.lng);
-      if (d < minD) { minD = d; minI = i; }
-    });
-    ordered.push(rem.splice(minI, 1)[0]);
-  }
-
-  // ④ 2-opt 교차 제거
-  twoOptRoads(ordered);
-
-  // ⑤ 진입 방향 최적화
+  const { corridors, fallback } = buildRoadCorridors(points);
+  const orderedCorridors = orderRoadCorridors(corridors, startPoint);
   const result = [];
-  let prevLat = ordered[0].lat, prevLng = ordered[0].lng;
-  ordered.forEach(road => {
-    const fwdD = road.sLat && road.sLng ? haversine(prevLat, prevLng, road.sLat, road.sLng) : Infinity;
-    const revD = road.eLat && road.eLng ? haversine(prevLat, prevLng, road.eLat, road.eLng) : Infinity;
-    const group = revD < fwdD ? [...road.group].reverse() : road.group;
-    result.push(...group);
-    const last = group[group.length - 1];
-    prevLat = last._lat || road.lat;
-    prevLng = last._lng || road.lng;
+  let previous = startPoint || null;
+
+  orderedCorridors.forEach((corridor, index) => {
+    const next = orderedCorridors.slice(index + 1).find(item => item.hasCoord) || null;
+    const stops = chooseCorridorVariant(corridor, previous, next);
+    stops.forEach(stop => { previous = appendRoadStop(result, stop, previous); });
   });
 
-  // ⑥ 좌표 없는 레코드: 같은 도로/단지 그룹 직후 삽입 (없으면 맨 끝)
-  const insertedIds = new Set();
-  noCoordUnits.forEach(noUnit => {
-    const key = noUnit.key;
-    // coordUnits 중 key의 앞부분이 일치하는 그룹 찾기 (같은 도로/아파트)
-    const matchIdx = result.findIndex(r => {
-      const rMeta = getSequenceUnitMeta(r);
-      return rMeta.key === key || rMeta.key.split(':').slice(0, 3).join(':') === key.split(':').slice(0, 3).join(':');
-    });
-    noUnit.records.forEach(r => {
-      if (insertedIds.has(r.id)) return;
-      insertedIds.add(r.id);
-      if (matchIdx !== -1) {
-        // 해당 그룹의 마지막 레코드 바로 뒤 삽입 위치 계산
-        let insertAt = matchIdx + 1;
-        while (insertAt < result.length && getSequenceUnitMeta(result[insertAt]).key === getSequenceUnitMeta(result[matchIdx]).key) insertAt++;
-        result.splice(insertAt, 0, r);
-      } else {
-        result.push(r);
-      }
-    });
-  });
-
-  return result;
+  // 도로명 자체가 없는 데이터만 좌표 TSP fallback을 적용한다. 도로명 데이터는 절대 이곳으로 되돌리지 않는다.
+  return [...result, ...nearestNeighborTSP(fallback, previous)];
 };
 
 const analyzeSequenceQuality = (records, drivers) => {
