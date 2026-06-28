@@ -200,6 +200,7 @@ const PrevMonthCompareModal = lazyWithChunkRecovery(() => import("./components/P
 const RouteMapModal         = lazyWithChunkRecovery(() => import("./components/RouteMapModal.jsx"));
 const RouteSetupModal       = lazyWithChunkRecovery(() => import("./components/RouteSetupModal.jsx"));
 const RouteQuickModal       = lazyWithChunkRecovery(() => import("./components/RouteQuickModal.jsx"));
+const DongSelectModal       = lazyWithChunkRecovery(() => import("./components/DongSelectModal.jsx"));
 const DriverRegistryModal   = lazyWithChunkRecovery(() => import("./components/DriverRegistryModal.jsx"));
 const SavedRecordsModal     = lazyWithChunkRecovery(() => import("./components/SavedRecordsModal.jsx"));
 const ScheduleTab           = lazyWithChunkRecovery(() => import("./components/ScheduleTab.jsx"));
@@ -210,7 +211,7 @@ import { canUseRouteMap, canUseDbOverview, getMonthlyLimit } from "./utils/tierU
 import { getCachedCoord, saveCoordCache } from "./utils/coordCache.js";
 import { guardAddressDetail } from "./utils/addressFormat.js";
 import { buildStepStatus, getVisibleWorkflowSteps, getWorkflowMeta, getWorkflowMode, WORKFLOW_STEP_LABELS } from "./utils/workflow.js";
-import { LogOut, ShieldCheck, Database, Crown, Layers, UserCircle, Undo2, BarChart3, MapPin, Truck, CalendarDays, FileSpreadsheet, Home, ChevronLeft, ChevronRight, BookOpen, HardDrive, HelpCircle } from "lucide-react";
+import { LogOut, ShieldCheck, Database, Crown, Layers, UserCircle, Undo2, BarChart3, MapPin, Map, Truck, CalendarDays, FileSpreadsheet, Home, ChevronLeft, ChevronRight, BookOpen, HardDrive, HelpCircle } from "lucide-react";
 
 // 등급별 사용설명서 열기 — 게스트/일반(무료)=무료가이드, VIP↑(유료)=유료가이드(따라하기). 두 문서는 상호 링크됨.
 const openManualFor = (tier) => {
@@ -385,6 +386,7 @@ export default function App() {
   const [showRouteMap, setShowRouteMap] = useState(false);
   const [showRouteSetup, setShowRouteSetup] = useState(false);
   const [showRouteQuick, setShowRouteQuick] = useState(false);
+  const [showDongMap, setShowDongMap] = useState(false);
   const [cloudRouteConfig, setCloudRouteConfig] = useState(null);
   const [routeSetupResult, setRouteSetupResult] = useState(null);
   const [routeBackToMatch, setRouteBackToMatch] = useState(false); // 지도→이전화면 복귀 시 setup을 match 단계로
@@ -2843,6 +2845,13 @@ export default function App() {
                   locked={!canUseRouteMap(user)}
                 />
               )}
+              <SidebarItem
+                icon={Map}
+                label="동별 배송지도"
+                active={showDongMap}
+                onClick={() => { if (!canUseRouteMap(user)) { setUpgradeReason('routeMap'); setShowUpgrade(true); } else setShowDongMap(true); }}
+                locked={!canUseRouteMap(user)}
+              />
               <SidebarItem icon={CalendarDays} label="배송일정" active={step === 11} onClick={guardGuest(() => setStep(11))} />
 
               {/* ── 데이터 관리 ── */}
@@ -3055,6 +3064,22 @@ export default function App() {
               setShowRouteQuick(false);
               setShowRouteMap(true);
             }}
+          />
+        )}
+        {showDongMap && (
+          <DongSelectModal
+            userId={user?.uid || ''}
+            userCities={user?.citiesApproved || []}
+            isAdmin={user?.role === 'admin'}
+            onConfirm={(city, monthId, dong) => {
+              // 기존 클라우드 흐름 재사용: 동 1개만 scope → RouteSetupModal → RouteMapModal
+              setCloudRouteConfig({ city, monthId, orgDongs: new Set([dong]), preselectedDong: dong });
+              setRouteSetupResult(null);
+              setRouteBackToMatch(false);
+              setShowDongMap(false);
+              setShowRouteSetup(true);
+            }}
+            onCancel={() => setShowDongMap(false)}
           />
         )}
         {showRouteSetup && (

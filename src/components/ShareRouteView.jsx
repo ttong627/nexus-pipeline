@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { db } from '../config/firebase.js';
-import { doc, onSnapshot, updateDoc } from 'firebase/firestore';
+import { doc, onSnapshot, updateDoc, deleteField } from 'firebase/firestore';
 import { MapPin, List, Map as MapIcon, RefreshCw, Building2, Phone, ChevronUp, ChevronDown, Navigation, Crosshair, Star, X, AlertCircle, Share2 } from 'lucide-react';
 
 const KAKAO_JS_KEY = import.meta.env.VITE_KAKAO_JS_KEY;
@@ -455,27 +455,37 @@ export default function ShareRouteView({ shareId, driverId }) {
 
   const requestOrderApply = useCallback(async () => {
     if (!driver?.id || isRequestingOrderApply) return;
-    const ids = allRecords.map(r => r._uid);
-    if (!ids.length) return;
-    setLocalOrderIds(ids);
-    try { localStorage.setItem(`route_order_${shareId}_${driver.id}`, JSON.stringify(ids)); } catch {}
+    // 온/오프 토글 — 현재 반영 상태를 실시간 shareData에서 직접 판단(TDZ·stale 방지)
+    const currentlyRequested = shareData?.orderApplyRequests?.[driver.id]?.status === 'requested';
     setIsRequestingOrderApply(true);
     try {
-      await updateDoc(doc(db, 'route_shares', shareId), {
-        [`driverOrder.${driver.id}`]: ids,
-        [`orderApplyRequests.${driver.id}`]: {
-          status: 'requested',
-          requestedAt: new Date().toISOString(),
-          orderIds: ids,
-          count: ids.length,
-        },
-      });
+      if (currentlyRequested) {
+        // 토글 OFF — 반영요청 취소(요청 상태만 해제, 기사 편집 순번 driverOrder는 보존)
+        await updateDoc(doc(db, 'route_shares', shareId), {
+          [`orderApplyRequests.${driver.id}`]: deleteField(),
+        });
+      } else {
+        // 토글 ON — 반영요청 등록
+        const ids = allRecords.map(r => r._uid);
+        if (!ids.length) { setIsRequestingOrderApply(false); return; }
+        setLocalOrderIds(ids);
+        try { localStorage.setItem(`route_order_${shareId}_${driver.id}`, JSON.stringify(ids)); } catch {}
+        await updateDoc(doc(db, 'route_shares', shareId), {
+          [`driverOrder.${driver.id}`]: ids,
+          [`orderApplyRequests.${driver.id}`]: {
+            status: 'requested',
+            requestedAt: new Date().toISOString(),
+            orderIds: ids,
+            count: ids.length,
+          },
+        });
+      }
     } catch (e) {
-      console.warn('Order apply request error:', e);
+      console.warn('Order apply toggle error:', e);
     } finally {
       setIsRequestingOrderApply(false);
     }
-  }, [allRecords, driver?.id, isRequestingOrderApply, shareId]);
+  }, [allRecords, driver?.id, isRequestingOrderApply, shareData, shareId]);
 
   // ── 링크 복사 ────────────────────────────────────────────────────────
   const handleCopyLink = useCallback(async () => {

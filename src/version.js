@@ -1,8 +1,12 @@
-export const APP_VERSION = 'V6.78';
-export const APP_BUILD = '2026.06.26';
-export const APP_BUILD_TIME = '2026.06.26 18:27';
+export const APP_VERSION = 'V6.79';
+export const APP_BUILD = '2026.06.28';
+export const APP_BUILD_TIME = '2026.06.28 20:51';
 
 export const CHANGELOG = [
+  { v: "V6.79", date: "2026.06.28", items: [
+    "동별 배송지도 메뉴 신설 — 행정동을 골라 그 동의 명단·배송순번·기사 배정을 한 화면에서 보고 기사별 공유 링크를 원클릭 전달",
+    "기사 공유 지도 — 배송순번 '반영됨'을 다시 누르면 취소되는 켜기/끄기 토글 추가",
+  ]},
   { v: "V6.77", date: "2026.06.26", items: [
     "기사 공유 지도 — 순번 미발행 시 순번 번호와 이동경로선만 숨기고, 핀의 이름·포수 정보는 항상 표시",
   ]},

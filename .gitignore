@@ -56,3 +56,6 @@ lint-report.json
 *firebase-adminsdk*.json
 복구리스트*.xlsx
 _tmp_*
+
+# 순번 시뮬레이션 추출 데이터 (이름·주소·좌표 — git 제외)
+.sim-data/
