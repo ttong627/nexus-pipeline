@@ -1,8 +1,12 @@
-export const APP_VERSION = 'V6.79';
-export const APP_BUILD = '2026.06.28';
-export const APP_BUILD_TIME = '2026.06.28 20:51';
+export const APP_VERSION = 'V6.79.1';
+export const APP_BUILD = '2026.06.30';
+export const APP_BUILD_TIME = '2026.06.30 11:31';
 
 export const CHANGELOG = [
+  { v: "V6.79.1", date: "2026.06.30", items: [
+    "주소정제 무한로딩 해결 — 지도 검색 응답이 느려도 정제가 멈추지 않고 끝까지 완료",
+    "정제 중 오류 발생 시 화면이 멈추지 않고 자동 복귀",
+  ]},
   { v: "V6.79", date: "2026.06.28", items: [
     "동별 배송지도 메뉴 신설 — 행정동을 골라 그 동의 명단·배송순번·기사 배정을 한 화면에서 보고 기사별 공유 링크를 원클릭 전달",
     "기사 공유 지도 — 배송순번 '반영됨'을 다시 누르면 취소되는 켜기/끄기 토글 추가",

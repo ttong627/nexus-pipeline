@@ -15,6 +15,7 @@ const KAKAO_REST_KEY = import.meta.env.VITE_KAKAO_REST_KEY;
 const ADDRESS_MATCH_API_URL = String(import.meta.env.VITE_ADDRESS_MATCH_API_URL || '').replace(/\/+$/, '');
 const ADDRESS_MATCH_TIMEOUT_MS = 3000; // 전국 DB가 1순위 — 대량(easy) burst·콜드스타트에 1200ms는 너무 짧아 JUSO로 새던 문제 해결
 const COORD_SERVICE_TIMEOUT_MS = 700;
+const KAKAO_TIMEOUT_MS = 2000; // Kakao 좌표/키워드 검색 — 타임아웃 없으면 응답 행(hang) 시 정제 전체가 무한 대기(무한로딩) → abort로 차단
 const JUSO_TIMEOUT_MS = 1800;
 let addressMatchCircuitOpenUntil = 0;
 let addressMatchFailCount = 0;
@@ -404,9 +405,10 @@ const fetchKakaoCoord = async (roadAddr, cityPrefix = '', buildingMgtNo = '') =>
     return null;
   }
   try {
-    const res = await fetch(
+    const res = await fetchWithTimeout(
       `https://dapi.kakao.com/v2/local/search/address.json?query=${encodeURIComponent(queryAddr)}&size=1`,
-      { headers: { Authorization: `KakaoAK ${KAKAO_REST_KEY}` } }
+      { headers: { Authorization: `KakaoAK ${KAKAO_REST_KEY}` } },
+      KAKAO_TIMEOUT_MS
     );
     if (!res.ok) { coordCache.set(key, null); return null; }
     const d = (await res.json()).documents?.[0];
@@ -424,9 +426,10 @@ const searchKakaoFull = async (query) => {
   if (!kakaoPending.has(key)) {
     const p = (async () => {
       try {
-        const res = await fetch(
+        const res = await fetchWithTimeout(
           `https://dapi.kakao.com/v2/local/search/keyword.json?query=${encodeURIComponent(key)}&size=1`,
-          { headers: { Authorization: `KakaoAK ${KAKAO_REST_KEY}` } }
+          { headers: { Authorization: `KakaoAK ${KAKAO_REST_KEY}` } },
+          KAKAO_TIMEOUT_MS
         );
         if (!res.ok) return null;
         return (await res.json()).documents?.[0] || null;

@@ -998,6 +998,7 @@ export default function App() {
       return;
     }
     setStep(4);
+    try {
     setProgressLogs([]);
     let count = 0;
     setEngineProgress({ current: 0, total, percent: 0 });
@@ -1305,6 +1306,13 @@ export default function App() {
       }
     } catch (e) {
       console.warn('[전월 비교 로드 실패 — 무시]', e);
+    }
+    } catch (err) {
+      // 정제 중 예외(Kakao 등 API 행·네트워크 오류) → step4 진행화면 무한로딩에서 안전 탈출
+      console.error('[주소정제 처리 오류]', err);
+      setGLoad({ show: false });
+      setStep(1); // 업로드 화면으로 복귀 — 진행바에 갇히지 않도록
+      setTimeout(() => alert('주소정제 중 오류가 발생해 중단했습니다.\n네트워크 상태를 확인한 뒤 다시 시도해주세요.'), 100);
     }
   };
 
