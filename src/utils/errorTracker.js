@@ -11,7 +11,11 @@ const TTL_DAYS = 30;         // expireAt 기반 자동 정리
 const recentErrors = new Map();
 let logging = false;         // 로깅 도중 또 에러나는 무한루프 차단
 
-/** extra 컨텍스트 정리 — 길이 제한으로 민감정보·과대 페이로드 유입 최소화 */
+/**
+ * extra 컨텍스트 정리 — 길이 제한으로 민감정보·과대 페이로드 유입 최소화
+ * @param {Record<string, unknown>} [extra]
+ * @returns {Record<string, string>}
+ */
 const sanitizeExtra = (extra) => {
   try {
     /** @type {Record<string, string>} */

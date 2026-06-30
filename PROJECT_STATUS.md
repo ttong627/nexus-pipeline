@@ -21,9 +21,8 @@
 |---|---|---|---|
 | nexus-pipeline | / (루트) | 메인 프론트엔드 (주소정제·명단·루트맵·동별 배송지도) | React 19.2 + Vite 8 + Tailwind 4 + Firebase 12 |
 | nexus-pipeline-functions | /functions | Firebase Cloud Functions | Node (firebase-admin, firebase-functions) |
-| nexus-address-service | /address-service | 주소 매칭 API (express, 6/24 최신) | Node |
-| nexus-address-service | /services/address-service | 주소 매칭 API (Docker+Cloud SQL, README 본체) | Node |
-| ⚠️ 위 2벌은 동일 API — 운영본 미확정, 둘 다 보존(리스크 참조) | | | |
+| nexus-address-service | /address-service | 주소 매칭 API (express) | Node |
+| nexus-address-service | /services/address-service | 주소 매칭 API (Docker+Cloud SQL) | Node |
 
 ## 마지막 작업 (2026-06-30)
 - **V6.80** 8da329b feat: 클라이언트 오류 자동추적 + lint 게이트 + 관리자 오류로그
@@ -42,16 +41,17 @@
 - 현재 앱 버전: **6.80.0 (V6.80)** · APP_BUILD 2026.06.30 13:03
 - 의존성: 루트 node_modules 설치됨 (자동설치 불필요)
 - 시크릿: `.env`·`.env.example` 존재 (gitignore, 값 비노출)
+- 검증 게이트: `prebuild` = eslint --quiet && tsc --noEmit (배포 전 자동). 별도: `npm run typecheck`, `npm run test:e2e`(Playwright 스모크)
 
 ## 동기화
 - 상태: **이미 최신** (origin/main...HEAD = behind 0 / ahead 0, 워킹트리 clean)
 - gh active 계정: ttong627 (repo owner와 일치 ✅)
 
 ## 검토 완료 메모 (2026-06-30 점검 후속)
-- **쉬운 정제 매칭 엔진**: 이미 100% 구현·배포 완료(excelWorker.js 형식점수+colConfidence+ambiguousKeys, App.jsx 지자체 autoConfirm, EasyCleanConfirm.jsx 마법사). 6/5 prompt_plan의 Phase1·2·3 모두 완성됨 → 추가 작업 불필요.
-- **ESLint 경고 100건**: 대부분 react-hooks(deps/static/refs, 일부 오탐)·주소정제 정규식·미사용변수 → 정리 시 퇴행 위험 > 가치라 **의도적 미처리**(에러 0, 빌드 통과, 핵심 에러차단은 lint 게이트로 달성).
+- **쉬운 정제 매칭 엔진**: 이미 100% 구현·배포 완료 → 추가 작업 불필요.
+- **TypeScript 점진 도입**: errorTracker·addressFormat·columnRules·parsers 4개 순수 모듈에 `// @ts-check` + JSDoc 적용. `tsc --noEmit`을 prebuild 게이트에 추가(타입오류 시 빌드 중단). 거대/IndexedDB 모듈(addressEngine·dbCache 등)은 다음 차수.
+- **E2E 스모크**: Playwright 1개(`tests/smoke.spec.js`) — 빌드된 앱이 런타임 크래시(예: V6.79.3 사고) 없이 셸 렌더되는지 배포 전 검증. `npm run test:e2e`.
 
 ## 리스크
 - 🟢 동기화·계정·환경·배포(200): 정상
 - 🟢 에러 가시성: 전역 추적 + 관리자 패널 오류로그 완비(V6.80)
-- 🟡 **address-service 2벌**: `/address-service`(index.js, 6/24 최신)와 `/services/address-service`(Docker+Cloud SQL, README 본체) — 둘 다 동일 API 제공. **운영 Cloud Run이 어느 소스인지 GCP 콘솔 확인 필요. 확인 전까지 둘 다 보존**(형 결정 2026-06-30). 삭제 금지.

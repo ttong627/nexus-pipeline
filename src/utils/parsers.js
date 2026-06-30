@@ -1,8 +1,13 @@
+// @ts-check
 // 전화번호 필드에서 번호와 뒤따르는 텍스트를 분리
 // "010-1234-5678 독거노인" → { cleaned: "010-1234-5678", note: "독거노인" }
 // "010-0000-0000(요양보호사)" → { cleaned: "010-0000-0000", note: "요양보호사" }
 // "010-0000-0000-형님번호"   → { cleaned: "010-0000-0000", note: "형님번호" }
 // "010-0000-0000:집주인"     → { cleaned: "010-0000-0000", note: "집주인" }
+/**
+ * @param {unknown} raw
+ * @returns {{ cleaned: string, note: string }}
+ */
 export const extractPhoneNote = (raw) => {
   const s = String(raw || '').trim();
   if (!s) return { cleaned: '', note: '' };
@@ -26,8 +31,12 @@ export const extractPhoneNote = (raw) => {
 };
 
 // 입력 중 실시간 자동 포맷 (숫자만 추출 → 대시 삽입)
+/**
+ * @param {unknown} raw
+ * @returns {string}
+ */
 export const formatPhoneInput = (raw) => {
-  const digits = (raw || '').replace(/\D/g, '').slice(0, 11);
+  const digits = String(raw || '').replace(/\D/g, '').slice(0, 11);
   if (!digits) return '';
   if (digits.startsWith('02')) {
     if (digits.length <= 2) return digits;
@@ -42,9 +51,17 @@ export const formatPhoneInput = (raw) => {
 
 // 엑셀이 앞자리 0을 숫자로 떼어낸 휴대폰 복원: 10자리 + 휴대폰접두어(10/11/16~19) → 앞에 0 붙여 11자리.
 // 예: 1080986080 → 01080986080(010-8098-6080). 유선(02/0XX)은 0으로 시작하므로 영향 없음.
+/**
+ * @param {string} d
+ * @returns {string}
+ */
 export const restoreMobileLeadingZero = (d) =>
   (d.length === 10 && /^1[016789]/.test(d)) ? `0${d}` : d;
 
+/**
+ * @param {string} s
+ * @returns {string}
+ */
 export const formatPhone = (s) => {
   const d = restoreMobileLeadingZero(String(s || '').replace(/[^\d]/g, ''));
   if (d.length === 11) return `${d.slice(0,3)}-${d.slice(3,7)}-${d.slice(7)}`;
@@ -56,12 +73,18 @@ export const formatPhone = (s) => {
   return s;
 };
 
+/**
+ * @param {unknown} p1
+ * @param {unknown} p2
+ * @returns {{ mobile: string, landline: string }}
+ */
 export const parsePhoneNumbers = (p1, p2) => {
   // 엑셀이 0을 떼어낸 휴대폰(1080986080)도 휴대폰으로 인식되도록 앞자리 0 복원 후 판별.
   let str1 = restoreMobileLeadingZero(String(p1 || '').replace(/[^\d]/g, ''));
   let str2 = restoreMobileLeadingZero(String(p2 || '').replace(/[^\d]/g, ''));
   let mobile = ''; let landline = '';
 
+  /** @param {string} s @returns {boolean} */
   const isMobile = (s) => /^(010|011|016|017|018|019)/.test(s);
 
   [str1, str2].filter(Boolean).forEach(p => {
@@ -72,6 +95,10 @@ export const parsePhoneNumbers = (p1, p2) => {
   return { mobile: formatPhone(mobile), landline: formatPhone(landline) };
 };
 
+/**
+ * @param {unknown} val
+ * @returns {'Y'|'N'}
+ */
 export const parseSMS = (val) => {
   const s = String(val || '').replace(/\s+/g, '').trim(); // 내부 공백 제거("수신 함"→"수신함")
   if (!s || s === '-') return 'N';
@@ -85,13 +112,17 @@ export const parseSMS = (val) => {
   return 'N';
 };
 
+/**
+ * @param {unknown} val
+ * @returns {string}
+ */
 export const parseBirthDate = (val) => {
   if (!val) return '';
   const digits = String(val).replace(/[^\d]/g, '');
   if (digits.length === 6) {
     return `${digits.slice(0, 2)}.${digits.slice(2, 4)}.${digits.slice(4, 6)}`;
   } else if (digits.length === 8) {
-    return `${digits.slice(2, 4)}.${digits.slice(4, 6)}.${digits.slice(6, 8)}`; 
+    return `${digits.slice(2, 4)}.${digits.slice(4, 6)}.${digits.slice(6, 8)}`;
   }
   let str = String(val).trim();
   if (/^\d{2}[-./]\d{2}[-./]\d{2}$/.test(str)) {
@@ -100,6 +131,10 @@ export const parseBirthDate = (val) => {
   return str;
 };
 
+/**
+ * @param {unknown} raw
+ * @returns {string}
+ */
 export const normalizeBirth = (raw) => {
   const s = String(raw).trim();
   if (/^\d{2}\.\d{2}\.\d{2}$/.test(s)) return s;

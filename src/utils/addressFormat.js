@@ -1,7 +1,13 @@
+// @ts-check
 // 정제 주소 표시 형식 변환 — 저장된 주소 문자열을 괄호(법정동, 건물명) 앞/뒤 배치로 재포맷.
 // App.jsx의 저장 시 포맷(formatAddressForDisplayMode)과 동일 규칙을 문자열만으로 재현한다.
 // 용도: 이미 저장된 r.주소를 화면에서 원하는 형식으로 표시(예: 루트맵 리스트).
 
+/**
+ * 괄호 깊이를 추적하며 최상위(괄호 밖) 첫 구분자(',' 또는 '/') 위치를 찾는다.
+ * @param {string} value
+ * @returns {number} 위치, 없으면 -1
+ */
 const findTopLevelSeparator = (value) => {
   let depth = 0;
   for (let i = 0; i < value.length; i++) {
@@ -13,12 +19,21 @@ const findTopLevelSeparator = (value) => {
   return -1;
 };
 
+/**
+ * 공백 정규화 + 앞뒤 구분자(쉼표/슬래시/공백) 제거.
+ * @param {unknown} value
+ * @returns {string}
+ */
 const cleanAddressPiece = (value) => String(value || '')
   .replace(/\s+/g, ' ')
   .replace(/^[,\s/]+|[,\s/]+$/g, '')
   .trim();
 
-// 주소 문자열 → { road, detail, paren }
+/**
+ * 주소 문자열 → { road, detail, paren }
+ * @param {unknown} address
+ * @returns {{ road: string, detail: string, paren: string }}
+ */
 export const parseDisplayedAddress = (address) => {
   const text = cleanAddressPiece(address);
   if (!text) return { road: '', detail: '', paren: '' };
@@ -27,8 +42,9 @@ export const parseDisplayedAddress = (address) => {
   const rest = sepIdx >= 0 ? cleanAddressPiece(text.slice(sepIdx + 1)) : '';
   const parenMatch = rest.match(/\(([^)]*)\)/);
   const paren = parenMatch ? cleanAddressPiece(parenMatch[1]) : '';
+  const parenIdx = parenMatch?.index ?? 0;
   const detail = parenMatch
-    ? cleanAddressPiece(`${rest.slice(0, parenMatch.index)} ${rest.slice(parenMatch.index + parenMatch[0].length)}`)
+    ? cleanAddressPiece(`${rest.slice(0, parenIdx)} ${rest.slice(parenIdx + parenMatch[0].length)}`)
     : cleanAddressPiece(rest);
   return { road, detail, paren };
 };
@@ -36,6 +52,10 @@ export const parseDisplayedAddress = (address) => {
 // ── 상세주소(동·호수) 손실 방지 가드 ──────────────────────────────
 // 재처리(정제·재적용) 후 주소가 기존 동(棟)·호수를 잃으면 복원/보존한다.
 // "아파트 동이 통째로 삭제되는" 손실을 코드로 차단(절대 망가뜨리지 않음).
+/**
+ * @param {unknown} a
+ * @returns {{ dong: string, ho: string }}
+ */
 const _detailNums = (a) => {
   const s = String(a || '');
   return {
@@ -43,6 +63,12 @@ const _detailNums = (a) => {
     ho: s.match(/(\d+)\s*호/)?.[1] || '',
   };
 };
+/**
+ * 재처리 후 주소가 기존 동·호수를 잃으면 복원/보존한다.
+ * @param {string} oldAddr
+ * @param {string} newAddr
+ * @returns {string}
+ */
 export const guardAddressDetail = (oldAddr, newAddr) => {
   if (!oldAddr || !newAddr) return newAddr || oldAddr || '';
   const o = _detailNums(oldAddr), n = _detailNums(newAddr);
@@ -58,14 +84,15 @@ export const guardAddressDetail = (oldAddr, newAddr) => {
 
 /**
  * 주소 문자열을 표시 형식으로 재포맷.
- * @param {string} address 저장된 주소 문자열
- * @param {'detailBeforeParen'|'parenBeforeDetail'} mode
- *   detailBeforeParen: "도로명, 동호수 (법정동, 건물명)"  (기본)
+ * @param {unknown} address 저장된 주소 문자열
+ * @param {'detailBeforeParen'|'parenBeforeDetail'} [mode]
+ *   detailBeforeParen: "도로명, 동호수 (법정동, 건물명)" (기본)
  *   parenBeforeDetail: "도로명, (법정동, 건물명) 동호수"
+ * @returns {string}
  */
 export const formatAddressDisplay = (address, mode = 'detailBeforeParen') => {
   const { road, detail, paren } = parseDisplayedAddress(address);
-  if (!road) return address || '';
+  if (!road) return String(address || '');
   const parenStr = paren ? `(${paren})` : '';
   if (mode === 'detailBeforeParen') {
     if (detail && parenStr) return `${road}, ${detail} ${parenStr}`;

@@ -59,3 +59,9 @@ _tmp_*
 
 # 순번 시뮬레이션 추출 데이터 (이름·주소·좌표 — git 제외)
 .sim-data/
+
+# Playwright E2E 산출물 (로컬 전용)
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
