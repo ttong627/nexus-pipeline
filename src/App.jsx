@@ -211,7 +211,7 @@ import { canUseRouteMap, canUseDbOverview, getMonthlyLimit } from "./utils/tierU
 import { getCachedCoord, saveCoordCache } from "./utils/coordCache.js";
 import { guardAddressDetail } from "./utils/addressFormat.js";
 import { buildStepStatus, getVisibleWorkflowSteps, getWorkflowMeta, getWorkflowMode, WORKFLOW_STEP_LABELS } from "./utils/workflow.js";
-import { LogOut, ShieldCheck, Database, Crown, Layers, UserCircle, Undo2, BarChart3, MapPin, Map, Truck, CalendarDays, FileSpreadsheet, Home, ChevronLeft, ChevronRight, BookOpen, HardDrive, HelpCircle } from "lucide-react";
+import { LogOut, ShieldCheck, Database, Crown, Layers, UserCircle, Undo2, BarChart3, MapPin, Map as MapIcon, Truck, CalendarDays, FileSpreadsheet, Home, ChevronLeft, ChevronRight, BookOpen, HardDrive, HelpCircle } from "lucide-react";
 
 // 등급별 사용설명서 열기 — 게스트/일반(무료)=무료가이드, VIP↑(유료)=유료가이드(따라하기). 두 문서는 상호 링크됨.
 const openManualFor = (tier) => {
@@ -1022,6 +1022,7 @@ export default function App() {
         const chunk = sheet.bodyRows.slice(i, i + CHUNK_SIZE);
         // 동시성 30 — 정제는 includeCoords:false(좌표 서킷브레이커 무관)이고 매칭 API(Cloud Run)는 오토스케일이라 안전. 처리량 ↑
         const chunkResults = await asyncPool(30, chunk, async (row) => {
+          try {
           let addr = getVal(row, 'address');
           let name = getVal(row, 'name');
           let adminDong = getVal(row, 'admin') || "";
@@ -1121,6 +1122,37 @@ export default function App() {
             _원주소: processedRow.원주소 || getVal(row, 'address') || '',
             _addressDisplayMode: addressDisplayMode,
           };
+          } catch (rowErr) {
+            // 한 행의 정제 예외가 전체 배치를 죽이지 않도록 격리 — 그 행만 오류로 표시하고 나머지는 계속 정제.
+            // asyncPool은 Promise.all 기반 fail-fast라, 워커가 throw하면 970건 전체가 폐기되던 문제 차단.
+            console.error('[행 정제 실패 — 이 행만 건너뜀]', { 주소: getVal(row, 'address'), 이름: getVal(row, 'name'), error: rowErr });
+            count++;
+            return {
+              id: window.crypto.randomUUID(),
+              구분: sheet.type === '혼합' ? '기초수급자' : sheet.type,
+              행정동: getVal(row, 'admin') || '',
+              리: '',
+              이름: getVal(row, 'name') || '',
+              생년월일: '',
+              품명: getVal(row, 'itemName') || '',
+              포수: getVal(row, 'qty') ? (parseInt(getVal(row, 'qty')) || 1) : '',
+              휴대폰: '',
+              유선전화: '',
+              주소: getVal(row, 'address') || '',
+              문자수신: 'N',
+              특이사항: '',
+              기사: getVal(row, 'driver') || '',
+              배송순번: getVal(row, 'seqNo') || '',
+              _에러: true,
+              _사유: '정제 중 오류(이 행만 건너뜀 — 콘솔 확인)',
+              _이식됨: false,
+              _lat: null,
+              _lng: null,
+              _isApt: false,
+              _원주소: getVal(row, 'address') || '',
+              _addressDisplayMode: addressDisplayMode,
+            };
+          }
         });
         results.push(...chunkResults);
       }
@@ -2854,7 +2886,7 @@ export default function App() {
                 />
               )}
               <SidebarItem
-                icon={Map}
+                icon={MapIcon}
                 label="동별 배송지도"
                 active={showDongMap}
                 onClick={() => { if (!canUseRouteMap(user)) { setUpgradeReason('routeMap'); setShowUpgrade(true); } else setShowDongMap(true); }}

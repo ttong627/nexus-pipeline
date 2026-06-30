@@ -1,8 +1,14 @@
-export const APP_VERSION = 'V6.79.1';
+export const APP_VERSION = 'V6.79.3';
 export const APP_BUILD = '2026.06.30';
-export const APP_BUILD_TIME = '2026.06.30 11:31';
+export const APP_BUILD_TIME = '2026.06.30 12:28';
 
 export const CHANGELOG = [
+  { v: "V6.79.3", date: "2026.06.30", items: [
+    "주소정제가 즉시 중단되던 문제 근본 해결 — 지도 아이콘 import가 내부 Map 기능을 가리던 충돌 제거",
+  ]},
+  { v: "V6.79.2", date: "2026.06.30", items: [
+    "주소정제 중 일부 행 오류가 전체를 중단시키던 문제 해결 — 행 단위 격리로 나머지는 정상 정제",
+  ]},
   { v: "V6.79.1", date: "2026.06.30", items: [
     "주소정제 무한로딩 해결 — 지도 검색 응답이 느려도 정제가 멈추지 않고 끝까지 완료",
     "정제 중 오류 발생 시 화면이 멈추지 않고 자동 복귀",
