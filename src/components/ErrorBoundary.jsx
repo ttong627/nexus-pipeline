@@ -1,5 +1,6 @@
 import { Component } from 'react';
 import { APP_VERSION } from '../version.js';
+import { logClientError } from '../utils/errorTracker.js';
 
 const isChunkLoadError = (error) => {
   const message = String(error?.message || error || '');
@@ -44,6 +45,7 @@ export default class ErrorBoundary extends Component {
 
   componentDidCatch(error, info) {
     console.error('[NEXUS ERROR]', error, info.componentStack);
+    logClientError('ErrorBoundary', error, { componentStack: String(info?.componentStack || '').slice(0, 500) });
     if (isChunkLoadError(error)) {
       clearAppCachesAndReload();
     }

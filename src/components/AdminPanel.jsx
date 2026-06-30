@@ -277,6 +277,8 @@ export default function AdminPanel({ onClose, user }) {
   // 운영 현황
   const [auditLogs, setAuditLogs] = useState([]);
   const [auditLoading, setAuditLoading] = useState(false);
+  const [errorLogs, setErrorLogs] = useState([]);
+  const [errorLoading, setErrorLoading] = useState(false);
   const [tierUpgradeTarget, setTierUpgradeTarget] = useState(null); // { inq, matchedUser, newTier }
 
   const fetchAuditLogs = async () => {
@@ -287,6 +289,16 @@ export default function AdminPanel({ onClose, user }) {
       setAuditLogs(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     } catch { setAuditLogs([]); }
     finally { setAuditLoading(false); }
+  };
+
+  const fetchErrorLogs = async () => {
+    setErrorLoading(true);
+    try {
+      // 최근 100건만 — error_logs는 TTL(30일) 자동 정리. 최신 위주 표시.
+      const snap = await getDocs(query(collection(db, 'error_logs'), orderBy('timestamp', 'desc'), limit(100)));
+      setErrorLogs(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    } catch { setErrorLogs([]); }
+    finally { setErrorLoading(false); }
   };
 
   // DB 마이그레이션: 동사무소/읍사무소/면사무소 → 주민센터
@@ -1002,7 +1014,7 @@ export default function AdminPanel({ onClose, user }) {
               )}
             </button>
             <button
-              onClick={() => { setActiveTab('ops'); if (!auditLogs.length) fetchAuditLogs(); }}
+              onClick={() => { setActiveTab('ops'); if (!auditLogs.length) fetchAuditLogs(); if (!errorLogs.length) fetchErrorLogs(); }}
               className={`px-4 py-2 rounded-lg text-sm font-bold transition-colors flex items-center gap-2 ${activeTab === 'ops' ? 'bg-[#3b82f6] text-black shadow-[0_0_15px_rgba(59,130,246,0.3)]' : 'bg-[#111] text-gray-400 border border-[#333] hover:text-white hover:bg-[#222]'}`}
             >
               <Activity size={16} /> 운영 현황
@@ -1673,6 +1685,37 @@ export default function AdminPanel({ onClose, user }) {
                 ))}
                 {auditLogs.length === 0 && !auditLoading && (
                   <p className="text-center text-gray-700 py-6 text-xs">기록된 로그가 없습니다.</p>
+                )}
+              </div>
+            </div>
+
+            {/* 최근 클라이언트 오류 로그 — "모르게 생기는 에러" 가시화 */}
+            <div>
+              <h3 className="text-gray-400 font-black text-base flex items-center gap-2 mb-3">
+                <span className="text-red-400">⚠</span> 최근 오류 로그
+                {errorLogs.length > 0 && (
+                  <span className="text-red-400 text-xs font-bold bg-red-500/10 border border-red-500/30 rounded-full px-2 py-0.5">{errorLogs.length}건</span>
+                )}
+                <button onClick={fetchErrorLogs} className="ml-auto text-[11px] text-gray-500 hover:text-gray-300 font-bold flex items-center gap-1">
+                  <RefreshCw size={12} className={errorLoading ? 'animate-spin' : ''}/> 새로고침
+                </button>
+              </h3>
+              <div className="space-y-1.5 max-h-64 overflow-y-auto scrollbar-thin scrollbar-thumb-[#333]">
+                {errorLogs.slice(0, 50).map(log => (
+                  <div key={log.id} className="px-4 py-2 bg-red-950/20 border border-red-900/30 rounded-lg text-xs hover:bg-red-950/30">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-red-300 font-bold truncate" title={log.message}>{log.message || '-'}</span>
+                      <span className="text-gray-600 font-mono text-[10px] shrink-0">{fmt(log.timestamp)}</span>
+                    </div>
+                    <div className="flex items-center gap-3 mt-1 text-[10px] text-gray-600">
+                      <span className="text-amber-500/80">{log.source || '-'}</span>
+                      <span className="font-mono">{log.appVersion || '-'}</span>
+                      <span className="font-mono truncate">{log.userEmail || '-'}</span>
+                    </div>
+                  </div>
+                ))}
+                {errorLogs.length === 0 && !errorLoading && (
+                  <p className="text-center text-gray-700 py-6 text-xs">기록된 오류가 없습니다. 👍</p>
                 )}
               </div>
             </div>

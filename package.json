@@ -1,12 +1,13 @@
 {
   "name": "nexus-pipeline",
   "private": true,
-  "version": "6.79.3",
+  "version": "6.80.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "version:bump": "node scripts/bump-version.cjs",
     "release": "node scripts/bump-version.cjs",
+    "prebuild": "eslint . --quiet",
     "build": "vite build",
     "deploy": "firebase deploy --only hosting --account ttong627@gmail.com",
     "deploy:hosting": "firebase deploy --only hosting --account ttong627@gmail.com",

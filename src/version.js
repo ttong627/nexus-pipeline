@@ -1,8 +1,13 @@
-export const APP_VERSION = 'V6.79.3';
+export const APP_VERSION = 'V6.80';
 export const APP_BUILD = '2026.06.30';
-export const APP_BUILD_TIME = '2026.06.30 12:28';
+export const APP_BUILD_TIME = '2026.06.30 13:03';
 
 export const CHANGELOG = [
+  { v: "V6.80", date: "2026.06.30", items: [
+    "오류 자동 추적 시스템 추가 — 정제·전역 오류를 자동 기록해 관리자가 즉시 확인",
+    "관리자 패널 '운영현황'에 최근 오류 로그 표시",
+    "배포 전 자동 코드검사(lint) 추가 — 아이콘이 기능을 가리는 류의 에러 사전 차단",
+  ]},
   { v: "V6.79.3", date: "2026.06.30", items: [
     "주소정제가 즉시 중단되던 문제 근본 해결 — 지도 아이콘 import가 내부 Map 기능을 가리던 충돌 제거",
   ]},

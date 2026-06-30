@@ -80,6 +80,16 @@ service cloud.firestore {
       allow read, update, delete: if isAdmin();
     }
 
+    // ── 에러 로그: 생성은 인증 사용자(허용 필드 제한), 조회·수정·삭제는 관리자만 ──────
+    match /error_logs/{document=**} {
+      allow create: if isAuthenticated() &&
+        request.resource.data.keys().hasOnly([
+          'message', 'stack', 'source', 'url', 'userAgent', 'appVersion',
+          'userEmail', 'uid', 'extra', 'timestamp', 'expireAt'
+        ]);
+      allow read, update, delete: if isAdmin();
+    }
+
     // ── 사용자: 본인 읽기/생성/수정 + 관리자 전체 제어 ──────────────────────
     match /users/{userId} {
       allow read: if isAuthenticated() &&

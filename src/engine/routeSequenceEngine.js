@@ -5,7 +5,7 @@
 // Node/브라우저 양쪽 안전한 KAKAO_REST_KEY (시뮬은 useApi=false라 미사용)
 const KAKAO_REST_KEY = (typeof import.meta !== 'undefined' && import.meta.env)
   ? import.meta.env.VITE_KAKAO_REST_KEY
-  : (process.env.VITE_KAKAO_REST_KEY || '');
+  : (typeof globalThis !== 'undefined' && globalThis.process ? (globalThis.process.env.VITE_KAKAO_REST_KEY || '') : '');
 
 // DS-14: 배송 예상속도 (정차·엘리베이터·인터폰 포함 도심 평균)
 export const SEQUENCE_ESTIMATED_SPEED_KMH = 10;

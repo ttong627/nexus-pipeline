@@ -2,7 +2,7 @@ import { useState } from 'react';
 import {
   X, Upload, FileSpreadsheet, Columns, Download, AlertTriangle,
   ChevronRight, ChevronLeft, ArrowRight, Zap, Star,
-  Map, Database, Share2, Link, Cloud,
+  Map as MapIcon, Database, Share2, Link, Cloud,
 } from 'lucide-react';
 
 const STEPS = [
@@ -63,7 +63,7 @@ const PipelineDiagram = () => {
     { icon: <Zap size={18}/>, label: 'AI 정제', color: '#3b82f6' },
     { icon: <Download size={18}/>, label: '내보내기', color: '#93c5fd' },
     { icon: <Cloud size={18}/>, label: '클라우드 저장', color: '#60a5fa' },
-    { icon: <Map size={18}/>, label: '루트맵 배분', color: '#3b82f6' },
+    { icon: <MapIcon size={18}/>, label: '루트맵 배분', color: '#3b82f6' },
   ];
   return (
     <div className="flex items-center gap-1 flex-wrap justify-center my-5">
