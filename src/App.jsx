@@ -398,12 +398,22 @@ export default function App() {
   });
   // 외부 시스템(정부양곡 정산 SYSTEM 등)에서 "명단 정제하기"로 넘겨준 파일 — URL에 담아온 다운로드
   // 주소를 fetch해 로컬 업로드와 동일하게 처리한다. importUrl 없으면 무시(기존 흐름 불변).
+  // import2Url이 함께 오면 2개 파일 합치기(기존 handleSecondFileUpload) — 고급모드로 전환해
+  // 지자체/월을 사용자가 한 번 확인하게 한다(개인정보 2건 병합 안전장치 — 자동확정 생략 금지).
   const [importParams] = useState(() => {
     const p = new URLSearchParams(window.location.search);
     const importUrl = p.get('importUrl');
-    return importUrl ? { importUrl, importName: p.get('importName') || '가져온파일.xlsx' } : null;
+    if (!importUrl) return null;
+    const import2Url = p.get('import2Url');
+    return {
+      importUrl,
+      importName: p.get('importName') || '가져온파일.xlsx',
+      import2Url: import2Url || null,
+      import2Name: p.get('import2Name') || '가져온파일2.xlsx',
+    };
   });
   const [importing, setImporting] = useState(false);
+  const pendingSecondImportRef = useRef(null); // Step2 진입 시 자동 합칠 2번째 파일
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [showDriverRegistry, setShowDriverRegistry] = useState(false);
   const [showSavedRecords, setShowSavedRecords] = useState(false);
@@ -802,6 +812,8 @@ export default function App() {
 
   // 외부 시스템 가져오기(importParams) — URL로 넘어온 파일을 fetch해 handleFileUpload로 그대로
   // 태운다(로컬 업로드와 동일 경로: 지자체·월 자동감지 → 확인모달/자동확정 → Step2~4).
+  // import2Url이 있으면(2개 파일 합치기) 고급모드로 강제해 자동확정을 끄고, Step2 진입 시
+  // pendingSecondImportRef를 소비해 handleSecondFileUpload로 합친다(아래 별도 useEffect).
   // 로그인 완료(user 세팅) 후 1회만 실행.
   const importTriedRef = useRef(false);
   useEffect(() => {
@@ -810,12 +822,19 @@ export default function App() {
     (async () => {
       setImporting(true);
       try {
-        const res = await fetch(importParams.importUrl);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const blob = await res.blob();
-        const file = new File([blob], importParams.importName, { type: blob.type || 'application/octet-stream' });
-        window.history.replaceState({}, '', window.location.pathname); // importUrl 쿼리 제거(재진입 시 재실행 방지)
-        await handleFileUpload({ target: { files: [file] } });
+        const fetchAsFile = async (url, name) => {
+          const res = await fetch(url);
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const blob = await res.blob();
+          return new File([blob], name, { type: blob.type || 'application/octet-stream' });
+        };
+        const file1 = await fetchAsFile(importParams.importUrl, importParams.importName);
+        if (importParams.import2Url) {
+          setCleanMode('advanced'); // 2파일 병합은 지자체/월을 사용자가 직접 확인(자동확정 생략 금지)
+          pendingSecondImportRef.current = await fetchAsFile(importParams.import2Url, importParams.import2Name);
+        }
+        window.history.replaceState({}, '', window.location.pathname); // import 쿼리 제거(재진입 시 재실행 방지)
+        await handleFileUpload({ target: { files: [file1] } });
       } catch (e) {
         alert('외부 시스템에서 파일을 가져오지 못했습니다: ' + e.message);
       } finally {
@@ -823,6 +842,15 @@ export default function App() {
       }
     })();
   }, [importParams, user, guestMode]);
+
+  // 2번째 가져오기 파일 자동 합치기 — Step2(고급 매핑 화면) 진입 시 1회 소비.
+  useEffect(() => {
+    if (step === 2 && pendingSecondImportRef.current) {
+      const file2 = pendingSecondImportRef.current;
+      pendingSecondImportRef.current = null;
+      handleSecondFileUpload(file2);
+    }
+  }, [step]);
 
   const handleCityMonthConfirm = (city, monthYYYYMM) => {
     const { sheetsData, initialSel, analysisSummary: summary } = pendingSetup || {};
