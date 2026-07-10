@@ -145,6 +145,10 @@ CREATE INDEX IF NOT EXISTS address_core_full_key_trgm
   ON address_core USING gin (full_key gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS address_core_road_exact
   ON address_core (version_id, road_code, underground_yn, building_main_no, building_sub_no);
+-- exactRoadMatch/exactBuildingRoadMatch는 road_code가 아니라 road_name으로 조회한다.
+-- road_name 인덱스가 없어 building_core(1072만) 시퀀셜 스캔 → 단건 조회 25초 hang(2026-07-11).
+CREATE INDEX IF NOT EXISTS address_core_roadname_exact
+  ON address_core (version_id, road_name, building_main_no, building_sub_no);
 CREATE INDEX IF NOT EXISTS address_core_jibun_exact
   ON address_core (version_id, legal_dong_code, jibun_san_yn, jibun_main_no, jibun_sub_no);
 CREATE INDEX IF NOT EXISTS address_links_road_exact
@@ -155,6 +159,8 @@ CREATE INDEX IF NOT EXISTS building_core_road_key_trgm
   ON building_core USING gin (road_key gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS building_core_road_exact
   ON building_core (version_id, road_code, underground_yn, building_main_no, building_sub_no);
+CREATE INDEX IF NOT EXISTS building_core_roadname_exact
+  ON building_core (version_id, road_name, building_main_no, building_sub_no);
 CREATE INDEX IF NOT EXISTS search_keys_road_trgm
   ON address_search_keys USING gin (road_key gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS search_keys_building_trgm

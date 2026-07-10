@@ -467,9 +467,9 @@ const analyzeAll = async (client) => {
 };
 
 const run = async () => {
-  requireConfig('databaseUrl', 'storageBucket');
-  // ANALYZE_ONLY=1 → 재적재 없이 통계만 갱신(운영 hang 응급 복구용). 스키마 인덱스도 보장.
+  // ANALYZE_ONLY=1 → 재적재 없이 통계만 갱신(운영 hang 응급 복구용). GCS 버킷 불필요.
   if (process.env.ANALYZE_ONLY === '1') {
+    requireConfig('databaseUrl');
     await withClient(async (client) => {
       await applySchema(client);   // CREATE INDEX IF NOT EXISTS — 누락 인덱스 보강
       await analyzeAll(client);
@@ -477,6 +477,7 @@ const run = async () => {
     console.log(JSON.stringify({ mode: 'analyze-only', version: config.activeVersion }, null, 2));
     return;
   }
+  requireConfig('databaseUrl', 'storageBucket');
   await withClient(async (client) => {
     await applySchema(client);
     await resetVersionData(client);
