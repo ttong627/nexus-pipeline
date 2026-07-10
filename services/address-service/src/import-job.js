@@ -451,8 +451,32 @@ const publishVersion = async (client, status) => {
   ]);
 };
 
+// 대량 적재/삭제 후 플래너 통계를 갱신한다. 없으면 stale 통계로 최악 실행계획(대형 중첩루프)이
+// 선택돼 단건 조회가 수십 초씩 걸린다(2026-07-11 매칭 37s hang 사고). ANALYZE 필수.
+const ANALYZE_TABLES = [
+  'road_codes', 'address_core', 'address_building_links',
+  'building_core', 'detail_core', 'address_search_keys',
+];
+const analyzeAll = async (client) => {
+  await client.query('SET search_path TO nexus_address, public');
+  for (const t of ANALYZE_TABLES) {
+    console.log(`[address-import] ANALYZE ${t}`);
+    await client.query(`ANALYZE ${t}`);
+  }
+  console.log('[address-import] ANALYZE 완료');
+};
+
 const run = async () => {
   requireConfig('databaseUrl', 'storageBucket');
+  // ANALYZE_ONLY=1 → 재적재 없이 통계만 갱신(운영 hang 응급 복구용). 스키마 인덱스도 보장.
+  if (process.env.ANALYZE_ONLY === '1') {
+    await withClient(async (client) => {
+      await applySchema(client);   // CREATE INDEX IF NOT EXISTS — 누락 인덱스 보강
+      await analyzeAll(client);
+    });
+    console.log(JSON.stringify({ mode: 'analyze-only', version: config.activeVersion }, null, 2));
+    return;
+  }
   await withClient(async (client) => {
     await applySchema(client);
     await resetVersionData(client);
@@ -470,6 +494,7 @@ const run = async () => {
     }
     await hydrateRoadAddresses(client);
     await rebuildSearchKeys(client);
+    await analyzeAll(client);   // 적재 직후 통계 갱신(영구 개선)
     await publishVersion(client, errors.length ? 'staging' : 'published');
   });
   console.log(JSON.stringify({ version: config.activeVersion, counts, errors: errors.slice(0, 20) }, null, 2));
