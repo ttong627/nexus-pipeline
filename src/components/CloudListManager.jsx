@@ -626,21 +626,27 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
       const baseRecs = baseSnap.docs.map(d => ({ id: d.id, ...d.data() }));
 
       const normDong = (v) => (v || '').replace(/\s/g, '').trim();
-      const byBirth = {}, byPhone = {}, byDongSet = {};
+      // S-2(동명이인 안전 매칭, CLAUDE.md §1-4): 약키(이름+읍면동)는 '사람'이 유일할 때만.
+      // 과거엔 특이사항 '값'이 1종이면 통과시켰는데, 같은 동 동명이인 중 1명만 비고가 있으면
+      // 두 사람 모두에게 이식되는 오염 경로였다 — 인원 수 기준으로 교체.
+      const byBirth = {}, byPhone = {}, byDongPersons = {};
       baseRecs.forEach(r => {
         const name = (r.name || r.이름 || '').trim();
+        if (!name) return;
         const birth = r.birthKey || normalizeBirth(String(r.생년월일 || ''));
         const mobile = normPhone(r.mobile || r.휴대폰 || '');
         const dong = normDong(r.dong || r.읍면동 || r.행정동 || '');
+        // 동명이인 인원 집계는 특이사항 유무와 무관하게 전원 기준
+        if (dong) { const k = `${name}__${dong}`; (byDongPersons[k] || (byDongPersons[k] = { count: 0, note: '' })).count += 1; }
         const note = (r.note || r.특이사항 || '').trim();
-        if (!name || !note) return;
+        if (!note) return;
         if (birth) byBirth[`${name}__${birth}`] = note;
         if (mobile.length >= 9) byPhone[`${name}__${mobile}`] = note;
-        if (dong) { const k = `${name}__${dong}`; (byDongSet[k] || (byDongSet[k] = new Set())).add(note); }
+        if (dong) byDongPersons[`${name}__${dong}`].note = note;
       });
-      // 읍면동+이름 fallback — 생년월일·휴대폰 없을 때 기본 매칭. 동명이인(서로 다른 특이사항)이면 모호 → 제외
+      // 읍면동+이름 fallback — 생년월일·휴대폰 없을 때 기본 매칭. 동명이인(사람 2+)은 무조건 제외
       const byDong = {};
-      Object.entries(byDongSet).forEach(([k, set]) => { if (set.size === 1) byDong[k] = [...set][0]; });
+      Object.entries(byDongPersons).forEach(([k, v]) => { if (v.count === 1 && v.note) byDong[k] = v.note; });
 
       const updates = [];
       let dongMatched = 0;

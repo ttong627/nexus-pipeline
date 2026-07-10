@@ -1,10 +1,10 @@
 # 📋 PROJECT STATUS — nexus-pipeline
-> 자동 생성: /확인 스킬 · 갱신 2026-06-30 13:42 (Tuesday)
+> 자동 생성: /확인 스킬 · 갱신 2026-07-10 23:20 KST
 
 ## 식별
 - GitHub: ttong627/nexus-pipeline (계정 세트: **ttong627**)
 - Firebase 프로젝트: **logis-op**
-- 로컬 경로: f:/TTong_newproject/nexus-pipeline-clean
+- 로컬 경로: I:/ttong_project/nexus-pipeline-clean (★I:=정본)
 - 브랜치: main
 
 ## 배포 환경
@@ -24,7 +24,11 @@
 | nexus-address-service | /address-service | 주소 매칭 API (express) | Node |
 | nexus-address-service | /services/address-service | 주소 매칭 API (Docker+Cloud SQL) | Node |
 
-## 마지막 작업 (2026-06-30)
+## 마지막 작업 (2026-07-10)
+- **동명이인 주소 오염 사고 해결**: 6/24 repair-address-tampering --write가 동대문 6월 김옥순(주민센터 수령자) 주소를 동명이인 집주소로 덮어씀 → 원인 6중 결함 확정, S-1~S-6 안전매칭 규칙(CLAUDE.md §1-4)·guard 모듈+테스트 9/9·수리 v2·특이사항 이식 우회로 봉쇄. 전수감사(동대문53+중원32) 피해 2건 → 복구 스크립트 준비(형 승인 대기). 설계서: 동명이인_주소오염_재발방지_설계.md
+- ⚠️ **CRITICAL 발견**: 운영 배포 번들 VITE_ADDRESS_MATCH_API_URL='' → 앱 정제가 저하 모드(캐시+카카오POI만). 서비스 URL 복구 필요
+
+## 직전 작업 (2026-06-30)
 - **V6.80** 8da329b feat: 클라이언트 오류 자동추적 + lint 게이트 + 관리자 오류로그
   - errorTracker.js(신규): window.onerror·unhandledrejection → Firestore `error_logs` 기록(throttle·TTL30일)
   - 관리자 패널 운영현황 탭에 '최근 오류 로그' 섹션
