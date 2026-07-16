@@ -1,8 +1,11 @@
-export const APP_VERSION = 'V6.86';
+export const APP_VERSION = 'V6.87';
 export const APP_BUILD = '2026.07.16';
-export const APP_BUILD_TIME = '2026.07.16 18:25';
+export const APP_BUILD_TIME = '2026.07.16 18:32';
 
 export const CHANGELOG = [
+  { v: "V6.87", date: "2026.07.16", items: [
+    "포수 정합성 자동 대조(M-7) — 원본 명단이 명시한 소계 포수와 정제 결과 포수가 다르면 즉시 경고(파싱 단계 대상자 누락까지 조기 감지)",
+  ]},
   { v: "V6.86", date: "2026.07.16", items: [
     "이름이 '면/읍'으로 끝나는 대상자(예: 정태면)가 파싱에서 누락되던 문제 해결 — 전화·포수·주소 등 개인정보 있으면 사람으로 보존(대상자 누락 0)",
   ]},

@@ -470,6 +470,21 @@ function parseSheet(name, rawJson, dynamicRules) {
   let qty = 0;
   bodyRows.forEach(row => { qty += parseInt(row[effectiveAmtIdx] || 0) || 1; });
 
+  // ── 원본 소계 추출 (누락 감지용 대조 기준, 무손실 M-7) — 시트가 명시한 포/세대/명 ──
+  // 헤더 근처(소계 행)의 "4785포"·"4207세대"·"5198명" 형태를 읽어 정제 결과 포수와 대조한다.
+  // 파싱 단계에서 대상자가 빠져도(정태면 사고처럼) 원본 소계와 어긋나면 즉시 잡아낸다.
+  let declaredQty = null, declaredHead = null, declaredPpl = null;
+  for (let o = 0; o <= 4; o++) {
+    const row = rawJson[headerIdx + o] || [];
+    row.forEach(c => {
+      const s = String(c || '').replace(/[\s,]/g, '');
+      let m;
+      if ((m = s.match(/^(\d{2,})포$/)) && declaredQty == null) declaredQty = parseInt(m[1], 10);
+      if ((m = s.match(/^(\d{2,})세대$/)) && declaredHead == null) declaredHead = parseInt(m[1], 10);
+      if ((m = s.match(/^(\d{2,})명$/)) && declaredPpl == null) declaredPpl = parseInt(m[1], 10);
+    });
+  }
+
   // ─── 데이터 컬럼 값으로 수급 유형 자동 감지 ──────────────────────────
   let typeColIdx = -1;
   if (bodyRows.length > 0) {
@@ -556,6 +571,7 @@ function parseSheet(name, rawJson, dynamicRules) {
 
   return {
     name, selected, type, qty, rowsCount: bodyRows.length,
+    declaredQty, declaredHead, declaredPpl,   // 원본 소계(누락 감지 대조 기준, M-7)
     headers, bodyRows, headerRowIdx: headerIdx + 1,
     dataStartRowIdx, mappedKeys, missingKeys, emptyWarnings,
     addrColIdx: colIndices['주소'],

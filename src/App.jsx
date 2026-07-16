@@ -1264,6 +1264,27 @@ export default function App() {
       ), 300);
     }
 
+    // 정합성 가드 M-7 — 원본 소계 포수 vs 정제 결과 포수 대조(파싱 단계 누락까지 잡는 근본 안전장치).
+    // 원본 명단이 명시한 소계 포수(예: 수급자 4785포+차상위 1190포)와 정제 결과 포수가 다르면
+    // 대상자 증발 신호 → 즉시 경고. (M-5 건수 가드는 파싱 이후만 봐서 파싱 단계 누락을 못 잡던 사각을 보완)
+    {
+      const declaredQtySum = (worksheets || [])
+        .filter(s => s.selected !== false && Number(s.declaredQty) > 0)
+        .reduce((sum, s) => sum + Number(s.declaredQty), 0);
+      if (declaredQtySum > 0) {
+        const resultQtySum = results.reduce((s, r) => s + (parseInt(r.포수) || 1), 0);
+        if (declaredQtySum !== resultQtySum) {
+          console.error(`[포수 정합성] 원본 소계 ${declaredQtySum}포 ≠ 정제 결과 ${resultQtySum}포`);
+          setTimeout(() => alert(
+            `⚠️ 포수 정합성 경고 — 원본 소계와 불일치\n\n` +
+            `원본 명단 소계 ${declaredQtySum.toLocaleString()}포 → 정제 결과 ${resultQtySum.toLocaleString()}포\n` +
+            `${Math.abs(declaredQtySum - resultQtySum).toLocaleString()}포 차이가 발생했습니다.\n\n` +
+            `대상자 누락 가능성이 있으니 담당자 확인이 필요합니다.`
+          ), 500);
+        }
+      }
+    }
+
     // 정제 결과 요약
     const errList = results.filter(r => r._에러);
     const apiFailCount = errList.filter(r => (r._사유 || '').includes('API') || (r._사유 || '').includes('응답')).length;
