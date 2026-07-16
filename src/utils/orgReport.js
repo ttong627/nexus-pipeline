@@ -29,6 +29,31 @@ export function downloadOrgReport({ city, monthId, orgs, records }) {
   const unassignedDongs = allDongs.filter(d => !assignedDongs[d]);
 
   const wb = XLSX.utils.book_new();
+
+  // ── 소속사 요약 시트 (맨 앞) — 소속사별 동별 포수 + 소속사 소계 + 전체 합계 (행정동요약 형식) ──
+  // 빈 포수=1(규칙 C-4). 구분별(수급자/차상위) + 전체 포수를 함께 표기.
+  const sumPo = (recs) => recs.reduce((s, r) => s + (parseInt(r.포수) || 1), 0);
+  const suPo  = (recs) => sumPo(recs.filter(r => r.구분 === '기초수급자'));
+  const chaPo = (recs) => sumPo(recs.filter(r => r.구분 === '차상위'));
+  const summaryAoa = [
+    ['소속사', '행정동', '수급자(포)', '차상위(포)', '전체(포)'],
+    ['■ 전체 합계', '', suPo(records), chaPo(records), sumPo(records)],
+  ];
+  const pushOrgBlock = (label, dongs) => {
+    const orgRecs = records.filter(r => (dongs || []).includes((r.행정동 || '').trim()));
+    if (!orgRecs.length) return;
+    summaryAoa.push([label, '소계', suPo(orgRecs), chaPo(orgRecs), sumPo(orgRecs)]);   // 소속사 합계
+    (dongs || []).forEach(dong => {
+      const dr = orgRecs.filter(r => (r.행정동 || '').trim() === dong);
+      if (dr.length) summaryAoa.push(['', dong, suPo(dr), chaPo(dr), sumPo(dr)]);      // 소속사 동별 포수
+    });
+  };
+  orgs.forEach(org => pushOrgBlock(org.name || '소속사', org.dongs || []));
+  if (unassignedDongs.length) pushOrgBlock('미배정', unassignedDongs);
+  const summaryWs = XLSX.utils.aoa_to_sheet(summaryAoa);
+  summaryWs['!cols'] = [{ wch: 20 }, { wch: 12 }, { wch: 11 }, { wch: 11 }, { wch: 10 }];
+  XLSX.utils.book_append_sheet(wb, summaryWs, '소속사요약');
+
   orgs.forEach(org => {
     const orgRecs = records.filter(r => (org.dongs || []).includes((r.행정동 || '').trim()));
     if (!orgRecs.length) return;
