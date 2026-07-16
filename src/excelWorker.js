@@ -549,7 +549,7 @@ function parseSheet(name, rawJson, dynamicRules) {
 }
 
 self.onmessage = ({ data }) => {
-  const { buffer, fileName, action, finalRows, exportCols } = data;
+  const { buffer, fileName, action, finalRows, exportCols, errorRows, dupRows } = data;
 
   try {
     // ── 행정동별 요약 보고서 ──────────────────────────────────────────────
@@ -1053,11 +1053,18 @@ self.onmessage = ({ data }) => {
       return;
     }
 
-    // ── 기존 표준 내보내기 ───────────────────────────────────────────────
+    // ── 기존 표준 내보내기 (전건 + 확인/중복 별도시트) ──────────────────────
+    // [정제결과] = 전건 그대로(누락 0). 확인필요·중복의심은 담당자 확인용 "별도 시트"로 추가 표시하되
+    // 원본(정제결과)에는 이미 전부 포함돼 있으므로 대상자·포수 누락이 발생하지 않는다(형 원칙).
     if (finalRows && exportCols) {
-      const ws = XLSX.utils.json_to_sheet(finalRows, { header: exportCols });
       const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, "정제결과");
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(finalRows, { header: exportCols }), "정제결과");
+      if (Array.isArray(errorRows) && errorRows.length) {
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(errorRows, { header: exportCols }), "확인필요");
+      }
+      if (Array.isArray(dupRows) && dupRows.length) {
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(dupRows, { header: exportCols }), "중복확인");
+      }
       const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
       self.postMessage({ success: true, wbout, fileName });
       return;

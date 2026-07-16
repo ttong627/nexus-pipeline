@@ -1,5 +1,5 @@
 ﻿import { useState } from 'react';
-import { db, collection, getDocs } from '../config/firebase.js';
+import { db, collection, getDocsFromServer } from '../config/firebase.js';
 import { Database, Download, X, CheckSquare, Square } from 'lucide-react';
 import { normalizeBirth } from '../utils/parsers.js';
 import { REGIONS, getSigunguOptions } from '../utils/regions.js';
@@ -38,7 +38,8 @@ export default function DbImportModal({ onClose, onImport, defaultCity }) {
     if (checkedFields.size === 0) return alert('이식할 항목을 하나 이상 선택해주세요.');
     setLoading(true);
     try {
-      const snap = await getDocs(collection(db, `base_lists/${selectedCity}/records`));
+      // 최신 유지: 서버 직접 조회(getDocsFromServer) — 오프라인 캐시의 옛 특이사항 이식 방지(§19)
+      const snap = await getDocsFromServer(collection(db, `base_lists/${selectedCity}/records`));
       const records = snap.docs.map(d => ({ id: d.id, ...d.data() }));
       if (records.length === 0) {
         alert('해당 지자체에 등록된 기본 명단이 없습니다.');
@@ -55,6 +56,20 @@ export default function DbImportModal({ onClose, onImport, defaultCity }) {
       // 3순위 매칭 인덱스 구축 (D-1: 이름+생년월일 → 이름+휴대폰 → 이름+유선전화)
       const baseMapObj = {};
       const dk = v => String(v || '').replace(/[^\d]/g, '');
+      // updatedAt(Firestore Timestamp/숫자) → ms. 없으면 0. 최신 우선 비교용(B-15)
+      const tsMs = (r) => {
+        const u = r?.updatedAt;
+        if (!u) return 0;
+        if (typeof u.toMillis === 'function') return u.toMillis();
+        if (typeof u.seconds === 'number') return u.seconds * 1000;
+        if (typeof u === 'number') return u;
+        return 0;
+      };
+      // 같은 키 중복 시 최신(updatedAt) 레코드만 유지 — 임의 덮어쓰기로 옛 자료가 남지 않게
+      const put = (key, r) => {
+        const prev = baseMapObj[key];
+        if (!prev || tsMs(r) >= tsMs(prev)) baseMapObj[key] = r;
+      };
       filtered.forEach(r => {
         const nm = (r.name || r.이름 || '').trim();
         if (!nm) return;
@@ -62,11 +77,11 @@ export default function DbImportModal({ onClose, onImport, defaultCity }) {
         const ph = dk(r.mobile || r.휴대폰 || '');
         const ld = dk(r.landline || r.유선전화 || '');
         if (bk) {
-          baseMapObj[`${nm}_${bk}`] = r;            // 1순위
+          put(`${nm}_${bk}`, r);            // 1순위
         } else if (ph.length >= 9) {
-          baseMapObj[`ph_${nm}_${ph}`] = r;         // 2순위 (생년월일 없을 때)
+          put(`ph_${nm}_${ph}`, r);         // 2순위 (생년월일 없을 때)
         } else if (ld.length >= 9) {
-          baseMapObj[`ld_${nm}_${ld}`] = r;         // 3순위 (생년월일·휴대폰 모두 없을 때)
+          put(`ld_${nm}_${ld}`, r);         // 3순위 (생년월일·휴대폰 모두 없을 때)
         }
       });
       setFetchedCount(filtered.length);

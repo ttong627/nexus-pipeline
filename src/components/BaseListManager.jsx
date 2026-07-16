@@ -1024,7 +1024,7 @@ export default function BaseListManager({ user, onBack, initialCity = '', export
                               <div className="p-3 space-y-1.5">
                                 <div className="flex justify-between items-center">
                                   <span className="text-[11px] text-gray-600">전체 등록</span>
-                                  <span className="text-[13px] font-black text-white">{records.length.toLocaleString()}건</span>
+                                  <span className="text-[13px] font-black text-white">{records.length.toLocaleString()}건 · {records.reduce((s,r)=>s+(parseInt(r.qty)||1),0).toLocaleString()}포</span>
                                 </div>
                                 <div className="flex justify-between items-center">
                                   <span className="text-[11px] text-gray-600">특이사항 있음</span>
@@ -1032,7 +1032,7 @@ export default function BaseListManager({ user, onBack, initialCity = '', export
                                 </div>
                                 <div className="flex justify-between items-center">
                                   <span className="text-[11px] text-gray-600">검색 결과</span>
-                                  <span className="text-[12px] font-bold text-gray-300">{displayRecords.length.toLocaleString()}건</span>
+                                  <span className="text-[12px] font-bold text-gray-300">{displayRecords.length.toLocaleString()}건 · {displayRecords.reduce((s,r)=>s+(parseInt(r.qty)||1),0).toLocaleString()}포</span>
                                 </div>
                                 {records.length > 0 && noteCount < records.length && (
                                   <div className="flex justify-between items-center">
@@ -1175,8 +1175,8 @@ export default function BaseListManager({ user, onBack, initialCity = '', export
                 </button>
               )}
               <span className="text-[11px] text-gray-600">
-                {displayRecords.length.toLocaleString()}건 표시
-                {records.length > 0 && ` (전체 ${records.length.toLocaleString()}건 중)`}
+                {displayRecords.length.toLocaleString()}건 · {displayRecords.reduce((s,r)=>s+(parseInt(r.qty)||1),0).toLocaleString()}포 표시
+                {records.length > 0 && ` (전체 ${records.length.toLocaleString()}건 · ${records.reduce((s,r)=>s+(parseInt(r.qty)||1),0).toLocaleString()}포 중)`}
               </span>
               {!searchText && !filterDong && records.length > 0 && (
                 <p className="text-[10px] text-gray-700 ml-auto">셀 클릭하여 직접 수정 · 행 끝 🗑 으로 삭제 표시</p>

@@ -106,6 +106,12 @@ const ResultGrid = memo(function ResultGrid({
   // 주소 확인 대상 = 오류이면서 아직 전화확인으로 분류되지 않은 건(담당자 확인 필요)
   const addrConfirmRows = gridData.filter(d => d._에러 && !d._전화확인);
   const inferredAddressCount = gridData.filter(d => d._주소추정 || (d._추정사유 || '').trim() || (d.특이사항 || '').includes('[주소추정]')).length;
+  // 포수 합계 — 형 원칙: 포수 확인 최우선, 명(건) 옆에 포를 항상 병기. 빈 포수는 1로 계산(규칙 C-4)
+  const poSum = (rows) => rows.reduce((s, r) => s + (parseInt(r.포수) || 1), 0);
+  const totalPo = poSum(gridData);
+  const errorPo = poSum(gridData.filter(d => d._에러));
+  const successPo = poSum(gridData.filter(d => !d._에러));
+  const inferredPo = poSum(gridData.filter(d => d._주소추정 || (d._추정사유 || '').trim() || (d.특이사항 || '').includes('[주소추정]')));
   const totalPages = Math.ceil(filteredData.length / itemsPerPage) || 1;
   const modeInfo = WORKFLOW_MODES[workflowMode] || WORKFLOW_MODES.cleaningOnly;
   const isDetailBeforeParen = addressDisplayMode === 'detailBeforeParen';
@@ -507,19 +513,19 @@ const ResultGrid = memo(function ResultGrid({
                 onClick={() => setFilter(f => ({ ...f, showErrorsOnly: false, showSuccessOnly: false, inferredAddress: false }))}
                 className={`px-4 py-1.5 text-xs rounded-md transition-all font-bold ${!filter.showErrorsOnly && !filter.showSuccessOnly && !filter.inferredAddress ? 'bg-[#101816] border border-emerald-500/35 text-emerald-300' : 'text-gray-500 hover:text-gray-300'}`}
               >
-                전체 <span className="font-mono font-black">{gridData.length.toLocaleString()}</span>
+                전체 <span className="font-mono font-black">{gridData.length.toLocaleString()}</span><span className="font-mono text-emerald-300/70">·{totalPo.toLocaleString()}포</span>
               </button>
               <button
                 onClick={() => setFilter(f => ({ ...f, showErrorsOnly: !filter.showErrorsOnly, showSuccessOnly: false, inferredAddress: false }))}
                 className={`px-4 py-1.5 text-xs rounded-md flex items-center gap-1.5 transition-all font-bold ${filter.showErrorsOnly ? 'bg-red-950/60 border border-red-500/50 text-red-400' : 'text-gray-500 hover:text-gray-300'}`}
               >
-                <AlertTriangle size={12}/> 확인필요 <span className="font-mono font-black">{errorCount.toLocaleString()}</span>
+                <AlertTriangle size={12}/> 확인필요 <span className="font-mono font-black">{errorCount.toLocaleString()}</span><span className="font-mono opacity-70">·{errorPo.toLocaleString()}포</span>
               </button>
               <button
                 onClick={() => setFilter(f => ({ ...f, showSuccessOnly: !filter.showSuccessOnly, showErrorsOnly: false, inferredAddress: false }))}
                 className={`px-4 py-1.5 text-xs rounded-md flex items-center gap-1.5 transition-all font-bold ${filter.showSuccessOnly ? 'bg-emerald-950/50 border border-emerald-500/35 text-emerald-300' : 'text-gray-500 hover:text-gray-300'}`}
               >
-                <CheckCircle size={12}/> 정제완료 <span className="font-mono font-black">{gridData.filter(d=>!d._에러).length.toLocaleString()}</span>
+                <CheckCircle size={12}/> 정제완료 <span className="font-mono font-black">{gridData.filter(d=>!d._에러).length.toLocaleString()}</span><span className="font-mono opacity-70">·{successPo.toLocaleString()}포</span>
               </button>
               {inferredAddressCount > 0 && (
                 <button
@@ -527,7 +533,7 @@ const ResultGrid = memo(function ResultGrid({
                   title="오타 보정, 도로명 추정, 압축 주소 변환처럼 시스템이 임의 보정한 주소만 모아봅니다."
                   className={`px-4 py-1.5 text-xs rounded-md flex items-center gap-1.5 transition-all font-bold ${filter.inferredAddress ? 'bg-amber-950/60 border border-amber-400/50 text-amber-200' : 'text-gray-500 hover:text-amber-200'}`}
                 >
-                  <Sparkles size={12}/> 주소 추정 <span className="font-mono font-black">{inferredAddressCount.toLocaleString()}</span>
+                  <Sparkles size={12}/> 주소 추정 <span className="font-mono font-black">{inferredAddressCount.toLocaleString()}</span><span className="font-mono opacity-70">·{inferredPo.toLocaleString()}포</span>
                 </button>
               )}
             </div>

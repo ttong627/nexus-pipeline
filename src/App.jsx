@@ -1226,27 +1226,43 @@ export default function App() {
       r.주소 = formatAddressForDisplayMode(r, addressDisplayMode);
       r._addressDisplayMode = addressDisplayMode;
     });
-    // 동일인 중복 제거 — 업로드 명단에 같은 사람이 여러 시트/행으로 중복돼도 1명으로 정리
-    // (이름+생년월일 또는 이름+휴대폰끝8 동일 = 동일인. 둘 다 없으면 합치지 않음 → 동명이인 보호)
+    // 동일인 중복 "표시만" — 자동 삭제 절대 금지(형 원칙: 대상자·포수 누락 금지, 담당자가 확인·결정).
+    // 같은 사람이 여러 시트/행으로 중복돼도 전건을 그대로 보존하고 _중복의심 플래그만 부여한다.
+    // 담당자는 결과화면/[중복확인] 시트에서 확인 후 직접 정리한다.
+    // (이름+생년월일끝6 또는 이름+휴대폰끝8 동일 = 동일인 의심. 둘 다 없으면 판정 불가 → 동명이인 보호로 미표시)
     {
-      const seen = new Map();        // key → out index
-      const deduped = [];
-      const score = (r) => (String(r.주소 || '').trim() ? 2 : 0) + (r._에러 ? 0 : 1); // 주소있고 정상인 행 우선 보존
+      const groups = new Map();      // key → [해당 레코드...]
       for (const r of results) {
+        r._중복의심 = false;         // 재정제 시 이전 플래그 초기화
+        r._중복그룹 = '';
         const name = String(r.이름 || '').replace(/\s/g, '');
         const bd = String(r.생년월일 || '').replace(/[^\d]/g, '');
         const bk = bd.length >= 6 ? bd.slice(-6) : '';
         const pd = String(r.휴대폰 || '').replace(/[^\d]/g, '');
         const pk = pd.length >= 8 ? pd.slice(-8) : '';
         const key = name && bk ? `b:${name}:${bk}` : (name && pk ? `p:${name}:${pk}` : null);
-        if (!key) { deduped.push(r); continue; }
-        if (!seen.has(key)) { seen.set(key, deduped.length); deduped.push(r); continue; }
-        const idx = seen.get(key);
-        if (score(r) > score(deduped[idx])) deduped[idx] = r;  // 더 나은 행으로 교체
+        if (!key) continue;          // 동일인 판정 불가 → 동명이인 보호(표시 안 함)
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(r);
       }
-      if (deduped.length !== results.length) { results.length = 0; results.push(...deduped); }
+      for (const [key, arr] of groups) {
+        if (arr.length < 2) continue;
+        arr.forEach(r => { r._중복의심 = true; r._중복그룹 = key; });  // 삭제 없음 — 전건 보존
+      }
     }
     pushHistory(results);
+
+    // 정합성 가드 — 파싱 입력 건수와 정제 결과 건수가 다르면 대상자 누락 신호(형 원칙: 대상자·포수 누락 절대 금지).
+    // dedup 자동삭제를 없앴으므로 정상 상태에서는 항상 일치. 불일치 시 즉시 경고해 조용한 증발을 차단한다.
+    if (typeof total === 'number' && total > 0 && results.length !== total) {
+      console.error(`[정합성 경고] 파싱 ${total}건 → 정제 결과 ${results.length}건 (차이 ${total - results.length}건)`);
+      setTimeout(() => alert(
+        `⚠️ 정합성 경고 — 대상자 수 불일치\n\n` +
+        `파싱 대상 ${total.toLocaleString()}건 → 정제 결과 ${results.length.toLocaleString()}건\n` +
+        `${Math.abs(total - results.length).toLocaleString()}건 차이가 발생했습니다.\n\n` +
+        `대상자 누락 가능성이 있으니 담당자 확인이 필요합니다.`
+      ), 300);
+    }
 
     // 정제 결과 요약
     const errList = results.filter(r => r._에러);
@@ -2514,8 +2530,9 @@ export default function App() {
     const monthStr = monthRaw.match(/^\d{4}-\d{2}$/)
       ? `${parseInt(monthRaw.split('-')[1])}월`
       : (monthRaw.replace(/월/g,'').trim() ? `${monthRaw.replace(/월/g,'').trim()}월` : '미상');
-    const suCount  = filteredData.filter(r => r.구분 === '기초수급자').reduce((s,r) => s+(Number(r.포수)||1), 0);
-    const chaCount = filteredData.filter(r => r.구분 === '차상위').reduce((s,r) => s+(Number(r.포수)||1), 0);
+    // 파일명 포수는 전건(gridData) 기준 — 화면 필터와 무관하게 전체 포수를 정확히 표기(누락 방지)
+    const suCount  = gridData.filter(r => r.구분 === '기초수급자').reduce((s,r) => s+(Number(r.포수)||1), 0);
+    const chaCount = gridData.filter(r => r.구분 === '차상위').reduce((s,r) => s+(Number(r.포수)||1), 0);
     const total    = suCount + chaCount;
     const base = `${safeCity}-${monthStr}-기초${suCount},차상위${chaCount},전체${total}-${mmdd}${timeSeq}`;
     return `${prefix}${base}.xlsx`;
@@ -2551,20 +2568,24 @@ export default function App() {
   const _activeColsFor = (rows) => _filterExportCols(rows);
 
   // 정제 결과 배열을 받아 정렬·컬럼 매핑 후 엑셀 즉시 다운로드 (쉬운정제 자동 저장용)
+  // 전건 그대로 [정제결과]로 내보내고, 확인필요·중복의심은 담당자 확인용 별도 시트로 함께 담는다(누락 0).
   const _exportResultRows = (rows) => {
     if (!rows?.length) return;
     const activeCols = _filterExportCols(rows);
     const sorted = sortByDeliveryOrder(rows);   // 정렬기준(행정동→리→주소→이름) 적용
-    const finalRows = sorted.map((r, i) => {
+    const toRow = (r, i) => {
       const row = {};
       activeCols.forEach(c => {
         if (c.key === 'NO') row[c.label] = i + 1;
-        else if (c.key === '사유') row[c.label] = r._에러 ? r._사유 : '정상';
+        else if (c.key === '사유') row[c.label] = r._에러 ? (r._사유 || '확인필요') : (r._중복의심 ? '중복확인' : '정상');
         else row[c.label] = r[c.key] ?? '';
       });
       return row;
-    });
-    _runExportWorker({ finalRows, exportCols: activeCols.map(c => c.label), fileName: _buildExportFileName() });
+    };
+    const finalRows = sorted.map(toRow);
+    const errorRows = sorted.filter(r => r._에러).map(toRow);
+    const dupRows   = sorted.filter(r => r._중복의심).map(toRow);
+    _runExportWorker({ finalRows, errorRows, dupRows, exportCols: activeCols.map(c => c.label), fileName: _buildExportFileName() });
   };
 
   // 기초명단(특이사항 파일) 건너뛰기 → 단순 정제 엑셀만 다운로드
@@ -2621,27 +2642,33 @@ export default function App() {
   };
 
   const handleExport = () => {
-    if (!filteredData.length) return alert('내보낼 데이터가 없습니다.');
+    if (!gridData.length) return alert('내보낼 데이터가 없습니다.');
     const unconfirmed = gridData.filter(r => r._에러 && !r._전화확인).length;
     if (unconfirmed > 0 && !window.confirm(`주소 확인이 안 된 ${unconfirmed}건이 있습니다.\n담당자 확인(주소 입력 또는 전화확인) 후 진행을 권장합니다.\n그래도 다운로드할까요?`)) return;
-    const activeCols = _activeExportCols();
-    const finalRows = filteredData.map((r, i) => {
+    // 전건(gridData) 기준 — 화면 필터와 무관하게 대상자·포수 누락 0 보장(형 원칙).
+    // [정제결과]에 전건을 담고, 확인필요·중복의심은 담당자 확인용 별도 시트로 함께 표시.
+    const allRows = sortByDeliveryOrder(gridData);
+    const activeCols = _filterExportCols(allRows);
+    const toRow = (r, i) => {
       const row = {};
       activeCols.forEach(c => {
         if (c.key === 'NO') row[c.label] = i + 1;
-        else if (c.key === '사유') row[c.label] = r._에러 ? r._사유 : '정상';
+        else if (c.key === '사유') row[c.label] = r._에러 ? (r._사유 || '확인필요') : (r._중복의심 ? '중복확인' : '정상');
         else row[c.label] = r[c.key] ?? '';
       });
       return row;
-    });
-    _runExportWorker({ finalRows, exportCols: activeCols.map(c => c.label), fileName: _buildExportFileName() });
+    };
+    const finalRows = allRows.map(toRow);
+    const errorRows = allRows.filter(r => r._에러).map(toRow);
+    const dupRows   = allRows.filter(r => r._중복의심).map(toRow);
+    _runExportWorker({ finalRows, errorRows, dupRows, exportCols: activeCols.map(c => c.label), fileName: _buildExportFileName() });
   };
 
   const handleExportErrors = () => {
-    const errors = filteredData.filter(r => r._에러);
+    const errors = gridData.filter(r => r._에러);   // 전건 기준 — 화면 필터 무관하게 전체 확인필요
     if (!errors.length) return alert('확인 필요 항목이 없습니다.');
-    const activeCols = _activeExportCols();
-    const finalRows = errors.map((r, i) => {
+    const activeCols = _filterExportCols(gridData);
+    const finalRows = sortByDeliveryOrder(errors).map((r, i) => {
       const row = {};
       activeCols.forEach(c => {
         if (c.key === 'NO') row[c.label] = i + 1;
@@ -2654,11 +2681,11 @@ export default function App() {
   };
 
   const handleExportDongSummary = () => {
-    if (!filteredData.length) return alert('내보낼 데이터가 없습니다.');
-    const activeCols = _activeExportCols();
+    if (!gridData.length) return alert('내보낼 데이터가 없습니다.');
+    const activeCols = _filterExportCols(gridData);
     _runExportWorker({
       action: 'EXPORT_DONG_SUMMARY',
-      rawRows: filteredData,
+      rawRows: sortByDeliveryOrder(gridData),   // 전건 기준(누락 방지)
       activeCols,
       city: fileInfo?.city || '지자체미상',
       month: fileInfo?.month || '미상',
@@ -2667,8 +2694,8 @@ export default function App() {
   };
 
   const handleExportByDriver = () => {
-    if (!filteredData.length) return alert('내보낼 데이터가 없습니다.');
-    const activeCols = _activeExportCols();
+    if (!gridData.length) return alert('내보낼 데이터가 없습니다.');
+    const activeCols = _filterExportCols(gridData);
     const worker = new Worker(new URL('./exportWorker.js', import.meta.url), { type: 'module' });
     worker.onmessage = (e) => {
       worker.terminate();
@@ -2685,7 +2712,7 @@ export default function App() {
     worker.onerror = () => { worker.terminate(); alert('내보내기 워커 오류'); };
     worker.postMessage({
       action: 'EXPORT_DRIVER_SHEETS',
-      rows: filteredData,
+      rows: sortByDeliveryOrder(gridData),   // 전건 기준(누락 방지)
       activeCols,
       fileName: _buildExportFileName('[기사별]'),
     });

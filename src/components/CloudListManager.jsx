@@ -364,8 +364,10 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
     // fetchRecords는 selectedCity 갱신 전에 호출되므로 cityId 직접 전달
     fetchRecordsFor(fullCity, cityItem.latestMonth.id);
     // 백그라운드에서 전체 월 목록도 갱신 (다른 월로 전환 가능하게)
+    // getDocsFromServer: 로컬 캐시 우회 — 방금 저장한 새 월/건수가 캐시 miss로 누락돼
+    // "저장했는데 사라짐"이 되던 문제 차단(레코드 조회와 동일 원칙, B-7).
     setTimeout(() => {
-      getDocs(collection(db, 'cloud_lists', fullCity, 'months'))
+      getDocsFromServer(collection(db, 'cloud_lists', fullCity, 'months'))
         .then(snap => {
           const data = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => b.id.localeCompare(a.id));
           if (data.length > 0) setMonths(data);
@@ -480,7 +482,9 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
     setSelectedMonth(null);
     setRecords([]);
     try {
-      const snap = await getDocs(collection(db, 'cloud_lists', selectedCity, 'months'));
+      // getDocsFromServer: 로컬 캐시 우회 — 저장 직후 새 월/갱신 건수가 캐시 miss로
+      // 목록에 안 뜨던 "저장했는데 사라짐" 근본 차단(레코드 조회 518과 동일 원칙, B-7).
+      const snap = await getDocsFromServer(collection(db, 'cloud_lists', selectedCity, 'months'));
       const data = snap.docs
         .map(d => ({ id: d.id, ...d.data() }))
         .sort((a, b) => b.id.localeCompare(a.id));
@@ -1845,15 +1849,15 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
                             <div className="grid grid-cols-3 gap-2">
                               <div className="bg-black/40 rounded-xl p-2 text-center">
                                 <p className="text-[15px] font-black text-white">{(m.totalCount||0).toLocaleString()}</p>
-                                <p className="text-[9px] text-gray-600 mt-0.5 font-bold">전체</p>
+                                <p className="text-[9px] text-gray-600 mt-0.5 font-bold">전체 · {(m.totalQty||0).toLocaleString()}포</p>
                               </div>
                               <div className="bg-black/40 rounded-xl p-2 text-center">
                                 <p className="text-[15px] font-black text-amber-400">{(m.수급자Count||0).toLocaleString()}</p>
-                                <p className="text-[9px] text-gray-600 mt-0.5 font-bold">수급자</p>
+                                <p className="text-[9px] text-gray-600 mt-0.5 font-bold">수급자 · {(m.수급자Qty||0).toLocaleString()}포</p>
                               </div>
                               <div className="bg-black/40 rounded-xl p-2 text-center">
                                 <p className="text-[15px] font-black text-blue-400">{(m.차상위Count||0).toLocaleString()}</p>
-                                <p className="text-[9px] text-gray-600 mt-0.5 font-bold">차상위</p>
+                                <p className="text-[9px] text-gray-600 mt-0.5 font-bold">차상위 · {(m.차상위Qty||0).toLocaleString()}포</p>
                               </div>
                             </div>
                           </>
@@ -1884,9 +1888,9 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
                     {selectedCity} — <span className="text-blue-400">{selectedMonth.id}</span>
                   </h2>
                   <div className="flex flex-wrap items-center gap-3 text-xs text-gray-500">
-                    <span>전체 <span className="text-white font-bold">{(selectedMonth.totalCount||0).toLocaleString()}</span>명</span>
-                    <span className="text-amber-400">기초수급자 <span className="font-bold">{(selectedMonth.수급자Count||0).toLocaleString()}</span>명</span>
-                    <span className="text-blue-400">차상위 <span className="font-bold">{(selectedMonth.차상위Count||0).toLocaleString()}</span>명</span>
+                    <span>전체 <span className="text-white font-bold">{(selectedMonth.totalCount||0).toLocaleString()}</span>명 · <span className="text-white font-bold">{records.reduce((s,r)=>s+(parseInt(r.포수)||1),0).toLocaleString()}</span>포</span>
+                    <span className="text-amber-400">기초수급자 <span className="font-bold">{(selectedMonth.수급자Count||0).toLocaleString()}</span>명 · <span className="font-bold">{records.filter(r=>r.구분==='기초수급자').reduce((s,r)=>s+(parseInt(r.포수)||1),0).toLocaleString()}</span>포</span>
+                    <span className="text-blue-400">차상위 <span className="font-bold">{(selectedMonth.차상위Count||0).toLocaleString()}</span>명 · <span className="font-bold">{records.filter(r=>r.구분==='차상위').reduce((s,r)=>s+(parseInt(r.포수)||1),0).toLocaleString()}</span>포</span>
                     {isAdmin && (
                       <span className="text-gray-600">업로드: {fmtTs(selectedMonth.uploadedAt)} · {selectedMonth.uploadedBy}</span>
                     )}
