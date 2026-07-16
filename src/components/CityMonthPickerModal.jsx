@@ -136,8 +136,8 @@ export default function CityMonthPickerModal({
             <div className="text-[10px] font-black text-emerald-500 uppercase tracking-wider mb-1">이번 업로드</div>
             {(uploadCounts && (uploadCounts.기초수급자 > 0 || uploadCounts.차상위 > 0)) ? (
               <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[13px] font-black">
-                {uploadCounts.기초수급자 > 0 && <span className="text-purple-300">수급자 {uploadCounts.기초수급자.toLocaleString()}명</span>}
-                {uploadCounts.차상위 > 0 && <span className="text-sky-300">차상위 {uploadCounts.차상위.toLocaleString()}명</span>}
+                {uploadCounts.기초수급자 > 0 && <span className="text-purple-300">수급자 {uploadCounts.기초수급자.toLocaleString()}명 · {(uploadCounts.기초수급자Qty || 0).toLocaleString()}포</span>}
+                {uploadCounts.차상위 > 0 && <span className="text-sky-300">차상위 {uploadCounts.차상위.toLocaleString()}명 · {(uploadCounts.차상위Qty || 0).toLocaleString()}포</span>}
                 {uploadCounts.기초수급자 > 0 && uploadCounts.차상위 > 0 && <span className="text-gray-500 text-[11px] font-bold">(혼합)</span>}
               </div>
             ) : uploadGubuns.length > 0 ? (

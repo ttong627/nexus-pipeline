@@ -1,8 +1,14 @@
-export const APP_VERSION = 'V6.87';
+export const APP_VERSION = 'V6.89';
 export const APP_BUILD = '2026.07.16';
-export const APP_BUILD_TIME = '2026.07.16 18:32';
+export const APP_BUILD_TIME = '2026.07.16 19:08';
 
 export const CHANGELOG = [
+  { v: "V6.89", date: "2026.07.16", items: [
+    "특정 서식(시트 범위가 XFC 등 비정상적으로 넓어 34MB로 비대해진 파일)에서 헤더·컬럼이 밀리던 문제 해결 — 파싱 전 실제 데이터 범위로 자동 정정",
+  ]},
+  { v: "V6.88", date: "2026.07.16", items: [
+    "지자체·적용월 확인 모달의 '이번 업로드' 표시에 포수 병기 — 수급자/차상위 명 옆에 포수 항상 표시(포수 확인 강화)",
+  ]},
   { v: "V6.87", date: "2026.07.16", items: [
     "포수 정합성 자동 대조(M-7) — 원본 명단이 명시한 소계 포수와 정제 결과 포수가 다르면 즉시 경고(파싱 단계 대상자 누락까지 조기 감지)",
   ]},

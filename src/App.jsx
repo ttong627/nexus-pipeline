@@ -772,18 +772,20 @@ export default function App() {
           });
 
           // 이번 업로드에 포함된 구분(수급자/차상위)별 인원 — 모달에서 "이번 업로드: 수급자 N명" 확인 + 기존현황 비교용
-          const uploadCounts = { 기초수급자: 0, 차상위: 0 };
+          const uploadCounts = { 기초수급자: 0, 차상위: 0, 기초수급자Qty: 0, 차상위Qty: 0 };
           sheetsData.forEach(sh => {
             const rows = sh.bodyRows || [];
             const ti = sh.typeColIdx;
+            const amtIdx = sh.colIndices?.['수량'];      // 포수 컬럼(빈값=1, 규칙 C-4)
+            const rowPo = (r) => amtIdx !== undefined ? (parseInt(r[amtIdx]) || 1) : 1;
             if (sh.type === '혼합' && ti >= 0) {
               rows.forEach(r => {
                 const v = String(r[ti] || '');
-                if (/차상위/.test(v)) uploadCounts.차상위++;
-                else if (/수급|기초|생계|의료/.test(v)) uploadCounts.기초수급자++;
+                if (/차상위/.test(v)) { uploadCounts.차상위++; uploadCounts.차상위Qty += rowPo(r); }
+                else if (/수급|기초|생계|의료/.test(v)) { uploadCounts.기초수급자++; uploadCounts.기초수급자Qty += rowPo(r); }
               });
-            } else if (sh.type === '기초수급자') uploadCounts.기초수급자 += rows.length;
-            else if (sh.type === '차상위') uploadCounts.차상위 += rows.length;
+            } else if (sh.type === '기초수급자') { uploadCounts.기초수급자 += rows.length; uploadCounts.기초수급자Qty += rows.reduce((s, r) => s + rowPo(r), 0); }
+            else if (sh.type === '차상위') { uploadCounts.차상위 += rows.length; uploadCounts.차상위Qty += rows.reduce((s, r) => s + rowPo(r), 0); }
           });
           const uploadGubuns = [];
           if (uploadCounts.기초수급자 > 0) uploadGubuns.push('기초수급자');

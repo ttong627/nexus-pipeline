@@ -59,6 +59,25 @@ function extractCityCandidates(fileName, rawJsonSamples, bodyRows, addrColIdx) {
   return result;
 }
 
+// 유령 범위 정정 — 시트 !ref가 실제 데이터보다 과도하게 넓으면(예: XFC892처럼 16000+열, 과거 서식/편집 흔적)
+// 실제 셀 기준으로 재계산한다. 이런 서식은 sheet_to_json을 오작동시켜 데이터를 못 읽거나 컬럼이 밀리고
+// 파일도 수십 MB로 비대해진다. (2026-07-16 차상위 양곡 서식 XFC 범위 밀림 사고 재발방지, 규칙 §5 CM-범위1)
+function fixSheetRange(ws) {
+  if (!ws || !ws['!ref']) return;
+  let range;
+  try { range = XLSX.utils.decode_range(ws['!ref']); } catch { return; }
+  if (range.e.c <= 200) return;   // 열 200 이하면 정상 — 그대로(정상 파일 성능 보호)
+  const cells = Object.keys(ws).filter(k => k[0] !== '!');
+  if (!cells.length) return;
+  let maxR = 0, maxC = 0;
+  for (const k of cells) {
+    const cell = XLSX.utils.decode_cell(k);
+    if (cell.r > maxR) maxR = cell.r;
+    if (cell.c > maxC) maxC = cell.c;
+  }
+  ws['!ref'] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: maxR, c: maxC } });
+}
+
 function parseSheet(name, rawJson, dynamicRules) {
   let type;
   if (name.includes('수급') || name.includes('의료') || name.includes('생계')) type = '기초수급자';
@@ -1120,6 +1139,9 @@ self.onmessage = ({ data }) => {
       cellDates: false,
       codepage: 949,   // .xls BIFF8 CP949(한글) 강제 인코딩
     });
+
+    // 유령 범위 정정 — XFC 등 과도하게 넓은 시트 범위를 실제 셀 기준으로 축소(밀림·비대·오작동 방지, CM-범위1)
+    wb.SheetNames.forEach(n => fixSheetRange(wb.Sheets[n]));
 
     if (action === 'PARSE_BASE' || action === 'PARSE_BASE_WITH_MAP') {
       const manualMap = data.manualMap || null;
