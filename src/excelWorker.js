@@ -383,7 +383,16 @@ function parseSheet(name, rawJson, dynamicRules) {
       if (!nameVal || nameVal === '-') return false;
       if (/^계$|합계|소계|총계|집계|가구$|세대$/.test(nameVal)) return false;
       // 집계/구분 행이 이름칸에 들어온 경우(시트 통계표·매핑 어긋남) — 사람 이름이 아님
-      if (/^[가-힣]{1,6}(면|읍)$/.test(nameVal)) return false;          // 갈산면·광천읍 등 면/읍 단독
+      // 면/읍으로 끝나는 이름은 실제 사람 이름일 수 있다(예: 정태면). 개인 데이터(전화·포수·주소)가
+      // 하나도 없을 때만 통계표의 행정구역 단독 행으로 간주해 제외한다. (2026-07-16 정태면 누락 사고 재발방지)
+      if (/^[가-힣]{1,6}(면|읍)$/.test(nameVal)) {          // 갈산면·광천읍 등 면/읍 단독(단, 개인 데이터 없을 때만)
+        const phoneVals = [colIndices['연락처'], colIndices['보조연락처']]
+          .filter(i => i !== undefined).map(i => String(r[i] || ''));
+        const hasPhone = phoneVals.some(v => /\d{2,3}-?\d{3,4}-?\d{4}/.test(v));
+        const hasAmt = colIndices['수량'] !== undefined && String(r[colIndices['수량']] || '').trim() !== '';
+        const hasAddr = colIndices['주소'] !== undefined && String(r[colIndices['주소']] || '').replace(/\s/g, '').length > 3;
+        if (!hasPhone && !hasAmt && !hasAddr) return false;   // 개인 데이터 없음 → 행정구역 단독 행으로 제외
+      }
       if (/^(수급자|차상위|기초수급자|차상위계층)$/.test(nameVal)) return false; // 구분값
       if (/^[\d,]+$/.test(nameVal)) return false;
       // 이름 컬럼 자리에 헤더 키워드가 그대로 들어온 경우 (헤더행 오인식 방지)

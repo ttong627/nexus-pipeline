@@ -1,8 +1,11 @@
-export const APP_VERSION = 'V6.85';
+export const APP_VERSION = 'V6.86';
 export const APP_BUILD = '2026.07.16';
-export const APP_BUILD_TIME = '2026.07.16 17:22';
+export const APP_BUILD_TIME = '2026.07.16 18:25';
 
 export const CHANGELOG = [
+  { v: "V6.86", date: "2026.07.16", items: [
+    "이름이 '면/읍'으로 끝나는 대상자(예: 정태면)가 파싱에서 누락되던 문제 해결 — 전화·포수·주소 등 개인정보 있으면 사람으로 보존(대상자 누락 0)",
+  ]},
   { v: "V6.85", date: "2026.07.16", items: [
     "엑셀 내보내기 첫 컬럼을 '표시순번'으로 표기 — 화면 정렬순서(7번길→10번길)를 숫자로 담아 엑셀에서 표시순번 정렬 시 화면과 동일 순서 재현(주소 정렬의 10<7 문제 대체)",
   ]},
