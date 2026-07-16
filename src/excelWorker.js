@@ -96,15 +96,26 @@ function parseSheet(name, rawJson, dynamicRules) {
   }
 
   // ─── 병합 헤더 처리 ──────────────────────────────────────────────
-  const colCount = Math.max(
+  const rawColCount = Math.max(
     ...[0, 1, 2].map(o => rawJson[headerIdx + o]?.length || 0)
   );
+  // 유령 후행 빈열 제거 — 시트 범위(!ref)가 실제 데이터보다 넓게 잡힌 경우(예: 과거 입력 흔적으로
+  // M열까지 범위가 남은 차상위 시트) 데이터가 전혀 없는 후행 열이 헤더·컬럼 매핑을 밀리게 하므로 잘라낸다.
+  let colCount = rawColCount;
+  while (colCount > 1) {
+    const c = colCount - 1;
+    if (rawJson.some(r => String(r?.[c] ?? '').trim() !== '')) break;
+    colCount--;
+  }
   // \r\n 포함 셀 정제 (예: "생년월일\r\n(주민등록앞자리)" → "생년월일(주민등록앞자리)")
   const cleanCell = c => String(c || '').replace(/[\r\n]+/g, '').trim();
   const headerBuf = Array.from({ length: colCount }, (_, i) =>
     cleanCell(rawJson[headerIdx]?.[i])
   );
 
+  // 주소 3분할 등 병합 서브헤더 라벨(구/동/번지/층/호수/상세 등)은 글자수와 무관하게 데이터로 오판하지 않는다.
+  // (예: "번지, 층, 호수(상세)"가 공백 차이로 13자가 되어 '긴 한글=데이터'로 오인 → 서브헤더 통합 실패 → 컬럼 밀림)
+  const HEADER_LABEL_RE = /^(시|도|구|군|읍|면|동|리|번지|층|호수?|상세|호|통|반|성\s*명|이름|주소|주민|생년월?일?|전화|연락처|휴대|유선|우편|비고|메모|구분)[\s,()·\/0-9가-힣]*$/;
   for (let offset = 1; offset <= 2; offset++) {
     const subRow = rawJson[headerIdx + offset];
     if (!subRow) break;
@@ -112,11 +123,13 @@ function parseSheet(name, rawJson, dynamicRules) {
     const nonEmpty = subVals.filter(Boolean);
     if (!nonEmpty.length) break;
     const looksLikeData = nonEmpty.some(v =>
-      /\d{2,3}-\d{3,4}-\d{4}/.test(v) ||
-      (/[가-힣]/.test(v) && v.length > 12) ||
-      /^\d{6,}$/.test(v) ||
-      /합계|소계|총계|집계/.test(String(v)) ||
-      /^\d{1,3}(,\d{3})+$/.test(String(v))
+      !HEADER_LABEL_RE.test(v) && (
+        /\d{2,3}-\d{3,4}-\d{4}/.test(v) ||
+        (/[가-힣]/.test(v) && v.length > 12) ||
+        /^\d{6,}$/.test(v) ||
+        /합계|소계|총계|집계/.test(String(v)) ||
+        /^\d{1,3}(,\d{3})+$/.test(String(v))
+      )
     );
     if (looksLikeData) break;
     subVals.forEach((v, i) => { if (v && !headerBuf[i]) headerBuf[i] = v; });

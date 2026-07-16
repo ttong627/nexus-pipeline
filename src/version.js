@@ -1,8 +1,11 @@
-export const APP_VERSION = 'V6.83';
+export const APP_VERSION = 'V6.84';
 export const APP_BUILD = '2026.07.16';
-export const APP_BUILD_TIME = '2026.07.16 15:24';
+export const APP_BUILD_TIME = '2026.07.16 17:11';
 
 export const CHANGELOG = [
+  { v: "V6.84", date: "2026.07.16", items: [
+    "차상위 등 특정 시트가 밀려 표시되던 문제 해결 — 정부양곡 서식 헤더·컬럼 자동 정렬(주소 서브헤더 보호·유령 빈열 제거)",
+  ]},
   { v: "V6.83", date: "2026.07.16", items: [
     "이번달 명단 검색결과 '전체 N명 중'에도 포수 병기 — 명+포 표시 완결",
   ]},
