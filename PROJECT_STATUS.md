@@ -1,5 +1,5 @@
 # 📋 PROJECT STATUS — nexus-pipeline
-> 자동 생성: /확인 스킬 · 갱신 2026-07-16 13:58 KST
+> 자동 생성: /확인 스킬 · 갱신 2026-07-16 15:24 KST
 
 ## 식별
 - GitHub: ttong627/nexus-pipeline (계정 세트: **ttong627**)
@@ -27,50 +27,38 @@
 ## 규칙 문서 (SSOT — 메뉴·기능 처리 방식의 기록, 작업 전 필독)
 | 문서 | 내용 |
 |---|---|
-| CLAUDE.md | 프로젝트 전체 운영규칙 — 주소정제 A-1~A-30·동명이인 안전매칭 S-1~S-6·DB저장 B-1~B-16·루트맵 R-0~R-N·배송순번 DS-1~DS-14·업로드/버전관리 |
-| DELIVERY_SEQUENCE_RULES.md | 배송순번 독립 규칙(roadAwareTSP·nearestNeighborTSP·품질분석) 상세 |
-| 동명이인_주소오염_재발방지_설계.md | 2026-07-10 동대문 김옥순 사고 재발방지 설계 — S-1~S-6 강키 매칭·guard 모듈 |
-| CLAUDE_FORGE_PRINCIPLES.md | 코딩 황금원칙(불변성·TDD·외과적 수정 등) |
-| AI_GLOBAL_RULES.md / AI_TEAM_SKILLS.md | 드림팀 운영·스킬 규칙 |
-| implementation_plan.md / prompt_plan.md | 기능 구현 계획 이력 |
+| CLAUDE.md | 프로젝트 전체 운영규칙 — 주소정제 A-1~A-30·동명이인 안전매칭 **S-1~S-6**·**무손실 원칙 M-1~M-6**·DB저장 B-1~B-16·루트맵 R-0~R-N·배송순번 DS·업로드/버전관리 |
+| CLAUDE.md §1-5 무손실 원칙(M-1~M-6) | ★2026-07-16 신설 절대규칙 — 대상자·포수 누락 금지·완전중복 자동삭제 금지·내보내기 전건·다중시트·정합성 가드·명+포 병기 |
+| DELIVERY_SEQUENCE_RULES.md | 배송순번 독립 규칙 상세 |
+| 동명이인_주소오염_재발방지_설계.md | 2026-07-10 동대문 김옥순 사고 재발방지 — S-1~S-6 |
+| CLAUDE_FORGE_PRINCIPLES.md | 코딩 황금원칙 |
 
-## 마지막 작업 (2026-07-11)
-- **외부 시스템(정부양곡 정산 SYSTEM) 명단 가져오기** — importUrl/import2Url 쿼리 지원
-  - 8564052 feat: 외부 가져오기 **2개 파일 합치기** 지원(import2Url) — src/App.jsx
-  - 90e4387 feat: 외부 시스템(정부양곡 정산 SYSTEM) 명단 가져오기 — importUrl 쿼리 지원
-- **address-service 매칭 hang 근본 수정** (37초 hang → 해결)
-  - 7a76284 fix: road_name 인덱스·ANALYZE·search_path
-  - 7e01176 fix: 적재 후 ANALYZE 추가
+## 마지막 작업 (2026-07-16) — 무손실 원칙 세션 · V6.81~V6.83
+- **저장 사라짐 근본수정**: 이번달 명단 저장 후 화면이 월 목록을 캐시(getDocs)로 읽어 새 저장분이 안 보이던 문제 → CloudListManager `fetchMonths`·카드열기 조회를 `getDocsFromServer`로 전환
+- **대상자·포수 누락 차단 (안양시 동안구 포수증발 사고 9명 10포)**: ① 정제 후 완전중복 **자동삭제 차단**(전건 유지 + `_중복의심` 표시) ② 내보내기를 `filteredData`→**`gridData` 전건**으로 ③ 다운로드 **[정제결과]+[확인필요]+[중복확인] 다중시트**
+- **정합성 가드**: 파싱 건수 ≠ 정제 결과 건수 시 즉시 경고
+- **명+포 표시**: 정제화면·기본명단·이번달명단 카운트에 포수 병기(포수 확인 최우선)
+- **특이사항 이식 최신유지**: DbImportModal·CloudBaseModal `getDocsFromServer` + `updatedAt` 최신 우선
+- **CLAUDE.md §1-5 무손실 원칙(M-1~M-6) 박제** — 절대규칙, 되돌리기 금지
+- 커밋: `a7c77ae`(코드) · `b5aec12`(규칙) · V6.83 추가 커밋 예정
 
-## 직전 작업 (2026-07-10)
-- **동명이인 주소 오염 사고 해결**: 6/24 repair-address-tampering --write가 동대문 6월 김옥순(주민센터 수령자) 주소를 동명이인 집주소로 덮어씀 → 원인 6중 결함 확정, S-1~S-6 안전매칭 규칙(CLAUDE.md §1-4)·guard 모듈+테스트 9/9·수리 v2·특이사항 이식 우회로 봉쇄. 전수감사(동대문53+중원32) 피해 2건 → 복구 완료(2cb5b6b, 형 승인 후 실행·재조회 검증). 설계서: 동명이인_주소오염_재발방지_설계.md
-- ⚠️ **CRITICAL(추적 필요)**: 운영 배포 번들 VITE_ADDRESS_MATCH_API_URL 값 확인 필요 → 비었으면 앱 정제가 저하 모드(캐시+카카오POI만). 7/11 address-service hang 수정 이후 서비스 URL 연결 상태 재확인 권장
-
-## 직전 작업 (2026-06-30)
-- **V6.80** feat: 클라이언트 오류 자동추적 + lint 게이트 + 관리자 오류로그 (errorTracker.js, error_logs 컬렉션, prebuild lint 게이트)
-- **V6.79.3** fix: 주소정제 즉시 중단(T is not a constructor) — lucide `Map` import가 전역 Map 생성자 가림 → `Map as MapIcon` 별칭
-- **V6.79.1** fix: 주소정제 무한로딩 — Kakao 타임아웃 + 핸들러 예외 안전망
+## 직전 작업 (2026-07-11)
+- 외부 시스템(정부양곡 정산 SYSTEM) 명단 가져오기 — importUrl/import2Url · address-service 매칭 hang 근본 수정
 
 ## 작업환경
 - node v24.15.0 / npm 11.12.1 · gh OK · gcloud OK · firebase OK
-- 현재 앱 버전: **V6.80** · APP_BUILD 2026.06.30 13:03 (version.js)
-- 의존성: **루트 node_modules 설치됨**(프론트 작업 즉시 가능). 하위앱 3곳 미설치 → 해당 서비스 작업 시에만 설치
-  - `cd functions && npm install` / `cd address-service && npm install` / `cd services/address-service && npm install`
+- 현재 앱 버전: **V6.83** · 무손실 원칙 적용본
+- 의존성: **루트 node_modules 설치됨**. 하위앱 3곳 미설치 → 해당 서비스 작업 시에만 `cd <폴더> && npm install`
 - 시크릿: `.env`·`.env.example` 존재 (gitignore, 값 비노출)
-- 검증 게이트: `prebuild`=eslint --quiet && tsc --noEmit (배포 전 자동). 별도: `npm run typecheck`, `npm run test:e2e`(Playwright 스모크)
+- 검증 게이트: `prebuild`=eslint --quiet && tsc --noEmit. 별도: `npm run typecheck`, `npm run test:e2e`
 
 ## 동기화
-- 상태: **이미 최신** (origin/main...HEAD = behind 0 / ahead 0, 워킹트리 clean)
-- 마지막 fetch: 2026-07-16 13:58 KST
+- 상태: 커밋·푸시 완료 (main = origin/main)
+- 마지막 fetch: 2026-07-16 15:24 KST
 - gh active 계정: ttong627 (repo owner와 일치 ✅)
-
-## 검토 완료 메모
-- **쉬운 정제 매칭 엔진**: 이미 100% 구현·배포 완료 → 추가 작업 불필요.
-- **TypeScript 점진 도입**: errorTracker·addressFormat·columnRules·parsers 4개 순수 모듈에 `// @ts-check` + JSDoc. `tsc --noEmit`이 prebuild 게이트. 거대/IndexedDB 모듈은 다음 차수.
-- **E2E 스모크**: Playwright 1개(`tests/smoke.spec.js`) — 배포 전 런타임 크래시 검증. `npm run test:e2e`.
 
 ## 리스크
 - 🟢 동기화·계정·환경·배포: 정상 (최신·계정일치·루트 의존성 설치됨)
-- 🟢 에러 가시성: 전역 추적 + 관리자 패널 오류로그 완비(V6.80)
-- 🟡 하위앱 3곳(functions·address-service×2) node_modules 미설치 — 해당 서비스 작업 시 npm install 필요(위 명령)
+- 🟢 데이터 무결성: 무손실 원칙(M-1~M-6) 적용 — 대상자·포수 누락 차단, 완전중복 자동삭제 금지
+- 🟡 하위앱 3곳(functions·address-service×2) node_modules 미설치 — 해당 서비스 작업 시 npm install 필요
 - 🟡 VITE_ADDRESS_MATCH_API_URL 운영 연결 상태 재확인 권장(저하 모드 방지)

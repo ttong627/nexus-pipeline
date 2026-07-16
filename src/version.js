@@ -1,8 +1,11 @@
-export const APP_VERSION = 'V6.82';
+export const APP_VERSION = 'V6.83';
 export const APP_BUILD = '2026.07.16';
-export const APP_BUILD_TIME = '2026.07.16 15:05';
+export const APP_BUILD_TIME = '2026.07.16 15:24';
 
 export const CHANGELOG = [
+  { v: "V6.83", date: "2026.07.16", items: [
+    "이번달 명단 검색결과 '전체 N명 중'에도 포수 병기 — 명+포 표시 완결",
+  ]},
   { v: "V6.82", date: "2026.07.16", items: [
     "정제·명단 화면에 포수(포) 합계 항상 표시 — 명 옆에 포수 병기 (포수 확인 강화)",
     "정제 시 대상자 수 자동 검증 — 파싱 대비 결과 수가 다르면 즉시 경고 (누락 조기 차단)",
