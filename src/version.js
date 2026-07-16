@@ -1,8 +1,11 @@
-export const APP_VERSION = 'V6.92';
+export const APP_VERSION = 'V6.93';
 export const APP_BUILD = '2026.07.16';
-export const APP_BUILD_TIME = '2026.07.16 22:14';
+export const APP_BUILD_TIME = '2026.07.16 22:26';
 
 export const CHANGELOG = [
+  { v: "V6.93", date: "2026.07.16", items: [
+    "이번달 배송명단 지자체 카드에 포수가 0으로만 뜨던 문제 해결 — 도시 목록이 포수(Qty) 필드를 읽도록 수정(구 저장분은 월문서에서 자동 복구)",
+  ]},
   { v: "V6.92", date: "2026.07.16", items: [
     "소속사배분 다운로드 맨 앞에 '소속사요약' 시트 추가 — 소속사별 동별 포수·소속사 합계·전체 합계(행정동요약 형식)",
   ]},

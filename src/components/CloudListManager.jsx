@@ -573,6 +573,9 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
             totalCount: data.latestTotalCount ?? 0,
             수급자Count: data['latest수급자Count'] ?? 0,
             차상위Count: data['latest차상위Count'] ?? 0,
+            totalQty: data.latestTotalQty ?? 0,          // 포수(도시 카드 표시용)
+            수급자Qty: data['latest수급자Qty'] ?? 0,
+            차상위Qty: data['latest차상위Qty'] ?? 0,
           } : null;
           return { id: cityId, sido, sigungu, latestMonth };
         })
@@ -583,10 +586,10 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
           return a.sigungu.localeCompare(b.sigungu, 'ko');
         });
 
-      // 카드 카운트가 0인데 lastMonthId가 있으면 month 문서를 직접 읽어 자동 복구
+      // 카드 카운트/포수가 0인데 lastMonthId가 있으면 month 문서를 직접 읽어 자동 복구(구 저장분 포수 캐시 없음 대응)
       await Promise.all(
         cities
-          .filter(c => c.latestMonth && c.latestMonth.totalCount === 0)
+          .filter(c => c.latestMonth && (c.latestMonth.totalCount === 0 || !c.latestMonth.totalQty))
           .map(async (c) => {
             try {
               const monthSnap = await getDoc(doc(db, 'cloud_lists', c.id, 'months', c.latestMonth.id));
@@ -595,15 +598,24 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
               const totalCount = m.totalCount ?? 0;
               const 수급자Count = m.수급자Count ?? 0;
               const 차상위Count = m.차상위Count ?? 0;
+              const totalQty = m.totalQty ?? 0;
+              const 수급자Qty = m.수급자Qty ?? 0;
+              const 차상위Qty = m.차상위Qty ?? 0;
               c.latestMonth.totalCount = totalCount;
               c.latestMonth.수급자Count = 수급자Count;
               c.latestMonth.차상위Count = 차상위Count;
+              c.latestMonth.totalQty = totalQty;
+              c.latestMonth.수급자Qty = 수급자Qty;
+              c.latestMonth.차상위Qty = 차상위Qty;
               // 최상위 문서 캐시도 동기화 (이후 로드 시 추가 읽기 불필요)
-              if (totalCount > 0) {
+              if (totalCount > 0 || totalQty > 0) {
                 setDoc(doc(db, 'cloud_lists', c.id), {
                   latestTotalCount: totalCount,
                   'latest수급자Count': 수급자Count,
                   'latest차상위Count': 차상위Count,
+                  latestTotalQty: totalQty,
+                  'latest수급자Qty': 수급자Qty,
+                  'latest차상위Qty': 차상위Qty,
                 }, { merge: true }).catch(() => {});
               }
             } catch { /* 복구 실패 무시 */ }
