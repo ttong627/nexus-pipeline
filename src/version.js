@@ -1,8 +1,11 @@
-export const APP_VERSION = 'V6.84';
+export const APP_VERSION = 'V6.85';
 export const APP_BUILD = '2026.07.16';
-export const APP_BUILD_TIME = '2026.07.16 17:11';
+export const APP_BUILD_TIME = '2026.07.16 17:22';
 
 export const CHANGELOG = [
+  { v: "V6.85", date: "2026.07.16", items: [
+    "엑셀 내보내기 첫 컬럼을 '표시순번'으로 표기 — 화면 정렬순서(7번길→10번길)를 숫자로 담아 엑셀에서 표시순번 정렬 시 화면과 동일 순서 재현(주소 정렬의 10<7 문제 대체)",
+  ]},
   { v: "V6.84", date: "2026.07.16", items: [
     "차상위 등 특정 시트가 밀려 표시되던 문제 해결 — 정부양곡 서식 헤더·컬럼 자동 정렬(주소 서브헤더 보호·유령 빈열 제거)",
   ]},

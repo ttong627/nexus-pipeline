@@ -314,7 +314,7 @@ export default function App() {
   const userUnsubRef = useRef(null); // user 문서 실시간 구독 해제용
 
   const DEFAULT_EXPORT_COLS = [
-    { key: 'NO',      label: 'NO',      on: true },
+    { key: 'NO',      label: '표시순번', on: true },
     { key: '구분',    label: '구분',    on: true },
     { key: '행정동',  label: '읍면동',  on: true },
     { key: '리',      label: '리',      on: true },
