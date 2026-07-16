@@ -1860,16 +1860,16 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
                             {/* 통계 */}
                             <div className="grid grid-cols-3 gap-2">
                               <div className="bg-black/40 rounded-xl p-2 text-center">
-                                <p className="text-[15px] font-black text-white">{(m.totalCount||0).toLocaleString()}</p>
-                                <p className="text-[9px] text-gray-600 mt-0.5 font-bold">전체 · {(m.totalQty||0).toLocaleString()}포</p>
+                                <p className="text-[22px] font-black text-white leading-none">{(m.totalQty||0).toLocaleString()}<span className="text-[13px] font-extrabold ml-0.5">포</span></p>
+                                <p className="text-[10px] text-gray-400 mt-1 font-bold">전체 {(m.totalCount||0).toLocaleString()}명</p>
                               </div>
                               <div className="bg-black/40 rounded-xl p-2 text-center">
-                                <p className="text-[15px] font-black text-amber-400">{(m.수급자Count||0).toLocaleString()}</p>
-                                <p className="text-[9px] text-gray-600 mt-0.5 font-bold">수급자 · {(m.수급자Qty||0).toLocaleString()}포</p>
+                                <p className="text-[22px] font-black text-amber-400 leading-none">{(m.수급자Qty||0).toLocaleString()}<span className="text-[13px] font-extrabold ml-0.5">포</span></p>
+                                <p className="text-[10px] text-gray-400 mt-1 font-bold">수급자 {(m.수급자Count||0).toLocaleString()}명</p>
                               </div>
                               <div className="bg-black/40 rounded-xl p-2 text-center">
-                                <p className="text-[15px] font-black text-blue-400">{(m.차상위Count||0).toLocaleString()}</p>
-                                <p className="text-[9px] text-gray-600 mt-0.5 font-bold">차상위 · {(m.차상위Qty||0).toLocaleString()}포</p>
+                                <p className="text-[22px] font-black text-blue-400 leading-none">{(m.차상위Qty||0).toLocaleString()}<span className="text-[13px] font-extrabold ml-0.5">포</span></p>
+                                <p className="text-[10px] text-gray-400 mt-1 font-bold">차상위 {(m.차상위Count||0).toLocaleString()}명</p>
                               </div>
                             </div>
                           </>
