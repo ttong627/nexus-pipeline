@@ -1,8 +1,12 @@
-export const APP_VERSION = 'V6.89';
+export const APP_VERSION = 'V6.90';
 export const APP_BUILD = '2026.07.16';
-export const APP_BUILD_TIME = '2026.07.16 19:08';
+export const APP_BUILD_TIME = '2026.07.16 21:14';
 
 export const CHANGELOG = [
+  { v: "V6.90", date: "2026.07.16", items: [
+    "A열(맨 앞)이 빈 서식에서 헤더·데이터가 한 칸씩 밀리던 문제 해결(빈 앞열 제외)",
+    "업로드 직후 자동 이상감지 — 핵심컬럼 미인식·원본 소계 대비 급감 시 즉시 경고(M-8)",
+  ]},
   { v: "V6.89", date: "2026.07.16", items: [
     "특정 서식(시트 범위가 XFC 등 비정상적으로 넓어 34MB로 비대해진 파일)에서 헤더·컬럼이 밀리던 문제 해결 — 파싱 전 실제 데이터 범위로 자동 정정",
   ]},

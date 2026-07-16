@@ -790,12 +790,29 @@ export default function App() {
           const uploadGubuns = [];
           if (uploadCounts.기초수급자 > 0) uploadGubuns.push('기초수급자');
           if (uploadCounts.차상위 > 0) uploadGubuns.push('차상위');
-          // 쉬운 정제 + 지자체·적용월이 확실히 감지(허가지역 포함)되면 확인 모달 생략하고 바로 진행.
-          // 불확실하면(지자체 미매칭·월 미감지·관리자 다지역) 안전을 위해 기존대로 모달 표시 → 오배정 방지.
+          // 업로드 직후 자동 이상감지 (M-8 · CM-0 선제방어) — 핵심 컬럼 미인식·데이터 0건·원본 소계 대비
+          // 급감을 정제 전에 미리 잡아 담당자에게 경고한다. 이상 있으면 자동확정을 끄고 확인 모달을 띄운다.
+          const uploadAnomalies = [];
+          sheetsData.filter(s => s.selected !== false).forEach(s => {
+            const ci = s.colIndices || {};
+            const missing = ['이름', '주소', '수량'].filter(k => ci[k] === undefined);
+            if (missing.length) uploadAnomalies.push(`[${s.name}] 핵심 항목 미인식: ${missing.join('·')}`);
+            if (s.rowsCount === 0) uploadAnomalies.push(`[${s.name}] 데이터 0건 — 서식/헤더 인식 실패 의심`);
+            if (s.declaredHead > 0 && s.rowsCount > 0 && s.rowsCount < s.declaredHead)
+              uploadAnomalies.push(`[${s.name}] 원본 ${s.declaredHead.toLocaleString()}건 → 인식 ${s.rowsCount.toLocaleString()}건 (${(s.declaredHead - s.rowsCount).toLocaleString()}건 누락 의심)`);
+            if (s.declaredQty > 0 && s.qty > 0 && s.qty < s.declaredQty)
+              uploadAnomalies.push(`[${s.name}] 원본 ${s.declaredQty.toLocaleString()}포 → 인식 ${s.qty.toLocaleString()}포 (${(s.declaredQty - s.qty).toLocaleString()}포 누락 의심)`);
+          });
+          // 쉬운 정제 + 지자체·적용월이 확실히 감지(허가지역 포함) + 이상 없음 → 확인 모달 생략하고 바로 진행.
+          // 불확실하거나 이상 감지 시 안전을 위해 모달 표시 → 오배정·누락 방지.
           const userCitiesList = user?.citiesApproved || [];
-          const autoConfirm = cleanMode === 'easy' && !!resolvedCity && !!monthStr && userCitiesList.includes(resolvedCity);
+          const autoConfirm = cleanMode === 'easy' && !!resolvedCity && !!monthStr && userCitiesList.includes(resolvedCity) && uploadAnomalies.length === 0;
           // 지자체·적용월 확인 모달 표시 (허가지역 대조된 resolvedCity 사용)
           setPendingSetup({ sheetsData, detectedCity: resolvedCity, monthStr, initialSel, analysisSummary, uploadGubuns, uploadCounts, autoConfirm });
+          if (uploadAnomalies.length) {
+            console.warn('[업로드 이상감지]', uploadAnomalies);
+            setTimeout(() => alert(`⚠️ 업로드 파일 이상 감지\n\n${uploadAnomalies.join('\n')}\n\n서식이 특이하거나 대상자·포수 누락 가능성이 있습니다.\n정제 결과를 반드시 확인해 주세요.`), 200);
+          }
           if (autoConfirm) setGLoad({ show: false });   // 로딩 닫고 아래 useEffect가 즉시 정제 진행
           else setShowCityPicker(true);
         } else if (!evt.data.ok) {

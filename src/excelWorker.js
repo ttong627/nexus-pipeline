@@ -69,13 +69,17 @@ function fixSheetRange(ws) {
   if (range.e.c <= 200) return;   // 열 200 이하면 정상 — 그대로(정상 파일 성능 보호)
   const cells = Object.keys(ws).filter(k => k[0] !== '!');
   if (!cells.length) return;
-  let maxR = 0, maxC = 0;
+  let maxR = 0, maxC = 0, minC = Infinity;
   for (const k of cells) {
     const cell = XLSX.utils.decode_cell(k);
     if (cell.r > maxR) maxR = cell.r;
     if (cell.c > maxC) maxC = cell.c;
+    if (cell.c < minC) minC = cell.c;
   }
-  ws['!ref'] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: maxR, c: maxC } });
+  // 시작 열은 실제 데이터가 시작하는 열(minC)로 — 빈 선행열(A열 등)을 포함하면 헤더와 데이터의
+  // 열 정렬이 어긋나 전체가 한 칸씩 밀린다(2026-07-16 차상위 양곡 A열 빈칸 밀림 사고). r은 제목행 포함 위해 0.
+  const startC = minC === Infinity ? 0 : minC;
+  ws['!ref'] = XLSX.utils.encode_range({ s: { r: 0, c: startC }, e: { r: maxR, c: maxC } });
 }
 
 function parseSheet(name, rawJson, dynamicRules) {
