@@ -176,6 +176,21 @@ const appendCheckReason = (result, reason) => {
 const SIDO_HEAD_RE = /(특별시|광역시|특별자치시|특별자치도|도)$/;
 const SIDO_LEAD_RE = /^(서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|제주)$/;
 
+// 시도 축약 정규화 — cityLabel은 정규 풀네임("서울특별시"), Kakao/JUSO 결과는 축약("서울")이라
+// 그대로 비교하면 오차단된다. 표준 약칭키로 정규화해 "서울특별시"↔"서울", "경기도"↔"경기" 등을 일치시킨다.
+// (2026-07-16 주민센터 84건 게이트 오차단 사고 재발방지 · A-30 시군구 비교는 유지)
+const SIDO_ALIAS = {
+  '서울특별시': '서울', '서울시': '서울',
+  '부산광역시': '부산', '대구광역시': '대구', '인천광역시': '인천', '광주광역시': '광주',
+  '대전광역시': '대전', '울산광역시': '울산',
+  '세종특별자치시': '세종', '세종시': '세종',
+  '경기도': '경기', '강원도': '강원', '강원특별자치도': '강원',
+  '충청북도': '충북', '충청남도': '충남', '전라북도': '전북', '전북특별자치도': '전북',
+  '전라남도': '전남', '경상북도': '경북', '경상남도': '경남',
+  '제주특별자치도': '제주', '제주도': '제주',
+};
+const normalizeSido = (s) => { const k = String(s || '').replace(/\s/g, ''); return SIDO_ALIAS[k] || k; };
+
 // cityLabel/주소에서 시군구 토큰 추출 — 자유 입력(시도 유무·순서 무관) 견고 대응.
 // "경기도 시흥시"→"시흥시", "시흥시"→"시흥시", "안양시 동안구"→"안양시 동안구", "강원 춘천"(시 누락)→"춘천"
 const extractSigungu = (label) => {
@@ -211,10 +226,11 @@ const getMunicipalityMatch = (cityLabel, matchedSido, matchedSigungu) => {
     || selectedSigunguKey.includes(matchedSigunguKey)
     || matchedSigunguKey.includes(selectedSigunguKey);
 
-  // 시도는 cityLabel에 명시됐고 매칭 결과에도 있을 때만 비교 — 시군구 단독 입력이면 시군구로만 판정
+  // 시도는 cityLabel에 명시됐고 매칭 결과에도 있을 때만 비교 — 시군구 단독 입력이면 시군구로만 판정.
+  // 축약 정규화(normalizeSido)로 "서울특별시"↔"서울" 등을 일치시켜 게이트 오차단을 막는다.
   const sidoOk = (!selectedSido || !matchedSido)
     ? true
-    : normalizePlaceKey(selectedSido) === normalizePlaceKey(matchedSido);
+    : normalizeSido(selectedSido) === normalizeSido(matchedSido);
 
   return { comparable: true, ok: sidoOk && sigunguOk, selectedSido, selectedSigungu };
 };

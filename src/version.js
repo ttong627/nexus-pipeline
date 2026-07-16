@@ -1,8 +1,11 @@
-export const APP_VERSION = 'V6.90';
+export const APP_VERSION = 'V6.91';
 export const APP_BUILD = '2026.07.16';
-export const APP_BUILD_TIME = '2026.07.16 21:14';
+export const APP_BUILD_TIME = '2026.07.16 21:43';
 
 export const CHANGELOG = [
+  { v: "V6.91", date: "2026.07.16", items: [
+    "주민센터 주소가 실제 도로명주소로 자동 변환되도록 수정 — 시도 축약(서울특별시↔서울) 지역검증 오차단 해결(주민센터가 확인필요로 대량 빠지던 문제 근본 해결)",
+  ]},
   { v: "V6.90", date: "2026.07.16", items: [
     "A열(맨 앞)이 빈 서식에서 헤더·데이터가 한 칸씩 밀리던 문제 해결(빈 앞열 제외)",
     "업로드 직후 자동 이상감지 — 핵심컬럼 미인식·원본 소계 대비 급감 시 즉시 경고(M-8)",
