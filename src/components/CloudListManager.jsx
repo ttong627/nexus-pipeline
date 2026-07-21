@@ -67,10 +67,12 @@ const fmtTs = (ts) => {
 const CLOUD_FIELDS = [
   { key: '구분',     label: '구분',     minW: '90px',  type: 'select', opts: ['기초수급자', '차상위'] },
   { key: '이름',     label: '이름',     minW: '80px',  type: 'text' },
+  { key: '본명',     label: '본명',     minW: '80px',  type: 'text' },
   { key: '생년월일', label: '생년월일', minW: '85px',  type: 'text' },
   { key: '행정동',   label: '읍면동',   minW: '75px',  type: 'text' },
   { key: '리',       label: '리',       minW: '60px',  type: 'text' },
   { key: '주소',     label: '주소',     minW: '210px', type: 'text' },
+  { key: '건물명',   label: '건물명',   minW: '120px', type: 'text' },
   { key: '휴대폰',   label: '휴대폰',   minW: '110px', type: 'text' },
   { key: '유선전화', label: '유선전화', minW: '110px', type: 'text' },
   { key: '포수',     label: '포수',     minW: '50px',  type: 'number' },

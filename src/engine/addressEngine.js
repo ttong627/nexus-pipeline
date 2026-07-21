@@ -623,6 +623,7 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
     정제된이름: inputName,
     주소: '',
     특이사항: '',
+    본명: '',
     확인필요: false,
     확인사유: '',
     도: '',
@@ -631,10 +632,11 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
     원주소: inputAddr || '',
   };
 
-  // ── A-1: 이름 5자 초과 → 5자 자르기 + 특이사항에 본명 추가 ──────
+  // ── A-1: 이름 5자 초과 → 5자 자르기 + 본명 전용 필드에 원본명 보관 ──────
+  // (특이사항 오염 방지: 본명은 특이사항이 아니라 별도 '본명' 컬럼으로 분리)
   if (inputName?.length > 5) {
     result.정제된이름 = inputName.substring(0, 5);
-    result.특이사항   = `(본명:${inputName}) `;
+    result.본명       = inputName;
   }
 
   // ── A-12 ①: 주소 공란 플래그 ─────────────────────────────────────

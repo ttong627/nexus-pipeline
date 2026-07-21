@@ -23,6 +23,7 @@ import SpecialNoteImporter from './SpecialNoteImporter.jsx';
 
 const FIELDS = [
   { key: 'name',     label: '이름',     minW: '90px'  },
+  { key: 'realName', label: '본명',     minW: '90px'  },
   { key: 'birthKey', label: '생년월일', minW: '85px'  },
   { key: 'dong',     label: '읍면동',   minW: '75px'  },
   { key: 'roadAddr',   label: '도로명주소',     minW: '150px' },

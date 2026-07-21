@@ -1,8 +1,14 @@
-export const APP_VERSION = 'V6.94';
-export const APP_BUILD = '2026.07.16';
-export const APP_BUILD_TIME = '2026.07.16 22:32';
+export const APP_VERSION = 'V6.95';
+export const APP_BUILD = '2026.07.21';
+export const APP_BUILD_TIME = '2026.07.21 17:09';
 
 export const CHANGELOG = [
+  { v: "V6.95", date: "2026.07.21", items: [
+    "특이사항 증발 문제 해결 — 도어락·현관비번·열쇠 위치 등 배송 안내 문구 전량 보존",
+    "본명·건물명을 특이사항에서 분리해 전용 컬럼으로 표시·저장·엑셀 출력",
+    "정제 시 주민등록번호 자동 제거(개인정보 보호)",
+    "기본명단 이식 시 레거시 (본명:XXX) 중복 표기 제거",
+  ]},
   { v: "V6.94", date: "2026.07.16", items: [
     "이번달 배송명단 지자체 카드에서 포수를 큰 메인 숫자로 강조 — 포수 우선 표시(명수는 작은 부제)",
   ]},

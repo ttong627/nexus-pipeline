@@ -163,10 +163,15 @@ function classifyPhones(...raws) {
 }
 function buildPayload(r, res) {
   const { mobile, landline } = classifyPhones(r.전화a, r.전화b);
+  // 특이사항: ◆이식표시·(본명:XXX)·주민번호(PII) 제거. 본명은 realName 컬럼으로 분리 저장.
   const note = [String(res.특이사항 || '').trim(), String(r.비고 || '').trim()].filter(Boolean).join(' ')
-    .replace(/\s*◆[^◆]*/g, '').replace(/\s+/g, ' ').trim();
+    .replace(/\s*◆[^◆]*/g, '')
+    .replace(/\(본명:[^)]*\)/g, '')
+    .replace(/\d{6}\s*[-–]\s*\d{7}/g, ' ')
+    .replace(/\s+/g, ' ').trim();
   const payload = {
-    name: r.이름, birthKey: '',
+    // A-1: 이름 5자 초과면 절단명 저장 + realName에 원본명(App 저장경로와 스키마 일치)
+    name: res.정제된이름 || r.이름, realName: res.본명 || '', birthKey: '',
     dong: r.행정동 || res.legalDong || '',
     address: res.주소 || r.주소,
     roadAddr: res.도로명주소 || '', detailAddr: res.상세주소 || '', parenInfo: res.괄호정보 || '',

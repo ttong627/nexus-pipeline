@@ -100,17 +100,25 @@ const mergeUniqueText = (...parts) => {
   return tokens.join(' ').trim();
 };
 
-// 비고 → 특이사항: 배송에 필요한 '세부 주소·배송 안내'만 추출한다.
-// 예) 가져옴: "2층 301호", "쪽문 돌아 첫번째 문", "경비실 맡김", "부재시 문앞"
-//     버림:  "현금 공제", "환급 신청", "소득 자격" 등 행정·재정 잡음(쓰레기 데이터 방지)
-const NOTE_JUNK_RE = /현금|공제|환급|환수|납부|미납|체납|정산|소득|재산|계좌|지원금|보조금|바우처|포인트|감액|증액|신청|자격|선정|해지|중지|자부담|본인부담|급여|연금|결제|등급|세대주|주민번호/;
-const NOTE_DELIVERY_RE = /(\d+\s*층)|(\d+\s*호)|(\d+\s*동)|지하|반지하|지층|지하층|옥탑|옥상|문|경비|부재|계단|엘리베|승강기|E\/?V|현관|대문|쪽문|뒷문|우편함|택배|방문|호출|초인종|벨|인터폰|골목|주차|복도|단지|빌라|연립|다세대|상가|사무실|별채|돌아|첫번째|두번째|세번째|끝집|모퉁이|올라|내려|좌측|우측|왼쪽|오른쪽|맡(겨|김|기)/;
+// 비고 → 특이사항: 기사 배송에 도움되는 정보는 전량 보존하고, 행정·재정 잡음만 버린다.
+// (블랙리스트 방식) — 현관 비번(#9999)·도어락(*2468*)·열쇠 위치·"건물 뒤편" 등 자유문구는
+// 화이트리스트 키워드가 없어도 배송 필수정보이므로 절대 삭제하지 않는다.
+// 예) 가져옴: "#9999", "*2468*", "열쇠 화분밑", "건물 뒤편", "2층 301호", "경비실 맡김"
+//     버림:  "현금 공제", "환급 신청", "소득 자격" 등 순수 행정·재정 잡음 토큰만
+const NOTE_JUNK_RE = /현금|공제|환급|환수|납부|미납|체납|정산|소득|재산|계좌|지원금|보조금|바우처|포인트|감액|증액|자격|선정|자부담|본인부담|급여|연금|결제|등급|세대주|주민번호/;
+// 개인정보(PII) 제거 — 주민등록번호(6자리-7자리, 13자리)만 정확히 차단(공유링크·엑셀 노출 방지).
+// ※ 전화번호(010-XXXX-XXXX 등)는 기사 배송 연락처이므로 절대 제거하지 않는다.
+const NOTE_PII_RE = /\d{6}\s*[-–]\s*\d{7}/g;
 const extractDeliveryNote = (raw) => {
-  const text = String(raw || '').trim();
+  let text = String(raw || '').replace(NOTE_PII_RE, ' ').trim();
   if (!text) return '';
-  // 쉼표·슬래시·세미콜론·줄바꿈·중점으로 세그먼트 분리 → 배송 신호 있고 잡음 없는 세그먼트만 유지
+  // 쉼표·슬래시·세미콜론·줄바꿈·중점으로 세그먼트 분리 후, 각 세그먼트를 공백 토큰 단위로 검사해
+  // 재정·행정 잡음 토큰만 제거한다. (예: "경비실맡김 자부담" → "경비실맡김" 보존, "자부담"만 제거)
+  // 도어락·열쇠·자유 배송문구는 잡음 토큰이 아니므로 전량 보존된다.
   const segs = text.split(/[,/;·\n]+/).map(s => s.trim()).filter(Boolean);
-  const kept = segs.filter(s => NOTE_DELIVERY_RE.test(s) && !NOTE_JUNK_RE.test(s));
+  const kept = segs
+    .map(seg => seg.split(/\s+/).filter(w => w && !NOTE_JUNK_RE.test(w)).join(' '))
+    .filter(Boolean);
   return kept.join(' ').trim();
 };
 
@@ -319,7 +327,9 @@ export default function App() {
     { key: '행정동',  label: '읍면동',  on: true },
     { key: '리',      label: '리',      on: true },
     { key: '이름',    label: '이름',    on: true },
+    { key: '본명',    label: '본명',    on: true },  // A-1: 이름 5자 초과 시 원본명(특이사항 분리)
     { key: '주소',    label: '주소',    on: true },
+    { key: '건물명',  label: '건물명',  on: true },  // 괄호 건물명 전용 표시(특이사항 분리)
     { key: '휴대폰',  label: '휴대폰',  on: true },
     { key: '유선전화',label: '유선전화',on: true },
     { key: '포수',    label: '포수',    on: true },
@@ -332,13 +342,15 @@ export default function App() {
     { key: '품명',    label: '품명',    on: false },
   ];
   // 기본 칼럼 순서 버전 — 올리면 저장된 옛 순서를 1회 새 DEFAULT로 강제 교체(이후 편집·폭은 유지)
-  const DEFAULT_COLS_VERSION = 2;
+  // v3: 본명·건물명 컬럼 신설(특이사항 분리)
+  const DEFAULT_COLS_VERSION = 3;
   const [exportColOrder, setExportColOrder] = useState(() => {
     try {
       const saved = localStorage.getItem('nexus_export_cols_v2');
-      const ver = localStorage.getItem('nexus_export_cols_ver');
-      // 버전 일치할 때만 저장값 유지(라벨만 최신화). 불일치=구버전 → 새 DEFAULT 강제 적용
-      if (saved && ver === String(DEFAULT_COLS_VERSION)) return refreshSavedCols(JSON.parse(saved), DEFAULT_EXPORT_COLS);
+      // 저장값이 있으면 항상 병합(refreshSavedCols): 사용자의 표시/폭/순서는 보존하고
+      // 버전업으로 새로 생긴 컬럼(본명·건물명)만 뒤에 추가한다. 전체 리셋하지 않는다.
+      // (라벨은 DEFAULT 기준으로 최신화, DEFAULT에서 사라진 키는 제거)
+      if (saved) return refreshSavedCols(JSON.parse(saved), DEFAULT_EXPORT_COLS);
     } catch { /* ignore */ }
     return DEFAULT_EXPORT_COLS;
   });
@@ -373,7 +385,7 @@ export default function App() {
   useEffect(() => {
     const remote = user?.exportColOrder;
     if (!Array.isArray(remote) || remote.length === 0) return;
-    if (user?.exportColsVer !== DEFAULT_COLS_VERSION) return; // 구버전 서버값 무시 → 새 DEFAULT 유지 후 덮어씀
+    // 구버전 원격도 버리지 않고 병합(refreshSavedCols)한다 — 사용자 순서·폭 보존 + 새 컬럼 추가(리셋 방지)
     const remoteJson = JSON.stringify(remote);
     if (remoteJson === lastSyncedColsRef.current) return; // 이미 반영됨(에코 방지)
     lastSyncedColsRef.current = remoteJson;
@@ -1133,8 +1145,12 @@ export default function App() {
             if (!baseEntry && dld.length >= 9) baseEntry = baseMap[`ld_${name}_${dld}`] || null;
           }
 
-          const importedNote = baseEntry && (importFields === null || importFields?.includes('note')) && baseEntry.note
-            ? `◆${baseEntry.note.replace(/^\[기본\]\s*/g, '')}`
+          // 레거시 note에 박힌 (본명:XXX)는 제거(이중오염 차단) — 이름은 별도 본명 컬럼으로 분리됨
+          const importedNoteClean = baseEntry?.note
+            ? String(baseEntry.note).replace(/^\[기본\]\s*/g, '').replace(/\(본명:[^)]*\)/g, '').replace(/\s+/g, ' ').trim()
+            : '';
+          const importedNote = baseEntry && (importFields === null || importFields?.includes('note')) && importedNoteClean
+            ? `◆${importedNoteClean}`
             : '';
           const importedDriver = baseEntry && (importFields === null || importFields?.includes('driver'))
             ? (baseEntry.driver || baseEntry.기사 || '')
@@ -1162,6 +1178,8 @@ export default function App() {
             행정동: getVal(row, 'admin') || "",
             리: processedRow.리 || "",
             이름: processedRow.정제된이름 || name,
+            본명: processedRow.본명 || "",          // A-1: 이름 5자 초과 시 원본명(특이사항에서 분리)
+            건물명: processedRow.buildingName || "", // 괄호 건물명 전용 컬럼(특이사항에서 분리)
             생년월일: birthKey,
             품명: getVal(row, 'itemName') || "",
             포수: getVal(row, 'qty') ? (parseInt(getVal(row, 'qty')) || 1) : "",
@@ -1172,7 +1190,7 @@ export default function App() {
             특이사항: [
               processedRow.특이사항,
               phoneNotes,
-              extractDeliveryNote(getVal(row, 'note')), // 비고: 배송 안내(층·호·문 등)만, 현금공제 등 잡음 제외
+              extractDeliveryNote(getVal(row, 'note')), // 비고: 재정·행정 잡음만 제거, 배송정보(도어락·열쇠·자유문구) 전량 보존
               importedNote,
             ].filter(Boolean).join(' ').trim() || "",
             기사: getVal(row, 'driver') || importedDriver || "",
@@ -1535,6 +1553,8 @@ export default function App() {
       const updatedRow = {
         ...row,
         주소: res.주소,
+        본명: res.본명 || row.본명 || '',        // 재정제 시 본명 컬럼 동기화(특이사항 분리)
+        건물명: res.buildingName || row.건물명 || '', // 재정제 시 건물명 컬럼 동기화
         특이사항: mergeUniqueText(row.특이사항, res.특이사항),
         _에러: res.확인필요 || false,
         _사유: res.확인사유 || '',
@@ -1584,6 +1604,8 @@ export default function App() {
       const updatedRow = {
         ...row,
         주소: res.주소,
+        본명: res.본명 || row.본명 || '',        // 재정제 시 본명 컬럼 동기화(특이사항 분리)
+        건물명: res.buildingName || row.건물명 || '', // 재정제 시 건물명 컬럼 동기화
         특이사항: mergeUniqueText(row.특이사항, res.특이사항),
         _에러: res.확인필요 || false,
         _사유: res.확인사유 || '',
@@ -1691,6 +1713,8 @@ export default function App() {
     let updated = {
       ...row,
       주소: res.주소,
+      본명: res.본명 || row.본명 || '',        // 재정제 시 본명 컬럼 동기화(특이사항 분리)
+      건물명: res.buildingName || row.건물명 || '', // 재정제 시 건물명 컬럼 동기화
       특이사항: mergeUniqueText(row.특이사항, res.특이사항),
       _에러: res.확인필요 || false,
       _사유: res.확인사유 || '',
@@ -2002,10 +2026,12 @@ export default function App() {
             const payload = {
               구분: r.구분 || '',
               이름: r.이름 || '',
+              본명: r.본명 || '',
               생년월일: r.생년월일 || '',
               행정동: r.행정동 || '',
               리: r.리 || '',
               주소: r.주소 || '',
+              건물명: r.건물명 || r._buildingName || '',
               휴대폰: r.휴대폰 || '',
               유선전화: r.유선전화 || '',
               문자수신: r.문자수신 || 'N',
@@ -2251,16 +2277,18 @@ export default function App() {
         // 생년월일·휴대폰·유선전화 모두 없으면 제외
         if (!birthKey && mKey.length < 9 && lKey.length < 9) return;
 
-        // 특이사항 정제: 기본명단에서 다시 가져온 이식 표시만 제거한다.
-        // 원본 명단의 문구는 임의 삭제하지 않는다.
+        // 특이사항 정제: 기본명단에서 다시 가져온 이식 표시(◆)와 레거시 (본명:XXX)를 제거한다.
+        // 본명은 별도 realName 컬럼으로 저장되므로 note에는 남기지 않는다. 원본 배송문구는 보존.
         const note = (row.특이사항 || '')
           .replace(/\s*◆[^◆]*/g, '')
+          .replace(/\(본명:[^)]*\)/g, '')
           .replace(/\s+/g, ' ')
           .trim();
 
         const _spl = parseDisplayedAddress(row.주소 || '');
         const payload = {
           name, birthKey,
+          realName: row.본명 || '',   // A-1 원본명(특이사항에서 분리 저장)
           dong:    row.행정동 || '',
           address: row.주소   || '',
           // 3분할 주소(도로명주소 비교·표시용): 콤마앞=도로명 / 나머지=상세 / 괄호=법정동·건물명

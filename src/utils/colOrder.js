@@ -7,10 +7,12 @@
 // 예) 기본명단(BaseListManager)은 영문 키(name·dong…), 오류목록은 `_사유`를 쓴다.
 export const EXPORT_KEY_ALIAS = {
   name: '이름',
+  realName: '본명',
   birthKey: '생년월일',
   dong: '행정동',
   mobile: '휴대폰',
   landline: '유선전화',
+  buildingName: '건물명',
   note: '특이사항',
   _사유: '사유',
 };

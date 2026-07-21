@@ -45,6 +45,7 @@ self.onmessage = ({ data }) => {
         { key: '이름',    label: '성명' },
         { key: '포수',    label: '포수' },
         { key: '주소',    label: '주소' },
+        { key: '건물명',  label: '건물명' },
         { key: '특이사항', label: '특이사항' },
         { key: '배송순번', label: '배송순번' },
       ];
@@ -76,6 +77,7 @@ self.onmessage = ({ data }) => {
           { wch: 8 },   // 성명
           { wch: 5 },   // 포수
           { wch: 40 },  // 주소
+          { wch: 16 },  // 건물명
           { wch: 30 },  // 특이사항
           { wch: 8 },   // 배송순번
         ];
@@ -97,7 +99,7 @@ self.onmessage = ({ data }) => {
           return row;
         });
         const wsAll = XLSX.utils.json_to_sheet(allRows, { header: [...deliveryCols.map(c => c.label), '기사'] });
-        wsAll['!cols'] = [...(Array(6).fill({ wch: 12 })), { wch: 8 }, { wch: 10 }];
+        wsAll['!cols'] = [...(Array(deliveryCols.length).fill({ wch: 12 })), { wch: 10 }];
         XLSX.utils.book_append_sheet(wb, wsAll, '전체합본');
       }
 
