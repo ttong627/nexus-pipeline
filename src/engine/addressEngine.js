@@ -69,11 +69,14 @@ const ROAD_ADDRESS_RE = new RegExp(`(^|[\\s,/\\(])(${ROAD_NAME_SOURCE})\\s*(\\uC
 // (길=길 추가. 누락 시 파서가 "홍양길"에서 끊겨 "번길 40-25"가 괄호로 오분류됨)
 const ROAD_BRANCH_SPACE_RE = new RegExp(`([${HANGUL}A-Za-z]+(?:\\uB300\\uB85C|\\uB85C|\\uAE38))\\s+(\\d+[${HANGUL}0-9]*${BRANCH_SUFFIX})`, 'gu');
 const ROAD_NUMBER_SPACE_RE = new RegExp(`([${HANGUL}A-Za-z0-9]+(?:\\uB300\\uB85C|\\uB85C|\\uAE38))\\s{2,}(\\d{1,5})(?![${HANGUL}A-Za-z0-9])`, 'gu');
+// A-31: `숫자+동/층/호` 뒤에 한글이 바로 붙으면(장안2동주민센터·신내1동우편취급국) 동호수가 아니라
+// 건물명의 일부다. 가드가 없어 "장안2동주민센터"가 "장안"+"2동주민센터"로 쪼개져 상세주소가
+// 오염되고 건물명 매칭이 깨졌다. DONG_UNIT_SRC(동 토큰) 규칙 자체는 그대로 둔다(A-10).
 // 동(棟) 단위 토큰 — 상세주소(동호수)의 일부. 숫자동(101동)·대시동(1-1동)·영문동(B동)·단일한글동(가동~하동).
 // 뒤에 공백/숫자/호/콤마/끝이 와야 매칭(건물명 중간의 '하동' 등 오절단 방지). 건물명으로 새는 버그 차단.
 const DONG_UNIT_SRC = '(?:\\d+(?:-\\d+)?|[A-Za-z]+|[가나다라마바사아자차카타파하])\\uB3D9(?=\\s|\\d|\\uD638|,|$)';
-const DETAIL_START_RE = new RegExp(`^(?:\\uC9C0\\uD558|\\uC9C0\\uCE35|\\uC625\\uD0D1|${DONG_UNIT_SRC}|\\d+\\s*(?:\\uB3D9|\\uCE35|\\uD638)|[A-Za-z]?\\d+\\s*\\uD638)`, 'u');
-const DETAIL_MARKER_RE = new RegExp(`__P\\d+__|\\uC9C0\\uD558|\\uC9C0\\uCE35|\\uC625\\uD0D1|${DONG_UNIT_SRC}|\\d+\\s*(?:\\uB3D9|\\uCE35|\\uD638)|[A-Za-z]?\\d+\\s*\\uD638`, 'u');
+const DETAIL_START_RE = new RegExp(`^(?:\\uC9C0\\uD558|\\uC9C0\\uCE35|\\uC625\\uD0D1|${DONG_UNIT_SRC}|\\d+\\s*(?:\\uB3D9|\\uCE35|\\uD638)(?![\\uAC00-\\uD7A3])|[A-Za-z]?\\d+\\s*\\uD638)`, 'u');
+const DETAIL_MARKER_RE = new RegExp(`__P\\d+__|\\uC9C0\\uD558|\\uC9C0\\uCE35|\\uC625\\uD0D1|${DONG_UNIT_SRC}|\\d+\\s*(?:\\uB3D9|\\uCE35|\\uD638)(?![\\uAC00-\\uD7A3])|[A-Za-z]?\\d+\\s*\\uD638`, 'u');
 // 주소칸에 섞인 전화번호 패턴(지역번호 0XX 또는 휴대폰 01X) — 건물명/상세 오염 차단용. 한국 지번·건물번호는 0으로 시작 안 함.
 const PHONE_IN_ADDR_RE = /(?:0\d{1,2}|01[016789])[-.\s]?\d{3,4}[-.\s]?\d{4}/;
 
@@ -466,7 +469,7 @@ const fetchKakaoLegalDong = async (addr, cityLabel = '') => {
         const sgg  = ra?.region_2depth_name || ad?.region_2depth_name || '';
         if (!isCandidateInSelectedMunicipality({ matchedSido: sido, matchedSigungu: sgg }, cityLabel)) return null;
         const legal = String(ra?.region_3depth_name || ad?.region_3depth_name || '').trim();
-        if (!legal || !DONG_SUFFIX.test(legal)) return null;
+        if (!legal || !LEGAL_DONG_RE.test(legal)) return null;
         return {
           legalDong:    legal,
           buildingName: String(ra?.building_name || '').trim(),
@@ -655,6 +658,14 @@ const REGION_SUFFIX = /^[가-힣\d]+(특별시|광역시|특별자치시|특별�
 // 카카오 등 축약 도명(경기·서울·충남 …) — 접미어가 없어 REGION_SUFFIX로 안 잡힘. 시도 선두 토큰 제거용.
 const REGION_LEAD   = /^(서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|제주)$/;
 const DONG_SUFFIX   = /^[가-힣\d]+(읍|면|동)$/;
+// A-31: '법정동' 판정 전용 — 실제 법정동 표기는 동/읍/면 말고도 다음 형태가 있다.
+//   · OO동            용두동, 장안동
+//   · OO읍 / OO면      홍북읍, 광천면
+//   · OO가            매산로2가, 을지로3가   ← 수원·서울 구도심 법정동(과거 누락 원인)
+//   · "OO읍 OO리"      홍북읍 신경리          ← 읍/면 지역 법정동+법정리(두 토큰, 과거 누락 원인)
+//   · OO리            신경리
+// DONG_SUFFIX(동/읍/면)만 쓰면 위 '가'·'읍 리' 형태가 전부 버려져 법정동이 빈칸이 된다.
+const LEGAL_DONG_RE = /^(?:[가-힣\d]+(?:읍|면)\s+)?[가-힣\d]+(?:동|읍|면|가|리)$/;
 
 // 공공기관 감지 — A-5 토큰 삭제 방지 + Fallback A 트리거
 const CENTER_RE   = /(주민\s*센터|행정복지센터|동사무소|읍사무소|면사무소|복지센터)/;
@@ -974,23 +985,51 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
   }
 
   // ── Fallback B (A-8): 건물명 전용 (도로명·지번 없음) ─────────────
-  if (!apiResult && adminDong) {
+  // A-31 확장: 행정동 컬럼이 없어도 지자체(cityLabel)만으로 시도한다. 예전엔 adminDong이
+  // 없으면 이 경로 자체를 건너뛰어, 명단에 아파트명·학교·우체국만 적힌 행이 전부 미매칭이었다.
+  if (!apiResult && (adminDong || cityLabel)) {
     const hasRoadOrJibun = /(로|길|대로)\s*\d/.test(text) || /[가-힣\d]+(동|읍|면|리)\s*\d+/.test(text);
-    if (!hasRoadOrJibun && BLDG_TYPE_RE.test(text)) {
-      const bldName = text.replace(/\d+\s*(동|층|호).*$/g, '').replace(/__P\d+__/g, '').trim();
+    // A-31: 건물 유형어(아파트·빌라…)가 없어도 시도한다. 실제 명단에는 유형어 없는 건물명이
+    // 많다(더존에이스빌·동광팰리스·숲예찬·서울장안동우체국 등) — 예전엔 전부 미매칭이었다.
+    // 대신 유형어가 없으면 Kakao POI 이름이 입력과 일치할 때만 채택한다(엉뚱한 장소 매칭 차단).
+    if (!hasRoadOrJibun) {
+      const needNameMatch = !BLDG_TYPE_RE.test(text);
+      // A-31: 동호수 절단은 '공백/문두 + 숫자 + 동·층·호' 이고 뒤에 한글이 안 붙을 때만.
+      // 예전 패턴(\d+\s*(동|층|호).*$)은 건물명 속 숫자동까지 잘라
+      //   "서울장안2동우체국"→"서울장안", "신내1동우편취급국"→"신내" 로 망가뜨려 매칭을 놓쳤다.
+      const bldName = text.replace(/(^|[\s,])\d+\s*(동|층|호)(?![가-힣]).*$/g, '').replace(/__P\d+__/g, '').trim();
       if (bldName.length >= 2) {
+        const dongTok = adminDong?.trim() || '';
         const districtTokForBld = cityLabel
           ? (cityLabel.trim().split(/\s+/).filter(t => /(시|군|구)$/.test(t)).pop() || '')
           : '';
         const buildingQueries = [
-          cityLabel ? `${cityLabel.trim()} ${adminDong.trim()} ${bldName}` : '',
-          districtTokForBld ? `${districtTokForBld} ${adminDong.trim()} ${bldName}` : '',
-          `${adminDong.trim()} ${bldName}`,
+          cityLabel && dongTok ? `${cityLabel.trim()} ${dongTok} ${bldName}` : '',
+          districtTokForBld && dongTok ? `${districtTokForBld} ${dongTok} ${bldName}` : '',
+          dongTok ? `${dongTok} ${bldName}` : '',
           cityLabel ? `${cityLabel.trim()} ${bldName}` : '',
+          districtTokForBld ? `${districtTokForBld} ${bldName}` : '',
         ].filter((q, i, arr) => q && arr.indexOf(q) === i);
         for (const q of buildingQueries) {
           apiResult = await lookupAddr(q, cityLabel);
           if (apiResult) break;
+        }
+        // 전국 주소DB가 건물명을 못 찾으면 Kakao POI로 도로명주소를 얻어 재조회한다.
+        // (주소DB는 건물명 인덱스가 약하고, 콜드스타트 지연으로 실패하는 일도 잦다)
+        if (!apiResult) {
+          const bldKey = normalizePlaceKey(bldName);
+          for (const q of buildingQueries) {
+            const kd = await searchKakaoFull(q);
+            if (!kd?.road_address_name) continue;
+            if (!kakaoDocInMunicipality(kd, cityLabel)) continue;   // A-30 지역검증
+            if (needNameMatch) {
+              // 유형어 없는 자유 건물명 → 이름이 서로 포함관계일 때만 신뢰
+              const placeKey = normalizePlaceKey(kd.place_name);
+              if (!placeKey || !(placeKey.includes(bldKey) || bldKey.includes(placeKey))) continue;
+            }
+            apiResult = await lookupAddr(kd.road_address_name, cityLabel) || kakaoDocToApiResult(kd);
+            if (apiResult) break;
+          }
         }
       }
     }
@@ -1037,7 +1076,7 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
     // adminDong(행정동 컬럼)이 채택돼 괄호에 행정동이 들어갔다.
     // 이제 주소DB가 확인한 법정동(legalDong/emdNm)을 무조건 먼저 쓴다.
     const apiLegalDong = String(apiResult.legalDong || apiResult.emdNm || '').trim();
-    if (apiLegalDong && DONG_SUFFIX.test(apiLegalDong)) dongPart = apiLegalDong;
+    if (apiLegalDong && LEGAL_DONG_RE.test(apiLegalDong)) dongPart = apiLegalDong;
 
     // ── dongPart 오지역 보정 ──────────────────────────────────────────
     // 도시(시/구) 지역인데 API가 '면'을 반환하면 오매칭으로 간주
@@ -1060,6 +1099,16 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
     if (dongPart) dongPart = dongPart.replace(/^([가-힣]+)\d+(동)$/, '$1$2');
 
     buildingName = apiResult.bdNm || inlineBuildingName || '';
+    // 무손실(M-1): API 건물명(bdNm)이 채택되면서 버려지던 입력 문구를 특이사항으로 보존한다.
+    // 예 "왕산로 72 뒷문으로 들어와서 계단 오른쪽" → 배송 안내가 통째로 사라지던 문제.
+    // 단 채택된 건물명과 서로 포함관계면(같은 건물의 다른 표기) 중복이므로 넣지 않는다.
+    if (inlineBuildingName && inlineBuildingName !== buildingName) {
+      const keptKey = normalizePlaceKey(buildingName);
+      const dropKey = normalizePlaceKey(inlineBuildingName);
+      if (dropKey && !(keptKey && (keptKey.includes(dropKey) || dropKey.includes(keptKey)))) {
+        result.특이사항 = appendUniqueNote(result.특이사항, inlineBuildingName);
+      }
+    }
     // 괄호 분류: 긴 문장(3단어↑ or 10자↑+공백) → 특이사항, 동명 토큰 → 제거, 나머지 → buildingName
     parens.forEach(p => {
       const inner = p.replace(/^\(|\)$/g, '').trim();
@@ -1243,14 +1292,18 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
   // 주소DB를 한 번 더 조회해 '실제 법정동'을 받아 채운다. 실패할 때만 기존 값을 유지한다.
   // lookupAddr이 부정 캐시까지 들고 있어 같은 주소가 반복돼도 추가 호출은 1회뿐이다.
   let legalDong = String(apiResult?.legalDong || apiResult?.emdNm || '').trim();
-  if (!legalDong && finalRoadAddr && finalRoadAddr.trim().length >= 4) {
+  // 읍/면만 온 경우(예 "홍북읍")는 법정리까지 있어야 완전하다 — 리는 정렬·기사배정 단위(§6)라
+  // "홍북읍 신경리"로 보강한다. 보강 실패 시 "홍북읍"을 그대로 유지(퇴행 없음).
+  const isBareEupMyeon = /^[가-힣\d]+(?:읍|면)$/.test(legalDong);
+  if ((!legalDong || isBareEupMyeon) && finalRoadAddr && finalRoadAddr.trim().length >= 4) {
     // ① Kakao 주소검색 우선 — 전국 주소DB(address-service)는 응답이 느려(20초+) 3초 타임아웃에
     //    걸리는 일이 잦다. Kakao는 수백 ms 안에 법정동을 준다(형 지시 2026-07-21).
     const kl = await fetchKakaoLegalDong(finalRoadAddr, cityLabel);
-    if (kl?.legalDong) {
+    // 읍/면 보강 시에는 '더 구체적인 값(리 포함)'일 때만 교체 — 덮어써서 정보가 줄면 안 된다.
+    if (kl?.legalDong && (!legalDong || /리$/.test(kl.legalDong))) {
       legalDong = kl.legalDong;
       if (!buildingName && kl.buildingName) buildingName = kl.buildingName;
-    } else if (/(대로|로|길)\s*\d/.test(finalRoadAddr)) {
+    } else if (!legalDong && /(대로|로|길)\s*\d/.test(finalRoadAddr)) {
       // ② Kakao도 못 찾으면 전국 주소DB 재조회(캐시로 1회만 — 부정 캐시가 재난타를 막는다)
       const sggPfx = extractSigungu(cityLabel) || (cityLabel || '').trim().split(/\s+/).pop() || '';
       const probe  = await lookupAddr(`${sggPfx ? `${sggPfx} ` : ''}${finalRoadAddr}`.trim(), cityLabel);
@@ -1261,8 +1314,17 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
       }
     }
   }
+  // ③ 그래도 없으면 지번주소 자체에서 법정동을 취한다 — 지번주소의 동/리는 정의상 법정동이므로
+  //    API 없이도 확정할 수 있다(예 "장곡동 344"→장곡동, "상봉동 126-39"→상봉동).
+  //    Kakao·주소DB에 미등재된 번지에서도 법정동이 빠지지 않게 하는 최종 방어선.
+  if (!legalDong) {
+    const jibunTok = String(finalRoadAddr || '').trim().match(/^([가-힣][가-힣\d]*(?:동|리|가))\s+산?\s*\d/);
+    const tok = jibunTok?.[1] ? jibunTok[1].replace(/^([가-힣]+)\d+(동)$/, '$1$2') : '';
+    if (tok && LEGAL_DONG_RE.test(tok)) legalDong = tok;
+  }
+
   // 법정동을 얻었으면 괄호 동명은 무조건 법정동으로 교체(행정동 폴백값이 남아 있어도 덮어쓴다)
-  if (legalDong && DONG_SUFFIX.test(legalDong)) {
+  if (legalDong && LEGAL_DONG_RE.test(legalDong)) {
     dongPart = legalDong.replace(/^([가-힣]+)\d+(동)$/, '$1$2');
   }
 
@@ -1376,10 +1438,15 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
   result.roadName = apiResult?.roadName || apiResult?.rn || '';
   result.buildingMainNo = apiResult?.buildingMainNo ?? apiResult?.buldMnnm ?? '';
   result.buildingSubNo = apiResult?.buildingSubNo ?? apiResult?.buldSlno ?? '';
-  result.buildingName = apiResult?.buildingName || apiResult?.bdNm || '';
+  // A-31: 괄호에 실제로 표시된 건물명을 컬럼에도 그대로 넣는다. 예전엔 API(bdNm)에서 온 값만
+  // 담아서, 입력 문장에서 뽑힌 건물명(래미안크레시티 등)은 괄호엔 보이는데 컬럼은 비어 있었다.
+  result.buildingName = buildingName || apiResult?.buildingName || apiResult?.bdNm || '';
   // A-31: 보강조회까지 반영된 법정동. 한글 키(법정동)로도 노출 — 그리드·엑셀·DB 컬럼이 그대로 쓴다.
   result.legalDong = legalDong || apiResult?.legalDong || apiResult?.emdNm || '';
   result.법정동 = result.legalDong;
+  // A-31: 읍/면 법정동은 "홍북읍 신경리" 형태로 오므로 리(里)를 여기서 먼저 확보해 둔다
+  // (아래 기존 리 추출이 비었을 때만 쓰이도록 변수로만 보관).
+  const legalRiFromDong = (result.legalDong.match(/\s([가-힣]{2,5}리)$/) || [])[1] || '';
   // 리(里): 읍/면 법정리 — 기사 배정 리 단위 매칭용. API liNm 우선, 없으면 지번주소(도로명 없음)에서 "OO리" 추출.
   result.리 = (apiResult?.liNm || apiResult?.legalRi || '').trim();
   // 지번주소(jibunAddr)에서 OO리 추출 — 도로명주소여도 지번주소엔 리가 포함됨(읍/면). 가장 확실한 소스.
@@ -1407,6 +1474,8 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
       if (rm && !RI_FALSE2.test(rm[1])) result.리 = rm[1];
     }
   }
+  // A-31: 위 경로들이 모두 비면 법정동("홍북읍 신경리")에서 뽑아 둔 리를 쓴다 — 리 빠짐 방지
+  if (!result.리 && legalRiFromDong) result.리 = legalRiFromDong;
   result.matchedSido = apiResult?.matchedSido || apiResult?.siNm || '';
   result.matchedSigungu = apiResult?.matchedSigungu || apiResult?.sggNm || '';
   result.detailAddress = finalDetail || '';
