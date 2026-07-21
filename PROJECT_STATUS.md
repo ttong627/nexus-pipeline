@@ -1,5 +1,10 @@
 # 📋 PROJECT STATUS — nexus-pipeline
-> 자동 생성: /확인 스킬 · 갱신 2026-07-16 22:18 KST
+> 자동 생성: /확인 스킬 · 갱신 2026-07-21 17:12 KST
+
+## ⚠️ 클론 분기 해소 기록 (2026-07-21)
+- **문제**: `D:/TTong_newproject/nexus-pipeline` 클론에 7/15 작업(특이사항 보존·본명/건물명 컬럼·PII 제거)이 **커밋되지 않은 채** 남아 있었고, 그 사이 I: 정본에서 7/16에 V6.81~V6.94(17커밋)를 올려 **버전번호 V6.81이 양쪽에서 다른 내용으로 중복**됐다. 운영 배포본은 V6.94(origin 계열)이라 **7/15 기능이 운영에서 빠진 상태**였다.
+- **해소**: ①로컬 미커밋 작업을 `rescue/v681-d-clone`(62bde54)에 통째로 커밋 보존 → ②main을 origin/main으로 FF → ③소스 7파일만 3-way 재적용(충돌 0) → ④빌드 게이트 통과 → ⑤**V6.95** 재부여·커밋(552d135). **양쪽 작업 모두 살아있음.**
+- **교훈**: 이 저장소는 **I: 정본 / D: 작업본 2개 클론**이 동시에 쓰인다. 작업 시작 전 반드시 `/확인`으로 fetch·분기 점검하고, 하루 작업은 반드시 커밋·푸시로 마감할 것.
 
 ## 식별
 - GitHub: ttong627/nexus-pipeline (계정 세트: **ttong627**)
@@ -33,7 +38,16 @@
 | DELIVERY_SEQUENCE_RULES.md | 배송순번 독립 규칙 상세 |
 | 동명이인_주소오염_재발방지_설계.md | 2026-07-10 동대문 김옥순 사고 재발방지 — S-1~S-6 |
 
-## 마지막 작업 (2026-07-16) — 무손실·파싱·표시·주소변환 대개편 · V6.81~V6.92
+## 마지막 작업 (2026-07-21) — V6.95 특이사항 보존·본명/건물명 컬럼 복원 (미푸시)
+- **552d135 (main, ahead 1 · 푸시·배포 형 승인 대기)**: 7/15 D: 클론 유일본 작업을 origin/main 위에 재적용
+  - **특이사항 화이트리스트→블랙리스트 반전**(`App.jsx NOTE_JUNK_RE`): 도어락·현관비번(#9999)·열쇠 위치·"건물 뒤편" 등 키워드 없는 자유 배송문구가 통째로 삭제되던 문제 차단. 세그먼트→**토큰 단위** 필터로 "경비실맡김 자부담" → "경비실맡김" 보존
+  - **본명·건물명 전용 컬럼**(`colOrder.js realName/buildingName`, 엑셀 컬럼 v3 병합): 표시·base_lists 저장·엑셀 출력. 사용자 표시/폭/순서는 보존하고 새 컬럼만 추가(리셋 금지)
+  - **주민등록번호(PII) 자동 제거**(`NOTE_PII_RE`) — 전화번호는 배송 연락처라 보존
+  - 기본명단 이식 note에서 레거시 `(본명:XXX)` 제거(이중오염 차단), 전체합본 시트 열너비를 `deliveryCols.length` 기준 산출
+  - 검증: `npm run build` EXIT=0 (prebuild=eslint --quiet && tsc --noEmit 통과) · 충돌 0 · origin 7/16 17커밋 전량 잔존 확인(uploadAnomalies·declaredQty·fixSheetRange·normalizeSido·표시순번·소속사요약)
+- 보존 브랜치: **`rescue/v681-d-clone`(62bde54)** — 재적용 검증 끝날 때까지 삭제 금지
+
+## 이전 작업 (2026-07-16) — 무손실·파싱·표시·주소변환 대개편 · V6.81~V6.94
 - **V6.92 소속사요약 시트**: 소속사 보고서 다운로드 **맨 앞에 '소속사요약' 시트** 추가 — 소속사별 동별 포수 + 소속사 소계 + 전체 합계(행정동요약 형식). `orgReport.js downloadOrgReport`
 - **V6.91 주민센터 주소 자동변환(A-30④)**: 주민센터 84건이 확인필요로 빠지던 근본원인 = 지역검증 게이트(`getMunicipalityMatch`)가 cityLabel 정규명 **"서울특별시"**와 Kakao 결과 축약 **"서울"**을 `normalizePlaceKey`(공백제거만)로 비교 → `서울특별시≠서울` → 게이트 차단 → Kakao가 찾은 도로명주소 폐기. **`normalizeSido`+`SIDO_ALIAS`로 시도 축약 정규화**(서울특별시↔서울·경기도↔경기). 시군구 비교 유지(진짜 타지역 오매칭 계속 차단). `addressEngine.js`. 검증: 신설동/용두동 통과, 서울vs경기 차단
 - **V6.90 A열 빈칸 밀림 해결 + 업로드 이상감지(M-8)**: ① `fixSheetRange` 시작열을 실제 데이터열(`minC`)부터 — A열이 빈 서식(차상위 양곡)에서 헤더/데이터 한 칸씩 밀리던 문제 차단(CM-범위1 보강) ② **업로드 직후 자동 이상감지(M-8)** — 핵심컬럼 미인식·데이터0건·원본 소계 대비 급감 시 정제 전 즉시 경고+자동확정 해제. `App.jsx uploadAnomalies`
@@ -50,10 +64,10 @@
 - 외부 시스템(정부양곡 정산 SYSTEM) 명단 가져오기 — importUrl/import2Url · address-service 매칭 hang 근본 수정
 
 ## 작업환경
-- node v24.15.0 / npm 11.12.1 · gh OK · gcloud OK · firebase OK
-- 현재 앱 버전: **V6.92** · 무손실 M-1~M-8 + 파싱 견고성 CM-0~범위1 + 주민센터 자동변환(A-30④) + 소속사요약 적용본
+- (D: 작업본 기준) node v24.18.0 / npm 11.16.0 · gh OK · gcloud OK · firebase OK
+- 현재 앱 버전: **V6.95** · 무손실 M-1~M-8 + 파싱 견고성 CM-0~범위1 + 주민센터 자동변환(A-30④) + 소속사요약 + **특이사항 보존·본명/건물명 컬럼**
 - 의존성: **루트 node_modules 설치됨**. 하위앱 3곳 미설치 → 해당 서비스 작업 시에만 `cd <폴더> && npm install`
-- 시크릿: `.env`·`.env.example` 존재 (gitignore, 값 비노출)
+- 시크릿: `.env`·`.env.example` 존재 (gitignore, 값 비노출). ⚠️ D: 클론의 `VITE_KAKAO_REST_KEY`·`VITE_ADDRESS_MATCH_API_URL` **공란** → 좌표·주소매칭 저하 모드로 빌드됨(정본 .env 필요)
 - 검증 게이트: `prebuild`=eslint --quiet && tsc --noEmit. 별도: `npm run typecheck`, `npm run test:e2e`
 
 ## 동기화
