@@ -26,6 +26,7 @@ const FIELDS = [
   { key: 'realName', label: '본명',     minW: '90px'  },
   { key: 'birthKey', label: '생년월일', minW: '85px'  },
   { key: 'dong',     label: '읍면동',   minW: '75px'  },
+  { key: 'legalDong', label: '법정동',  minW: '75px'  },
   { key: 'roadAddr',   label: '도로명주소',     minW: '150px' },
   { key: 'detailAddr', label: '상세주소',       minW: '90px'  },
   { key: 'parenInfo',  label: '(법정동,건물명)', minW: '160px' },
@@ -297,6 +298,12 @@ export default function BaseListManager({ user, onBack, initialCity = '', export
     let val = dirtyMap[id]?.[field] ?? r[field] ?? '';
     // 3분할 컬럼: 저장값 없으면 address에서 즉시 파생(기존 레코드 호환)
     if (!val && SPLIT_DERIVE[field] && r.address) val = parseDisplayedAddress(r.address)[SPLIT_DERIVE[field]] || '';
+    // A-31 법정동: 저장값 없는 기존 레코드는 괄호(법정동, 건물명) 첫 토큰에서 파생
+    if (!val && field === 'legalDong') {
+      const paren = r.parenInfo || (r.address ? parseDisplayedAddress(r.address).paren : '');
+      const tok = String(paren || '').split(',')[0].trim();
+      if (/^[가-힣\d]+(읍|면|동)$/.test(tok)) val = tok;
+    }
     if (isEditing) {
       return (
         <input

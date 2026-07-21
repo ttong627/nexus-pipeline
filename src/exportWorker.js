@@ -42,6 +42,7 @@ self.onmessage = ({ data }) => {
       const deliveryCols = [
         { key: 'NO',      label: 'NO' },
         { key: '행정동',  label: '행정동' },
+        { key: '법정동',  label: '법정동' },
         { key: '이름',    label: '성명' },
         { key: '포수',    label: '포수' },
         { key: '주소',    label: '주소' },
@@ -74,6 +75,7 @@ self.onmessage = ({ data }) => {
         ws['!cols'] = [
           { wch: 5 },   // NO
           { wch: 10 },  // 행정동
+          { wch: 10 },  // 법정동
           { wch: 8 },   // 성명
           { wch: 5 },   // 포수
           { wch: 40 },  // 주소

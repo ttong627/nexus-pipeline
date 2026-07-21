@@ -10,6 +10,7 @@ export const EXPORT_KEY_ALIAS = {
   realName: '본명',
   birthKey: '생년월일',
   dong: '행정동',
+  legalDong: '법정동',
   mobile: '휴대폰',
   landline: '유선전화',
   buildingName: '건물명',

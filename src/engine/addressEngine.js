@@ -434,6 +434,52 @@ const fetchKakaoCoord = async (roadAddr, cityPrefix = '', buildingMgtNo = '') =>
   } catch { coordCache.set(key, null); return null; }
 };
 
+// ── A-31: Kakao 법정동 조회 (형 지시 2026-07-21 · 절대 되돌리지 말 것) ──
+// 괄호 `()` 안은 반드시 법정동이어야 한다. Kakao 주소검색 응답에서
+//   region_3depth_name   = 법정동  ← 이것만 쓴다
+//   region_3depth_h_name = 행정동  ← 쓰지 않는다
+// 전국 주소DB(address-service)가 느리거나 못 찾는 동안에도 법정동을 확실히 채우는 소스.
+const legalDongCache   = new Map();
+const legalDongPending = new Map();
+const fetchKakaoLegalDong = async (addr, cityLabel = '') => {
+  if (!KAKAO_REST_KEY || !addr || addr.trim().length < 4) return null;
+  const hasCity = /특별시|광역시|특별자치시|도$|시$/.test(addr.slice(0, 10));
+  const sggPfx  = hasCity ? '' : (extractSigungu(cityLabel) || (cityLabel || '').trim().split(/\s+/).pop() || '');
+  const query   = `${sggPfx ? `${sggPfx} ` : ''}${addr}`.trim();
+  const key     = `${cityLabel.trim()}::${query}`;
+  if (legalDongCache.has(key)) return legalDongCache.get(key);
+  if (!legalDongPending.has(key)) {
+    const p = (async () => {
+      try {
+        const res = await fetchWithTimeout(
+          `https://dapi.kakao.com/v2/local/search/address.json?query=${encodeURIComponent(query)}&size=1`,
+          { headers: { Authorization: `KakaoAK ${KAKAO_REST_KEY}` } },
+          KAKAO_TIMEOUT_MS
+        );
+        if (!res.ok) return null;
+        const d = (await res.json()).documents?.[0];
+        if (!d) return null;
+        const ra = d.road_address || null;
+        const ad = d.address || null;
+        // A-30: 지역 검증 — 전국 동명 오매칭 차단(시흥시 군자동 vs 광진구 군자동)
+        const sido = ra?.region_1depth_name || ad?.region_1depth_name || '';
+        const sgg  = ra?.region_2depth_name || ad?.region_2depth_name || '';
+        if (!isCandidateInSelectedMunicipality({ matchedSido: sido, matchedSigungu: sgg }, cityLabel)) return null;
+        const legal = String(ra?.region_3depth_name || ad?.region_3depth_name || '').trim();
+        if (!legal || !DONG_SUFFIX.test(legal)) return null;
+        return {
+          legalDong:    legal,
+          buildingName: String(ra?.building_name || '').trim(),
+        };
+      } catch { return null; }
+    })().finally(() => legalDongPending.delete(key));
+    legalDongPending.set(key, p);
+  }
+  const out = await legalDongPending.get(key);
+  legalDongCache.set(key, out);
+  return out;
+};
+
 // ── Kakao: POI 키워드 검색 (주민센터 등) ──────────────────────────
 const searchKakaoFull = async (query) => {
   if (!KAKAO_REST_KEY || !query) return null;
@@ -461,11 +507,16 @@ const searchKakaoFull = async (query) => {
 // Kakao POI → JUSO 호환 구조 변환 (JUSO 미인덱스 케이스)
 const kakaoDocToApiResult = (d) => {
   if (!d?.road_address_name) return null;
+  // A-31: POI 지번주소(address_name)에서 법정동 토큰 추출 — 이 경로에서도 괄호가 법정동이 되도록.
+  // 예 "서울 동대문구 용두동 39-1" → 용두동  (예전엔 비어 있어서 행정동 폴백이 괄호에 들어갔다)
+  const legal = String(d.address_name || '').trim().split(/\s+/).find(t => DONG_SUFFIX.test(t)) || '';
   return {
     roadAddrPart1: d.road_address_name,
     roadAddr:      d.road_address_name,
     bdNm:          d.place_name || '',
     bdKdcd:        '0',
+    legalDong:     legal,
+    emdNm:         legal,
     _fromKakao:    true,
   };
 };
@@ -523,21 +574,49 @@ const fetchJusoAPI = async (keyword, retryCount = 0) => {
   return null;
 };
 
+// 법정동 보유 여부 — 캐시 품질 게이트의 판정 기준.
+// 주소매칭 서비스 URL이 비어 있던 '저하 모드' 시절에 저장된 캐시에는 법정동이 없다.
+// 그걸 그대로 재사용하면 괄호가 영원히 행정동으로 남으므로, 캐시를 '완전/불완전'으로 나눈다.
+const hasLegalDong = (rec) => !!String(rec?.legalDong || rec?.emdNm || '').trim();
+
+// 법정동 보강 재조회를 이미 시도한 키 — 서비스가 법정동을 못 주는 주소를 매 행마다
+// 재조회해 API를 두드리는 것을 막는다(1회만 시도).
+const legalDongRetried = new Set();
+
 // A-13: 메모리 → IndexedDB → API 순서로 조회
+// 형 지시(2026-07-21): "있는 데이터는 활용하되 없는 데이터는 꼭 가져와라" —
+// 캐시에 법정동이 없으면 캐시를 반환하지 않고 API를 한 번 더 태운다. 재조회가 실패하면
+// 기존 캐시를 그대로 돌려주어 퇴행은 만들지 않는다.
 const lookupAddr = async (keyword, cityLabel = '') => {
   if (!keyword?.trim() || keyword.trim().length < 2) return null;
   const key = `${cityLabel.trim()}::${keyword.trim()}`;
-  if (apiCache.has(key)) return apiCache.get(key);
-  const localByCity = await getLocalCache(key);
-  if (localByCity && isCandidateInSelectedMunicipality(localByCity, cityLabel)) {
-    _setApiCache(key, localByCity);
-    return localByCity;
+
+  // 불완전(법정동 없음) 캐시는 폴백으로만 들고 간다.
+  let stale = null;
+  if (apiCache.has(key)) {
+    const hit = apiCache.get(key);
+    if (hit === null) return null;              // 부정 캐시 보존 — 없는 주소를 매번 재조회하지 않는다
+    if (hasLegalDong(hit)) return hit;
+    stale = hit;
   }
-  const localGeneric = await getLocalCache(keyword.trim());
-  if (localGeneric && isCandidateInSelectedMunicipality(localGeneric, cityLabel)) {
-    _setApiCache(key, localGeneric);
-    return localGeneric;
+  if (!stale) {
+    const localByCity = await getLocalCache(key);
+    if (localByCity && isCandidateInSelectedMunicipality(localByCity, cityLabel)) {
+      if (hasLegalDong(localByCity)) { _setApiCache(key, localByCity); return localByCity; }
+      stale = localByCity;
+    }
   }
+  if (!stale) {
+    const localGeneric = await getLocalCache(keyword.trim());
+    if (localGeneric && isCandidateInSelectedMunicipality(localGeneric, cityLabel)) {
+      if (hasLegalDong(localGeneric)) { _setApiCache(key, localGeneric); return localGeneric; }
+      stale = localGeneric;
+    }
+  }
+  // 불완전 캐시를 이미 한 번 보강 시도했다면 그대로 사용(API 재난타 방지)
+  if (stale && legalDongRetried.has(key)) return stale;
+  if (stale) legalDongRetried.add(key);
+
   const online = await fetchAddressMatchAPI(keyword.trim(), cityLabel);
   if (online && isCandidateInSelectedMunicipality(online, cityLabel)) {
     _setApiCache(key, online);
@@ -553,12 +632,16 @@ const lookupAddr = async (keyword, cityLabel = '') => {
   }
   let r = null;
   try { r = await pendingRequests.get(key); } catch { r = null; }
-  _setApiCache(key, r);
   if (r) {
+    _setApiCache(key, r);
     await setLocalCache(key, r);
     await setLocalCache(keyword.trim(), r);
+    return r;
   }
-  return r;
+  // 온라인 조회 실패 → 법정동은 없어도 기존 캐시는 살려서 반환(주소 자체는 유효)
+  if (stale) { _setApiCache(key, stale); return stale; }
+  _setApiCache(key, null);
+  return null;
 };
 
 const _setApiCache = (key, value) => {
@@ -948,6 +1031,14 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
     if (remain.length > 0 && DONG_SUFFIX.test(remain[0])) dongPart = remain.shift();
     finalRoadAddr = remain.join(' ') || rawFinal;
 
+    // ── A-24(개정): 괄호 동명은 '법정동'이 최우선 (절대 되돌리지 말 것) ──
+    // 괄호 `()` 안은 법정동이어야 한다. 도로명주소(roadAddrPart1)에는 동(洞) 토큰이 없는
+    // 경우가 대부분이라, 예전 우선순위(도로명 토큰 → adminDong → emdNm)에서는 사실상
+    // adminDong(행정동 컬럼)이 채택돼 괄호에 행정동이 들어갔다.
+    // 이제 주소DB가 확인한 법정동(legalDong/emdNm)을 무조건 먼저 쓴다.
+    const apiLegalDong = String(apiResult.legalDong || apiResult.emdNm || '').trim();
+    if (apiLegalDong && DONG_SUFFIX.test(apiLegalDong)) dongPart = apiLegalDong;
+
     // ── dongPart 오지역 보정 ──────────────────────────────────────────
     // 도시(시/구) 지역인데 API가 '면'을 반환하면 오매칭으로 간주
     // 예: 서울 동대문구인데 dongPart='왕산면' → adminDong(용두동)으로 대체
@@ -960,13 +1051,9 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
           : '';
       }
     }
-    // adminDong이 있고 API dongPart가 비어있으면 adminDong 사용
+    // 법정동을 끝내 못 얻었을 때만 adminDong(행정동 컬럼) 폴백 — 괄호 공란 방지용 최후수단
     if (!dongPart && adminDong?.trim() && DONG_SUFFIX.test(adminDong.trim())) {
       dongPart = adminDong.trim();
-    }
-    // adminDong도 없으면 JUSO API emdNm(읍면동명) 사용 — 도로명 뒤 (행정동) 미표시 방지
-    if (!dongPart && apiResult.emdNm?.trim() && DONG_SUFFIX.test(apiResult.emdNm.trim())) {
-      dongPart = apiResult.emdNm.trim();
     }
     // A-27: 행정동 번호 접미어 제거 — 도로명주소 () 내 동명은 법정동(번호 없음) 표기
     // 예: 답십리2동 → 답십리동, 청량리3동 → 청량리동, 신설1동 → 신설동
@@ -1151,6 +1238,34 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
     result.특이사항 = appendUniqueNote(result.특이사항, `[주소추정] ${result.추정사유}`);
   }
 
+  // ── A-31: 법정동 빠짐 방지 보강조회 (형 지시 2026-07-21 · 절대 되돌리지 말 것) ──
+  // 여기까지 와서 법정동을 못 얻었으면(=괄호가 비거나 행정동 폴백이면), 확정된 도로명주소로
+  // 주소DB를 한 번 더 조회해 '실제 법정동'을 받아 채운다. 실패할 때만 기존 값을 유지한다.
+  // lookupAddr이 부정 캐시까지 들고 있어 같은 주소가 반복돼도 추가 호출은 1회뿐이다.
+  let legalDong = String(apiResult?.legalDong || apiResult?.emdNm || '').trim();
+  if (!legalDong && finalRoadAddr && finalRoadAddr.trim().length >= 4) {
+    // ① Kakao 주소검색 우선 — 전국 주소DB(address-service)는 응답이 느려(20초+) 3초 타임아웃에
+    //    걸리는 일이 잦다. Kakao는 수백 ms 안에 법정동을 준다(형 지시 2026-07-21).
+    const kl = await fetchKakaoLegalDong(finalRoadAddr, cityLabel);
+    if (kl?.legalDong) {
+      legalDong = kl.legalDong;
+      if (!buildingName && kl.buildingName) buildingName = kl.buildingName;
+    } else if (/(대로|로|길)\s*\d/.test(finalRoadAddr)) {
+      // ② Kakao도 못 찾으면 전국 주소DB 재조회(캐시로 1회만 — 부정 캐시가 재난타를 막는다)
+      const sggPfx = extractSigungu(cityLabel) || (cityLabel || '').trim().split(/\s+/).pop() || '';
+      const probe  = await lookupAddr(`${sggPfx ? `${sggPfx} ` : ''}${finalRoadAddr}`.trim(), cityLabel);
+      const probed = String(probe?.legalDong || probe?.emdNm || '').trim();
+      if (probed) {
+        legalDong = probed;
+        if (!buildingName && probe?.bdNm) buildingName = probe.bdNm;
+      }
+    }
+  }
+  // 법정동을 얻었으면 괄호 동명은 무조건 법정동으로 교체(행정동 폴백값이 남아 있어도 덮어쓴다)
+  if (legalDong && DONG_SUFFIX.test(legalDong)) {
+    dongPart = legalDong.replace(/^([가-힣]+)\d+(동)$/, '$1$2');
+  }
+
   // ── A-11: 최종 주소 형식 조합 ─────────────────────────────────────
   // 표준: "도로명주소(건물번호까지), (법정동, 건물명) 상세주소"
   // 도로명주소 바로 뒤 첫 구분자는 ","를 유지한다.
@@ -1248,7 +1363,11 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
     const mSido = extractSido(refAddr) || apiResult.matchedSido || apiResult.siNm || '';
     const mSgg  = extractSigungu(refAddr) || apiResult.matchedSigungu || apiResult.sggNm || '';
     const region = getMunicipalityMatch(cityLabel, mSido, mSgg);
-    if (region.comparable && !region.ok) { apiResult = null; crossRegionRejected = true; }
+    if (region.comparable && !region.ok) {
+      apiResult = null;
+      crossRegionRejected = true;
+      legalDong = '';   // A-31: 폐기된 타지역 매칭의 법정동은 쓰지 않는다
+    }
   }
 
   // ── 좌표 취득 (Kakao Geocoding) ──────────────────────────────────
@@ -1258,7 +1377,9 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
   result.buildingMainNo = apiResult?.buildingMainNo ?? apiResult?.buldMnnm ?? '';
   result.buildingSubNo = apiResult?.buildingSubNo ?? apiResult?.buldSlno ?? '';
   result.buildingName = apiResult?.buildingName || apiResult?.bdNm || '';
-  result.legalDong = apiResult?.legalDong || apiResult?.emdNm || '';
+  // A-31: 보강조회까지 반영된 법정동. 한글 키(법정동)로도 노출 — 그리드·엑셀·DB 컬럼이 그대로 쓴다.
+  result.legalDong = legalDong || apiResult?.legalDong || apiResult?.emdNm || '';
+  result.법정동 = result.legalDong;
   // 리(里): 읍/면 법정리 — 기사 배정 리 단위 매칭용. API liNm 우선, 없으면 지번주소(도로명 없음)에서 "OO리" 추출.
   result.리 = (apiResult?.liNm || apiResult?.legalRi || '').trim();
   // 지번주소(jibunAddr)에서 OO리 추출 — 도로명주소여도 지번주소엔 리가 포함됨(읍/면). 가장 확실한 소스.

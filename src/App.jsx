@@ -325,6 +325,7 @@ export default function App() {
     { key: 'NO',      label: '표시순번', on: true },
     { key: '구분',    label: '구분',    on: true },
     { key: '행정동',  label: '읍면동',  on: true },
+    { key: '법정동',  label: '법정동',  on: true },  // A-31: 주소DB가 확인한 법정동 전용 컬럼
     { key: '리',      label: '리',      on: true },
     { key: '이름',    label: '이름',    on: true },
     { key: '본명',    label: '본명',    on: true },  // A-1: 이름 5자 초과 시 원본명(특이사항 분리)
@@ -342,8 +343,8 @@ export default function App() {
     { key: '품명',    label: '품명',    on: false },
   ];
   // 기본 칼럼 순서 버전 — 올리면 저장된 옛 순서를 1회 새 DEFAULT로 강제 교체(이후 편집·폭은 유지)
-  // v3: 본명·건물명 컬럼 신설(특이사항 분리)
-  const DEFAULT_COLS_VERSION = 3;
+  // v3: 본명·건물명 컬럼 신설(특이사항 분리) / v4: 법정동 컬럼 신설(A-31)
+  const DEFAULT_COLS_VERSION = 4;
   const [exportColOrder, setExportColOrder] = useState(() => {
     try {
       const saved = localStorage.getItem('nexus_export_cols_v2');
@@ -1176,6 +1177,7 @@ export default function App() {
                 })()
               : sheet.type,
             행정동: getVal(row, 'admin') || "",
+            법정동: processedRow.법정동 || "",   // A-31: 주소DB가 확인한 법정동(괄호 표기와 동일 값)
             리: processedRow.리 || "",
             이름: processedRow.정제된이름 || name,
             본명: processedRow.본명 || "",          // A-1: 이름 5자 초과 시 원본명(특이사항에서 분리)
@@ -1555,6 +1557,7 @@ export default function App() {
         주소: res.주소,
         본명: res.본명 || row.본명 || '',        // 재정제 시 본명 컬럼 동기화(특이사항 분리)
         건물명: res.buildingName || row.건물명 || '', // 재정제 시 건물명 컬럼 동기화
+        법정동: res.법정동 || row.법정동 || row._legalDong || '', // A-31: 재정제 시 법정동 컬럼 동기화
         특이사항: mergeUniqueText(row.특이사항, res.특이사항),
         _에러: res.확인필요 || false,
         _사유: res.확인사유 || '',
@@ -1606,6 +1609,7 @@ export default function App() {
         주소: res.주소,
         본명: res.본명 || row.본명 || '',        // 재정제 시 본명 컬럼 동기화(특이사항 분리)
         건물명: res.buildingName || row.건물명 || '', // 재정제 시 건물명 컬럼 동기화
+        법정동: res.법정동 || row.법정동 || row._legalDong || '', // A-31: 재정제 시 법정동 컬럼 동기화
         특이사항: mergeUniqueText(row.특이사항, res.특이사항),
         _에러: res.확인필요 || false,
         _사유: res.확인사유 || '',
@@ -1715,6 +1719,7 @@ export default function App() {
       주소: res.주소,
       본명: res.본명 || row.본명 || '',        // 재정제 시 본명 컬럼 동기화(특이사항 분리)
       건물명: res.buildingName || row.건물명 || '', // 재정제 시 건물명 컬럼 동기화
+      법정동: res.법정동 || row.법정동 || row._legalDong || '', // A-31: 재정제 시 법정동 컬럼 동기화
       특이사항: mergeUniqueText(row.특이사항, res.특이사항),
       _에러: res.확인필요 || false,
       _사유: res.확인사유 || '',
@@ -2029,6 +2034,7 @@ export default function App() {
               본명: r.본명 || '',
               생년월일: r.생년월일 || '',
               행정동: r.행정동 || '',
+              법정동: r.법정동 || r._legalDong || '',   // A-31: 주소DB 확인 법정동(표시 컬럼)
               리: r.리 || '',
               주소: r.주소 || '',
               건물명: r.건물명 || r._buildingName || '',
@@ -2311,7 +2317,7 @@ export default function App() {
           buildingMainNo: row._buildingMainNo ?? '',
           buildingSubNo: row._buildingSubNo ?? '',
           buildingName: row._buildingName || '',
-          legalDong: row._legalDong || '',
+          legalDong: row.법정동 || row._legalDong || '',   // A-31: 법정동 컬럼 우선(없으면 히든 필드)
           matchedSido: row._matchedSido || '',
           matchedSigungu: row._matchedSigungu || '',
           detailAddress: row._detailAddress || '',

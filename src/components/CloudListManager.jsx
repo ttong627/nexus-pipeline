@@ -70,6 +70,7 @@ const CLOUD_FIELDS = [
   { key: '본명',     label: '본명',     minW: '80px',  type: 'text' },
   { key: '생년월일', label: '생년월일', minW: '85px',  type: 'text' },
   { key: '행정동',   label: '읍면동',   minW: '75px',  type: 'text' },
+  { key: '법정동',   label: '법정동',   minW: '75px',  type: 'text' },
   { key: '리',       label: '리',       minW: '60px',  type: 'text' },
   { key: '주소',     label: '주소',     minW: '210px', type: 'text' },
   { key: '건물명',   label: '건물명',   minW: '120px', type: 'text' },
@@ -821,7 +822,12 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
     const id = r.id;
     const isEditing = editingCell?.id === id && editingCell?.field === key;
     const isDirty = dirtyRecords[id]?.[key] !== undefined;
-    const val = dirtyRecords[id]?.[key] ?? r[key] ?? '';
+    let val = dirtyRecords[id]?.[key] ?? r[key] ?? '';
+    // A-31 법정동: 저장값 없는 기존 레코드는 저장된 legalDong → 괄호 첫 토큰 순으로 파생
+    if (!val && key === '법정동') {
+      const tok = String(r.legalDong || parseDisplayedAddress(r.주소 || '').paren || '').split(',')[0].trim();
+      if (/^[가-힣\d]+(읍|면|동)$/.test(tok)) val = tok;
+    }
 
     if (isEditing) {
       return (
@@ -1394,6 +1400,8 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
         const newAddr = guardAddressDetail(oldAddr, (refined.주소 || '').trim());
         // 리(里) 백필: 주소가 안 바뀌어도 리가 비어있거나 다르면 채운다 (읍/면 배정 매칭용)
         const riNeedsUpdate = !!refined.리 && refined.리 !== (rec.리 || '');
+        // A-31: 법정동 백필 — 주소가 그대로여도 법정동이 비었거나 다르면 채운다(빠짐 방지)
+        const legalNeedsUpdate = !!refined.법정동 && refined.법정동 !== (rec.법정동 || '');
         const addrChanged = !!newAddr && (newAddr !== oldAddr || refined.확인필요);
         // 전화번호 교정: 휴대폰칸은 휴대폰형식만 유지.
         //  ① 휴대폰칸이 비휴대폰/빈값 + 유선칸 휴대폰형식 → 맞바꿈(휴대폰←유선, 유선←기존 휴대폰칸값)
@@ -1407,7 +1415,7 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
           else if (curMob && !curLand) phoneUpdate = { 휴대폰: '', 유선전화: curMob };
         }
         const phoneSwap = !!phoneUpdate;
-        if (!addrChanged && !riNeedsUpdate && !phoneSwap) return;
+        if (!addrChanged && !riNeedsUpdate && !legalNeedsUpdate && !phoneSwap) return;
 
         if (addrChanged) {
           // 저번달 주소 매칭
@@ -1453,6 +1461,7 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
           ...(dirtyUpdates[rec.id] || {}),
           ...(addrChanged ? { 주소: newAddr } : {}),
           ...(riNeedsUpdate ? { 리: refined.리 } : {}),
+          ...(legalNeedsUpdate ? { 법정동: refined.법정동 } : {}),
           ...(phoneUpdate || {}),
           ...(refined.확인필요 ? { 확인필요: true, 확인사유: refined.확인사유 || '' } : {}),
         };
