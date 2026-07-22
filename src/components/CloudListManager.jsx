@@ -1,5 +1,6 @@
 ﻿import { useState, useEffect, useMemo, useRef, useCallback, memo } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
+import CellInput, { ColEditToggle } from './CellInput.jsx';
 import * as XLSX from 'xlsx';
 import {
   db, storage, auth,
@@ -149,31 +150,7 @@ const hasRoadAddressChanged = (prevAddr, currentAddr) => {
 };
 
 // 셀 편집 입력 — 자체 상태 관리로 부모 리렌더 완전 차단
-const CellInput = memo(function CellInput({ type, opts, initial, onCommit, onCancel, isPhone }) {
-  const [val, setVal] = useState(String(initial ?? ''));
-  if (type === 'select') {
-    return (
-      <select autoFocus value={val}
-        onChange={e => { setVal(e.target.value); onCommit(e.target.value); }}
-        onBlur={() => onCommit(val)}
-        className="w-full bg-[#111] border border-blue-500 rounded text-xs text-white outline-none px-1 py-0.5"
-      >
-        {(opts || []).map(o => <option key={o} value={o}>{o}</option>)}
-      </select>
-    );
-  }
-  return (
-    <input autoFocus type={type === 'number' ? 'number' : 'text'}
-      className="w-full bg-transparent text-white text-xs outline-none border-b border-blue-400 py-0.5"
-      value={val}
-      onChange={e => { const v = isPhone ? formatPhoneInput(e.target.value) : e.target.value; setVal(v); }}
-      onBlur={() => onCommit(val)}
-      onKeyDown={e => { if (e.key === 'Enter') onCommit(val); if (e.key === 'Escape') onCancel(); }}
-    />
-  );
-});
-
-const VirtualTable = memo(function VirtualTable({ fields, exportColOrder, onColResize, editing, isOn, onToggle, dragProps, displayRecords, dirtyRecords, deletedRecordIds, loadingRecords, records, renderCell, setDeletedRecordIds }) {
+const VirtualTable = memo(function VirtualTable({ fields, exportColOrder, onColResize, editing, isOn, onToggle, dragProps, colEditMode, onColEditToggle, displayRecords, dirtyRecords, deletedRecordIds, loadingRecords, records, renderCell, setDeletedRecordIds }) {
   const scrollRef = useRef(null);
 
   const virtualizer = useVirtualizer({
@@ -224,6 +201,10 @@ const VirtualTable = memo(function VirtualTable({ fields, exportColOrder, onColR
                     className={`px-3 py-2.5 text-center text-[10px] font-bold uppercase tracking-wider overflow-hidden ${dim ? 'opacity-40' : ''} ${f.key === '기사' || f.key === '배송순번' ? 'text-[#3b82f6]/60' : 'text-gray-600'}`}>
                     {editing && onToggle && <ColHeaderEditControls colKey={f.key} on={on} onToggle={onToggle} />}
                     {f.label}
+                    {/* 칼럼 수정모드 토글 — 이 칼럼 전체가 입력창이 되어 Enter로 다음 행 연속 입력 */}
+                    {!editing && onColEditToggle && (
+                      <ColEditToggle colKey={f.key} active={colEditMode === f.key} onToggle={onColEditToggle} />
+                    )}
                     {editing && onColResize && <ColResizeHandle colKey={f.key} currentWidth={w} onResize={onColResize} />}
                   </th>
                 );
@@ -327,6 +308,8 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
   const [dirtyRecords, setDirtyRecords] = useState({});  // { [id]: { field: val } }
   const [deletedRecordIds, setDeletedRecordIds] = useState(new Set());
   const [editingCell, setEditingCell] = useState(null);  // { id, field }
+  const [colEditMode, setColEditMode] = useState(null);   // 칼럼 전체 수정모드
+  const [autoSaving, setAutoSaving] = useState(false);
   const [saving, setSaving] = useState(false);
 
 
@@ -800,22 +783,35 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
 
   const cancelEdit = useCallback(() => setEditingCell(null), []);
 
-  const commitEdit = useCallback((id, field, newVal) => {
+  /**
+   * 셀 편집 확정 — 셀에서 빠져나오는 순간 그 칸만 즉시 DB에 저장한다(형 지시 2026-07-22).
+   * @param {'next'|'prev'|null} move Enter/Tab 이동 방향(칼럼 수정모드 연속 입력)
+   */
+  const commitEdit = useCallback(async (id, field, newVal, move) => {
     const origVal = records.find(r => r.id === id)?.[field] ?? '';
-    setDirtyRecords(prev => {
-      const prevEntry = prev[id] || {};
-      if (String(newVal) === String(origVal) && prevEntry[field] === undefined) return prev;
-      if (String(newVal) === String(origVal)) {
-        const newEntry = { ...prevEntry };
-        delete newEntry[field];
-        const newMap = { ...prev };
-        if (!Object.keys(newEntry).length) delete newMap[id]; else newMap[id] = newEntry;
-        return newMap;
-      }
-      return { ...prev, [id]: { ...prevEntry, [field]: field === '포수' ? Number(newVal) : newVal } };
-    });
-    setEditingCell(null);
-  }, [records]);
+    const value = field === '포수' ? Number(newVal) : newVal;
+    const changed = String(newVal) !== String(origVal);
+
+    if (colEditMode === field && move) {
+      const idx = displayRecords.findIndex(r => r.id === id);
+      const nextRec = displayRecords[move === 'next' ? idx + 1 : idx - 1];
+      setEditingCell(nextRec ? { id: nextRec.id, field } : null);
+    } else {
+      setEditingCell(null);
+    }
+    if (!changed || !selectedCity || !selectedMonth?.id) return;
+
+    setRecords(prev => prev.map(r => (r.id === id ? { ...r, [field]: value } : r)));
+    setAutoSaving(true);
+    try {
+      await setDoc(doc(db, 'cloud_lists', selectedCity, 'months', selectedMonth.id, 'records', id),
+        { [field]: value, updatedAt: serverTimestamp() }, { merge: true });
+    } catch (e) {
+      setRecords(prev => prev.map(r => (r.id === id ? { ...r, [field]: origVal } : r)));
+      alert(`저장 실패 — 되돌렸습니다.
+${e.message}`);
+    } finally { setAutoSaving(false); }
+  }, [records, colEditMode, displayRecords, selectedCity, selectedMonth]);
 
   const renderCell = useCallback((r, fieldDef) => {
     const { key, type, opts } = fieldDef;
@@ -829,15 +825,17 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
       if (/^[가-힣\d]+(읍|면|동)$/.test(tok)) val = tok;
     }
 
-    if (isEditing) {
+    const colMode = colEditMode === key;
+    if (isEditing || colMode) {
       return (
         <CellInput
           type={type}
           opts={opts}
           initial={val}
-          onCommit={(v) => commitEdit(id, key, v)}
+          autoFocus={isEditing}
+          onCommit={(v, move) => commitEdit(id, key, v, move)}
           onCancel={cancelEdit}
-          isPhone={key === '휴대폰' || key === '유선전화'}
+          format={key === '휴대폰' || key === '유선전화' ? formatPhoneInput : undefined}
         />
       );
     }
@@ -845,7 +843,7 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
     if (key === '구분') {
       return (
         <span
-          onClick={() => startEdit(id, key)}
+          onDoubleClick={() => startEdit(id, key)}
           className={`cursor-pointer inline-flex px-2 py-0.5 rounded text-[10px] font-bold ${
             val === '기초수급자' ? 'bg-amber-900/40 text-amber-400' :
             val === '차상위'    ? 'bg-blue-900/40 text-blue-400'  :
@@ -860,7 +858,7 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
     if (key === '포수') {
       return (
         <span
-          onClick={() => startEdit(id, key)}
+          onDoubleClick={() => startEdit(id, key)}
           className={`cursor-text block text-center text-xs font-bold ${isDirty ? 'text-blue-300' : 'text-blue-400'}`}
         >
           {val || '—'}
@@ -871,13 +869,13 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
     return (
       <span
         title={String(val)}
-        onClick={() => startEdit(id, key)}
+        onDoubleClick={() => startEdit(id, key)}
         className={`cursor-text block truncate text-xs ${isDirty ? 'text-blue-300 font-semibold' : 'text-gray-300'} ${!val ? 'text-gray-700' : ''}`}
       >
         {val || '—'}
       </span>
     );
-  }, [editingCell, dirtyRecords, commitEdit, cancelEdit, startEdit]);
+  }, [editingCell, colEditMode, dirtyRecords, commitEdit, cancelEdit, startEdit]);
 
   // ── Save edits ────────────────────────────────────────────────────
   const handleSaveEdits = async () => {
@@ -2053,6 +2051,8 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
                 exportColOrder={editor.cols}
                 onColResize={editor.resizeKey}
                 editing={editor.editing}
+                colEditMode={colEditMode}
+                onColEditToggle={setColEditMode}
                 isOn={editor.isOn}
                 onToggle={editor.toggleKey}
                 dragProps={editor.dragProps}

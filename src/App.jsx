@@ -4,6 +4,7 @@ const ttl90 = () => Timestamp.fromMillis(Date.now() + 90 * 24 * 60 * 60 * 1000);
 import { APP_VERSION } from "./version.js";
 import { cleanupExpiredCache } from "./engine/dbCache.js";
 import { refreshSavedCols } from "./utils/colOrder.js";
+import { splitNameBirth, sanitizeNote } from "./utils/noteSanitizer.js";
 import { HOUSEHOLD_EXCL, HOUSEHOLD_RE } from "./columnRules.js";
 
 // 서버 AI 학습 규칙(nexus_config/ai_rules)이 '수량' 키워드에 가구·세대 칼럼을 끼워넣어
@@ -1117,7 +1118,10 @@ export default function App() {
         const chunkResults = await asyncPool(30, chunk, async (row) => {
           try {
           let addr = getVal(row, 'address');
-          let name = getVal(row, 'name');
+          // A-34: 이름칸이 `홍길동(750315)` 형태인 지자체(용산구 등) → 이름·생년월일 분리.
+          // A-1(5자 절단)보다 먼저 처리해야 `홍길동(7` 로 망가지지 않는다.
+          const _nameSplit = splitNameBirth(getVal(row, 'name'));
+          let name = _nameSplit.name;
           let adminDong = getVal(row, 'admin') || "";
           const processedRow = await processAddress(addr, name, adminDong, fileInfo?.city || "", getVal(row, 'note'), { includeCoords: false });
           count++;
@@ -1135,7 +1139,8 @@ export default function App() {
           ].filter(Boolean).join(' ');
 
           // baseMap 3순위 매칭: 이름+생년월일 → 이름+휴대폰 → 이름+유선전화
-          const birthKey = parseBirthDate(getVal(row, 'birth'));
+          // A-34: 생년월일 컬럼이 비어 있으면 이름칸에서 분리한 값을 쓴다(누락 방지)
+          const birthKey = parseBirthDate(getVal(row, 'birth') || _nameSplit.birth);
           let baseEntry = null;
           if (baseMap) {
             const dkf = v => String(v || '').replace(/[^\d]/g, '');
@@ -1165,6 +1170,27 @@ export default function App() {
           const smsValue = parseSMS(getVal(row, 'sms') || importedSms);
           const hasImportedBase = Boolean(importedNote || importedDriver || importedSeqNo || importedSms);
 
+          // ── A-33 적용지점 ①(정제 단계): 특이사항 검증 ────────────────────
+          // 본명·법정동·건물명은 제 컬럼으로 보내고, 호수는 주소 상세부로 승격한다.
+          // ★ 다음 달 명단의 상세주소에 호수가 없어도, 특이사항에 호수가 있으면
+          //   여기서 주소 상세부에 자동으로 채워진다(형 질문 2026-07-22).
+          const _composedNote = [
+            processedRow.특이사항,
+            phoneNotes,
+            extractDeliveryNote(getVal(row, 'note')), // 비고: 재정·행정 잡음만 제거, 배송정보(도어락·열쇠·자유문구) 전량 보존
+            importedNote,
+          ].filter(Boolean).join(' ').trim();
+          const _addrParts = parseDisplayedAddress(processedRow.주소 || '');
+          const _san = sanitizeNote(_composedNote, {
+            address: processedRow.주소, detailAddr: _addrParts.detail,
+            buildingName: processedRow.buildingName, legalDong: processedRow.법정동,
+            realName: processedRow.본명, dong: getVal(row, 'admin'),
+          });
+          // 호수가 상세부로 승격되면 주소를 재조립한다(무손실 — 값이 사라지지 않는다)
+          const _finalAddr = _san.detailAddr
+            ? [[_addrParts.road, _san.detailAddr].filter(Boolean).join(', '), _addrParts.paren ? `(${_addrParts.paren})` : ''].filter(Boolean).join(' ')
+            : processedRow.주소;
+
           return {
             id: window.crypto.randomUUID(),
             구분: sheet.type === '혼합'
@@ -1177,24 +1203,19 @@ export default function App() {
                 })()
               : sheet.type,
             행정동: getVal(row, 'admin') || "",
-            법정동: processedRow.법정동 || "",   // A-31: 주소DB가 확인한 법정동(괄호 표기와 동일 값)
+            법정동: processedRow.법정동 || _san.legalDong || "",   // A-31: 주소DB가 확인한 법정동(괄호 표기와 동일 값)
             리: processedRow.리 || "",
             이름: processedRow.정제된이름 || name,
-            본명: processedRow.본명 || "",          // A-1: 이름 5자 초과 시 원본명(특이사항에서 분리)
-            건물명: processedRow.buildingName || "", // 괄호 건물명 전용 컬럼(특이사항에서 분리)
+            본명: _san.realName || processedRow.본명 || "",          // A-1: 이름 5자 초과 시 원본명(특이사항에서 분리)
+            건물명: _san.buildingName || processedRow.buildingName || "", // 괄호 건물명 전용 컬럼(특이사항에서 분리)
             생년월일: birthKey,
             품명: getVal(row, 'itemName') || "",
             포수: getVal(row, 'qty') ? (parseInt(getVal(row, 'qty')) || 1) : "",
             휴대폰: phones.mobile,
             유선전화: phones.landline,
-            주소: processedRow.주소,
+            주소: _finalAddr,
             문자수신: smsValue,
-            특이사항: [
-              processedRow.특이사항,
-              phoneNotes,
-              extractDeliveryNote(getVal(row, 'note')), // 비고: 재정·행정 잡음만 제거, 배송정보(도어락·열쇠·자유문구) 전량 보존
-              importedNote,
-            ].filter(Boolean).join(' ').trim() || "",
+            특이사항: _san.note || "",   // A-33 검증 통과분(배송 도움 메모만)
             기사: getVal(row, 'driver') || importedDriver || "",
             배송순번: getVal(row, 'seqNo') || importedSeqNo || "",
             _에러: processedRow.확인필요,
@@ -2285,21 +2306,32 @@ export default function App() {
 
         // 특이사항 정제: 기본명단에서 다시 가져온 이식 표시(◆)와 레거시 (본명:XXX)를 제거한다.
         // 본명은 별도 realName 컬럼으로 저장되므로 note에는 남기지 않는다. 원본 배송문구는 보존.
-        const note = (row.특이사항 || '')
+        const _noteBase = (row.특이사항 || '')
           .replace(/\s*◆[^◆]*/g, '')
           .replace(/\(본명:[^)]*\)/g, '')
           .replace(/\s+/g, ' ')
           .trim();
 
         const _spl = parseDisplayedAddress(row.주소 || '');
+        // ── A-33 적용지점 ②(저장 단계 · 마지막 방어선) ────────────────────
+        // 정제 단계를 거치지 않고 들어오는 경로(직접 편집·이식·과거 데이터)까지
+        // 여기서 한 번 더 검증한다. 이동이 기본이라 값은 사라지지 않는다.
+        const _sanSave = sanitizeNote(_noteBase, {
+          address: row.주소, detailAddr: _spl.detail,
+          buildingName: row.건물명 || row._buildingName, legalDong: row.법정동 || row._legalDong,
+          realName: row.본명, dong: row.행정동,
+        });
+        const note = _sanSave.note;
+
         const payload = {
           name, birthKey,
-          realName: row.본명 || '',   // A-1 원본명(특이사항에서 분리 저장)
+          realName: _sanSave.realName || row.본명 || '',   // A-1 원본명(특이사항에서 분리 저장)
           dong:    row.행정동 || '',
           address: row.주소   || '',
           // 3분할 주소(도로명주소 비교·표시용): 콤마앞=도로명 / 나머지=상세 / 괄호=법정동·건물명
           roadAddr:   _spl.road   || '',
-          detailAddr: _spl.detail || '',
+          // A-33: 특이사항에만 있던 호수는 상세주소에 먼저 담는다(형 지시 — 지우기 전 저장)
+          detailAddr: _spl.detail || _sanSave.detailAddr || '',
           parenInfo:  _spl.paren  || '',
           mobile,  landline,
           note,
@@ -2316,8 +2348,8 @@ export default function App() {
           roadName: row._roadName || '',
           buildingMainNo: row._buildingMainNo ?? '',
           buildingSubNo: row._buildingSubNo ?? '',
-          buildingName: row._buildingName || '',
-          legalDong: row.법정동 || row._legalDong || '',   // A-31: 법정동 컬럼 우선(없으면 히든 필드)
+          buildingName: row.건물명 || row._buildingName || _sanSave.buildingName || '',
+          legalDong: row.법정동 || row._legalDong || _sanSave.legalDong || '',   // A-31: 법정동 컬럼 우선(없으면 히든 필드)
           matchedSido: row._matchedSido || '',
           matchedSigungu: row._matchedSigungu || '',
           detailAddress: row._detailAddress || '',
@@ -2327,6 +2359,14 @@ export default function App() {
           updatedAt: serverTimestamp(),
         };
 
+        // ── M-9 특이사항 누락 차단 (2026-07-22 · 절대 되돌리지 말 것) ──────────
+        // 사고: 월 명단은 기본명단 특이사항을 `◆내용`으로 이식받는데(D-4), 저장 시
+        // B-9가 `◆...`를 통째로 제거해 note='' 가 되고, 그 빈값이 기존 기본명단
+        // 특이사항을 덮어써서 저장할수록 특이사항이 사라졌다(동대문구 3,074건 소실).
+        // → 새 note가 비었으면 기존 값을 그대로 둔다. 빈값으로 덮어쓰지 않는다.
+        const existingNote = (rec) => String(rec?.note ?? rec?.특이사항 ?? '').trim();
+        const updData = (rec) => (payload.note || !existingNote(rec)) ? payload : { ...payload, note: existingNote(rec) };
+
         if (birthKey) {
           // ── 1순위: 이름+생년월일 ────────────────────────────────────────
           const matched = liveByBirth[`${name}__${birthKey}`];
@@ -2334,12 +2374,13 @@ export default function App() {
             if (matched._isInFlight) {
               matched.data = {
                 ...matched.data, ...payload,
+                note: payload.note || matched.data.note || '',   // M-9: 빈값으로 덮어쓰지 않음
                 birthKey: matched.data.birthKey || payload.birthKey,
                 mobile:   matched.data.mobile   || payload.mobile,
                 landline: matched.data.landline || payload.landline,
               };
             } else {
-              updates.push({ id: matched.id, data: payload });
+              updates.push({ id: matched.id, data: updData(matched) });
               liveByBirth[`${name}__${birthKey}`] = { ...matched, ...payload };
             }
           } else {
@@ -2354,6 +2395,7 @@ export default function App() {
                 // 같은 배치에서 먼저 휴대폰/유선으로 추가된 신규 → 같은 객체에 생년월일 병합
                 xMatch.data = {
                   ...xMatch.data, ...payload,
+                  note: payload.note || xMatch.data.note || '',   // M-9: 빈값으로 덮어쓰지 않음
                   mobile:   payload.mobile   || xMatch.data.mobile,
                   landline: payload.landline || xMatch.data.landline,
                 };
@@ -2361,7 +2403,7 @@ export default function App() {
               } else {
                 // 기존 DB의 전화전용 레코드 → 생년월일 보강 업데이트(연락처는 빈값이면 기존값 보존)
                 updates.push({ id: xMatch.id, data: {
-                  ...payload,
+                  ...updData(xMatch),
                   mobile:   payload.mobile   || xMatch.mobile   || xMatch.휴대폰  || '',
                   landline: payload.landline || xMatch.landline || xMatch.유선전화 || '',
                 } });
@@ -2383,11 +2425,12 @@ export default function App() {
             if (matched._isInFlight) {
               matched.data = {
                 ...matched.data, ...payload,
+                note: payload.note || matched.data.note || '',   // M-9: 빈값으로 덮어쓰지 않음
                 mobile:   matched.data.mobile   || payload.mobile,
                 landline: matched.data.landline || payload.landline,
               };
             } else {
-              updates.push({ id: matched.id, data: payload });
+              updates.push({ id: matched.id, data: updData(matched) });
               liveByPhone[`${name}__${mKey}`] = { ...matched, ...payload };
             }
           } else {
@@ -2404,10 +2447,11 @@ export default function App() {
             if (matched._isInFlight) {
               matched.data = {
                 ...matched.data, ...payload,
+                note: payload.note || matched.data.note || '',   // M-9: 빈값으로 덮어쓰지 않음
                 landline: matched.data.landline || payload.landline,
               };
             } else {
-              updates.push({ id: matched.id, data: payload });
+              updates.push({ id: matched.id, data: updData(matched) });
               liveByLandline[`${name}__${lKey}`] = { ...matched, ...payload };
             }
           } else {

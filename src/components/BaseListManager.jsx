@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 
 import { normalizeBirth, parsePhoneNumbers, formatPhoneInput } from '../utils/parsers.js';
+import CellInput, { ColEditToggle } from './CellInput.jsx';
 import { parseDisplayedAddress } from '../utils/addressFormat.js';
 import { REGIONS } from '../utils/regions.js';
 import { useConfirmDelete } from '../contexts/ConfirmDeleteContext.jsx';
@@ -95,7 +96,9 @@ export default function BaseListManager({ user, onBack, initialCity = '', export
   const [dirtyMap, setDirtyMap] = useState({});
   const [deletedIds, setDeletedIds] = useState(new Set());
   const [editingCell, setEditingCell] = useState(null);
-  const [editValue, setEditValue] = useState('');
+  // 칼럼 수정모드 — 이 칼럼의 모든 셀이 입력창이 되어 위아래로 연속 입력할 수 있다
+  const [colEditMode, setColEditMode] = useState(null);
+  const [autoSaving, setAutoSaving] = useState(false);
   const [saving, setSaving] = useState(false);
 
   const [searchText, setSearchText] = useState('');
@@ -267,28 +270,41 @@ export default function BaseListManager({ user, onBack, initialCity = '', export
     finally { setRequestingCity(false); }
   };
 
-  const startEdit = (id, field, val) => {
-    setEditingCell({ id, field });
-    setEditValue(String(val ?? ''));
-  };
+  const startEdit = (id, field) => setEditingCell({ id, field });
 
-  const commitEdit = () => {
-    if (!editingCell) return;
-    const { id, field } = editingCell;
-    const origVal = records.find(r => r.id === id)?.[field] ?? '';
-    setDirtyMap(prev => {
-      const prevEntry = prev[id] || {};
-      if (String(editValue) === String(origVal) && prevEntry[field] === undefined) return prev;
-      if (String(editValue) === String(origVal)) {
-        const newEntry = { ...prevEntry };
-        delete newEntry[field];
-        const newMap = { ...prev };
-        if (Object.keys(newEntry).length === 0) delete newMap[id]; else newMap[id] = newEntry;
-        return newMap;
-      }
-      return { ...prev, [id]: { ...prevEntry, [field]: editValue } };
-    });
-    setEditingCell(null);
+  /**
+   * 셀 편집 확정 — 셀에서 빠져나오는 순간 그 칸만 즉시 DB에 저장한다(형 지시 2026-07-22).
+   * @param {string} id 레코드 ID
+   * @param {string} field 필드 키
+   * @param {string} newVal 새 값
+   * @param {'next'|'prev'|null} move Enter/Tab 이동 방향(칼럼 수정모드 연속 입력)
+   */
+  const commitEdit = async (id, field, newVal, move) => {
+    const rec = records.find(r => r.id === id);
+    const origVal = rec?.[field] ?? '';
+    const changed = String(newVal) !== String(origVal);
+
+    // 다음 칸으로 포커스 이동(칼럼 수정모드) — 저장을 기다리지 않는다
+    if (colEditMode === field && move) {
+      const idx = displayRecords.findIndex(r => r.id === id);
+      const nextRec = displayRecords[move === 'next' ? idx + 1 : idx - 1];
+      setEditingCell(nextRec ? { id: nextRec.id, field } : null);
+    } else {
+      setEditingCell(null);
+    }
+
+    if (!changed) return;
+
+    // 화면 먼저 반영(낙관적) → 저장 실패 시 되돌린다
+    setRecords(prev => prev.map(r => (r.id === id ? { ...r, [field]: newVal } : r)));
+    setAutoSaving(true);
+    try {
+      await setDoc(doc(db, `base_lists/${selectedCity}/records`, id), { [field]: newVal, updatedAt: serverTimestamp() }, { merge: true });
+    } catch (e) {
+      setRecords(prev => prev.map(r => (r.id === id ? { ...r, [field]: origVal } : r)));
+      alert(`저장 실패 — 되돌렸습니다.
+${e.message}`);
+    } finally { setAutoSaving(false); }
   };
 
   const renderCell = (r, field) => {
@@ -304,15 +320,16 @@ export default function BaseListManager({ user, onBack, initialCity = '', export
       const tok = String(paren || '').split(',')[0].trim();
       if (/^[가-힣\d]+(읍|면|동)$/.test(tok)) val = tok;
     }
-    if (isEditing) {
+    // 칼럼 수정모드면 그 칼럼의 모든 셀이 입력창(현재 칸만 포커스) · 아니면 편집 중인 셀만
+    const colMode = colEditMode === field;
+    if (isEditing || colMode) {
       return (
-        <input
-          autoFocus
-          className="w-full bg-transparent text-white text-xs outline-none border-b border-blue-400 py-0.5"
-          value={editValue}
-          onChange={e => setEditValue(field === 'mobile' || field === 'landline' ? formatPhoneInput(e.target.value) : e.target.value)}
-          onBlur={commitEdit}
-          onKeyDown={e => { if (e.key === 'Enter') commitEdit(); if (e.key === 'Escape') setEditingCell(null); }}
+        <CellInput
+          initial={val}
+          autoFocus={isEditing}
+          format={field === 'mobile' || field === 'landline' ? formatPhoneInput : undefined}
+          onCommit={(v, move) => commitEdit(id, field, v, move)}
+          onCancel={() => setEditingCell(null)}
         />
       );
     }
@@ -320,7 +337,8 @@ export default function BaseListManager({ user, onBack, initialCity = '', export
     if (field === 'note' && noteStr.includes('◆')) {
       const parts = noteStr.split(/(◆[^◆]*)/).filter(Boolean);
       return (
-        <span title={noteStr} onClick={() => startEdit(id, field, val)}
+        <span title={`${noteStr}
+(더블클릭하면 수정)`} onDoubleClick={() => startEdit(id, field)}
           className={`cursor-text block truncate text-xs ${isDirty ? 'font-semibold' : ''}`}>
           {parts.map((p, i) => (
             <span key={i} className={p.startsWith('◆') ? 'text-amber-400' : isDirty ? 'text-blue-300' : 'text-gray-300'}>{p}</span>
@@ -329,7 +347,8 @@ export default function BaseListManager({ user, onBack, initialCity = '', export
       );
     }
     return (
-      <span title={noteStr} onClick={() => startEdit(id, field, val)}
+      <span title={`${noteStr}
+(더블클릭하면 수정)`} onDoubleClick={() => startEdit(id, field)}
         className={`cursor-text block truncate text-xs ${isDirty ? 'text-blue-300 font-semibold' : 'text-gray-300'} ${!val ? 'text-gray-700' : ''}`}>
         {val || '—'}
       </span>
@@ -1238,6 +1257,10 @@ export default function BaseListManager({ user, onBack, initialCity = '', export
                           className={`px-3 py-2.5 text-center text-[10px] text-gray-600 font-bold uppercase tracking-wider overflow-hidden ${dim ? 'opacity-40' : ''}`}>
                           {editor.editing && <ColHeaderEditControls colKey={f.key} on={on} onToggle={editor.toggleKey} />}
                           {f.label}
+                          {/* 칼럼 수정모드 토글 — 이 칼럼 전체가 입력창이 되어 Enter로 다음 행 연속 입력 */}
+                          {!editor.editing && f.key !== 'history' && (
+                            <ColEditToggle colKey={f.key} active={colEditMode === f.key} onToggle={setColEditMode} />
+                          )}
                           {editor.editing && <ColResizeHandle colKey={f.key} currentWidth={w} onResize={editor.resizeKey} />}
                         </th>
                       );
