@@ -1,12 +1,13 @@
 ﻿import { useState } from 'react';
 import { X, AlertTriangle, UserPlus, UserMinus, MapPin, ArrowRight, ChevronDown, ChevronUp } from 'lucide-react';
 
-export default function PrevMonthCompareModal({ data, onClose }) {
+export default function PrevMonthCompareModal({ data, onClose, acknowledged = false, onAcknowledge }) {
   const [filterType, setFilterType] = useState('all'); // all | new | left | address
   const [expandedWarnings, setExpandedWarnings] = useState(true);
+  const [checked, setChecked] = useState(false);
 
   if (!data) return null;
-  const { warnings, changes, newCount, leftCount, addrChangeCount, prevMonthId } = data;
+  const { warnings, changes, newCount, leftCount, addrChangeCount, prevMonthId, critical, comparedCount = 0, addrChangeRate = 0 } = data;
 
   const filtered = (() => {
     if (filterType === 'new') return changes.filter(c => c.type === 'new');
@@ -25,13 +26,31 @@ export default function PrevMonthCompareModal({ data, onClose }) {
             <h2 className="text-white text-lg font-black">전월 대비 변경 현황</h2>
             <p className="text-gray-500 text-xs mt-1">{prevMonthId} 월 데이터와 비교</p>
           </div>
-          <button onClick={onClose} className="text-gray-600 hover:text-white transition-colors p-1">
+          <button onClick={onClose} title={critical ? '확인 처리를 해야 저장할 수 있습니다' : '닫기'} className="text-gray-600 hover:text-white transition-colors p-1">
             <X size={20}/>
           </button>
         </div>
 
         {/* 요약 배지 */}
         <div className="px-6 py-4 shrink-0 border-b border-[#0f1a2e]">
+          {/* M-10: 전체 주소 변동률이 임계를 넘으면 명단 오류로 보고 담당자 확인을 강제한다 */}
+          {critical && (
+            <div className="bg-red-950/40 border-2 border-red-500/50 rounded-xl p-4 mb-3">
+              <div className="flex items-center gap-2 mb-2">
+                <AlertTriangle size={18} className="text-red-400"/>
+                <span className="text-red-300 font-black text-sm">🔴 명단 오류 의심 — 담당자 확인 필요</span>
+              </div>
+              <p className="text-red-200 text-xs leading-relaxed">
+                전월({prevMonthId})과 대조된 <b className="text-white">{comparedCount.toLocaleString()}명</b> 중{' '}
+                <b className="text-white">{addrChangeCount.toLocaleString()}명({Math.round(addrChangeRate * 100)}%)</b>의 주소가 바뀌었습니다.
+              </p>
+              <p className="text-red-300/80 text-[11px] mt-2 leading-relaxed">
+                이 정도 변동은 보통 실제 이사가 아니라 <b>명단 자체가 잘못된 경우</b>입니다 —
+                다른 달 파일, 다른 지자체 파일, 주소 칼럼 밀림 등을 먼저 확인해주세요.
+                <br/>확인 전에는 <b>저장이 차단됩니다.</b>
+              </p>
+            </div>
+          )}
           {warnings.length > 0 && (
             <div className="bg-amber-950/30 border border-amber-500/30 rounded-xl p-3 mb-3">
               <button
@@ -148,12 +167,31 @@ export default function PrevMonthCompareModal({ data, onClose }) {
               원본 확인 후 재업로드
             </button>
           )}
-          <button
-            onClick={onClose}
-            className="flex-1 py-2.5 bg-[#3b82f6] text-black font-black rounded-xl text-sm hover:bg-[#93c5fd] transition-colors"
-          >
-            이대로 계속 진행
-          </button>
+          {critical && !acknowledged ? (
+            <div className="flex-1 flex flex-col gap-2">
+              <label className="flex items-center gap-2 text-xs text-red-200 cursor-pointer select-none">
+                <input type="checkbox" checked={checked} onChange={e => setChecked(e.target.checked)}
+                  className="w-4 h-4 accent-red-500" />
+                원본 명단을 확인했고, 이 주소 변동이 맞습니다
+              </label>
+              <button
+                disabled={!checked}
+                onClick={() => { onAcknowledge?.(); onClose(); }}
+                className={`w-full py-2.5 font-black rounded-xl text-sm transition-colors ${
+                  checked ? 'bg-red-500 text-white hover:bg-red-400' : 'bg-[#1a1a1a] text-gray-600 cursor-not-allowed'
+                }`}
+              >
+                {checked ? '확인했습니다 — 저장 진행' : '위 항목을 체크해야 진행됩니다'}
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={onClose}
+              className="flex-1 py-2.5 bg-[#3b82f6] text-black font-black rounded-xl text-sm hover:bg-[#93c5fd] transition-colors"
+            >
+              이대로 계속 진행
+            </button>
+          )}
         </div>
       </div>
     </div>

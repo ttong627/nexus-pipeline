@@ -1,8 +1,11 @@
-export const APP_VERSION = 'V7.0';
+export const APP_VERSION = 'V7.1';
 export const APP_BUILD = '2026.07.22';
-export const APP_BUILD_TIME = '2026.07.22 16:12';
+export const APP_BUILD_TIME = '2026.07.22 16:21';
 
 export const CHANGELOG = [
+  { v: "V7.1", date: "2026.07.22", items: [
+    "전월 대비 주소 대량변동 감지(M-10) — 명단이 통째로 잘못된 경우 담당자 확인 전까지 저장 차단",
+  ]},
   { v: "V7.0", date: "2026.07.22", items: [
     "타 지자체 6곳 기본명단 특이사항 보강 — 용산구·중구·종로구·부천 소사구·여주시·시흥시 7,926건",
     "기본명단 이식에 상세주소 추가(D-6) — 이번달 명단에 호수가 없으면 기본명단 상세주소로 자동 채움",

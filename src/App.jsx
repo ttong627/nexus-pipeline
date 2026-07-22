@@ -5,6 +5,7 @@ import { APP_VERSION } from "./version.js";
 import { cleanupExpiredCache } from "./engine/dbCache.js";
 import { refreshSavedCols } from "./utils/colOrder.js";
 import { splitNameBirth, sanitizeNote } from "./utils/noteSanitizer.js";
+import { evaluateAddrChange } from "./utils/prevMonthGuard.js";
 import { HOUSEHOLD_EXCL, HOUSEHOLD_RE } from "./columnRules.js";
 
 // 서버 AI 학습 규칙(nexus_config/ai_rules)이 '수량' 키워드에 가구·세대 칼럼을 끼워넣어
@@ -285,6 +286,8 @@ export default function App() {
   const [purifyResult, setPurifyResult] = useState(null);
   const [prevMonthCompare, setPrevMonthCompare] = useState(null); // { warnings, changes, newCount, leftCount }
   const [showPrevCompare, setShowPrevCompare] = useState(false);
+  // M-10: 주소 대량변동 경고를 담당자가 확인했는지 — 확인 전에는 저장을 막는다
+  const [addrAlertAck, setAddrAlertAck] = useState(false);
   const [baseCount, setBaseCount] = useState(0);
   const [baseMap, setBaseMap] = useState(null);
   const [importFields, setImportFields] = useState(null); // null = 전체 이식, Set = 선택 필드만
@@ -1496,9 +1499,21 @@ export default function App() {
           const newCount = changes.filter(c => c.type === 'new').length;
           const addrChangeCount = changes.filter(c => c.type === 'address').length;
 
+          // ── M-10 전체 주소 변동률 게이트 (2026-07-22 형 지시) ─────────────────
+          // 행정동별 경고(위 warnings)는 특정 동에 몰린 경우만 잡는다. 명단 전체가
+          // 통째로 틀어진 경우(엉뚱한 달·다른 지자체·컬럼 밀림)는 동마다 30% 미만이라
+          // 안 걸리고 그대로 저장돼 버린다. → 전체 비율로 한 번 더 막는다.
+          const comparedCount = [...prevMap.keys()].filter(k => currentKeys.has(k)).length;
+          // 판정은 src/utils/prevMonthGuard.js 단일 규칙(회귀 테스트로 고정)
+          const { rate: addrChangeRate, critical, reason: criticalReason } = evaluateAddrChange({ comparedCount, addrChangeCount });
+
           if (warnings.length > 0 || addrChangeCount > 0 || newCount > 0 || leftCount > 0) {
-            setPrevMonthCompare({ warnings, changes, newCount, leftCount, addrChangeCount, prevMonthId });
-            if (warnings.length > 0) setShowPrevCompare(true); // 경고 있으면 자동 표시
+            setPrevMonthCompare({
+              warnings, changes, newCount, leftCount, addrChangeCount, prevMonthId,
+              comparedCount, addrChangeRate, critical, criticalReason,
+            });
+            setAddrAlertAck(false);                       // 새 비교 결과 → 확인 상태 초기화
+            if (critical || warnings.length > 0) setShowPrevCompare(true); // 경고 있으면 자동 표시
           }
         }
       }
@@ -1926,8 +1941,35 @@ export default function App() {
     }
   };
 
+  /**
+   * M-10 저장 게이트 — 전월 대비 주소가 비정상적으로 많이 바뀌었으면
+   * 담당자가 전월비교 창에서 확인 처리를 하기 전까지 저장을 막는다.
+   * @returns {boolean} true = 막힘(저장 중단)
+   */
+  const blockedByAddrAlert = () => {
+    if (!prevMonthCompare?.critical || addrAlertAck) return false;
+    alert(
+      `⚠️ 명단 오류 의심 — 저장을 중단했습니다.
+
+` +
+      `전월(${prevMonthCompare.prevMonthId})과 대조된 ${prevMonthCompare.comparedCount.toLocaleString()}명 중 ` +
+      `${prevMonthCompare.addrChangeCount.toLocaleString()}명(${Math.round(prevMonthCompare.addrChangeRate * 100)}%)의 주소가 바뀌었습니다.
+
+` +
+      `이 정도 변동은 보통 이사가 아니라 명단 자체가 잘못된 경우입니다.
+` +
+      `(다른 달 파일 · 다른 지자체 · 컬럼 밀림 등)
+
+` +
+      `전월 비교 창에서 내용을 확인한 뒤 다시 저장해주세요.`
+    );
+    setShowPrevCompare(true);
+    return true;
+  };
+
   const handleSaveMonthlyList = async () => {
     if (guestMode) { requireLogin(); return; }
+    if (blockedByAddrAlert()) return;
     const city = fileInfo?.city;
     if (!city) return alert('지자체 정보를 감지하지 못했습니다. 파일을 다시 확인해주세요.');
     const unconfirmedAddr = gridData.filter(r => r._에러 && !r._전화확인).length;
@@ -2255,6 +2297,7 @@ export default function App() {
     const city = fileInfo?.city;
     if (!city) return alert('지자체 정보를 감지하지 못했습니다. 파일을 다시 확인해주세요.');
     if (isSavingBaseListRef.current) return;
+    if (blockedByAddrAlert()) return;   // M-10
     // 헤더 키워드 이름 행 제거 (방어)
     const HEADER_NAME_RE = /^(이름|성명|대상자|수령자명)$/;
     const validData = rawValidData.filter(d => !HEADER_NAME_RE.test((d.이름 || '').trim()));
@@ -3422,6 +3465,8 @@ export default function App() {
         {showPrevCompare && prevMonthCompare && (
           <PrevMonthCompareModal
             data={prevMonthCompare}
+            acknowledged={addrAlertAck}
+            onAcknowledge={() => setAddrAlertAck(true)}
             onClose={() => setShowPrevCompare(false)}
           />
         )}

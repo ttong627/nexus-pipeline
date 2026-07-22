@@ -2,6 +2,7 @@
 // 실행: node scripts/note-sanitizer.test.mjs
 import assert from 'node:assert/strict';
 import { sanitizeNote, mergeNotes, splitNameBirth, extractRealName } from '../src/utils/noteSanitizer.js';
+import { evaluateAddrChange } from '../src/utils/prevMonthGuard.js';
 
 let pass = 0, fail = 0;
 const t = (label, fn) => {
@@ -112,6 +113,29 @@ t('자리수 안 맞으면 분리하지 않는다', () => {
 });
 t('괄호 없으면 그대로', () => {
   assert.deepEqual(splitNameBirth('손우겸'), { name: '손우겸', birth: '' });
+});
+
+console.log('');
+console.log('== M-10 전월 주소 대량변동 게이트 ==');
+t('정상 범위(5%)는 막지 않는다', () => {
+  assert.equal(evaluateAddrChange({ comparedCount: 1000, addrChangeCount: 50 }).critical, false);
+});
+t('변동률 15% 이상이면 담당자 확인 필요', () => {
+  assert.equal(evaluateAddrChange({ comparedCount: 1000, addrChangeCount: 150 }).critical, true);
+});
+t('비율이 낮아도 100건 이상이면 확인 필요', () => {
+  const r = evaluateAddrChange({ comparedCount: 5000, addrChangeCount: 120 });
+  assert.equal(r.critical, true);
+  assert.match(r.reason, /120건/);
+});
+t('표본 30명 미만이면 판정하지 않는다(비율 요동 방지)', () => {
+  assert.equal(evaluateAddrChange({ comparedCount: 10, addrChangeCount: 10 }).critical, false);
+});
+t('명단이 통째로 다른 경우(100%)는 반드시 막는다', () => {
+  assert.equal(evaluateAddrChange({ comparedCount: 500, addrChangeCount: 500 }).critical, true);
+});
+t('전월 자료가 없으면(0명) 막지 않는다', () => {
+  assert.equal(evaluateAddrChange({ comparedCount: 0, addrChangeCount: 0 }).critical, false);
 });
 
 console.log(`\n결과: ${pass} PASS / ${fail} FAIL`);
