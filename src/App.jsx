@@ -1167,8 +1167,13 @@ export default function App() {
           const importedSms = baseEntry && (importFields === null || importFields?.includes('sms'))
             ? (baseEntry.sms || baseEntry.문자수신 || '')
             : '';
+          // D-5: 상세주소 이식 (형 지시 2026-07-22) — 이번 달 명단 주소에 호수·층이 없을 때
+          // 기본명단에 쌓인 상세주소를 가져와 채운다. 명단에 값이 있으면 절대 덮어쓰지 않는다.
+          const importedDetail = baseEntry && (importFields === null || importFields?.includes('detailAddr'))
+            ? String(baseEntry.detailAddr || baseEntry.detailAddress || baseEntry.상세주소 || '').trim()
+            : '';
           const smsValue = parseSMS(getVal(row, 'sms') || importedSms);
-          const hasImportedBase = Boolean(importedNote || importedDriver || importedSeqNo || importedSms);
+          const hasImportedBase = Boolean(importedNote || importedDriver || importedSeqNo || importedSms || importedDetail);
 
           // ── A-33 적용지점 ①(정제 단계): 특이사항 검증 ────────────────────
           // 본명·법정동·건물명은 제 컬럼으로 보내고, 호수는 주소 상세부로 승격한다.
@@ -1186,9 +1191,11 @@ export default function App() {
             buildingName: processedRow.buildingName, legalDong: processedRow.법정동,
             realName: processedRow.본명, dong: getVal(row, 'admin'),
           });
-          // 호수가 상세부로 승격되면 주소를 재조립한다(무손실 — 값이 사라지지 않는다)
-          const _finalAddr = _san.detailAddr
-            ? [[_addrParts.road, _san.detailAddr].filter(Boolean).join(', '), _addrParts.paren ? `(${_addrParts.paren})` : ''].filter(Boolean).join(' ')
+          // 상세주소 우선순위: ①명단 원본 → ②특이사항에서 승격한 호수 → ③기본명단 이식(D-5)
+          // 원본에 값이 있으면 절대 건드리지 않는다(무손실 M-1).
+          const _detailFilled = _addrParts.detail || _san.detailAddr || importedDetail || '';
+          const _finalAddr = (!_addrParts.detail && _detailFilled)
+            ? [[_addrParts.road, _detailFilled].filter(Boolean).join(', '), _addrParts.paren ? `(${_addrParts.paren})` : ''].filter(Boolean).join(' ')
             : processedRow.주소;
 
           return {

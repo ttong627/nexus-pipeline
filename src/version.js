@@ -1,8 +1,12 @@
-export const APP_VERSION = 'V6.99';
+export const APP_VERSION = 'V7.0';
 export const APP_BUILD = '2026.07.22';
-export const APP_BUILD_TIME = '2026.07.22 15:55';
+export const APP_BUILD_TIME = '2026.07.22 16:12';
 
 export const CHANGELOG = [
+  { v: "V7.0", date: "2026.07.22", items: [
+    "타 지자체 6곳 기본명단 특이사항 보강 — 용산구·중구·종로구·부천 소사구·여주시·시흥시 7,926건",
+    "기본명단 이식에 상세주소 추가(D-6) — 이번달 명단에 호수가 없으면 기본명단 상세주소로 자동 채움",
+  ]},
   { v: "V6.99", date: "2026.07.22", items: [
     "명단 직접수정 버벅거림 해결 — 입력값을 셀이 자체 관리해 키 입력마다 표 전체가 다시 그려지던 문제 제거",
     "칼럼 헤더 볼펜(✏️) 버튼 — 그 칼럼 전체가 수정모드, Enter/Tab으로 다음 행 연속 입력",

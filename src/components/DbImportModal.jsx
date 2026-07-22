@@ -5,10 +5,11 @@ import { normalizeBirth } from '../utils/parsers.js';
 import { REGIONS, getSigunguOptions } from '../utils/regions.js';
 
 const IMPORT_FIELDS = [
-  { key: 'note',   label: '특이사항', desc: '수령자 메모·특이사항' },
-  { key: 'seqNo',  label: '배송순번', desc: '기사 배송 순서' },
-  { key: 'driver', label: '기사',     desc: '담당 배송 기사명' },
-  { key: 'sms',    label: '문자수신', desc: '문자 수신 가능 여부' },
+  { key: 'note',       label: '특이사항', desc: '수령자 메모·특이사항' },
+  { key: 'detailAddr', label: '상세주소', desc: '호수·층 등 (명단에 없을 때만 채움)' },
+  { key: 'seqNo',      label: '배송순번', desc: '기사 배송 순서' },
+  { key: 'driver',     label: '기사',     desc: '담당 배송 기사명' },
+  { key: 'sms',        label: '문자수신', desc: '문자 수신 가능 여부' },
 ];
 
 export default function DbImportModal({ onClose, onImport, defaultCity }) {
@@ -21,7 +22,7 @@ export default function DbImportModal({ onClose, onImport, defaultCity }) {
   const selectedCity = selectedSido && selectedSigungu ? `${selectedSido} ${selectedSigungu}` : '';
 
   const [selectedMonth, setSelectedMonth] = useState('');
-  const [checkedFields, setCheckedFields] = useState(new Set(['note', 'seqNo', 'driver']));
+  const [checkedFields, setCheckedFields] = useState(new Set(['note', 'detailAddr', 'seqNo', 'driver']));
   const [loading, setLoading] = useState(false);
   const [fetchedCount, setFetchedCount] = useState(null);
 
