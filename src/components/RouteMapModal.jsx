@@ -5,6 +5,7 @@ import { collection, serverTimestamp, Timestamp, getDocs, getDoc, setDoc, update
 import * as XLSX from 'xlsx';
 import CoordBrushModal from './CoordBrushModal.jsx';
 import { formatAddressDisplay } from '../utils/addressFormat.js';
+import { splitByDay, summarizeDaySplit } from '../engine/deliveryDaySplit.js';
 
 const KAKAO_JS_KEY = import.meta.env.VITE_KAKAO_JS_KEY;
 const KAKAO_REST_KEY = import.meta.env.VITE_KAKAO_REST_KEY;
@@ -1143,6 +1144,11 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
 
   // 배송 일정 상태
   const [scheduleMode, setScheduleMode] = useState(false);
+  // 일자 분할(수량 많을 때 여러 날로) — 형 지시 2026-07-23
+  const [daySplitOpen, setDaySplitOpen] = useState(false);
+  const [daySplitMode, setDaySplitMode] = useState('load'); // 'load'=하루최대물량 | 'days'=날짜개수
+  const [daySplitVal, setDaySplitVal] = useState('500');
+  const [daySplitSummary, setDaySplitSummary] = useState(null); // [{day,count,load,dongs}]
 
   // 클라우드 모드 상태
   const [isCloudMode, setIsCloudMode] = useState(false);
@@ -2464,6 +2470,23 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
     setRecords(prev => prev.map(r => newSeqMap[r.id] !== undefined ? { ...r, 배송순번: newSeqMap[r.id] } : r));
   }, [records]);
 
+  // ── 일자 분할 (형 지시 2026-07-23) — 수량 많으면 지역(동)별로 묶어 여러 날로 ──
+  //   같은 동은 안 쪼개고, 가까운 동끼리 같은 날. 각 날 안의 순번은 [순번] 버튼이 담당.
+  const handleDaySplit = useCallback(() => {
+    const v = parseInt(daySplitVal, 10);
+    if (!v || v <= 0) { showToast('error', '올바른 값을 입력하세요.'); return; }
+    const depot = drivers.find(d => d.startLat && d.startLng);
+    const opts = daySplitMode === 'days'
+      ? { numDays: v, getLoad: getEffectiveLoad, depot: depot ? { lat: depot.startLat, lng: depot.startLng } : null }
+      : { maxLoadPerDay: v, getLoad: getEffectiveLoad, depot: depot ? { lat: depot.startLat, lng: depot.startLng } : null };
+    const split = splitByDay(records, opts);
+    const byId = new Map(split.map(r => [r.id, r.배송일차]));
+    setRecords(prev => prev.map(r => ({ ...r, 배송일차: byId.get(r.id) || 1 })));
+    const summary = summarizeDaySplit(split);
+    setDaySplitSummary(summary);
+    showToast('success', `${summary.length}일로 분할 — ${daySplitMode === 'days' ? `${v}일 균등` : `하루 최대 ${v}포`} · 동 경계 보존`);
+  }, [records, drivers, daySplitMode, daySplitVal, showToast]);
+
   const handleAutoSequence = useCallback(() => {
     // pendingPaintRef 잔류분을 먼저 반영 (브러시 보정 직후 클릭 시 배치 유실 방지)
     const snapshot = new Map(pendingPaintRef.current);
@@ -2998,6 +3021,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
         const driverName = drivers.find(d => d.id === r._driverId)?.name || '';
         const ref = doc(db, 'cloud_lists', cloudCity, 'months', cloudMonthId, 'records', r._cloudDocId);
         const patch = { 기사: driverName, 배송순번: r.배송순번 ? String(r.배송순번) : '' };
+        if (r.배송일차 !== undefined) patch.배송일차 = r.배송일차 || ''; // 일자 분할 결과(형 지시 2026-07-23)
         if (r._lat !== undefined && r._lat !== null) { patch.lat = r._lat; patch.lng = r._lng; }
         if (r._isApt !== undefined) patch.isApt = r._isApt;
         batch.set(ref, patch, { merge: true });
@@ -4032,6 +4056,42 @@ ${folders}
             >
               <Navigation2 size={10} /> 순번
             </button>
+            {/* 일자 분할 — 수량 많으면 지역(동)별로 여러 날로 나눔(형 지시 2026-07-23) */}
+            <div className="relative">
+              <button
+                onClick={() => setDaySplitOpen(v => !v)}
+                title="수량이 많을 때 지역(동)별로 묶어 여러 날로 나눕니다. 같은 동은 안 쪼갭니다."
+                className={`px-2 py-1 rounded-lg text-[10px] font-bold flex items-center gap-1 border transition-colors ${daySplitOpen || daySplitSummary ? 'bg-teal-900/40 border-teal-500/50 text-teal-300' : 'bg-[#0d1a1a] border-teal-500/25 text-teal-400 hover:bg-teal-900/20'}`}
+              >
+                <Clock size={10} /> 일자분할{daySplitSummary ? `·${daySplitSummary.length}일` : ''}
+              </button>
+              {daySplitOpen && (
+                <div className="absolute top-full left-0 mt-1 z-50 w-64 bg-[#0b1220] border border-teal-500/40 rounded-xl p-3 shadow-2xl">
+                  <div className="text-[10px] font-black text-teal-300 mb-2">📅 배송 일자 분할</div>
+                  <div className="flex gap-1 mb-2">
+                    <button onClick={() => { setDaySplitMode('load'); setDaySplitVal('500'); }} className={`flex-1 py-1 rounded text-[10px] font-bold border ${daySplitMode === 'load' ? 'bg-teal-600 text-white border-teal-500' : 'bg-[#111] text-gray-400 border-[#2a2a2a]'}`}>하루 최대 물량</button>
+                    <button onClick={() => { setDaySplitMode('days'); setDaySplitVal('2'); }} className={`flex-1 py-1 rounded text-[10px] font-bold border ${daySplitMode === 'days' ? 'bg-teal-600 text-white border-teal-500' : 'bg-[#111] text-gray-400 border-[#2a2a2a]'}`}>날짜 개수</button>
+                  </div>
+                  <div className="flex items-center gap-1 mb-2">
+                    <input type="number" min="1" value={daySplitVal} onChange={e => setDaySplitVal(e.target.value)}
+                      className="flex-1 bg-[#111] border border-[#2a2a2a] rounded px-2 py-1 text-xs text-white outline-none focus:border-teal-500" />
+                    <span className="text-[10px] text-gray-500">{daySplitMode === 'days' ? '일로' : '포/일'}</span>
+                    <button onClick={handleDaySplit} className="px-3 py-1 bg-teal-500 text-white rounded text-[10px] font-black hover:bg-teal-400">분할</button>
+                  </div>
+                  {daySplitSummary && (
+                    <div className="mt-1 max-h-32 overflow-y-auto space-y-0.5">
+                      {daySplitSummary.map(s => (
+                        <div key={s.day} className="flex items-center justify-between text-[10px] bg-black/30 rounded px-2 py-1">
+                          <span className="text-teal-300 font-bold">{s.day}일차</span>
+                          <span className="text-gray-400">{s.count}가구·{s.load}포·동{s.dongs.length}</span>
+                        </div>
+                      ))}
+                      <p className="text-[9px] text-gray-600 mt-1">각 날짜 안에서 [순번] 버튼으로 방문순서를 매기세요.</p>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
             {/* AI순번 버튼 제거 — 결과가 불안정해 미사용(handleAdvancedAutoSequence 함수는 유지) */}
             <button
               onClick={handleRunSequenceAnalysis}

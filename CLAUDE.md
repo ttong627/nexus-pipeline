@@ -657,6 +657,8 @@ forcedAssignCount: 좌표·행정동 fallback으로 강제 배정된 레코드 �
 | DS-14-3 | `estimatedMinutes = round((totalDistKm / SEQUENCE_ESTIMATED_SPEED_KMH) × 60)` |
 | DS-14-4 | 순번 분석 카드 하단에 `총 {N}km · 약 {M}분 · {count}건` 표시 |
 | DS-14-5 | `SEQUENCE_ESTIMATED_SPEED_KMH` 는 절대 하드코딩 금지 — 상수만 수정하여 전체 반영 |
+| DS-15 | **좌표 오류 거리기반 검증** (2026-07-23 신설·형 지시 · 절대 되돌리지 말 것). 배송순번 교차·먼거리 왕복의 진짜 원인은 순번 알고리즘이 아니라 **좌표 오류**다(실측: 시흥 안금순 좌표 190km 밖 → 기사 구역 430km로 부풀림 · 오류 379건 정리 후 이성우 430→58km, 평균구역폭 31→11km). 엔진 `src/engine/coordValidator.js` `detectCoordOutliers`: 지자체 좌표 **중앙값** 중심에서 임계 반경(기본 25km) 벗어난 좌표를 API 없이 검출(중앙값이라 오류 좌표에 안 흔들림). 정리 도구 `scripts/fix-coord-outliers.mjs`(재지오코딩=nexus와 동일 Kakao 지자체접두어+`isInRegion` 관할필터, 실패 시 좌표제거+플래그, 백업·audit). 회귀 `scripts/coord-validator.test.mjs`. **순번 알고리즘(roadAwareTSP)은 이미 최적이라 변경 금지** — 3자 비교(nexus vs yyplus 도로명/좌표)로 현행이 되돌아가기 0·최단임을 증명 |
+| DS-16 | **수량 기반 일자 분할** (2026-07-23 신설·형 지시). 수량 많으면 지역(동)별로 묶어 여러 날로 나눈다. 엔진 `src/engine/deliveryDaySplit.js` `splitByDay(records, {maxLoadPerDay|numDays, getLoad, depot})`: **①하루 최대 물량 자동분할 ②날짜 개수 직접지정** 둘 다. **행정동=권역 단위(같은 동 절대 안 쪼갬)**, 동을 지리적 최근접 체인으로 정렬 후 배분 → 가까운 동끼리 같은 날(동선 최소). 물량은 `getEffectiveLoad`(체감물량) 주입. numDays 모드는 정확히 N일 보장(마지막 날 초과 허용). 결과 `배송일차`(1..N) 저장, 각 날 안의 방문순번은 [순번] 버튼(roadAwareTSP)이 담당. UI: RouteMapModal 상단 [일자분할] 패널. 회귀 `scripts/delivery-day-split.test.mjs` 13 PASS |
 
 ---
 
