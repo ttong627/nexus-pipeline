@@ -9,11 +9,12 @@ import {
 } from '../config/firebase.js';
 import { normalizeBirth, formatPhoneInput } from '../utils/parsers.js';
 import { deliveryCompare } from '../utils/sortRecords.js';
+import { annotateCarryover } from '../utils/prevMonthCarryover.js';
 import {
   Cloud, Trash2, ArrowLeft, Download, Calendar, FileSpreadsheet,
   AlertCircle, Search, Save, RotateCcw, X, CheckCircle, MapPin,
   Building2, DatabaseZap, Ghost, BookOpen, Phone, LayoutGrid,
-  Wand2, AlertTriangle, List, Eraser, Columns,
+  Wand2, AlertTriangle, List, Eraser, Columns, History, User,
 } from 'lucide-react';
 import OrgPresetModal from './OrgPresetModal.jsx';
 import CoordBrushModal from './CoordBrushModal.jsx';
@@ -308,6 +309,8 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
   // Inline edit state
   const [dirtyRecords, setDirtyRecords] = useState({});  // { [id]: { field: val } }
   const [showDriverSeq, setShowDriverSeq] = useState(false); // ③ 기사별 배송순번 뷰
+  const [carryMap, setCarryMap] = useState({});              // ⑥ 전월 승계: id → { _isNew, _prevDriver, _prevSeqNo, _carryAmbiguous }
+  const [carryLoading, setCarryLoading] = useState(false);   // ⑥ 전월 로드 진행중
   const [deletedRecordIds, setDeletedRecordIds] = useState(new Set());
   const [editingCell, setEditingCell] = useState(null);  // { id, field }
   const [colEditMode, setColEditMode] = useState(null);   // 칼럼 전체 수정모드
@@ -453,6 +456,37 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
       handleSelectMonth(months[0]);
     }
   }, [months]);
+
+  // ⑥ 전월 작업내역 승계 매칭 — 선택 월의 "전월" delivery_history 로드 → 강키(이름+생년월일)+양측유일만 승계 표시
+  // 저장 스키마는 건드리지 않고 화면 표시용 carryMap(id→승계정보)만 계산. 동명이인 안전은 annotateCarryover가 보장.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setCarryMap({});
+      if (!selectedCity || !selectedMonth?.id || records.length === 0) return;
+      const m = String(selectedMonth.id).match(/^(\d{4})-(\d{2})$/);
+      if (!m) return;
+      // 선택 월의 전월 ID (month는 1-based → -2로 전월 인덱스)
+      const pd = new Date(Number(m[1]), Number(m[2]) - 2, 1);
+      const prevId = `${pd.getFullYear()}-${String(pd.getMonth() + 1).padStart(2, '0')}`;
+      setCarryLoading(true);
+      try {
+        const snap = await getDocs(collection(db, 'delivery_history', selectedCity, 'months', prevId, 'records'));
+        if (cancelled) return;
+        const prevRecords = snap.docs.map(d => d.data());
+        const map = {};
+        annotateCarryover(prevRecords, records).forEach(r => {
+          map[r.id] = { _isNew: r._isNew, _prevDriver: r._prevDriver, _prevSeqNo: r._prevSeqNo, _carryAmbiguous: r._carryAmbiguous };
+        });
+        if (!cancelled) setCarryMap(map);
+      } catch (e) {
+        console.warn('[⑥ 전월 승계] 로드 실패:', e);
+      } finally {
+        if (!cancelled) setCarryLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [selectedCity, selectedMonth?.id, records.length]);
 
   useEffect(() => {
     setDirtyRecords({});
@@ -868,6 +902,25 @@ ${e.message}`);
       );
     }
 
+    // ⑥ 기사·배송순번: 실제 값이 없고 전월 승계값이 있으면 흐리게 참고표시(더블클릭해 편집·승계버튼으로 확정)
+    if (key === '기사' || key === '배송순번') {
+      const carry = carryMap[id];
+      const prevVal = key === '기사'
+        ? (carry?._prevDriver || '')
+        : (carry?._prevSeqNo != null ? String(carry._prevSeqNo) : '');
+      if (!val && prevVal) {
+        return (
+          <span
+            title={`전월 승계값: ${prevVal} — 더블클릭해 입력하거나 [전월 승계 적용]으로 채웁니다`}
+            onDoubleClick={() => startEdit(id, key)}
+            className="cursor-text block truncate text-xs italic text-amber-500/50"
+          >
+            {prevVal}<span className="text-[9px] not-italic ml-0.5 opacity-70">전월</span>
+          </span>
+        );
+      }
+    }
+
     return (
       <span
         title={String(val)}
@@ -875,9 +928,52 @@ ${e.message}`);
         className={`cursor-text block truncate text-xs ${isDirty ? 'text-blue-300 font-semibold' : 'text-gray-300'} ${!val ? 'text-gray-700' : ''}`}
       >
         {val || '—'}
+        {key === '이름' && carryMap[id]?._isNew && (
+          <span className="ml-1 inline-flex px-1 py-0.5 rounded text-[8px] font-bold bg-emerald-900/50 text-emerald-400 align-middle">NEW</span>
+        )}
       </span>
     );
-  }, [editingCell, colEditMode, dirtyRecords, commitEdit, cancelEdit, startEdit]);
+  }, [editingCell, colEditMode, dirtyRecords, commitEdit, cancelEdit, startEdit, carryMap]);
+
+  // ⑥ 전월 승계 요약 — NEW 인원수 / 승계 채울 수 있는 건수 (동명이인·약키 제외)
+  const carryStats = useMemo(() => {
+    let newCount = 0, carryable = 0;
+    records.forEach(r => {
+      if (deletedRecordIds.has(r.id)) return;
+      const c = carryMap[r.id];
+      if (!c) return;
+      if (c._isNew) newCount++;
+      if (c._carryAmbiguous) return;
+      const curDriver = dirtyRecords[r.id]?.기사 ?? r.기사 ?? '';
+      const curSeq = dirtyRecords[r.id]?.배송순번 ?? r.배송순번 ?? '';
+      if ((c._prevDriver && !String(curDriver).trim()) || (c._prevSeqNo != null && !String(curSeq).trim())) carryable++;
+    });
+    return { newCount, carryable };
+  }, [records, carryMap, dirtyRecords, deletedRecordIds]);
+
+  // ⑥ 전월 승계 적용 — 빈 기사·순번 칸만 전월값으로 채움(동명이인·약키 제외). 실제 반영은 [저장]으로.
+  const applyCarryover = useCallback(() => {
+    const updates = {};
+    let filled = 0;
+    records.forEach(r => {
+      if (deletedRecordIds.has(r.id)) return;
+      const c = carryMap[r.id];
+      if (!c || c._carryAmbiguous) return;
+      const curDriver = dirtyRecords[r.id]?.기사 ?? r.기사 ?? '';
+      const curSeq = dirtyRecords[r.id]?.배송순번 ?? r.배송순번 ?? '';
+      const patch = {};
+      if (c._prevDriver && !String(curDriver).trim()) patch.기사 = c._prevDriver;
+      if (c._prevSeqNo != null && !String(curSeq).trim()) patch.배송순번 = String(c._prevSeqNo);
+      if (Object.keys(patch).length) { updates[r.id] = patch; filled++; }
+    });
+    if (!filled) { alert('채울 전월 승계값이 없습니다. (동명이인·생년월일 없는 건은 안전상 제외)'); return; }
+    if (!confirm(`전월 기사·순번을 빈 칸에 채웁니다: ${filled}건\n\n· 동명이인·생년월일 없는 건은 안전상 제외됩니다.\n· 채운 뒤 [저장]을 눌러야 실제 반영됩니다.`)) return;
+    setDirtyRecords(prev => {
+      const next = { ...prev };
+      Object.entries(updates).forEach(([id, patch]) => { next[id] = { ...(next[id] || {}), ...patch }; });
+      return next;
+    });
+  }, [records, carryMap, dirtyRecords, deletedRecordIds]);
 
   // ── Save edits ────────────────────────────────────────────────────
   const handleSaveEdits = async () => {
@@ -1759,6 +1855,22 @@ ${e.message}`);
                 title="기사별 담당 가구를 배송순번 순서로 봅니다"
               >
                 <User size={13} /> 기사별 순번
+              </button>
+            )}
+            {records.length > 0 && (carryStats.carryable > 0 || carryStats.newCount > 0) && (
+              <button
+                onClick={applyCarryover}
+                disabled={carryStats.carryable === 0}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-bold bg-emerald-950/40 hover:bg-emerald-900/50 text-emerald-400 border border-emerald-500/30 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                title={carryLoading ? '전월 내역 불러오는 중…' : '전월(선택 월의 지난달) 기사·순번을 빈 칸에 채웁니다. 동명이인·생년월일 없는 건은 안전상 제외. NEW=전월에 없던 신규 대상자'}
+              >
+                <History size={13} /> 전월 승계
+                {carryStats.carryable > 0 && (
+                  <span className="px-1 rounded bg-emerald-500/25 text-[9px] leading-none">{carryStats.carryable}</span>
+                )}
+                {carryStats.newCount > 0 && (
+                  <span className="px-1 rounded bg-sky-500/25 text-sky-300 text-[9px] leading-none">NEW {carryStats.newCount}</span>
+                )}
               </button>
             )}
             {addrChanges.length > 0 && (

@@ -7,6 +7,7 @@ import CoordBrushModal from './CoordBrushModal.jsx';
 import DriverSequenceView from './DriverSequenceView.jsx';
 import { formatAddressDisplay } from '../utils/addressFormat.js';
 import { splitByDay, summarizeDaySplit } from '../engine/deliveryDaySplit.js';
+import { annotateCarryover } from '../utils/prevMonthCarryover.js';
 
 const KAKAO_JS_KEY = import.meta.env.VITE_KAKAO_JS_KEY;
 const KAKAO_REST_KEY = import.meta.env.VITE_KAKAO_REST_KEY;
@@ -1168,6 +1169,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
   const [isCloudMode, setIsCloudMode] = useState(false);
   const [cloudCity, setCloudCity] = useState('');
   const [cloudMonthId, setCloudMonthId] = useState('');
+  const [carryMap, setCarryMap] = useState({}); // ⑥ 전월 승계: id → { _isNew, _prevDriver, _prevSeqNo, _carryAmbiguous }
   const [isLoadingCloud, setIsLoadingCloud] = useState(false);
   const [isSavingCloud, setIsSavingCloud] = useState(false);
   const [showCloudPicker, setShowCloudPicker] = useState(false);
@@ -1895,6 +1897,33 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
 
   // [제거됨] 경계선 짝대기(이동 경계) 기능 — 무거운 오버레이/드래그 재배정 로직 삭제.
   // 기사 구역 나누기는 자동 N등분(PCA 연속분할) + 브러시 수동보정으로 대체한다.
+
+  // ⑥ 전월 작업내역 신규(NEW) 판정 — 클라우드 명단의 "전월" delivery_history 로드 → 강키+양측유일 매칭
+  // 지도 명단 리스트에 NEW 배지를 띄우기 위한 표시용. 저장 스키마는 건드리지 않는다.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setCarryMap({});
+      if (!cloudCity || !cloudMonthId || records.length === 0) return;
+      const m = String(cloudMonthId).match(/^(\d{4})-(\d{2})$/);
+      if (!m) return;
+      const pd = new Date(Number(m[1]), Number(m[2]) - 2, 1);
+      const prevId = `${pd.getFullYear()}-${String(pd.getMonth() + 1).padStart(2, '0')}`;
+      try {
+        const snap = await getDocs(collection(db, 'delivery_history', cloudCity, 'months', prevId, 'records'));
+        if (cancelled) return;
+        const prevRecords = snap.docs.map(d => d.data());
+        const map = {};
+        annotateCarryover(prevRecords, records).forEach(r => {
+          map[r.id] = { _isNew: r._isNew, _prevDriver: r._prevDriver, _prevSeqNo: r._prevSeqNo, _carryAmbiguous: r._carryAmbiguous };
+        });
+        if (!cancelled) setCarryMap(map);
+      } catch (e) {
+        console.warn('[⑥ 지도 전월 신규판정] 로드 실패:', e);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [cloudCity, cloudMonthId, records.length]);
 
   // ── 변경 감지 ─────────────────────────────────────────────────────
   useEffect(() => { setHasUnsaved(true); }, [records, drivers]);
@@ -5270,6 +5299,11 @@ ${folders}
                               </span>
                             )}
                             {r.이름}
+                            {carryMap[r.id]?._isNew && (
+                              <span className="px-1 py-0 rounded bg-emerald-500/25 text-emerald-300 text-[8px] font-black leading-4" title="전월(지난달) 명단에 없던 신규 대상자">
+                                NEW
+                              </span>
+                            )}
                           </span>
                         </td>
                         <td className="px-1 py-0.5 text-gray-500 max-w-0 w-full">
