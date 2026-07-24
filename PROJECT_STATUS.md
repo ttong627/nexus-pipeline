@@ -169,5 +169,6 @@
 - 🟡 **2클론 분기 재발 위험** — I: 정본 / D: 작업본이 동시 사용됨(7/21 사고). 오늘 FF로 해소했으나, **작업 시작 = /확인, 작업 종료 = 커밋·푸시**를 반드시 지킬 것
 - 🟡 gh 전역 active가 `ttong0627` — 이 repo(ttong627) push 전 계정 확인 필수
 - 🟡 하위앱 3곳(functions·address-service×2) node_modules 미설치 — 해당 서비스 작업 시 npm install 필요
-- 🟡 `npm audit` 18건(critical 1·high 7) — critical=`websocket-driver`(dev 경유). **주의 대상: `xlsx@^0.18.5` Prototype Pollution(HIGH)** — 사용자 업로드 엑셀을 파싱하는 앱 특성상 실사용 경로. npm 레지스트리판이 갱신 안 되는 패키지라 교체 검토 필요(형 승인 후 별건 처리)
-- 🟠 `nexus-address-api`(Cloud Run) 콜드스타트 매칭 20~23초 — 클라이언트 3초 타임아웃 → Kakao 우회 중. min-instances≥1 또는 매칭 쿼리 인덱스 점검 필요(V6.96에서 식별된 미해결 과제)
+- 🟢 **xlsx 취약점 해소(2026-07-25)** — 사용자 업로드 엑셀 파싱 경로였던 `xlsx@0.18.5`(Prototype Pollution·ReDoS, HIGH)를 **SheetJS 공식 CDN판 `0.20.3`으로 교체**(package.json이 cdn.sheetjs.com tarball URL, import 코드 무변경·API 왕복 스모크 OK). 남은 audit 18건은 전부 dev 의존성(빌드툴) 경유라 프로덕션 번들 미포함(critical=`websocket-driver` dev)
+- 🟢 **nexus-address-api 콜드스타트 해소 확인(2026-07-25)** — 이미 `minScale=1`+startup-cpu-boost 적용 상태. 실측 매칭 응답 **145ms→23ms→22ms**(상시 웜). 과거 "20~23초"는 낡은 기록(당시 원인은 Windows curl 한글 인코딩, Node fetch는 정상이었음)
+- 🟡 하위앱 3곳(functions·address-service×2) node_modules 미설치 — 해당 서비스 작업 시 npm install 필요
