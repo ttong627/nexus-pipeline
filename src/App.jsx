@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef, lazy, Suspense } from "react";
-import { auth, onAuthStateChanged, signOut, setDoc, getDoc, updateDoc, deleteDoc, doc, db, serverTimestamp, Timestamp, increment, addDoc, collection, getDocs, getDocsFromServer, writeBatch, query, where, onSnapshot, GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult } from "./config/firebase.js";
+import { auth, onAuthStateChanged, signOut, setDoc, getDoc, updateDoc, deleteDoc, doc, db, serverTimestamp, Timestamp, increment, addDoc, collection, getDocs, getDocsFromServer, writeBatch, query, where, onSnapshot, GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult, signInWithCustomToken } from "./config/firebase.js";
 const ttl90 = () => Timestamp.fromMillis(Date.now() + 90 * 24 * 60 * 60 * 1000);
 import { APP_VERSION } from "./version.js";
 import { cleanupExpiredCache } from "./engine/dbCache.js";
@@ -524,6 +524,20 @@ export default function App() {
         if (err?.code !== 'auth/null-user') {
           alert('Google 로그인에 실패했습니다.\n오류코드: ' + (err?.code || err?.message));
         }
+      });
+    }
+
+    // 통합포털 SSO: URL 해시 #sso=<커스텀토큰> 받아 자동 로그인 (웰쉐어 통합 로그인 연동)
+    const _ssoMatch = window.location.hash.match(/[#&]sso=([^&]+)/);
+    if (_ssoMatch) {
+      const _ssoToken = decodeURIComponent(_ssoMatch[1]);
+      // 토큰 노출 방지 — 즉시 해시 제거
+      history.replaceState(null, '', window.location.pathname + window.location.search);
+      setAuthLoading(true);
+      signInWithCustomToken(auth, _ssoToken).catch(err => {
+        console.error('SSO 로그인 실패:', err);
+        setAuthLoading(false);
+        alert('통합 로그인 연동에 실패했습니다.\n오류: ' + (err?.code || err?.message));
       });
     }
 
