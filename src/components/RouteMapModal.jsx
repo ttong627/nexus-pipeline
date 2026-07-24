@@ -29,6 +29,19 @@ const haversine = (lat1, lng1, lat2, lng2) => {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 };
 
+// ── 동명이인 안전매칭 강키(S-1~S-5) — scripts/doppelganger-guard.mjs와 동일 규약 ──
+//   주소·개인데이터를 '쓰는' 매칭은 강키(이름+휴대폰 끝8자리)만 허용. 이름 단독(약키) 금지.
+//   생년월일 필드는 명단에 없어 휴대폰 끝8을 강키 보조로 사용.
+const _digits = (v) => String(v || '').replace(/[^0-9]/g, '');
+const _phone8 = (v) => { const d = _digits(v); return d.length >= 8 ? d.slice(-8) : ''; };
+const _nameKey = (s) => String(s || '').replace(/\s+/g, '').trim();
+// 레코드 → 강키 문자열. 이름·휴대폰 둘 다 있어야 유효(없으면 '' 반환 → 매칭 제외).
+const strongMatchKey = (r) => {
+  const name = _nameKey(r?.이름 || r?.본명);
+  const ph = _phone8(r?.휴대폰 || r?.연락처 || r?.전화 || r?.유선전화);
+  return (name && ph) ? `${name}|${ph}` : '';
+};
+
 const parseAptDong = (addr) => {
   const text = String(addr || '');
   const m = text.match(/(?:^|[\s,(])(\d{1,4})\s*동(?:[\s,)]|$)/) || text.match(/(?:^|[\s,(])(\d{3,4})\s*[-]\s*\d{1,4}\s*호?/);
@@ -1295,10 +1308,14 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
   }, [hasDongSetupMapping, activeDong, filteredRecords, drivers, allKnownDrivers, resolveDongMappedIds]);
 
   // cloud_lists의 기사 문자열이 이미 저장되어 있으면 지도 내부 배정 키(_driverId)로 복원한다.
+  // 매칭 풀 = allKnownDrivers(회사풀·시작기사) + drivers(현재 세션·route_sessions 저장본).
+  //   재진입 시 저장본 기사가 회사풀에 없어도 route_sessions에서 로드된 drivers로 복원되게 함(이슈①).
   useEffect(() => {
-    if (!records.length || !allKnownDrivers.length) return;
+    if (!records.length) return;
+    const matchPool = [...allKnownDrivers, ...drivers];
+    if (!matchPool.length) return;
     const nameToId = new Map();
-    allKnownDrivers.forEach(d => {
+    matchPool.forEach(d => {
       const name = String(d.name || '').trim();
       if (name && !nameToId.has(name)) nameToId.set(name, d.id);
     });
@@ -1314,7 +1331,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
       return { ...r, _driverId: driverId };
     });
     if (changed) setRecords(restored);
-  }, [records, allKnownDrivers]);
+  }, [records, allKnownDrivers, drivers]);
 
   const [listFilterGubun, setListFilterGubun] = useState('');
   const displayRecords = (() => {
@@ -1660,6 +1677,23 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
           setIsCloudMode(true);
           setCloudCity(initialCloudCity);
           setCloudMonthId(initialCloudMonthId);
+          // ★ 재진입 자동복원(이슈①): route_sessions에 저장된 기사구성을 로드해
+          //   저장본의 기사·배송순번이 지도에 자동으로 복원되게 한다.
+          //   (loaded records엔 이미 기사·배송순번 문자열이 있으나, 그 기사명을
+          //    _driverId로 되돌리려면 drivers 풀에 저장본 기사가 있어야 함 → 여기서 채움)
+          try {
+            const sessSnap = await getDoc(doc(db, 'route_sessions', initialCloudCity, 'months', initialCloudMonthId));
+            if (sessSnap.exists()) {
+              const sessData = sessSnap.data();
+              if (Array.isArray(sessData.drivers) && sessData.drivers.length) {
+                setDrivers(sessData.drivers);
+                setDriverCount(sessData.drivers.length);
+              }
+              if (sessData.status) setSessionStatus(sessData.status);
+            }
+          } catch (sessErr) {
+            console.error('route_sessions 자동복원 실패:', sessErr);
+          }
           // dongQueue: 설정에서 선택한 동 순서 (없으면 전체 동)
           const allDongs = [...new Set(loaded.map(r => getRouteDong(r)).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'ko'));
           const queueDongs = selectedDongsProp
@@ -2611,6 +2645,41 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
   }, [drivers, showToast, isAssignmentLocked]);
 
   // ── 1단계: 세션 수동 저장 (draft / final) ───────────────────────────
+  // 이슈④: 저장 직전, _cloudDocId가 없는 '배정된' 레코드를 cloud_lists 기존문서에 강키(이름+휴대폰끝8·양측유일)로
+  //   매칭해 문서ID를 복원한다. 매칭 실패분은 신규 문서를 만들지 않고(명단 오염 방지) 경고만 반환한다.
+  //   → 로컬 gridData 유입 등으로 _cloudDocId가 빠진 배정이 저장에서 통째로 스킵되던 '유령저장'을 차단.
+  const resolveMissingCloudDocIds = useCallback(async (recs) => {
+    const missing = recs.filter(r => !r._cloudDocId && r._driverId);
+    if (!missing.length) return { recs, matched: 0, unmatched: 0 };
+    if (!cloudCity || !cloudMonthId) return { recs, matched: 0, unmatched: missing.length };
+    let byStrong;
+    try {
+      const snap = await getDocs(collection(db, 'cloud_lists', cloudCity, 'months', cloudMonthId, 'records'));
+      byStrong = new Map();
+      const dupKeys = new Set();
+      snap.forEach(d => {
+        const k = strongMatchKey(d.data());
+        if (!k) return;
+        if (dupKeys.has(k)) return;
+        if (byStrong.has(k)) { byStrong.delete(k); dupKeys.add(k); return; } // 양측유일: 충돌키(동명이인+동일전화 등)는 제외
+        byStrong.set(k, d.id);
+      });
+    } catch (e) {
+      console.error('안전매칭 인덱스 로드 실패:', e);
+      return { recs, matched: 0, unmatched: missing.length };
+    }
+    let matched = 0, unmatched = 0;
+    const out = recs.map(r => {
+      if (r._cloudDocId || !r._driverId) return r;
+      const k = strongMatchKey(r);
+      const id = k ? byStrong.get(k) : null;
+      if (id) { matched++; return { ...r, _cloudDocId: id }; }
+      unmatched++;
+      return r;
+    });
+    return { recs: out, matched, unmatched };
+  }, [cloudCity, cloudMonthId]);
+
   const handleSaveSession = useCallback(async (isFinal = false) => {
     if (!isCloudMode || !cloudCity || !cloudMonthId) {
       if (isFinal) alert('클라우드 명단 로드 후 저장 가능합니다.');
@@ -2631,6 +2700,10 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
     }
     setIsSavingSession(true);
     try {
+      // 이슈④ 유령저장 방지: _cloudDocId 없는 배정을 강키로 명단문서에 매칭해 문서ID 복원(실패분은 경고, 신규생성 없음)
+      const { recs: saveRecs, matched: _mMatched, unmatched: _mUnmatched } = await resolveMissingCloudDocIds(records);
+      if (_mMatched) setRecords(saveRecs);
+      if (_mUnmatched) showToast('warning', `⚠️ 배정 ${_mUnmatched}건이 클라우드 명단과 매칭되지 않아 저장에서 제외됐습니다 — 클라우드 명단을 불러온 뒤 작업하세요(신규 문서는 만들지 않음)`);
       // route_sessions에 기사구성·배정 저장
       await setDoc(
         doc(db, 'route_sessions', cloudCity, 'months', cloudMonthId),
@@ -2641,8 +2714,8 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
           savedBy: auth.currentUser?.email || '',
           drivers: drivers.map(d => ({ id: d.id, name: d.name, color: d.color, capacity: d.capacity || 100, deliveryDate: d.deliveryDate || '' })),
           status: isFinal ? 'final' : 'draft',
-          totalRecords: records.length,
-          assignedCount: records.filter(r => r._driverId).length,
+          totalRecords: saveRecs.length,
+          assignedCount: saveRecs.filter(r => r._driverId).length,
           selectedDongs: selectedDongsProp ? [...selectedDongsProp] : (orgDongs ? [...orgDongs] : null),
           activeDong: activeDong || null,
           completedDongs: [...completedDongs, ...(activeDong ? [activeDong] : [])],
@@ -2653,10 +2726,10 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
       const CHUNK = 499;
       const driverNameById = new Map(drivers.map(d => [d.id, d.name || '']));
       const syncBatches = [];
-      for (let i = 0; i < records.length; i += CHUNK) {
+      for (let i = 0; i < saveRecs.length; i += CHUNK) {
         const batch = writeBatch(db);
         let hasOps = false;
-        records.slice(i, i + CHUNK).forEach(r => {
+        saveRecs.slice(i, i + CHUNK).forEach(r => {
           if (!r._cloudDocId) return;
           const driverName = driverNameById.get(r._driverId) || '';
           const ref = doc(db, 'cloud_lists', cloudCity, 'months', cloudMonthId, 'records', r._cloudDocId);
@@ -2688,9 +2761,9 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
         // 베이스 = 기존 전체 저장본 + 이번 세션 셋업 매핑(작업 대상 동)
         const dongDriverMap = { ...baseMap, ...(setupDongDriverMapProp || {}) };
         const workedDongs = new Set();
-        records.forEach(r => { if (r._driverId) { const rd = getRouteDong(r); if (rd) workedDongs.add(rd); } });
+        saveRecs.forEach(r => { if (r._driverId) { const rd = getRouteDong(r); if (rd) workedDongs.add(rd); } });
         workedDongs.forEach(d => { dongDriverMap[d] = []; }); // 작업한 동만 비우고 records로 재구성
-        records.forEach(r => {
+        saveRecs.forEach(r => {
           const routeDong = getRouteDong(r);
           if (!r._driverId || !routeDong) return;
           if (!dongDriverMap[routeDong]) dongDriverMap[routeDong] = [];
@@ -2720,7 +2793,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
         try {
           const histBatch = writeBatch(db);
           drivers.forEach(driver => {
-            const driverRecs = records.filter(r => r._driverId === driver.id);
+            const driverRecs = saveRecs.filter(r => r._driverId === driver.id);
             if (!driverRecs.length) return;
             const totalQty = driverRecs.reduce((s, r) => s + (parseInt(r.포수 || r['수량(포수)']) || 1), 0);
             const effectiveLoad = driverRecs.reduce((s, r) => s + getEffectiveLoad(r), 0);
@@ -2741,7 +2814,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
         } catch (e) {
           console.error('delivery_history 적재 실패:', e);
         }
-        showToast('success', `${activeDong ? activeDong + ' ' : ''}저장·확정 완료 — 명단·기본명단 반영 ${filteredRecords.filter(r => r._driverId).length}건 (전체 확정 ${records.filter(r => r._driverId).length}건)`, 5000);
+        showToast('success', `${activeDong ? activeDong + ' ' : ''}저장·확정 완료 — 명단·기본명단 반영 ${filteredRecords.filter(r => r._driverId).length}건 (전체 확정 ${saveRecs.filter(r => r._driverId).length}건)`, 5000);
       } else {
         showToast('success', `임시저장 완료 — 배정현황이 저장되었습니다 (기본명단 미반영)`);
       }
@@ -2750,7 +2823,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
     } finally {
       setIsSavingSession(false);
     }
-  }, [isCloudMode, cloudCity, cloudMonthId, drivers, records, filteredRecords, showToast, overlapCount, activeDong, completedDongs]);
+  }, [isCloudMode, cloudCity, cloudMonthId, drivers, records, filteredRecords, showToast, overlapCount, activeDong, completedDongs, resolveMissingCloudDocIds]);
 
   // ── 1단계: 세션 불러오기 (이어서 작업) ──────────────────────────────
   const handleLoadSession = useCallback(async () => {
@@ -3042,8 +3115,12 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
     }
     setIsSavingCloud(true);
     try {
+      // 이슈④ 유령저장 방지: 강키 매칭으로 _cloudDocId 복원 후 저장(실패분은 경고, 신규생성 없음)
+      const { recs: saveRecs, matched: _m2, unmatched: _u2 } = await resolveMissingCloudDocIds(records);
+      if (_m2) setRecords(saveRecs);
+      if (_u2) showToast('warning', `⚠️ 배정 ${_u2}건이 클라우드 명단과 매칭되지 않아 저장에서 제외됐습니다 — 클라우드 명단을 불러온 뒤 작업하세요(신규 문서는 만들지 않음)`);
       // 1단계: cloud_lists에 기사/배송순번/좌표 저장
-      await patchCloudRecords(records);
+      await patchCloudRecords(saveRecs);
 
       // 2단계: route_sessions도 갱신 — "이어서 작업" 복원이 DB 저장 이후 상태를 반영하도록
       await setDoc(
@@ -3054,8 +3131,8 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
           savedBy: auth.currentUser?.email || '',
           drivers: drivers.map(d => ({ id: d.id, name: d.name, color: d.color, capacity: d.capacity || 100, deliveryDate: d.deliveryDate || '' })),
           status: 'draft',
-          totalRecords: records.length,
-          assignedCount: records.filter(r => r._driverId).length,
+          totalRecords: saveRecs.length,
+          assignedCount: saveRecs.filter(r => r._driverId).length,
           selectedDongs: selectedDongsProp ? [...selectedDongsProp] : (orgDongs ? [...orgDongs] : null),
         },
         { merge: true }
