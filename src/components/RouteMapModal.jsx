@@ -1,9 +1,10 @@
 ﻿import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { X, MapPin, Navigation2, Plus, Minus, RefreshCw, Save, AlertTriangle, Map as MapIcon, List, Building2, Clock, FileSpreadsheet, Download, HardDrive, Maximize2, Minimize2, Columns, AlertCircle, Search, Crosshair, Share2, Link, Eraser, ArrowLeftRight, ChevronLeft } from 'lucide-react';
+import { X, MapPin, Navigation2, Plus, Minus, RefreshCw, Save, AlertTriangle, Map as MapIcon, List, Building2, Clock, FileSpreadsheet, Download, HardDrive, Maximize2, Minimize2, Columns, AlertCircle, Search, Crosshair, Share2, Link, Eraser, ArrowLeftRight, ChevronLeft, User } from 'lucide-react';
 import { db, auth } from '../config/firebase.js';
 import { collection, serverTimestamp, Timestamp, getDocs, getDoc, setDoc, updateDoc, doc, writeBatch, query, where, limit, increment } from 'firebase/firestore';
 import * as XLSX from 'xlsx';
 import CoordBrushModal from './CoordBrushModal.jsx';
+import DriverSequenceView from './DriverSequenceView.jsx';
 import { formatAddressDisplay } from '../utils/addressFormat.js';
 import { splitByDay, summarizeDaySplit } from '../engine/deliveryDaySplit.js';
 
@@ -1194,6 +1195,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
   const [showExportMenu, setShowExportMenu] = useState(false); // 내보내기 드롭다운(KML·엑셀·배송루트·공유 통합)
   const [showSessionMenu, setShowSessionMenu] = useState(false); // 세션 드롭다운(이어서작업·저장본·이전달승계 통합 — 가끔 쓰는 동작 정리)
   const [savedView, setSavedView] = useState(null); // 저장본 보기 모달: null | { loading, rows, summary }
+  const [showDriverSeq, setShowDriverSeq] = useState(false); // ③ 기사별 배송순번 뷰
 
   // ── 소속사 기사 추가 피커
   const [showCompanyPicker, setShowCompanyPicker] = useState(false);
@@ -4051,6 +4053,12 @@ ${folders}
                         <HardDrive size={11} /> 저장본 보기·편집
                       </button>
                       <button
+                        onClick={() => { setShowSessionMenu(false); setShowDriverSeq(true); }}
+                        className="w-full text-left px-2.5 py-1.5 rounded-lg text-[11px] font-bold text-blue-400 hover:bg-blue-900/20 flex items-center gap-1.5 transition-colors"
+                      >
+                        <User size={11} /> 기사별 순번
+                      </button>
+                      <button
                         onClick={() => { setShowSessionMenu(false); handleLoadPrevMonth(); }}
                         disabled={isLoadingPrevMonth}
                         className="w-full text-left px-2.5 py-1.5 rounded-lg text-[11px] font-bold text-blue-400 hover:bg-blue-900/20 flex items-center gap-1.5 transition-colors disabled:opacity-50"
@@ -6098,6 +6106,13 @@ ${folders}
         </div>
       )}
 
+      {showDriverSeq && (
+        <DriverSequenceView
+          records={records.map(r => ({ ...r, 기사: drivers.find(d => d.id === r._driverId)?.name || r.기사 || '' }))}
+          title={`기사별 배송순번 — ${cloudCity || ''} ${cloudMonthId || ''}`}
+          onClose={() => setShowDriverSeq(false)}
+        />
+      )}
       {/* ── 저장본 보기/편집 모달 ─────────────────────────────────────────── */}
       {savedView && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-[650] flex items-center justify-center p-4" onClick={() => setSavedView(null)}>

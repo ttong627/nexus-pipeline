@@ -29,6 +29,7 @@ import { idbGet, idbSet, idbDel } from '../utils/idbCache.js';
 import { orderFieldsByExport, hasRi, getColWidth, colCellStyle } from '../utils/colOrder.js';
 import { getCityExportTemplate } from '../utils/cityExportTemplates.js';
 import { useConfirmDelete } from '../contexts/ConfirmDeleteContext.jsx';
+import DriverSequenceView from './DriverSequenceView.jsx';
 
 const KAKAO_REST_KEY = import.meta.env.VITE_KAKAO_REST_KEY;
 const ttl90 = () => Timestamp.fromMillis(Date.now() + 90 * 24 * 60 * 60 * 1000);
@@ -306,6 +307,7 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
 
   // Inline edit state
   const [dirtyRecords, setDirtyRecords] = useState({});  // { [id]: { field: val } }
+  const [showDriverSeq, setShowDriverSeq] = useState(false); // ③ 기사별 배송순번 뷰
   const [deletedRecordIds, setDeletedRecordIds] = useState(new Set());
   const [editingCell, setEditingCell] = useState(null);  // { id, field }
   const [colEditMode, setColEditMode] = useState(null);   // 칼럼 전체 수정모드
@@ -1750,6 +1752,15 @@ ${e.message}`);
                 <Eraser size={13} /> 기사 정리
               </button>
             )}
+            {records.length > 0 && (
+              <button
+                onClick={() => setShowDriverSeq(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-bold bg-blue-950/40 hover:bg-blue-900/50 text-blue-400 border border-blue-500/30 transition-colors"
+                title="기사별 담당 가구를 배송순번 순서로 봅니다"
+              >
+                <User size={13} /> 기사별 순번
+              </button>
+            )}
             {addrChanges.length > 0 && (
               <button
                 onClick={() => setShowAddrChanges(true)}
@@ -2074,6 +2085,13 @@ ${e.message}`);
       )}
 
       {/* ═══ ORG PRESET MODAL ═══ */}
+      {showDriverSeq && (
+        <DriverSequenceView
+          records={records.filter(r => !deletedRecordIds.has(r.id)).map(r => ({ ...r, ...(dirtyRecords[r.id] || {}) }))}
+          title={`기사별 배송순번 — ${selectedCity || ''} ${selectedMonth?.id || ''}`}
+          onClose={() => setShowDriverSeq(false)}
+        />
+      )}
       {showOrgPreset && selectedCity && selectedMonth && (
         <OrgPresetModal
           city={selectedCity}
