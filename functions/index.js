@@ -230,6 +230,59 @@ const kakaoGeocode = async (주소, sido, sigungu) => {
   return null;
 };
 
+// ── VWorld 경유 좌표 해석 (nexus-address-api) ───────────────────────────────
+//   일반 주소: /v1/address/geocode (서버가 VWorld 우선 → Kakao 폴백)
+//   아파트+동번호: /v1/building/dong-coords (LT_C_SPBD 동別 정밀좌표+층수)
+//   API 실패 시 호출부에서 kakaoGeocode로 폴백하므로 기존 동작은 보존된다.
+const ADDRESS_API_URL = process.env.ADDRESS_API_URL || 'https://nexus-address-api-31783407891.asia-northeast3.run.app';
+
+// 상세주소 → 동(棟)번호: "12- 402호"→"12", "나동 302호"→"나", "101동"→"101", "108호"→""
+const parseDongNo = (detail) => {
+  const s = String(detail || '').trim();
+  if (!s) return '';
+  const ko = s.match(/([가-힣A-Za-z])\s*동(?![가-힣])/); // 나동/가동/B동 (동 뒤 한글이면 동호수 아님)
+  if (ko) return ko[1];
+  const num = s.match(/^\s*(\d{1,3})\s*동(?![가-힣])/);  // 101동
+  if (num) return num[1];
+  const dash = s.match(/^\s*(\d{1,3})\s*-\s*\d/);        // "12- 402호" 동-호 축약
+  if (dash) return dash[1];
+  return '';
+};
+
+// 좌표 캐시 키: 아파트+동이면 동별로 분리(같은 도로명 다른 동이 같은 좌표로 덮이지 않게)
+const coordCacheKey = (r) => {
+  const base = addrToDocId(extractRoadAddress(r.주소));
+  const dong = parseDongNo(r.detailAddress);
+  return (dong && (r.isApt || r.건물명)) ? `${base}#dong${dong}` : base;
+};
+
+const apiPost = async (path, body) => {
+  try {
+    const res = await fetch(`${ADDRESS_API_URL}${path}`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+    });
+    if (!res.ok) return null;
+    const j = await res.json();
+    return j?.ok ? j.data : null;
+  } catch { return null; }
+};
+
+const apiGeocode = async (r, sido, sigungu) => {
+  const road = r.standardRoadAddress || extractRoadAddress(r.주소);
+  if (!road) return null;
+  const complexName = r.건물명 || r.buildingName || '';
+  const dongNo = parseDongNo(r.detailAddress);
+  // 아파트 + 동번호 → 동별 정밀좌표
+  if ((r.isApt || complexName) && dongNo) {
+    const d = await apiPost('/v1/building/dong-coords', { roadAddress: road, complexName, dongNo: `${dongNo}동`, sigungu });
+    if (d?.lat && d?.lng) return { lat: Number(d.lat), lng: Number(d.lng) };
+  }
+  // 일반 지오코딩 (서버측 VWorld 우선 → Kakao 폴백)
+  const g = await apiPost('/v1/address/geocode', { standardRoadAddress: road });
+  if (g?.lat && g?.lng) return { lat: Number(g.lat), lng: Number(g.lng) };
+  return null;
+};
+
 exports.geocode = onRequest(
   { cors: true, region: 'asia-northeast3', timeoutSeconds: 300, memory: '512MiB' },
   async (req, res) => {
@@ -266,13 +319,13 @@ exports.geocode = onRequest(
 
       const processOne = async (docSnap) => {
         const r = docSnap.data();
-        const key = addrToDocId(extractRoadAddress(r.주소));
+        const key = coordCacheKey(r);
         let coord = null;
         if (key) {
           try { const c = await cacheCol.doc(key).get(); if (c.exists) { const cd = c.data(); if (cd.lat && cd.lng) coord = { lat: cd.lat, lng: cd.lng }; } } catch { /* ignore */ }
         }
         if (!coord) {
-          coord = await kakaoGeocode(r.주소, sido, sigungu);
+          coord = await apiGeocode(r, sido, sigungu) || await kakaoGeocode(r.주소, sido, sigungu);
           if (coord && key) {
             try { await cacheCol.doc(key).set({ address: extractRoadAddress(r.주소), lat: coord.lat, lng: coord.lng, fetchedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true }); } catch { /* ignore */ }
           }
@@ -353,13 +406,13 @@ exports.geocodeAuto = onSchedule(
         while (idx < batch.length) {
           const docSnap = batch[idx++];
           const r = docSnap.data();
-          const key = addrToDocId(extractRoadAddress(r.주소));
+          const key = coordCacheKey(r);
           let coord = null;
           if (key) {
             try { const c = await cacheCol.doc(key).get(); if (c.exists) { const cd = c.data(); if (cd.lat && cd.lng) coord = { lat: cd.lat, lng: cd.lng }; } } catch { /* ignore */ }
           }
           if (!coord) {
-            coord = await kakaoGeocode(r.주소, sido, sigungu);
+            coord = await apiGeocode(r, sido, sigungu) || await kakaoGeocode(r.주소, sido, sigungu);
             if (coord && key) { try { await cacheCol.doc(key).set({ address: extractRoadAddress(r.주소), lat: coord.lat, lng: coord.lng, fetchedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true }); } catch { /* ignore */ } }
           }
           if (coord) {
