@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { db } from '../config/firebase.js';
 import { doc, onSnapshot, updateDoc, deleteField } from 'firebase/firestore';
-import { MapPin, List, Map as MapIcon, RefreshCw, Building2, Phone, ChevronUp, ChevronDown, Navigation, Crosshair, Star, X, AlertCircle, Share2 } from 'lucide-react';
+import { MapPin, List, Map as MapIcon, RefreshCw, Building2, Phone, ChevronUp, ChevronDown, Navigation, Crosshair, Star, X, AlertCircle, Share2, CheckCircle2 } from 'lucide-react';
+import { haversineKm } from '../engine/coordValidator.js';
 
 const KAKAO_JS_KEY = import.meta.env.VITE_KAKAO_JS_KEY;
 
@@ -162,6 +163,7 @@ export default function ShareRouteView({ shareId, driverId }) {
   const [localOrderIds, setLocalOrderIds] = useState([]);
   const [isSavingOrder, setIsSavingOrder] = useState(false);
   const [isRequestingOrderApply, setIsRequestingOrderApply] = useState(false);
+  const [savingDoneId, setSavingDoneId] = useState(null);
   const [isInAppBrowser, setIsInAppBrowser] = useState(() => {
     const ua = navigator.userAgent.toLowerCase();
     return ua.indexOf('kakaotalk') > -1 || ua.indexOf('naver') > -1 || ua.indexOf('line') > -1 || ua.indexOf('instagram') > -1 || ua.indexOf('fban') > -1;
@@ -487,6 +489,47 @@ export default function ShareRouteView({ shareId, driverId }) {
     }
   }, [allRecords, driver?.id, isRequestingOrderApply, shareData, shareId]);
 
+  // ── 배송완료 토글 (현재 GPS 캡처 + 동별좌표 오차 기록) ──────────────────
+  const handleToggleComplete = useCallback(async (r) => {
+    if (savingDoneId) return;
+    const alreadyDone = !!shareData?.completions?.[r._uid];
+    setSavingDoneId(r._uid);
+    try {
+      if (alreadyDone) {
+        // 완료 취소
+        await updateDoc(doc(db, 'route_shares', shareId), {
+          [`completions.${r._uid}`]: deleteField(),
+        });
+      } else {
+        // 완료 기록 — 현재 GPS와 배송지(동별)좌표 오차 계산
+        const loc = latestLocRef.current;
+        const hasGps = loc && Number.isFinite(loc.lat) && Number.isFinite(loc.lng);
+        const dLat = Number(r.lat), dLng = Number(r.lng);
+        const hasDong = Number.isFinite(dLat) && Number.isFinite(dLng);
+        const errM = (hasGps && hasDong)
+          ? Math.round(haversineKm(loc.lat, loc.lng, dLat, dLng) * 1000)
+          : null;
+        await updateDoc(doc(db, 'route_shares', shareId), {
+          [`completions.${r._uid}`]: {
+            at: new Date().toISOString(),
+            driverId: driver?.id || driverId || null,
+            name: r.이름 || null,
+            lat: hasGps ? loc.lat : null,
+            lng: hasGps ? loc.lng : null,
+            accuracy: hasGps ? (loc.accuracy ?? null) : null,
+            dongLat: hasDong ? dLat : null,
+            dongLng: hasDong ? dLng : null,
+            errM,
+          },
+        });
+      }
+    } catch (e) {
+      console.warn('Complete toggle error:', e);
+    } finally {
+      setSavingDoneId(null);
+    }
+  }, [shareData, shareId, driver, driverId, savingDoneId]);
+
   // ── 링크 복사 ────────────────────────────────────────────────────────
   const handleCopyLink = useCallback(async () => {
     try {
@@ -561,12 +604,13 @@ export default function ShareRouteView({ shareId, driverId }) {
     }
     mapRecords.forEach((r) => {
       const isSelected = r._uid === selectedId;
-      const bg = isSelected ? '#fff' : driverColor;
-      const fg = isSelected ? driverColor : '#fff';
+      const isDone = !!shareData?.completions?.[r._uid];
+      const bg = isDone ? '#059669' : isSelected ? '#fff' : driverColor;
+      const fg = isDone ? '#fff' : isSelected ? driverColor : '#fff';
       const size = isSelected ? 30 : 22;
-      const shadow = isSelected ? `0 0 0 3px ${driverColor}, 0 4px 12px rgba(0,0,0,0.7)` : '0 2px 6px rgba(0,0,0,0.5)';
-      // 순번은 발행됐을 때(hasOrder)만 원 안에 표시. 이름·포수 라벨은 항상 표시.
-      const seqText = hasOrder ? (r._displaySeq || '') : '';
+      const shadow = isDone ? '0 0 0 2px #10b981, 0 2px 8px rgba(0,0,0,0.6)' : isSelected ? `0 0 0 3px ${driverColor}, 0 4px 12px rgba(0,0,0,0.7)` : '0 2px 6px rgba(0,0,0,0.5)';
+      // 순번은 발행됐을 때(hasOrder)만 원 안에 표시. 완료 시 ✓. 이름·포수 라벨은 항상 표시.
+      const seqText = isDone ? '✓' : (hasOrder ? (r._displaySeq || '') : '');
       const qty = parseInt(r.포수) || 1;
       const label = `${r.이름 || ''}${qty ? `·${qty}포` : ''}`;
       const content = `
@@ -942,14 +986,18 @@ export default function ShareRouteView({ shareId, driverId }) {
             const isSelected = r._uid === selectedId;
             const qty = parseInt(r.포수) || 1;
             const isMultiQty = qty > 1;
+            const doneInfo = shareData?.completions?.[r._uid];
+            const done = !!doneInfo;
             return (
               <div key={r._uid} id={`share-rec-${r._uid}`} onClick={() => handleRecordClick(r)}
                 className={`flex items-center gap-2 px-3 py-2 border-b cursor-pointer transition-colors ${
-                  isSelected
-                    ? 'bg-[#0d1e0d] border-[#1a3a1a]'
-                    : isMultiQty
-                      ? 'bg-amber-950/10 border-amber-500/20 hover:bg-amber-950/20'
-                      : 'border-[#111] hover:bg-[#0f0f0f]'
+                  done
+                    ? 'bg-emerald-950/25 border-emerald-500/20 hover:bg-emerald-950/35'
+                    : isSelected
+                      ? 'bg-[#0d1e0d] border-[#1a3a1a]'
+                      : isMultiQty
+                        ? 'bg-amber-950/10 border-amber-500/20 hover:bg-amber-950/20'
+                        : 'border-[#111] hover:bg-[#0f0f0f]'
                 }`}
               >
                 {orderEditMode && (
@@ -971,13 +1019,16 @@ export default function ShareRouteView({ shareId, driverId }) {
                   </div>
                 )}
                 <div className="w-7 h-7 rounded-full shrink-0 flex items-center justify-center font-black text-[11px]"
-                  style={{
+                  style={done ? {
+                    background: '#059669', color: '#fff', border: '2px solid #10b981',
+                    boxShadow: '0 0 10px rgba(16,185,129,0.5)',
+                  } : {
                     background: isSelected ? driverColor : `${driverColor}22`,
                     color: isSelected ? '#fff' : driverColor,
                     border: `2px solid ${isSelected ? driverColor : `${driverColor}44`}`,
                     boxShadow: isSelected ? `0 0 10px ${driverColor}60` : 'none',
                   }}>
-                  {r._displaySeq || ''}
+                  {done ? <CheckCircle2 size={15} /> : (r._displaySeq || '')}
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-0.5">
@@ -995,8 +1046,29 @@ export default function ShareRouteView({ shareId, driverId }) {
                   </div>
                   <div className="text-gray-600 text-[11px] truncate">{r.행정동 && `${r.행정동} · `}{r.주소}</div>
                   {r.특이사항 && <div className="text-amber-700 text-[10px] truncate mt-0.5">⚠ {r.특이사항}</div>}
+                  {done && (
+                    <div className="text-emerald-500 text-[10px] mt-0.5 flex items-center gap-1 flex-wrap">
+                      <CheckCircle2 size={9} />
+                      완료 {doneInfo.at ? new Date(doneInfo.at).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }) : ''}
+                      {doneInfo.errM != null && <span className="text-gray-600">· 오차 {doneInfo.errM}m</span>}
+                      {doneInfo.lat == null && <span className="text-orange-600">· 위치 없이 기록</span>}
+                    </div>
+                  )}
                 </div>
                 <div className="shrink-0 flex flex-col items-end gap-1.5">
+                  {/* 배송완료 토글 */}
+                  <button onClick={(e) => { e.stopPropagation(); handleToggleComplete(r); }}
+                    disabled={savingDoneId === r._uid}
+                    aria-pressed={done}
+                    aria-label={done ? '배송완료 취소' : '배송완료 처리'}
+                    className={`flex items-center gap-1 text-[10px] font-black px-2.5 py-1 rounded-full transition-all active:scale-95 disabled:opacity-40 ${
+                      done
+                        ? 'bg-emerald-500/25 text-emerald-300 border border-emerald-400/40'
+                        : 'bg-[#1a1a1a] border border-[#2a2a2a] text-gray-400 hover:text-emerald-400 hover:border-emerald-500/40'
+                    }`}>
+                    <CheckCircle2 size={11} className={done ? 'fill-emerald-500/20' : ''} />
+                    {savingDoneId === r._uid ? '…' : done ? '완료됨' : '완료'}
+                  </button>
                   {/* 카카오 내비 */}
                   {r.lat && r.lng && isSelected && (
                     <button onClick={(e) => { e.stopPropagation(); openKakaoNavi(r); }}

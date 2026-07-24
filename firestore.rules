@@ -181,18 +181,22 @@ service cloud.firestore {
       allow create: if isAuthenticated();
 
       // 생성자·관리자: 전체 수정 허용
-      // 기사(미인증 포함): 유효 공유 링크 범위 내에서 liveGps·driverOrder·orderApplyRequests만 수정
+      // 기사(미인증 포함): 유효 공유 링크 범위 내에서 liveGps·driverOrder·orderApplyRequests·completions만 수정
       allow update: if isRouteOwner() || isAdmin() ||
         (
           isShareWithinTTL() &&
           request.resource.data.diff(resource.data).affectedKeys()
-            .hasOnly(['liveGps', 'driverOrder', 'orderApplyRequests']) &&
+            .hasOnly(['liveGps', 'driverOrder', 'orderApplyRequests', 'completions']) &&
           (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['liveGps'])
             || request.resource.data.liveGps is map) &&
           (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['driverOrder'])
             || request.resource.data.driverOrder is map) &&
           (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['orderApplyRequests'])
-            || request.resource.data.orderApplyRequests is map)
+            || request.resource.data.orderApplyRequests is map) &&
+          // completions: 완료 기록(map) 또는 마지막 건 취소로 필드 소멸(deleteField)까지 허용, 타입 변조만 차단
+          (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['completions'])
+            || !('completions' in request.resource.data)
+            || request.resource.data.completions is map)
         );
 
       // 삭제는 생성자·관리자만

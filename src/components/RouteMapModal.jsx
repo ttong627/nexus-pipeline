@@ -1,10 +1,11 @@
 ﻿import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { X, MapPin, Navigation2, Plus, Minus, RefreshCw, Save, AlertTriangle, Map as MapIcon, List, Building2, Clock, FileSpreadsheet, Download, HardDrive, Maximize2, Minimize2, Columns, AlertCircle, Search, Crosshair, Share2, Link, Eraser, ArrowLeftRight, ChevronLeft, User, Satellite, Grid3x3 } from 'lucide-react';
+import { X, MapPin, Navigation2, Plus, Minus, RefreshCw, Save, AlertTriangle, Map as MapIcon, List, Building2, Clock, FileSpreadsheet, Download, HardDrive, Maximize2, Minimize2, Columns, AlertCircle, Search, Crosshair, Share2, Link, Eraser, ArrowLeftRight, ChevronLeft, User, Satellite, Grid3x3, Target } from 'lucide-react';
 import { db, auth } from '../config/firebase.js';
 import { collection, serverTimestamp, Timestamp, getDocs, getDoc, setDoc, updateDoc, doc, writeBatch, query, where, limit, increment } from 'firebase/firestore';
 import * as XLSX from 'xlsx';
 import CoordBrushModal from './CoordBrushModal.jsx';
 import DriverSequenceView from './DriverSequenceView.jsx';
+import DeliveryAccuracyView from './DeliveryAccuracyView.jsx';
 import { formatAddressDisplay } from '../utils/addressFormat.js';
 import { splitByDay, splitBySequence, summarizeDaySplit } from '../engine/deliveryDaySplit.js';
 import { annotateCarryover } from '../utils/prevMonthCarryover.js';
@@ -1188,6 +1189,12 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
   const [isLoadingOrderRequests, setIsLoadingOrderRequests] = useState(false);
   const [isApplyingOrderRequest, setIsApplyingOrderRequest] = useState(false);
 
+  // ── ②-B 배송완료 정확도 비교 (완료 GPS ↔ 동별좌표) ──────────────────────────
+  const [completionData, setCompletionData] = useState([]); // [{key,name,at,lat,lng,dongLat,dongLng,errM,accuracy,driverId,driverName,shareId}]
+  const [showCompletionCompare, setShowCompletionCompare] = useState(false); // 지도 오버레이 토글
+  const [isLoadingCompletions, setIsLoadingCompletions] = useState(false);
+  const [showAccuracy, setShowAccuracy] = useState(false); // 정확도 분석화면
+
   // ── 기사 배치 잠금 (브러시 보정 후 실수로 초기화 방지)
   const [isAssignmentLocked, setIsAssignmentLocked] = useState(false);
 
@@ -1249,6 +1256,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
   const overlaysRef = useRef([]);
   const polylinesRef = useRef([]);
   const driverPinOverlaysRef = useRef([]);
+  const completionOverlaysRef = useRef([]); // ②-B 완료좌표 비교 오버레이(점·선·라벨)
   const mapClickListenerRef = useRef(null);
   const initialBoundsRef = useRef(null);
   // true 일 때만 setBounds 호출 — 초기 로드/명단 불러오기/세션 로드 후 한 번만 실행
@@ -3317,6 +3325,106 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
     }
   }, [cloudCity, cloudMonthId, showToast]);
 
+  // ── ②-B 배송완료 기록 로드 (route_shares.completions 수집) ──────────────────
+  const handleLoadCompletions = useCallback(async () => {
+    if (!cloudCity || !cloudMonthId) {
+      showToast('error', '클라우드 명단을 먼저 불러오세요.');
+      return [];
+    }
+    setIsLoadingCompletions(true);
+    try {
+      const snap = await getDocs(query(
+        collection(db, 'route_shares'),
+        where('city', '==', cloudCity),
+        where('monthId', '==', cloudMonthId),
+        limit(30)
+      ));
+      const rows = [];
+      snap.forEach(docSnap => {
+        const data = docSnap.data();
+        const driversArr = data.drivers || [];
+        Object.entries(data.completions || {}).forEach(([key, c]) => {
+          if (!c) return;
+          const driver = driversArr.find(d => d.id === c.driverId);
+          const lat = Number(c.lat), lng = Number(c.lng);
+          const dLat = Number(c.dongLat), dLng = Number(c.dongLng);
+          rows.push({
+            key: `${docSnap.id}_${key}`,
+            name: c.name || '',
+            at: c.at || '',
+            lat: Number.isFinite(lat) ? lat : null,
+            lng: Number.isFinite(lng) ? lng : null,
+            dongLat: Number.isFinite(dLat) ? dLat : null,
+            dongLng: Number.isFinite(dLng) ? dLng : null,
+            errM: Number.isFinite(c.errM) ? c.errM : null,
+            accuracy: Number.isFinite(c.accuracy) ? c.accuracy : null,
+            driverId: c.driverId || null,
+            driverName: driver?.name || '',
+            shareId: docSnap.id,
+          });
+        });
+      });
+      setCompletionData(rows);
+      return rows;
+    } catch (e) {
+      showToast('error', `완료 기록 조회 실패: ${e.message}`);
+      return [];
+    } finally {
+      setIsLoadingCompletions(false);
+    }
+  }, [cloudCity, cloudMonthId, showToast]);
+
+  // 완료비교 지도 토글 — 켤 때 최신 로드
+  const toggleCompletionCompare = useCallback(async () => {
+    if (showCompletionCompare) { setShowCompletionCompare(false); return; }
+    const rows = await handleLoadCompletions();
+    setShowCompletionCompare(true);
+    const located = rows.filter(r => r.lat != null && r.dongLat != null).length;
+    showToast(located ? 'info' : 'success',
+      located ? `완료 ${rows.length}건 중 위치기록 ${located}건 표시` : '표시할 완료 위치기록이 없습니다.');
+  }, [showCompletionCompare, handleLoadCompletions, showToast]);
+
+  // 정확도 분석화면 — 열 때 최신 로드
+  const openAccuracyView = useCallback(async () => {
+    await handleLoadCompletions();
+    setShowAccuracy(true);
+  }, [handleLoadCompletions]);
+
+  // ── ②-B 완료좌표 ↔ 동별좌표 비교 오버레이 (점·연결선·오차 라벨) ──────────────
+  useEffect(() => {
+    const map = kakaoMapRef.current;
+    completionOverlaysRef.current.forEach(o => { try { o.setMap(null); } catch {} });
+    completionOverlaysRef.current = [];
+    if (!map || !showCompletionCompare || !window.kakao?.maps) return;
+    completionData.forEach(c => {
+      if (c.lat == null || c.lng == null || c.dongLat == null || c.dongLng == null) return;
+      const color = c.errM != null && c.errM > 100 ? '#ef4444'
+        : (c.errM != null && c.errM > 50 ? '#f59e0b' : '#22c55e');
+      const donePos = new window.kakao.maps.LatLng(c.lat, c.lng);
+      const dongPos = new window.kakao.maps.LatLng(c.dongLat, c.dongLng);
+      const line = new window.kakao.maps.Polyline({
+        path: [dongPos, donePos], strokeWeight: 3, strokeColor: color,
+        strokeOpacity: 0.85, strokeStyle: c.errM != null && c.errM > 100 ? 'shortdash' : 'solid',
+      });
+      line.setMap(map);
+      completionOverlaysRef.current.push(line);
+      const dot = new window.kakao.maps.CustomOverlay({
+        position: donePos, yAnchor: 0.5, xAnchor: 0.5, zIndex: 320,
+        content: `<div style="width:14px;height:14px;border-radius:50%;background:${color};border:2px solid #fff;box-shadow:0 1px 5px rgba(0,0,0,0.6);"></div>`,
+      });
+      dot.setMap(map);
+      completionOverlaysRef.current.push(dot);
+      if (c.errM != null) {
+        const label = new window.kakao.maps.CustomOverlay({
+          position: donePos, yAnchor: 2.1, xAnchor: 0.5, zIndex: 321,
+          content: `<div style="padding:1px 6px;border-radius:6px;background:${color};color:#fff;font-size:10px;font-weight:900;white-space:nowrap;box-shadow:0 1px 4px rgba(0,0,0,0.5);">${c.errM}m</div>`,
+        });
+        label.setMap(map);
+        completionOverlaysRef.current.push(label);
+      }
+    });
+  }, [showCompletionCompare, completionData]);
+
   const handleApproveOrderRequest = useCallback(async (requestItem) => {
     if (!cloudCity || !cloudMonthId) {
       showToast('error', '클라우드 명단을 먼저 불러오세요.');
@@ -4268,6 +4376,26 @@ ${folders}
               }`}
             >
               <Grid3x3 size={10} /> 지적도
+            </button>
+            <button
+              onClick={toggleCompletionCompare}
+              disabled={isLoadingCompletions}
+              title="기사앱 배송완료 GPS와 배송지 동별좌표의 오차를 지도에 선으로 표시"
+              className={`px-2 py-1 rounded-lg text-[10px] font-bold flex items-center gap-1 border transition-colors disabled:opacity-40 ${
+                showCompletionCompare
+                  ? 'bg-teal-500/15 border-teal-400/40 text-teal-300'
+                  : 'bg-[#0d1a18] border-teal-500/25 text-teal-400 hover:bg-teal-900/20'
+              }`}
+            >
+              <Crosshair size={10} /> {isLoadingCompletions ? '로딩…' : '완료비교'}
+            </button>
+            <button
+              onClick={openAccuracyView}
+              disabled={isLoadingCompletions}
+              title="배송 정확도 분석화면(오차 순위·평균·이상 건수) 열기"
+              className="px-2 py-1 rounded-lg text-[10px] font-bold flex items-center gap-1 border transition-colors disabled:opacity-40 bg-[#0d1a18] border-teal-500/25 text-teal-400 hover:bg-teal-900/20"
+            >
+              <Target size={10} /> 정확도
             </button>
             <button
               onClick={handleClearSequence}
@@ -6196,6 +6324,21 @@ ${folders}
           records={records.map(r => ({ ...r, 기사: drivers.find(d => d.id === r._driverId)?.name || r.기사 || '' }))}
           title={`기사별 배송순번 — ${cloudCity || ''} ${cloudMonthId || ''}`}
           onClose={() => setShowDriverSeq(false)}
+        />
+      )}
+
+      {showAccuracy && (
+        <DeliveryAccuracyView
+          completions={completionData}
+          onClose={() => setShowAccuracy(false)}
+          onFocus={(c) => {
+            if (c.lat != null && c.lng != null && kakaoMapRef.current && window.kakao?.maps) {
+              setShowAccuracy(false);
+              setShowCompletionCompare(true);
+              kakaoMapRef.current.setCenter(new window.kakao.maps.LatLng(c.lat, c.lng));
+              kakaoMapRef.current.setLevel(3);
+            }
+          }}
         />
       )}
       {/* ── 저장본 보기/편집 모달 ─────────────────────────────────────────── */}
