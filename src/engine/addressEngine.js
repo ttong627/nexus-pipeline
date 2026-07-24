@@ -1,6 +1,7 @@
 import { collection, getDocs, setDoc, doc, addDoc, serverTimestamp } from 'firebase/firestore';
 import { db, auth } from '../config/firebase.js';
 import { getLocalCache, setLocalCache } from './dbCache.js';
+import { parseAptDong } from './routeSequenceEngine.js';
 
 // ══════════════════════════════════════════════════════════════════
 //  TTong NEXUS — 주소 정제 엔진  (규칙 A-1 ~ A-20)
@@ -435,6 +436,32 @@ const fetchKakaoCoord = async (roadAddr, cityPrefix = '', buildingMgtNo = '') =>
     coordCache.set(key, coord);
     return coord;
   } catch { coordCache.set(key, null); return null; }
+};
+
+// ── VWorld 아파트 동(棟)별 개별좌표 (서버 /v1/building/dong-coords 경유) ──
+// 카카오는 아파트 단지를 1좌표로 주지만, VWorld는 동별 개별좌표를 준다(동선 정확도↑).
+// 동번호가 있는 아파트만 호출한다 — 없으면 단지 centroid라 geocode와 같아 불필요 호출이 된다.
+// 서버·프론트 모두 캐시 → 같은 아파트 반복 시 재호출 없음(대량 정제 성능 방어).
+const dongCoordCache = new Map();
+const fetchDongCoord = async (roadAddr, dongNo, sigungu = '') => {
+  if (!ADDRESS_MATCH_API_URL || !roadAddr || !dongNo) return null;
+  if (Date.now() < coordServiceCircuitOpenUntil) return null;
+  const key = `dong_${roadAddr}#${dongNo}`;
+  if (dongCoordCache.has(key)) return dongCoordCache.get(key);
+  try {
+    const res = await fetchWithTimeout(`${ADDRESS_MATCH_API_URL}/v1/building/dong-coords`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ roadAddress: roadAddr, dongNo: String(dongNo), sigungu }),
+    }, COORD_SERVICE_TIMEOUT_MS);
+    if (!res.ok) { dongCoordCache.set(key, null); return null; }
+    const d = (await res.json())?.data;
+    // 동(棟) 단위로 매칭된 것만 사용 — centroid/complex 폴백은 geocode와 다를 바 없어 무시
+    const coord = (d?.lat && d?.lng && d.matched === 'dong')
+      ? { lat: Number(d.lat), lng: Number(d.lng) } : null;
+    dongCoordCache.set(key, coord);
+    return coord;
+  } catch { dongCoordCache.set(key, null); return null; }
 };
 
 // ── A-31: Kakao 법정동 조회 (형 지시 2026-07-21 · 절대 되돌리지 말 것) ──
@@ -1503,7 +1530,14 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
     const cityPrefix = !apiResult?.roadAddr && cityLabel
       ? (cityLabel.trim().split(/\s+/).filter(t => /(시|군|구)$/.test(t)).pop() || '')
       : '';
-    const coord = await fetchKakaoCoord(apiResult?.roadAddr || result.주소, cityPrefix, result.buildingMgtNo);
+    const road = apiResult?.roadAddr || result.주소;
+    // 아파트 동(棟)별 정밀좌표 우선 — 원주소/정제주소/특이사항에서 숫자 동번호를 찾으면 dong-coords 시도.
+    // 동 단위 매칭 실패 시 아래 기존 좌표(단지 대표좌표)로 폴백.
+    let coord = null;
+    const sigungu = cityPrefix || (cityLabel || '').trim().split(/\s+/).filter(t => /(시|군|구)$/.test(t)).pop() || '';
+    const dongNo = parseAptDong([inputAddr, result.주소, inputNote].filter(Boolean).join(' '));
+    if (dongNo) coord = await fetchDongCoord(road, dongNo, sigungu);
+    if (!coord) coord = await fetchKakaoCoord(road, cityPrefix, result.buildingMgtNo);
     if (coord) { result.lat = coord.lat; result.lng = coord.lng; }
   }
 

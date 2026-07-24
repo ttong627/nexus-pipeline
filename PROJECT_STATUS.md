@@ -1,5 +1,5 @@
 # 📋 PROJECT STATUS — nexus-pipeline
-> 자동 생성: /확인 스킬 · 갱신 2026-07-22 13:54 KST
+> 자동 생성: /확인 스킬 · 갱신 2026-07-24 00:02 KST
 
 ## ⚠️ 클론 분기 해소 기록 (2026-07-21)
 - **문제**: `D:/TTong_newproject/nexus-pipeline` 클론에 7/15 작업(특이사항 보존·본명/건물명 컬럼·PII 제거)이 **커밋되지 않은 채** 남아 있었고, 그 사이 I: 정본에서 7/16에 V6.81~V6.94(17커밋)를 올려 **버전번호 V6.81이 양쪽에서 다른 내용으로 중복**됐다. 운영 배포본은 V6.94(origin 계열)이라 **7/15 기능이 운영에서 빠진 상태**였다.
@@ -38,7 +38,20 @@
 | DELIVERY_SEQUENCE_RULES.md | 배송순번 독립 규칙 상세 |
 | 동명이인_주소오염_재발방지_설계.md | 2026-07-10 동대문 김옥순 사고 재발방지 — S-1~S-6 |
 
-## 마지막 작업 (2026-07-22) — V7.1 전월 대비 주소 대량변동 게이트(M-10)
+## 마지막 작업 (2026-07-25) — HANDOFF ①~⑥ 완결 + dong-coords 연동 + 백필 잔여 정리
+- **⑥ 전월 승계 + NEW 배지(4b87430·배포)**: 전월 delivery_history를 이번달 명단에 승계 매칭. 강키(이름+생년월일)+**양측유일**만 승계, 동명이인·약키는 보류(S-1~S-6). `src/utils/prevMonthCarryover.js`(회귀 14) + CloudListManager NEW 배지·[전월 승계] 버튼 + RouteMapModal 명단 NEW 배지. 저장 스키마 미변경(조회 시 동적 계산).
+- **⑤ 순번 구간 일자분할(556ff75·배포)**: 일자분할에 세 번째 모드 `순번 구간` 추가 — 담당자가 정한 **하루 가구수**만큼 배송순번 순서대로 끊어 배송일차 부여(`splitBySequence`, 회귀 8건 추가 → delivery-day-split 21). 동 경계 무시(순번=동선).
+- **③ 기사별순번뷰 크래시 핫픽스(4b87430)**: CloudListManager `User` 아이콘 미import → 명단 화면 "Element type is invalid" 크래시(07-25 오전 배포 V7.2 운영본에 잠복). import 추가로 해결.
+- **3. VWorld dong-coords 프론트 연동**: `addressEngine.processAddress` 좌표취득 시 아파트 동번호가 있으면 서버 `/v1/building/dong-coords`(동棟별 개별좌표) 우선 호출, 동 매칭 실패 시 기존 geocode 폴백. 정제 성능 방어 위해 동번호 있을 때만·프론트+서버 캐시. `parseAptDong` 재사용.
+- **4. 법정동 백필 잔여 정리(1회성 스크립트·DB 반영)**: cloud_lists 88,463건 스캔 → **괄호 불균형 152건 전부 안전 복원**(떠돌이 `)` 제거 등, 원본 억지 재조립 없이), **법정동없음 32건 중 23건 필드 백필**(주소 괄호에서 법정동 파싱). 남은 9건(API 필요)+도로명없음 30건은 원본 결손이라 개별 확인 대상. 스크립트는 1회성이라 커밋 안 함.
+- **검증**: 회귀(prevMonthCarryover 14 + delivery-day-split 21) 0 fail · eslint 0 error · tsc 0 · vite build 성공.
+
+## 이전 작업 (2026-07-23) — V7.2 수량 기반 일자 분할(DS-16) + 좌표 오류 검증
+- **V7.2 DS-16 수량 기반 일자 분할(43dffc5)**: 배송순번 지도화면에서 하루 배송 물량이 많을 때 일자별로 나눠 배송. `src/engine/deliveryDaySplit.js`(순수함수) + 회귀 `scripts/delivery-day-split.test.mjs`
+- **좌표 오류 거리기반 검증·정리(cfe4e10)**: 순번 교차의 원인=잘못된 좌표. 거리 기반 outlier 검출·정리. `src/engine/coordValidator.js`
+- **기본명단→이번달 명단 이식 스크립트(0cf108c)**: `scripts/import-base-to-month.mjs`
+
+## 이전 작업 (2026-07-22) — V7.1 전월 대비 주소 대량변동 게이트(M-10)
 - **문제(형 지시)**: 정제할 때 전월 대비 주소가 많이 바뀌면 실제 이사가 아니라 **명단 자체가 잘못된 것**(다른 달 파일·다른 지자체·주소 칼럼 밀림)인데, 기존 경고는 **행정동별**(30%↑·20건↑)만 봐서 명단 전체가 통째로 틀어지면 동마다 30% 미만이라 안 걸리고 그대로 저장됐다
 - **M-10 신설**: 전월과 대조된 인원 기준 **전체 변동률**로 한 번 더 막는다. 임계 = 대조 30명 이상 & (변동률 15%↑ 또는 변동 100건↑) → `critical`
 - **담당자 확인 강제**: `critical`이면 ①전월비교 모달 자동 표시 ②🔴 「명단 오류 의심」 배너(대조 인원·변동 건수·비율 명시) ③**체크박스로 확인하기 전까지 월 명단 저장·기본명단 저장을 모두 차단**(`blockedByAddrAlert`). 새 비교 결과가 나오면 확인 상태 초기화
@@ -135,18 +148,18 @@
 ## 직전 작업 (2026-07-11)
 - 외부 시스템(정부양곡 정산 SYSTEM) 명단 가져오기 — importUrl/import2Url · address-service 매칭 hang 근본 수정
 
-## 작업환경 (2026-07-22 13:54 KST 실측 · I: 정본 기준)
+## 작업환경 (2026-07-24 00:02 KST 실측 · I: 정본 기준)
 - node v24.15.0 / npm 11.12.1 · gh OK · gcloud OK · firebase OK
-- 현재 앱 버전: **V6.97** · 무손실 M-1~M-8 + 파싱 견고성 CM-0~범위1 + 주민센터 자동변환(A-30④) + 소속사요약 + 특이사항 보존·본명/건물명 컬럼 + **법정동 정밀화(A-32, 채움률 99.2%)**
-- 의존성: **루트 node_modules 재설치 완료**(2026-07-22 · `npm install` exit 0 · 669 packages). 하위앱 3곳(functions·address-service·services/address-service) 미설치 → 해당 서비스 작업 시에만 `cd <폴더> && npm install`
-- 시크릿: `.env`(키 12개)·`.env.example` 존재 (gitignore, 값 비노출). **I: 정본은 `VITE_KAKAO_REST_KEY`·`VITE_ADDRESS_MATCH_API_URL`·`VITE_FIREBASE_API_KEY` 모두 설정됨 ✅** (D: 클론은 공란이었음 — 빌드는 I:에서)
-- 배포 URL 헬스체크: https://logis-op.web.app → **HTTP 200 ✅**
+- 현재 앱 버전: **V7.2** (package.json 7.2.0) · 무손실 M-1~M-10 + 파싱 견고성 CM-0~범위1 + 법정동 정밀화(A-32) + 특이사항 정제·이식(A-33·A-34·D-6) + **좌표 오류 검증(coordValidator)** + **수량 기반 일자 분할(DS-16)**
+- 의존성: **루트 node_modules 존재 OK**. 하위앱 3곳(functions·address-service·services/address-service) **미설치** → 해당 서비스 작업 시에만 `cd <폴더> && npm install` (메인 프론트 작업엔 지장 없음)
+- 시크릿: `.env`·`.env.example` 존재 (gitignore, 값 비노출)
+- 배포 URL 헬스체크: https://logis-op.web.app → **200** · https://logis-op.firebaseapp.com → **200 ✅**
 - 검증 게이트: `prebuild`=eslint --quiet && tsc --noEmit. 별도: `npm run typecheck`, `npm run test:e2e`
 
-## 동기화 (2026-07-22 13:51 KST)
-- 상태: **FF 최신화 완료** — I: 정본이 origin/main보다 7커밋 behind(V6.94 정지, 7/21 D: 작업 미반영)였음 → `git merge --ff-only origin/main` 실행 → **7cd97ca(V6.97)**, 현재 behind 0 / ahead 0
-- 미커밋 2건 보존: `claude-forge/hooks/output-secret-filter.sh`(삭제) · `claude-forge/skills/security-compliance/reference/threat-modeling-risk.md`(수정) — 앱 코드 무관, 인커밍과 겹침 0
-- 마지막 fetch: 2026-07-22 13:51 KST
+## 동기화 (2026-07-24 00:00 KST)
+- 상태: **FF 최신화 완료** — I: 정본이 origin/main보다 **14커밋 behind**(V6.94 정지, 7/21~7/23 작업 미반영)였음 → owner 토큰 주입 fetch → `git merge --ff-only origin/main` 실행 → **43dffc5(V7.2)**, 현재 behind 0 / ahead 0
+- 워킹트리 clean(미커밋·untracked 0) — FF 안전 실행
+- 마지막 fetch: 2026-07-24 00:00 KST
 - gh active 계정: **ttong0627**(전역) ≠ repo owner **ttong627** → 전역 전환 없이 `GH_TOKEN=$(gh auth token -u ttong627)` 주입 방식으로 fetch/merge 수행. **push·배포 시 동일 주입 또는 `gh auth switch --user ttong627` 필요**
 
 ## 리스크
