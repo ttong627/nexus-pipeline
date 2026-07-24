@@ -1,6 +1,19 @@
-# HANDOFF — VWorld 동별좌표 / 배송완료 좌표 비교 (2026-07-24)
+# HANDOFF — VWorld 동별좌표 / 배송완료 좌표 비교 (2026-07-24 → 07-25 완료)
 
-> 새 세션은 이 파일을 먼저 읽고 **②-A부터** 이어간다. ①은 완료·배포됨.
+> ①②-A②-B **전부 완료·배포됨**(2026-07-25, 커밋 a4beda0, logis-op.web.app). 남은 것은 형 폰 실기기 완료버튼 테스트뿐.
+
+## ✅ ②-A·②-B 완료 (2026-07-25, 커밋 a4beda0 배포)
+### ②-A 기사앱 배송완료 버튼 (`src/components/ShareRouteView.jsx`)
+- 배송지별 "배송완료" 토글 버튼 → 탭 시 `latestLocRef` 현재 GPS 캡처.
+- `errM = Math.round(haversineKm(gps, 동별좌표)*1000)`(공용 `engine/coordValidator.js` 재사용).
+- 저장: `updateDoc(route_shares/{shareId}, { completions.{record._uid}: {at,driverId,name,lat,lng,accuracy,dongLat,dongLng,errM} })`. 취소=`deleteField()`.
+- GPS 미허용 시에도 완료시각 기록(errM=null "위치 없이 기록"). 목록·지도핀 ✓·초록 표시.
+- **firestore.rules**: `route_shares` update 화이트리스트에 `completions` 추가(map 검증 + 마지막 건 취소로 필드 소멸 허용). ⚠️ HANDOFF 초안의 "completions도 같은 문서라 OK"는 오판이었음 — 화이트리스트라 rules 보강 필수였고 반영함.
+### ②-B 관리자 비교뷰 (`src/components/RouteMapModal.jsx` + 신규 `DeliveryAccuracyView.jsx`)
+- 툴바(지적도 옆) "완료비교" 토글 → `handleLoadCompletions`(route_shares getDocs, city+monthId) → 지도에 동별좌표↔완료좌표 연결선+오차 라벨(>100m 빨강·>50m 주황·양호 초록). 별도 `completionOverlaysRef`.
+- "정확도" 버튼 → `DeliveryAccuracyView`(오차 순위·평균·최대·이상>100m·위치없음 건수, 행 클릭 시 지도 focus).
+- **핵심 설계**: completion 문서에 `dongLat/dongLng·errM·name`을 함께 저장 → ②-B는 record 매칭 불필요, completions 데이터만으로 완결(견고).
+- 검증: eslint 신규코드 0에러, vite build 그린, 배포 HTTP 200.
 
 ## ✅ 오늘 완료 (①, 배포됨)
 1. **V7.3 VWorld 소스 복구** — 배포본에만 있고 git 미커밋이던 서버 소스를 GCS 배포 아카이브에서 복구. 커밋 `2219bae`.
