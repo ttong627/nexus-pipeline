@@ -1,5 +1,5 @@
 ﻿import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { X, MapPin, Navigation2, Plus, Minus, RefreshCw, Save, AlertTriangle, Map as MapIcon, List, Building2, Clock, FileSpreadsheet, Download, HardDrive, Maximize2, Minimize2, Columns, AlertCircle, Search, Crosshair, Share2, Link, Eraser, ArrowLeftRight, ChevronLeft, User } from 'lucide-react';
+import { X, MapPin, Navigation2, Plus, Minus, RefreshCw, Save, AlertTriangle, Map as MapIcon, List, Building2, Clock, FileSpreadsheet, Download, HardDrive, Maximize2, Minimize2, Columns, AlertCircle, Search, Crosshair, Share2, Link, Eraser, ArrowLeftRight, ChevronLeft, User, Satellite, Grid3x3 } from 'lucide-react';
 import { db, auth } from '../config/firebase.js';
 import { collection, serverTimestamp, Timestamp, getDocs, getDoc, setDoc, updateDoc, doc, writeBatch, query, where, limit, increment } from 'firebase/firestore';
 import * as XLSX from 'xlsx';
@@ -1170,6 +1170,8 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
   const [cloudCity, setCloudCity] = useState('');
   const [cloudMonthId, setCloudMonthId] = useState('');
   const [carryMap, setCarryMap] = useState({}); // ⑥ 전월 승계: id → { _isNew, _prevDriver, _prevSeqNo, _carryAmbiguous }
+  const [mapType, setMapType] = useState('roadmap');       // 배경지도: roadmap(일반) | hybrid(위성)
+  const [showCadastral, setShowCadastral] = useState(false); // 지적편집도 오버레이(카카오 USE_DISTRICT)
   const [isLoadingCloud, setIsLoadingCloud] = useState(false);
   const [isSavingCloud, setIsSavingCloud] = useState(false);
   const [showCloudPicker, setShowCloudPicker] = useState(false);
@@ -1813,6 +1815,23 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
     const t = setTimeout(() => kakaoMapRef.current?.relayout(), 200);
     return () => clearTimeout(t);
   }, [layoutMode]);
+
+  // ── 배경지도 타입(일반/위성) — 카카오 내장 HYBRID(위성+라벨) 활용 ──────
+  useEffect(() => {
+    const map = kakaoMapRef.current;
+    if (!map || !window.kakao?.maps) return;
+    const T = window.kakao.maps.MapTypeId;
+    map.setMapTypeId(mapType === 'hybrid' ? T.HYBRID : T.ROADMAP);
+  }, [mapType, isMapReady]);
+
+  // ── 지적편집도 오버레이(카카오 USE_DISTRICT) 토글 ──────────────────────
+  useEffect(() => {
+    const map = kakaoMapRef.current;
+    if (!map || !window.kakao?.maps) return;
+    const T = window.kakao.maps.MapTypeId;
+    if (showCadastral) map.addOverlayMapTypeId(T.USE_DISTRICT);
+    else map.removeOverlayMapTypeId(T.USE_DISTRICT);
+  }, [showCadastral, isMapReady]);
 
   // ── Escape → mapfull 해제 / 핀 배치 모드 취소 ──────────────────────────
   useEffect(() => {
@@ -4227,6 +4246,28 @@ ${folders}
               }`}
             >
               <Search size={10} /> 분석
+            </button>
+            <button
+              onClick={() => setMapType(t => t === 'hybrid' ? 'roadmap' : 'hybrid')}
+              title="배경지도를 위성사진으로 전환(카카오 하이브리드)"
+              className={`px-2 py-1 rounded-lg text-[10px] font-bold flex items-center gap-1 border transition-colors ${
+                mapType === 'hybrid'
+                  ? 'bg-emerald-500/15 border-emerald-400/40 text-emerald-300'
+                  : 'bg-[#0d1a14] border-emerald-500/25 text-emerald-400 hover:bg-emerald-900/20'
+              }`}
+            >
+              <Satellite size={10} /> 위성
+            </button>
+            <button
+              onClick={() => setShowCadastral(v => !v)}
+              title="지적편집도(필지 경계) 오버레이 표시"
+              className={`px-2 py-1 rounded-lg text-[10px] font-bold flex items-center gap-1 border transition-colors ${
+                showCadastral
+                  ? 'bg-amber-500/15 border-amber-400/40 text-amber-300'
+                  : 'bg-[#1a160d] border-amber-500/25 text-amber-400 hover:bg-amber-900/20'
+              }`}
+            >
+              <Grid3x3 size={10} /> 지적도
             </button>
             <button
               onClick={handleClearSequence}
