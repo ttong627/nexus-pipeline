@@ -17,6 +17,7 @@ export const config = {
   allowedOrigins: csv(process.env.ADDRESS_ALLOWED_ORIGINS || '*'),
   jusoApiKeys: csv(process.env.JUSO_API_KEYS),
   kakaoRestKey: process.env.KAKAO_REST_KEY || '',
+  vworldKey: process.env.VWORLD_KEY || '',
   importBatchSize: Number.parseInt(process.env.ADDRESS_IMPORT_BATCH_SIZE || '1000', 10),
 };
 

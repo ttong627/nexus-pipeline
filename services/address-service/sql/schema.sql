@@ -122,7 +122,10 @@ CREATE TABLE IF NOT EXISTS address_geocode_cache (
   lng double precision,
   failure_count integer NOT NULL DEFAULT 0,
   fetched_at timestamptz NOT NULL DEFAULT now(),
-  last_used_at timestamptz NOT NULL DEFAULT now()
+  last_used_at timestamptz NOT NULL DEFAULT now(),
+  dong_no text,
+  floors integer,
+  match_type text
 );
 
 CREATE TABLE IF NOT EXISTS address_search_keys (

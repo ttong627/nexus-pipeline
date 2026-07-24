@@ -1,8 +1,11 @@
-export const APP_VERSION = 'V7.2';
-export const APP_BUILD = '2026.07.23';
-export const APP_BUILD_TIME = '2026.07.23 19:29';
+export const APP_VERSION = 'V7.3';
+export const APP_BUILD = '2026.07.24';
+export const APP_BUILD_TIME = '2026.07.24';
 
 export const CHANGELOG = [
+  { v: "V7.3", date: "2026.07.24", items: [
+    "아파트 동별 정확 좌표 적용 — 배송 위치·순번 정밀도 향상(정부 공간정보 VWorld 연동)",
+  ]},
   { v: "V7.2", date: "2026.07.23", items: [
     "좌표 오류 거리기반 검증·정리(DS-15) — 배송순번 교차·먼거리 왕복의 진짜 원인 제거(오류 379건 정리, 기사구역 430→58km)",
     "수량 기반 일자 분할(DS-16) — 지역별로 묶어 여러 날로(하루최대물량/날짜개수), 배송순번 지도화면 [일자분할] 패널",

@@ -2,6 +2,7 @@ import { createServer } from 'node:http';
 import { config, requireConfig } from './config.js';
 import { query } from './db.js';
 import { cleanText, formatRoadLookupQuery, normalizeSearchKey, parseRoadNumber, roadSideKey } from './normalize.js';
+import { geocodeRoad, matchDongCoord, parseDongNo } from './vworld.js';
 
 const ADDRESS_SCHEMA = config.dbSchema;
 let currentJusoKey = 0;
@@ -335,7 +336,7 @@ const matchAddress = async ({ queryText, cityLabel = '', version = config.active
 };
 
 const geocode = async ({ standardRoadAddress, buildingMgtNo = '' }) => {
-  if (!config.kakaoRestKey || !standardRoadAddress) return null;
+  if (!standardRoadAddress) return null;
   const normalized = normalizeSearchKey(standardRoadAddress);
   const cacheKey = buildingMgtNo || normalized;
   const { rows } = await query(`
@@ -345,25 +346,42 @@ const geocode = async ({ standardRoadAddress, buildingMgtNo = '' }) => {
     RETURNING lat, lng, provider
   `, [cacheKey]);
   if (rows[0]?.lat && rows[0]?.lng) return rows[0];
-  const url = new URL('https://dapi.kakao.com/v2/local/search/address.json');
-  url.searchParams.set('query', standardRoadAddress);
-  url.searchParams.set('size', '1');
-  const response = await fetch(url, { headers: { Authorization: `KakaoAK ${config.kakaoRestKey}` } });
-  const document = response.ok ? (await response.json()).documents?.[0] : null;
-  const lat = document?.y ? Number.parseFloat(document.y) : null;
-  const lng = document?.x ? Number.parseFloat(document.x) : null;
+
+  // 폴백 체인: VWorld 지오코더(정부 정합성 우선) → Kakao
+  let lat = null;
+  let lng = null;
+  let provider = null;
+  const vw = await geocodeRoad(standardRoadAddress);
+  if (vw?.lat && vw?.lng) {
+    lat = vw.lat;
+    lng = vw.lng;
+    provider = 'vworld';
+  }
+  if (lat == null && config.kakaoRestKey) {
+    const url = new URL('https://dapi.kakao.com/v2/local/search/address.json');
+    url.searchParams.set('query', standardRoadAddress);
+    url.searchParams.set('size', '1');
+    const response = await fetch(url, { headers: { Authorization: `KakaoAK ${config.kakaoRestKey}` } });
+    const document = response.ok ? (await response.json()).documents?.[0] : null;
+    if (document?.y && document?.x) {
+      lat = Number.parseFloat(document.y);
+      lng = Number.parseFloat(document.x);
+      provider = 'kakao';
+    }
+  }
   await query(`
     INSERT INTO ${ADDRESS_SCHEMA}.address_geocode_cache (
-      cache_key, standard_road_address, building_mgt_no, provider_query, lat, lng, failure_count
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+      cache_key, standard_road_address, building_mgt_no, provider_query, lat, lng, failure_count, provider
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
     ON CONFLICT (cache_key) DO UPDATE SET
       provider_query = EXCLUDED.provider_query,
       lat = EXCLUDED.lat,
       lng = EXCLUDED.lng,
+      provider = EXCLUDED.provider,
       failure_count = ${ADDRESS_SCHEMA}.address_geocode_cache.failure_count + EXCLUDED.failure_count,
       last_used_at = now()
-  `, [cacheKey, standardRoadAddress, buildingMgtNo || null, standardRoadAddress, lat, lng, lat && lng ? 0 : 1]);
-  return lat && lng ? { lat, lng, provider: 'kakao' } : null;
+  `, [cacheKey, standardRoadAddress, buildingMgtNo || null, standardRoadAddress, lat, lng, lat && lng ? 0 : 1, provider || 'kakao']);
+  return lat && lng ? { lat, lng, provider } : null;
 };
 
 const status = async () => {
@@ -405,6 +423,44 @@ const server = createServer(async (req, res) => {
       });
       return json(res, data ? 200 : 404, { ok: Boolean(data), data }, headers);
     }
+    if (req.method === 'POST' && url.pathname === '/v1/building/dong-coords') {
+      const body = await readBody(req);
+      const road = body.roadAddress || body.standardRoadAddress || '';
+      const dongNo = parseDongNo(body.dongNo || body.complexName || '');
+      const cacheKey = (dongNo && road) ? `dong:${normalizeSearchKey(road)}#${dongNo}` : '';
+      // 캐시 조회 (같은 아파트 반복 조회 시 VWorld 재호출 방지)
+      if (cacheKey) {
+        const { rows } = await query(`
+          UPDATE ${ADDRESS_SCHEMA}.address_geocode_cache SET last_used_at = now()
+          WHERE cache_key = $1 RETURNING lat, lng, floors, match_type, dong_no
+        `, [cacheKey]);
+        if (rows[0]?.lat && rows[0]?.lng) {
+          return json(res, 200, { ok: true, data: {
+            lat: rows[0].lat, lng: rows[0].lng, floors: rows[0].floors,
+            buildName: body.complexName || '', matched: rows[0].match_type || 'dong',
+            dongNo: rows[0].dong_no || dongNo, cached: true,
+          } }, headers);
+        }
+      }
+      const data = await matchDongCoord({
+        roadAddress: road,
+        complexName: body.complexName || body.buildingName || '',
+        dongNo: body.dongNo || '',
+        sigungu: body.sigungu || '',
+      });
+      // 캐시 저장 (동/단지 매칭 성공분만 — centroid 폴백은 재시도 여지 남김)
+      if (data && cacheKey && (data.matched === 'dong' || data.matched === 'complex')) {
+        await query(`
+          INSERT INTO ${ADDRESS_SCHEMA}.address_geocode_cache
+            (cache_key, standard_road_address, provider_query, provider, lat, lng, dong_no, floors, match_type)
+          VALUES ($1, $2, $3, 'vworld', $4, $5, $6, $7, $8)
+          ON CONFLICT (cache_key) DO UPDATE SET
+            lat = EXCLUDED.lat, lng = EXCLUDED.lng, floors = EXCLUDED.floors,
+            match_type = EXCLUDED.match_type, last_used_at = now()
+        `, [cacheKey, road, road, data.lat, data.lng, data.dongNo || dongNo, data.floors, data.matched]);
+      }
+      return json(res, data ? 200 : 404, { ok: Boolean(data), data }, headers);
+    }
     return json(res, 404, { ok: false, error: '존재하지 않는 주소 API 엔드포인트입니다.' }, headers);
   } catch (error) {
     console.error('[address-api]', error);
@@ -412,7 +468,22 @@ const server = createServer(async (req, res) => {
   }
 });
 
+// 기존 실DB에 동별좌표 캐시 컬럼 자동 마이그레이션 (idempotent)
+const ensureGeocodeColumns = async () => {
+  await query(`
+    ALTER TABLE ${ADDRESS_SCHEMA}.address_geocode_cache
+      ADD COLUMN IF NOT EXISTS dong_no text,
+      ADD COLUMN IF NOT EXISTS floors integer,
+      ADD COLUMN IF NOT EXISTS match_type text
+  `);
+};
+
 requireConfig('databaseUrl');
+try {
+  await ensureGeocodeColumns();
+} catch (error) {
+  console.error('[migrate] geocode 캐시 컬럼 마이그레이션 실패:', error.message);
+}
 server.listen(config.port, () => {
   console.log(`[address-api] listening on ${config.port}, version ${config.activeVersion}`);
 });
