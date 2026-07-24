@@ -6,7 +6,7 @@ import * as XLSX from 'xlsx';
 import CoordBrushModal from './CoordBrushModal.jsx';
 import DriverSequenceView from './DriverSequenceView.jsx';
 import { formatAddressDisplay } from '../utils/addressFormat.js';
-import { splitByDay, summarizeDaySplit } from '../engine/deliveryDaySplit.js';
+import { splitByDay, splitBySequence, summarizeDaySplit } from '../engine/deliveryDaySplit.js';
 import { annotateCarryover } from '../utils/prevMonthCarryover.js';
 
 const KAKAO_JS_KEY = import.meta.env.VITE_KAKAO_JS_KEY;
@@ -2540,16 +2540,25 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
   const handleDaySplit = useCallback(() => {
     const v = parseInt(daySplitVal, 10);
     if (!v || v <= 0) { showToast('error', '올바른 값을 입력하세요.'); return; }
-    const depot = drivers.find(d => d.startLat && d.startLng);
-    const opts = daySplitMode === 'days'
-      ? { numDays: v, getLoad: getEffectiveLoad, depot: depot ? { lat: depot.startLat, lng: depot.startLng } : null }
-      : { maxLoadPerDay: v, getLoad: getEffectiveLoad, depot: depot ? { lat: depot.startLat, lng: depot.startLng } : null };
-    const split = splitByDay(records, opts);
+    let split, msg;
+    if (daySplitMode === 'seq') {
+      // 배송순번 구간 분할 — 담당자가 정한 하루 가구수만큼 순번 순서대로 끊음(동 경계 무시, 순번이 곧 동선)
+      split = splitBySequence(records, { maxPerDay: v });
+      msg = `하루 최대 ${v}가구 · 배송순번 구간`;
+    } else {
+      const depot = drivers.find(d => d.startLat && d.startLng);
+      const dp = depot ? { lat: depot.startLat, lng: depot.startLng } : null;
+      const opts = daySplitMode === 'days'
+        ? { numDays: v, getLoad: getEffectiveLoad, depot: dp }
+        : { maxLoadPerDay: v, getLoad: getEffectiveLoad, depot: dp };
+      split = splitByDay(records, opts);
+      msg = `${daySplitMode === 'days' ? `${v}일 균등` : `하루 최대 ${v}포`} · 동 경계 보존`;
+    }
     const byId = new Map(split.map(r => [r.id, r.배송일차]));
     setRecords(prev => prev.map(r => ({ ...r, 배송일차: byId.get(r.id) || 1 })));
     const summary = summarizeDaySplit(split);
     setDaySplitSummary(summary);
-    showToast('success', `${summary.length}일로 분할 — ${daySplitMode === 'days' ? `${v}일 균등` : `하루 최대 ${v}포`} · 동 경계 보존`);
+    showToast('success', `${summary.length}일로 분할 — ${msg}`);
   }, [records, drivers, daySplitMode, daySplitVal, showToast]);
 
   const handleAutoSequence = useCallback(() => {
@@ -4182,14 +4191,15 @@ ${folders}
               {daySplitOpen && (
                 <div className="absolute top-full left-0 mt-1 z-50 w-64 bg-[#0b1220] border border-teal-500/40 rounded-xl p-3 shadow-2xl">
                   <div className="text-[10px] font-black text-teal-300 mb-2">📅 배송 일자 분할</div>
-                  <div className="flex gap-1 mb-2">
-                    <button onClick={() => { setDaySplitMode('load'); setDaySplitVal('500'); }} className={`flex-1 py-1 rounded text-[10px] font-bold border ${daySplitMode === 'load' ? 'bg-teal-600 text-white border-teal-500' : 'bg-[#111] text-gray-400 border-[#2a2a2a]'}`}>하루 최대 물량</button>
-                    <button onClick={() => { setDaySplitMode('days'); setDaySplitVal('2'); }} className={`flex-1 py-1 rounded text-[10px] font-bold border ${daySplitMode === 'days' ? 'bg-teal-600 text-white border-teal-500' : 'bg-[#111] text-gray-400 border-[#2a2a2a]'}`}>날짜 개수</button>
+                  <div className="grid grid-cols-3 gap-1 mb-2">
+                    <button onClick={() => { setDaySplitMode('load'); setDaySplitVal('500'); }} className={`py-1 rounded text-[10px] font-bold border ${daySplitMode === 'load' ? 'bg-teal-600 text-white border-teal-500' : 'bg-[#111] text-gray-400 border-[#2a2a2a]'}`}>하루 물량</button>
+                    <button onClick={() => { setDaySplitMode('days'); setDaySplitVal('2'); }} className={`py-1 rounded text-[10px] font-bold border ${daySplitMode === 'days' ? 'bg-teal-600 text-white border-teal-500' : 'bg-[#111] text-gray-400 border-[#2a2a2a]'}`}>날짜 개수</button>
+                    <button onClick={() => { setDaySplitMode('seq'); setDaySplitVal('100'); }} title="배송순번 순서대로 하루 가구수만큼 끊어 나눔(순번이 곧 동선)" className={`py-1 rounded text-[10px] font-bold border ${daySplitMode === 'seq' ? 'bg-teal-600 text-white border-teal-500' : 'bg-[#111] text-gray-400 border-[#2a2a2a]'}`}>순번 구간</button>
                   </div>
                   <div className="flex items-center gap-1 mb-2">
                     <input type="number" min="1" value={daySplitVal} onChange={e => setDaySplitVal(e.target.value)}
                       className="flex-1 bg-[#111] border border-[#2a2a2a] rounded px-2 py-1 text-xs text-white outline-none focus:border-teal-500" />
-                    <span className="text-[10px] text-gray-500">{daySplitMode === 'days' ? '일로' : '포/일'}</span>
+                    <span className="text-[10px] text-gray-500">{daySplitMode === 'days' ? '일로' : daySplitMode === 'seq' ? '가구/일' : '포/일'}</span>
                     <button onClick={handleDaySplit} className="px-3 py-1 bg-teal-500 text-white rounded text-[10px] font-black hover:bg-teal-400">분할</button>
                   </div>
                   {daySplitSummary && (

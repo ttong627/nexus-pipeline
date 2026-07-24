@@ -2,7 +2,7 @@
 // 형 지시(2026-07-23): 수량 많으면 여러 날로 — ①하루 최대 물량 자동 ②날짜 개수 지정, 지역(동)별로 묶어서
 // 실행: node scripts/delivery-day-split.test.mjs
 import assert from 'node:assert/strict';
-import { splitByDay } from '../src/engine/deliveryDaySplit.js';
+import { splitByDay, splitBySequence } from '../src/engine/deliveryDaySplit.js';
 
 let pass = 0, fail = 0;
 const t = (label, fn) => { try { fn(); pass++; console.log(`  ✅ ${label}`); } catch (e) { fail++; console.log(`  ❌ ${label}\n     ${e.message}`); } };
@@ -90,6 +90,45 @@ t('좌표 없는 동도 배정된다(맨 뒤 날차)', () => {
   const out = splitByDay(noco, { numDays: 2 });
   assert.ok(out.find((r) => r.이름 === 'x').배송일차 >= 1);
 });
+
+console.log('\n── splitBySequence: 배송순번 구간 분할(하루 최대 가구수) ──');
+// 형 지시(2026-07-25): 담당자가 정한 하루 가구 수만큼 배송순번 순서대로 끊어 1일차·2일차…
+const seqRec = (이름, 배송순번) => ({ id: 이름, 이름, 배송순번, 행정동: '동', 포수: 1 });
+const SEQ5 = [seqRec('s1', 1), seqRec('s2', 2), seqRec('s3', 3), seqRec('s4', 4), seqRec('s5', 5)];
+const dayByName = (out) => Object.fromEntries(out.map((r) => [r.이름, r.배송일차]));
+
+t('하루 2가구면 배송순번 순서대로 [1,1,2,2,3]일차', () => {
+  const out = splitBySequence(SEQ5, { maxPerDay: 2 });
+  assert.deepEqual(out.map((r) => r.배송일차), [1, 1, 2, 2, 3]);
+});
+t('입력이 순번 역순·뒤섞여도 순번 오름차순 기준으로 분할', () => {
+  const shuffled = [seqRec('s3', 3), seqRec('s1', 1), seqRec('s5', 5), seqRec('s2', 2), seqRec('s4', 4)];
+  const d = dayByName(splitBySequence(shuffled, { maxPerDay: 2 }));
+  assert.equal(d.s1, 1); assert.equal(d.s2, 1);
+  assert.equal(d.s3, 2); assert.equal(d.s4, 2);
+  assert.equal(d.s5, 3);
+});
+t('하루 100가구인데 5가구뿐이면 전부 1일차', () => {
+  assert.equal(new Set(splitBySequence(SEQ5, { maxPerDay: 100 }).map((r) => r.배송일차)).size, 1);
+});
+t('maxPerDay 없으면 전부 1일차(분할 안 함)', () => {
+  assert.equal(new Set(splitBySequence(SEQ5, {}).map((r) => r.배송일차)).size, 1);
+});
+t('배송순번 없는 건은 맨 뒤(마지막 일차)로 몰린다', () => {
+  const mixed = [seqRec('s1', 1), seqRec('s2', 2), seqRec('s3', 3), { id: 'x', 이름: 'x', 배송순번: '', 행정동: '동' }];
+  const d = dayByName(splitBySequence(mixed, { maxPerDay: 2 })); // s1,s2=1 / s3=2 / x=2(마지막)
+  assert.equal(d.s1, 1); assert.equal(d.s2, 1); assert.equal(d.s3, 2); assert.equal(d.x, 2);
+});
+t('순번 있는 게 하나도 없으면 전부 1일차', () => {
+  const nos = [{ id: 'a', 이름: 'a', 배송순번: '' }, { id: 'b', 이름: 'b', 배송순번: '' }];
+  assert.equal(new Set(splitBySequence(nos, { maxPerDay: 2 }).map((r) => r.배송일차)).size, 1);
+});
+t('원본 불변(immutable)', () => {
+  const snap = JSON.stringify(SEQ5);
+  splitBySequence(SEQ5, { maxPerDay: 2 });
+  assert.equal(JSON.stringify(SEQ5), snap);
+});
+t('빈 입력은 빈 배열', () => assert.deepEqual(splitBySequence([], { maxPerDay: 2 }), []));
 
 console.log(`\n결과: ${pass} PASS / ${fail} FAIL`);
 process.exit(fail ? 1 : 0);

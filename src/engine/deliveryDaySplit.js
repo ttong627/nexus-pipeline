@@ -111,6 +111,40 @@ export function splitByDay(records = [], { maxLoadPerDay = null, numDays = null,
   return records.map((r) => ({ ...r, 배송일차: dayOfDong.get(dongOf(r)) || 1 }));
 }
 
+/**
+ * 배송순번 구간 기반 일자 분할 (형 지시 2026-07-25).
+ *  담당자가 "하루에 도는 가구 수"를 정하면, 이미 매겨진 배송순번 순서대로 그만큼씩 끊어
+ *  배송일차 1,2,3…을 부여한다. 순번이 곧 동선이므로 동 경계는 무시한다(splitByDay의 동-보존과 다른 취지).
+ *  배송순번이 비어 있는 레코드는 분할 대상에서 빼고 맨 뒤(마지막 일차)로 몰되, 순번 있는 게 없으면 전부 1일차.
+ *
+ * @param {Array} records
+ * @param {object} opts
+ * @param {number} [opts.maxPerDay] 하루 최대 가구수(레코드 수). 미지정/0이면 분할 안 함.
+ * @returns {Array} records 복사본에 `배송일차`(1..N) 부여
+ */
+export function splitBySequence(records = [], { maxPerDay = null } = {}) {
+  if (!records.length) return [];
+  const cap = maxPerDay && maxPerDay > 0 ? Math.floor(maxPerDay) : Infinity;
+
+  const seqOf = (r) => { const n = parseInt(r?.배송순번, 10); return Number.isFinite(n) && n > 0 ? n : null; };
+  const withSeq = [];
+  const noSeq = [];
+  records.forEach((r) => { (seqOf(r) != null ? withSeq : noSeq).push(r); });
+  withSeq.sort((a, b) => seqOf(a) - seqOf(b));
+
+  const dayOf = new Map(); // record 참조 → 배송일차 (id 없어도 안전)
+  let lastDay = 1;
+  withSeq.forEach((r, i) => {
+    const day = Number.isFinite(cap) ? Math.floor(i / cap) + 1 : 1;
+    dayOf.set(r, day);
+    lastDay = day;
+  });
+  // 순번 없는 건은 마지막 일차로(순번 있는 게 없으면 전부 1일차)
+  noSeq.forEach((r) => dayOf.set(r, withSeq.length ? lastDay : 1));
+
+  return records.map((r) => ({ ...r, 배송일차: dayOf.get(r) || 1 }));
+}
+
 /** 분할 결과 요약(화면·검증용) */
 export function summarizeDaySplit(records) {
   const byDay = new Map();
