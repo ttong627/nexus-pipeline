@@ -56,6 +56,38 @@ service cloud.firestore {
       allow read, list, update, delete: if isAdmin() || isAdminEmail();
     }
 
+    // ── 자가학습 승격 사전 (저위험 자동 반영) — dict=관리자 쓰기, suggestion=인증 사용자 기여 ──
+    match /name_typo_dict/{docId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin() || isAdminEmail();
+    }
+    match /name_typo_suggestions/{docId} {
+      allow create: if isAuthenticated() &&
+        request.resource.data.keys().hasOnly(['wrong', 'correction', 'status', 'createdAt', 'createdByUid']) &&
+        request.resource.data.status == 'pending';
+      allow read, update, delete: if isAdmin() || isAdminEmail();
+    }
+    match /building_alias/{docId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin() || isAdminEmail();
+    }
+    match /building_alias_suggestions/{docId} {
+      allow create: if isAuthenticated() &&
+        request.resource.data.keys().hasOnly(['alias', 'canonical', 'status', 'createdAt', 'createdByUid']) &&
+        request.resource.data.status == 'pending';
+      allow read, update, delete: if isAdmin() || isAdminEmail();
+    }
+    match /note_hints/{docId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin() || isAdminEmail();
+    }
+    match /note_hints_suggestions/{docId} {
+      allow create: if isAuthenticated() &&
+        request.resource.data.keys().hasOnly(['hint', 'status', 'createdAt', 'createdByUid']) &&
+        request.resource.data.status == 'pending';
+      allow read, update, delete: if isAdmin() || isAdminEmail();
+    }
+
     // ── 문의: 생성은 인증 사용자, 조회·수정·삭제는 관리자 ────────────────────
     match /inquiries/{inquiryId} {
       allow create: if isAuthenticated();
