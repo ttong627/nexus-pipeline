@@ -427,7 +427,9 @@ const server = createServer(async (req, res) => {
       const body = await readBody(req);
       const road = body.roadAddress || body.standardRoadAddress || '';
       const dongNo = parseDongNo(body.dongNo || body.complexName || '');
-      const cacheKey = (dongNo && road) ? `dong:${normalizeSearchKey(road)}#${dongNo}` : '';
+      const complexKey = normalizeSearchKey(body.complexName || body.buildingName || '');
+      // 캐시 키에 단지명 포함(2026-07-27): 같은 도로명에 걸친 인접 단지가 같은 동번호를 가질 때 좌표 오염 차단.
+      const cacheKey = (dongNo && road) ? `dong:${normalizeSearchKey(road)}#${dongNo}#${complexKey}` : '';
       // 캐시 조회 (같은 아파트 반복 조회 시 VWorld 재호출 방지)
       if (cacheKey) {
         const { rows } = await query(`

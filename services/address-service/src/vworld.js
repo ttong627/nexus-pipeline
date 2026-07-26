@@ -7,7 +7,8 @@ import { cleanText } from './normalize.js';
 const VWORLD_BASE = 'https://api.vworld.kr/req';
 const DEFAULT_TIMEOUT_MS = 7000;
 const BLD_LAYER = 'LT_C_SPBD';
-const BBOX_DEG = 0.0025; // 약 ±250m
+const BBOX_DEG = 0.0025;   // 약 ±250m — 소규모 단지·정밀 1차 조회
+const BBOX_LARGE = 0.0065; // 약 ±700m — 대형 단지(대표점이 단지 한쪽에 찍혀 반대편 동이 범위 밖일 때) 2차 확장 조회
 
 const withTimeout = (ms = DEFAULT_TIMEOUT_MS) => {
   const ctrl = new AbortController();
@@ -19,8 +20,8 @@ const withTimeout = (ms = DEFAULT_TIMEOUT_MS) => {
 export const parseDongNo = (value) => {
   const s = cleanText(value);
   if (!s) return '';
-  const num = s.match(/(\d{1,3})\s*동(?![가-힣])/); // A-32: 동 뒤 한글이면 동호수 아님(장안2동우체국 오탐 차단)
-  if (num) return num[1];
+  const num = s.match(/(\d{1,4})\s*동(?![가-힣])/); // A-32: 동 뒤 한글이면 동호수 아님(장안2동우체국 오탐 차단). 4자리 동(1001동 등) 허용.
+  if (num) return String(Number(num[1])); // 앞자리 0 정규화("0306"→"306")로 클라(apartmentDong)와 정합
   const ko = s.match(/([가-힣A-Za-z])\s*동(?![가-힣])/); // 가동/나동/B동
   return ko ? ko[1] : '';
 };
@@ -107,27 +108,46 @@ const sigunguMatches = (bldSigungu, wantSigungu) => {
   return a.includes(b) || b.includes(a) || b.split(/\s+/).some((tok) => tok && a.includes(tok));
 };
 
+// BBOX 조회 건물 목록에서 원하는 동(棟)을 고른다 — 동번호 일치 + (단지명 있으면) 단지명 포함 우선.
+//   단지명으로 좁혀 인접 단지의 같은 동번호 오채택을 차단(대형 BBOX 확장 시 특히 중요).
+const pickDong = (buildings, { wantDong, complexName, sigungu }) => {
+  if (!wantDong) return null;
+  const regional = buildings.filter((b) => b.lat != null && sigunguMatches(b.sigungu, sigungu));
+  const byDong = regional.filter((b) => b.dongNo === wantDong);
+  if (!byDong.length) return null;
+  const pick = complexName
+    ? byDong.find((b) => cleanText(b.buildName).includes(cleanText(complexName))) || byDong[0]
+    : byDong[0];
+  return pick || null;
+};
+
 // 도로명 + 단지명 + 동번호 → 특정 동의 좌표·층수
 // 반환: { lat, lng, floors, buildName, matched:'dong'|'complex'|'centroid', dongNo }
+// ★대형 단지 대응(2026-07-27 근본수정): geocodeRoad 대표점이 단지 한쪽에 찍히면 반대편 동이 ±250m 밖으로
+//   벗어나 동 매칭이 조용히 실패하고 대표점(=다른 동 위치)으로 회귀했다("306동이 320동 위치에" 원인).
+//   → 좁은 BBOX로 먼저 정밀 조회하고, 동을 못 찾고 동번호가 있으면 넓은 BBOX(±700m)로 한 번 더 조회한다.
+//   소규모 단지는 좁게(정확), 대단지만 넓게 — 인접 단지 오염은 단지명 필터(pickDong)로 방어.
 export const matchDongCoord = async ({ roadAddress, complexName = '', dongNo = '', sigungu = '' }) => {
   const center = await geocodeRoad(roadAddress);
   if (!center) return null;
 
   const wantDong = parseDongNo(dongNo) || parseDongNo(complexName);
-  const all = await getBuildingsNear(center.lng, center.lat);
-  const regional = all.filter((b) => b.lat != null && sigunguMatches(b.sigungu, sigungu));
 
-  // 1순위: 동번호 일치
-  if (wantDong) {
-    const byDong = regional.filter((b) => b.dongNo === wantDong);
-    const pick = complexName
-      ? byDong.find((b) => cleanText(b.buildName).includes(cleanText(complexName))) || byDong[0]
-      : byDong[0];
-    if (pick) {
-      return { lat: pick.lat, lng: pick.lng, floors: pick.floors, buildName: pick.buildName, matched: 'dong', dongNo: wantDong };
-    }
+  // 1차: 좁은 BBOX(±250m) 정밀 조회
+  let all = await getBuildingsNear(center.lng, center.lat, BBOX_DEG);
+  let pick = pickDong(all, { wantDong, complexName, sigungu });
+
+  // 2차: 동을 못 찾았고 동번호가 있으면 넓은 BBOX(±700m)로 확장 조회 — 대단지 커버
+  if (!pick && wantDong) {
+    all = await getBuildingsNear(center.lng, center.lat, BBOX_LARGE);
+    pick = pickDong(all, { wantDong, complexName, sigungu });
   }
-  // 2순위: 단지명 일치(동 못 찾음) — 단지 내 첫 건물
+  if (pick) {
+    return { lat: pick.lat, lng: pick.lng, floors: pick.floors, buildName: pick.buildName, matched: 'dong', dongNo: wantDong };
+  }
+
+  // 2순위: 단지명 일치(동 못 찾음) — (마지막으로 조회한) 범위 내 단지 첫 건물
+  const regional = all.filter((b) => b.lat != null && sigunguMatches(b.sigungu, sigungu));
   if (complexName) {
     const byName = regional.filter((b) => cleanText(b.buildName).includes(cleanText(complexName)));
     if (byName[0]) {
