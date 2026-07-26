@@ -46,6 +46,16 @@ service cloud.firestore {
       allow read, update, delete: if isAdmin() || isAdminEmail();
     }
 
+    // ── 자가학습 후보 큐: 인증 사용자 기여, 검토·집계·승격은 관리자 (Phase 1~3) ──
+    match /learn_candidates/{docId} {
+      allow create: if isAuthenticated() &&
+        request.resource.data.keys().hasOnly([
+          'field', 'before', 'after', 'type', 'risk', 'ruleKey',
+          'payload', 'reason', 'status', 'city', 'month', 'uid', 'createdAt'
+        ]);
+      allow read, list, update, delete: if isAdmin() || isAdminEmail();
+    }
+
     // ── 문의: 생성은 인증 사용자, 조회·수정·삭제는 관리자 ────────────────────
     match /inquiries/{inquiryId} {
       allow create: if isAuthenticated();
