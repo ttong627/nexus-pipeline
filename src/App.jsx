@@ -8,6 +8,7 @@ import { splitNameBirth, sanitizeNote } from "./utils/noteSanitizer.js";
 import { evaluateAddrChange } from "./utils/prevMonthGuard.js";
 import { HOUSEHOLD_EXCL, HOUSEHOLD_RE } from "./columnRules.js";
 import { captureCorrections } from "./learn/captureCorrection.js";
+import { analyzeQuality } from "./analysis/analyzeQuality.js";
 
 // 서버 AI 학습 규칙(nexus_config/ai_rules)이 '수량' 키워드에 가구·세대 칼럼을 끼워넣어
 // 기본 제외(excl)를 무력화하는 것을 로드 시점에 차단(이중 방어, 워커 최종가드와 병행). CLAUDE.md §5
@@ -1389,6 +1390,14 @@ export default function App() {
     const addressMissingCount = errList.filter(r => (r._사유 || '').includes('주소 없음')).length;
     const otherErrCount = errList.length - apiFailCount - emptyAddrCount - shortAddrCount
       - outOfMunicipalityCount - outOfAdminDongCount - jibunOnlyCount - addressMissingCount;
+    // 정밀 분석: 정제결과 품질(중복인물·원본대비누락·수량이상). 원본 신고 소계는 worksheets에서 합산.
+    const declaredHeadSum = (worksheets || [])
+      .filter(s => s.selected !== false && Number(s.declaredHead) > 0)
+      .reduce((sum, s) => sum + Number(s.declaredHead), 0);
+    const declaredQtySumAll = (worksheets || [])
+      .filter(s => s.selected !== false && Number(s.declaredQty) > 0)
+      .reduce((sum, s) => sum + Number(s.declaredQty), 0);
+    const quality = analyzeQuality(results, { declaredHead: declaredHeadSum, declaredQty: declaredQtySumAll });
     setPurifyResult({
       totalCount: results.length,
       successCount: results.length - errList.length,
@@ -1403,6 +1412,7 @@ export default function App() {
       otherErrCount,
       importedCount: results.filter(r => r._이식됨).length,
       inferredAddressCount: results.filter(r => r._주소추정 || (r._추정사유 || '').trim()).length,
+      quality,
     });
 
     // 정제 누적 통계: 대시보드/관리자 화면에서 공통으로 읽는 users 문서 필드

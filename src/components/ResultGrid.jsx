@@ -427,6 +427,47 @@ const ResultGrid = memo(function ResultGrid({
                 </button>
               </div>
             )}
+            {purifyResult.quality?.hasIssues && (
+              <div className="bg-black/40 border border-fuchsia-500/20 rounded-xl p-4 mb-4 space-y-2">
+                <p className="text-xs text-fuchsia-300 font-black mb-2 flex items-center gap-1.5"><Sparkles size={13}/> 정밀 분석 (데이터 품질)</p>
+                {purifyResult.quality.dupGroups > 0 && (
+                  <>
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-fuchsia-400 font-bold">• 중복 의심 인물</span>
+                      <span className="text-white font-black">{purifyResult.quality.dupGroups}명 · {purifyResult.quality.dupExtra}건 초과</span>
+                    </div>
+                    <p className="text-[11px] text-gray-500 leading-relaxed pl-2">
+                      {purifyResult.quality.duplicates.slice(0, 12).map(d => `${d.name}(${d.count})`).join(' · ')}
+                      {purifyResult.quality.duplicates.length > 12 ? ` 외 ${purifyResult.quality.duplicates.length - 12}명` : ''}
+                    </p>
+                  </>
+                )}
+                {purifyResult.quality.shortage?.headDiff > 0 && (
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-amber-400 font-bold">• 원본 대비 인원 부족</span>
+                    <span className="text-white font-black">원본 {purifyResult.quality.shortage.declaredHead.toLocaleString()} → {purifyResult.quality.shortage.actualHead.toLocaleString()} ({purifyResult.quality.shortage.headDiff.toLocaleString()}건)</span>
+                  </div>
+                )}
+                {purifyResult.quality.shortage?.qtyDiff > 0 && (
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-amber-400 font-bold">• 원본 대비 포수 부족</span>
+                    <span className="text-white font-black">{purifyResult.quality.shortage.qtyDiff.toLocaleString()}포</span>
+                  </div>
+                )}
+                {purifyResult.quality.qtyZero?.length > 0 && (
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-red-400 font-bold">• 포수 0 (누락 의심)</span>
+                    <span className="text-white font-black">{purifyResult.quality.qtyZero.length}건</span>
+                  </div>
+                )}
+                {purifyResult.quality.qtyHigh?.length > 0 && (
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-yellow-400 font-bold">• 포수 과다 (10↑)</span>
+                    <span className="text-white font-black">{purifyResult.quality.qtyHigh.length}건</span>
+                  </div>
+                )}
+              </div>
+            )}
             <div className="flex gap-3">
               {purifyResult.errorCount > 0 && (
                 <button onClick={() => { setFilter(f => ({...f, showErrorsOnly: true})); onClosePurifyResult(); }}
