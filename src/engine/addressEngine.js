@@ -267,6 +267,8 @@ const kakaoCache      = new Map(); // Kakao POI
 // ── A-2: 오타 사전 ────────────────────────────────────────────────
 let typoDict   = {};
 let _typoRegex = null;
+let nameTypoDict = {};       // 이름 오타 사전(Phase 4) — 주소 typo와 분리, 이름에만 적용
+let buildingAliasDict = {};  // 건물명 별칭 사전(Phase 4) — 승인된 별칭 → 표준 건물명
 
 // Firestore typo_dict 미로드 시에도 반드시 교정해야 하는 긴급 항목.
 // 신규 오타는 Enter 재정제로 자동 등록 → 아래 목록은 최소화.
@@ -334,9 +336,11 @@ export let typoDictReady = Promise.resolve();
 export const loadTypoDict = async () => {
   typoDictReady = (async () => {
     try {
-      const [typoSnap, spSnap] = await Promise.all([
+      const [typoSnap, spSnap, nameSnap, aliasSnap] = await Promise.all([
         getDocs(collection(db, 'typo_dict')),
         getDocs(collection(db, 'special_chars')),
+        getDocs(collection(db, 'name_typo_dict')),   // Phase 4: 승인된 이름 오타
+        getDocs(collection(db, 'building_alias')),   // Phase 4: 승인된 건물명 별칭
       ]);
       typoSnap.forEach(d => {
         const data = d.data();
@@ -344,6 +348,14 @@ export const loadTypoDict = async () => {
         if (wrong && data.correction) typoDict[wrong] = data.correction;
       });
       spSnap.forEach(d => { specialChars.add(d.data().char || d.id); });
+      nameSnap.forEach(d => {
+        const x = d.data(); const w = x.wrong || d.id;
+        if (w && x.correction) nameTypoDict[w] = x.correction;
+      });
+      aliasSnap.forEach(d => {
+        const x = d.data(); const a = x.alias || d.id;
+        if (a && x.canonical) buildingAliasDict[a] = x.canonical;
+      });
       _buildTypoRegex();
       _buildSpecialCharRegex();
     } catch (e) { console.error('[A-2] 사전 로드 오류:', e); }
@@ -789,6 +801,13 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
       addCorrectionLog(m, fixed, '학습 오타 보정');
       return fixed;
     });
+  }
+  // 학습 이름 오타 사전 적용 (Phase 4) — 정제된이름/본명에 승인된 이름 오타 치환(완전일치만).
+  {
+    const _bn = result.정제된이름;
+    if (_bn && nameTypoDict[_bn]) result.정제된이름 = nameTypoDict[_bn];
+    if (result.본명 && nameTypoDict[result.본명]) result.본명 = nameTypoDict[result.본명];
+    if (_bn !== result.정제된이름) addCorrectionLog(_bn, result.정제된이름, '학습 이름 보정');
   }
   const beforeCommonRoadTypo = text;
   text = text.replace(/\uC7AC\uAE30\uB85C(?=\d*\uAE38|\s*\d)/g, '\uC81C\uAE30\uB85C');
@@ -1468,6 +1487,10 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
   // A-31: 괄호에 실제로 표시된 건물명을 컬럼에도 그대로 넣는다. 예전엔 API(bdNm)에서 온 값만
   // 담아서, 입력 문장에서 뽑힌 건물명(래미안크레시티 등)은 괄호엔 보이는데 컬럼은 비어 있었다.
   result.buildingName = buildingName || apiResult?.buildingName || apiResult?.bdNm || '';
+  // 학습 건물명 별칭 적용 (Phase 4) — 승인된 별칭을 표준 건물명으로 치환(완전일치만).
+  if (result.buildingName && buildingAliasDict[result.buildingName]) {
+    result.buildingName = buildingAliasDict[result.buildingName];
+  }
   // A-31: 보강조회까지 반영된 법정동. 한글 키(법정동)로도 노출 — 그리드·엑셀·DB 컬럼이 그대로 쓴다.
   result.legalDong = legalDong || apiResult?.legalDong || apiResult?.emdNm || '';
   result.법정동 = result.legalDong;
