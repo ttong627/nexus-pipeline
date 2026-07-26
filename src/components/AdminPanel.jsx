@@ -2,7 +2,7 @@
 import { createPortal } from 'react-dom';
 import { getDocs, getDoc, updateDoc, setDoc, deleteDoc, doc, collection, db, serverTimestamp, Timestamp, addDoc, query, orderBy, limit, writeBatch, arrayUnion, arrayRemove } from '../config/firebase.js';
 const ttl90 = () => Timestamp.fromMillis(Date.now() + 90 * 24 * 60 * 60 * 1000);
-import { X, Users, BarChart2, Clock, ShieldOff, ShieldCheck, AlertTriangle, Crown, MessageSquare, CheckCircle2, Building2, ShieldAlert, Plus, ChevronDown, TrendingUp, AlertCircle, UserX, Activity, Zap, Trash2, Truck, Edit2, RefreshCw, UserCheck } from 'lucide-react';
+import { X, Users, BarChart2, Clock, ShieldOff, ShieldCheck, AlertTriangle, Crown, MessageSquare, CheckCircle2, Building2, ShieldAlert, Plus, ChevronDown, TrendingUp, AlertCircle, UserX, Activity, Zap, Trash2, Truck, Edit2, RefreshCw, UserCheck, Sparkles } from 'lucide-react';
 import { REGIONS, getSigunguOptions } from '../utils/regions.js';
 import { getDriversCollection, getDriverScopeLabel } from '../utils/company.js';
 
@@ -299,6 +299,67 @@ export default function AdminPanel({ onClose, user }) {
       setErrorLogs(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     } catch { setErrorLogs([]); }
     finally { setErrorLoading(false); }
+  };
+
+  // 자가학습 검토 큐 (Phase 3)
+  const [learnSug, setLearnSug] = useState([]);       // 승인 대기 제안(일반사용자 제출 suggestion)
+  const [learnCand, setLearnCand] = useState([]);     // 고위험 후보(검토 필요)
+  const [learnLoading, setLearnLoading] = useState(false);
+
+  // 제안 컬렉션 → 승격 사전 매핑. before/after는 표시용, payload는 dict 승격 데이터.
+  const LEARN_SUG_DEFS = [
+    { col: 'typo_suggestions', dict: 'typo_dict', label: '주소 오타', key: d => d.wrong, before: d => d.wrong, after: d => d.correction, payload: d => ({ wrong: d.wrong, correction: d.correction, updatedAt: new Date().toISOString() }) },
+    { col: 'name_typo_suggestions', dict: 'name_typo_dict', label: '이름 오타', key: d => d.wrong, before: d => d.wrong, after: d => d.correction, payload: d => ({ wrong: d.wrong, correction: d.correction, updatedAt: new Date().toISOString() }) },
+    { col: 'building_alias_suggestions', dict: 'building_alias', label: '건물명 별칭', key: d => d.alias, before: d => d.alias, after: d => d.canonical, payload: d => ({ alias: d.alias, canonical: d.canonical, updatedAt: new Date().toISOString() }) },
+    { col: 'note_hints_suggestions', dict: 'note_hints', label: '특이사항', key: d => d.hint, before: () => '', after: d => d.hint, payload: d => ({ hint: d.hint, updatedAt: new Date().toISOString() }) },
+    { col: 'special_char_suggestions', dict: 'special_chars', label: '특수문자', key: d => d.char, before: () => '', after: d => d.char, payload: d => ({ char: d.char, addedAt: new Date().toISOString() }) },
+  ];
+  const learnDocId = (v) => encodeURIComponent(String(v || '').trim()).replace(/\./g, '%2E').slice(0, 1400);
+
+  const fetchLearn = async () => {
+    setLearnLoading(true);
+    try {
+      const sugSnaps = await Promise.all(LEARN_SUG_DEFS.map(def =>
+        getDocs(query(collection(db, def.col), limit(100))).catch(() => ({ docs: [] }))
+      ));
+      const sug = [];
+      sugSnaps.forEach((snap, i) => {
+        const def = LEARN_SUG_DEFS[i];
+        snap.docs.forEach(d => {
+          const data = d.data();
+          const after = def.after(data);
+          if (!after) return; // 값 없는 제안은 표시 제외
+          sug.push({ __col: def.col, __id: d.id, __def: i, label: def.label, before: def.before(data), after, _raw: data });
+        });
+      });
+      setLearnSug(sug);
+      const candSnap = await getDocs(query(collection(db, 'learn_candidates'), limit(200))).catch(() => ({ docs: [] }));
+      setLearnCand(candSnap.docs.map(d => ({ id: d.id, ...d.data() })).filter(c => c.risk === 'high' && c.status === 'pending'));
+    } catch { setLearnSug([]); setLearnCand([]); }
+    finally { setLearnLoading(false); }
+  };
+
+  const approveSug = async (item) => {
+    const def = LEARN_SUG_DEFS[item.__def];
+    try {
+      await setDoc(doc(db, def.dict, learnDocId(def.key(item._raw))), def.payload(item._raw), { merge: true });
+      await deleteDoc(doc(db, item.__col, item.__id));
+      setLearnSug(prev => prev.filter(s => !(s.__col === item.__col && s.__id === item.__id)));
+    } catch (e) { alert('승인 실패: ' + e.message); }
+  };
+
+  const rejectSug = async (item) => {
+    try {
+      await deleteDoc(doc(db, item.__col, item.__id));
+      setLearnSug(prev => prev.filter(s => !(s.__col === item.__col && s.__id === item.__id)));
+    } catch (e) { alert('거부 실패: ' + e.message); }
+  };
+
+  const dismissCand = async (id) => {
+    try {
+      await deleteDoc(doc(db, 'learn_candidates', id));
+      setLearnCand(prev => prev.filter(c => c.id !== id));
+    } catch (e) { alert('삭제 실패: ' + e.message); }
   };
 
   // DB 마이그레이션: 동사무소/읍사무소/면사무소 → 주민센터
@@ -1024,6 +1085,17 @@ export default function AdminPanel({ onClose, user }) {
                 </span>
               )}
             </button>
+            <button
+              onClick={() => { setActiveTab('learn'); if (!learnSug.length && !learnCand.length) fetchLearn(); }}
+              className={`px-4 py-2 rounded-lg text-sm font-bold transition-colors flex items-center gap-2 ${activeTab === 'learn' ? 'bg-[#3b82f6] text-black shadow-[0_0_15px_rgba(59,130,246,0.3)]' : 'bg-[#111] text-gray-400 border border-[#333] hover:text-white hover:bg-[#222]'}`}
+            >
+              <Sparkles size={16} /> 학습 검토
+              {learnSug.length > 0 && (
+                <span className="bg-cyan-500 text-black text-[10px] px-1.5 py-0.5 rounded-full ml-1 font-black">
+                  {learnSug.length}
+                </span>
+              )}
+            </button>
             <button onClick={onClose} className="text-gray-500 hover:text-white transition-colors p-1 ml-4"><X size={22}/></button>
           </div>
         </div>
@@ -1446,6 +1518,59 @@ export default function AdminPanel({ onClose, user }) {
                 ))}
               </div>
             )}
+          </div>
+        )}
+
+
+        {activeTab === 'learn' && (
+          <div className="flex-1 overflow-auto scrollbar-thin scrollbar-thumb-[#2d4a35] p-6 space-y-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-white font-black text-lg flex items-center gap-2"><Sparkles size={18}/> 자가학습 검토</h3>
+                <p className="text-gray-500 text-xs mt-1">직원이 정제 중 만든 저위험 규칙을 승인 · 고위험 수정은 확인만(자동 반영 안 함)</p>
+              </div>
+              <button onClick={fetchLearn} className="px-3 py-1.5 rounded-lg text-xs font-bold bg-[#111] text-gray-300 border border-[#333] hover:bg-[#222] flex items-center gap-1.5"><RefreshCw size={13}/> 새로고침</button>
+            </div>
+
+            {learnLoading && <div className="text-gray-500 text-sm">불러오는 중…</div>}
+
+            {/* 승인 대기 제안 */}
+            <div>
+              <h4 className="text-cyan-400 font-bold text-sm mb-2">승인 대기 제안 <span className="font-mono">{learnSug.length}</span></h4>
+              {learnSug.length === 0 && !learnLoading && <div className="text-gray-600 text-xs">대기 중인 제안이 없습니다.</div>}
+              <div className="space-y-1.5">
+                {learnSug.map(item => (
+                  <div key={`${item.__col}_${item.__id}`} className="flex items-center gap-3 bg-[#0a0a0a] border border-[#222] rounded-lg px-3 py-2">
+                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-[#1a2a3a] text-cyan-300 shrink-0">{item.label}</span>
+                    <span className="text-sm text-gray-300 flex-1 truncate">
+                      {item.before ? <><span className="text-red-400 line-through">{item.before}</span> <span className="text-gray-600">→</span> </> : null}
+                      <span className="text-emerald-400 font-bold">{item.after}</span>
+                    </span>
+                    <button onClick={() => approveSug(item)} className="px-2.5 py-1 rounded text-xs font-bold bg-emerald-600/20 text-emerald-300 border border-emerald-700/40 hover:bg-emerald-600/30 shrink-0">승인</button>
+                    <button onClick={() => rejectSug(item)} className="px-2.5 py-1 rounded text-xs font-bold bg-[#111] text-gray-400 border border-[#333] hover:text-red-300 shrink-0">거부</button>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* 고위험 후보(검토) */}
+            <div>
+              <h4 className="text-amber-400 font-bold text-sm mb-2 flex items-center gap-1.5"><ShieldAlert size={15}/> 고위험 수정(검토) <span className="font-mono">{learnCand.length}</span></h4>
+              <p className="text-gray-600 text-[11px] mb-2">주소 본번·이름 변경은 동명이인·변조 위험이 있어 자동 반영하지 않습니다. 내용 확인용이며, 확인 후 목록에서 지웁니다.</p>
+              {learnCand.length === 0 && !learnLoading && <div className="text-gray-600 text-xs">검토할 고위험 수정이 없습니다.</div>}
+              <div className="space-y-1.5">
+                {learnCand.map(c => (
+                  <div key={c.id} className="flex items-center gap-3 bg-[#0a0a0a] border border-amber-900/30 rounded-lg px-3 py-2">
+                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-900/30 text-amber-300 shrink-0">{c.field === 'name' ? '이름' : c.field === 'address' ? '주소' : c.field}</span>
+                    <span className="text-sm text-gray-300 flex-1 truncate">
+                      <span className="text-red-400 line-through">{c.before}</span> <span className="text-gray-600">→</span> <span className="text-amber-300 font-bold">{c.after}</span>
+                      {c.city && <span className="text-gray-600 text-[11px] ml-2">{c.city}</span>}
+                    </span>
+                    <button onClick={() => dismissCand(c.id)} className="px-2.5 py-1 rounded text-xs font-bold bg-[#111] text-gray-400 border border-[#333] hover:text-red-300 shrink-0">확인함</button>
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
         )}
 
