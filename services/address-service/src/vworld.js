@@ -26,17 +26,37 @@ export const parseDongNo = (value) => {
   return ko ? ko[1] : '';
 };
 
-// 폴리곤/멀티폴리곤 지오메트리 → centroid(좌표 평균) 근사
+// 링(외곽 정점 [lng,lat] 배열)의 면적가중 중심(shoelace) — 정점 단순평균의 요철 편향 제거(도형 정중심).
+//   ★2026-07-27 근본수정: 정점 평균은 요철·곡선부(정점 밀집)로 중심이 쏠려 옆 동을 찍었다(703→701·707→706 등).
+const ringAreaCentroid = (ring) => {
+  const avg = () => { const xs = ring.map((p) => p[0]); const ys = ring.map((p) => p[1]); return { lng: xs.reduce((a, b) => a + b, 0) / xs.length, lat: ys.reduce((a, b) => a + b, 0) / ys.length, area: 0 }; };
+  if (!Array.isArray(ring) || ring.length < 4) return avg();
+  let A = 0; let cx = 0; let cy = 0;
+  for (let i = 0; i < ring.length - 1; i += 1) {
+    const [x0, y0] = ring[i]; const [x1, y1] = ring[i + 1];
+    const cr = x0 * y1 - x1 * y0; A += cr; cx += (x0 + x1) * cr; cy += (y0 + y1) * cr;
+  }
+  A *= 0.5;
+  if (Math.abs(A) < 1e-13) return avg();
+  return { lng: cx / (6 * A), lat: cy / (6 * A), area: Math.abs(A) };
+};
+
+// 폴리곤/멀티폴리곤 지오메트리 → 대표 좌표. 면적 최대 폴리곤(부속 조각 제외)의 면적가중 중심.
 const geometryCentroid = (geometry) => {
   if (!geometry?.coordinates) return { lat: null, lng: null };
-  const flat = JSON.stringify(geometry.coordinates).match(/-?\d+\.\d+/g)?.map(Number) || [];
-  const xs = flat.filter((_, i) => i % 2 === 0);
-  const ys = flat.filter((_, i) => i % 2 === 1);
-  if (!xs.length) return { lat: null, lng: null };
-  return {
-    lng: xs.reduce((a, b) => a + b, 0) / xs.length,
-    lat: ys.reduce((a, b) => a + b, 0) / ys.length,
-  };
+  const c = geometry.coordinates;
+  let rings = [];
+  if (geometry.type === 'Polygon') rings = [c[0]];
+  else if (geometry.type === 'MultiPolygon') rings = c.map((poly) => poly && poly[0]).filter(Boolean);
+  if (!rings.length) {
+    const flat = JSON.stringify(c).match(/-?\d+\.\d+/g)?.map(Number) || [];
+    const xs = flat.filter((_, i) => i % 2 === 0); const ys = flat.filter((_, i) => i % 2 === 1);
+    if (!xs.length) return { lat: null, lng: null };
+    return { lng: xs.reduce((a, b) => a + b, 0) / xs.length, lat: ys.reduce((a, b) => a + b, 0) / ys.length };
+  }
+  let best = null; let bestArea = -1;
+  for (const ring of rings) { const cen = ringAreaCentroid(ring); if (cen.area >= bestArea) { bestArea = cen.area; best = cen; } }
+  return best ? { lat: best.lat, lng: best.lng } : { lat: null, lng: null };
 };
 
 // 도로명주소 → 좌표 (지오코더 API)
