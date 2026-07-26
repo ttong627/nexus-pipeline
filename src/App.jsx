@@ -7,6 +7,7 @@ import { refreshSavedCols } from "./utils/colOrder.js";
 import { splitNameBirth, sanitizeNote } from "./utils/noteSanitizer.js";
 import { evaluateAddrChange } from "./utils/prevMonthGuard.js";
 import { HOUSEHOLD_EXCL, HOUSEHOLD_RE } from "./columnRules.js";
+import { captureCorrections } from "./learn/captureCorrection.js";
 
 // 서버 AI 학습 규칙(nexus_config/ai_rules)이 '수량' 키워드에 가구·세대 칼럼을 끼워넣어
 // 기본 제외(excl)를 무력화하는 것을 로드 시점에 차단(이중 방어, 워커 최종가드와 병행). CLAUDE.md §5
@@ -1266,6 +1267,14 @@ export default function App() {
             _추정사유: processedRow.추정사유 || '',
             _원주소: processedRow.원주소 || getVal(row, 'address') || '',
             _addressDisplayMode: addressDisplayMode,
+            // 자가학습 baseline: 정제직후 스냅샷. 저장 시 최종값과 diff→captureCorrections(확정분만).
+            // 재정제·셀편집은 {...row} spread라 이 값이 유지돼 "정제직후→최종확정" 차이만 학습된다.
+            _learnBaseline: {
+              주소: _finalAddr,
+              이름: processedRow.정제된이름 || name,
+              특이사항: _san.note || '',
+              건물명: _san.buildingName || processedRow.buildingName || '',
+            },
           };
           } catch (rowErr) {
             // 한 행의 정제 예외가 전체 배치를 죽이지 않도록 격리 — 그 행만 오류로 표시하고 나머지는 계속 정제.
@@ -2162,6 +2171,22 @@ export default function App() {
           await new Promise(r => setTimeout(r, 0)); // 메인스레드 양보 — 대량 저장 중 UI 프리징 완화
         }
       } catch (e) { throw new Error(`[5단계 레코드 배치저장 권한 오류] ${e.message}\n계정: ${user?.email}`); }
+
+      // 자가학습 캡처: 정제직후값(_learnBaseline) vs 최종 확정값 diff만 기록(확정분만·비차단).
+      //   위험분류(classifyCorrection)로 저위험 자동/고위험 검토 분기. 실패해도 저장 흐름 무영향.
+      try {
+        const learnCtx = { cityLabel: city, month: monthStr };
+        const learnItems = [];
+        for (const r of allData) {
+          const bl = r._learnBaseline;
+          if (!bl) continue;
+          if ((r.주소 || '') !== (bl.주소 || '')) learnItems.push({ field: 'address', before: bl.주소 || '', after: r.주소 || '', context: learnCtx });
+          if ((r.이름 || '') !== (bl.이름 || '')) learnItems.push({ field: 'name', before: bl.이름 || '', after: r.이름 || '', context: learnCtx });
+          if ((r.특이사항 || '') !== (bl.특이사항 || '')) learnItems.push({ field: 'note', before: bl.특이사항 || '', after: r.특이사항 || '', context: learnCtx });
+          if ((r.건물명 || '') !== (bl.건물명 || '')) learnItems.push({ field: 'buildingName', before: bl.건물명 || '', after: r.건물명 || '', context: learnCtx });
+        }
+        if (learnItems.length) captureCorrections(learnItems).catch(() => {});
+      } catch (e) { console.warn('[learn] 수정 캡처 스킵:', e); }
 
       await addDoc(collection(db, 'audit_logs'), {
         action: 'SAVE_MONTHLY_LIST', city, monthId: monthStr,
