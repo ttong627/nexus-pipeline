@@ -73,10 +73,33 @@ test('건물명 별칭 표준화 → building_alias·low', () => {
 });
 
 // ── 특이사항/배송힌트 이동 (저위험, "이동≠삭제") ──────────────
-test('빈 특이사항에 배송힌트 추가 → note_move·low', () => {
+test('빈 특이사항에 배송힌트 추가 → note_move·low (힌트 축적, 매핑 아님)', () => {
   const r = classifyCorrection({ field: 'note', before: '', after: '계단위집' });
   assert.equal(r.type, 'note_move');
   assert.equal(r.risk, 'low');
+  assert.deepEqual(r.payload, { hint: '계단위집' });
+});
+
+// ── 특이사항 정규화 매핑 (저위험, before≠after 둘 다 있음 → 재적용 대상) ──
+test('특이사항 표기 정규화(before≠after) → note_normalize·low·{wrong,correct}', () => {
+  const r = classifyCorrection({ field: 'note', before: '계단위집', after: '계단 위 집' });
+  assert.equal(r.type, 'note_normalize');
+  assert.equal(r.risk, 'low');
+  assert.equal(r.ruleKey, 'note_norm:계단위집');
+  assert.deepEqual(r.payload, { wrong: '계단위집', correct: '계단 위 집' });
+});
+
+test('특이사항 공백만 다른 것 → noop (학습 안 함)', () => {
+  const r = classifyCorrection({ field: 'note', before: '지하 ', after: '지하' });
+  assert.equal(r.type, 'noop');
+  assert.equal(r.risk, 'none');
+});
+
+test('특이사항 삭제(after 빈값) → note_move 유지·힌트 없음', () => {
+  const r = classifyCorrection({ field: 'note', before: '오타내용', after: '' });
+  assert.equal(r.type, 'note_move');
+  assert.equal(r.risk, 'low');
+  assert.deepEqual(r.payload, { hint: '' });
 });
 
 // ── 컬럼 매핑 (저위험) ────────────────────────────────────

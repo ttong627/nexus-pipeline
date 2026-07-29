@@ -312,6 +312,7 @@ export default function AdminPanel({ onClose, user }) {
     { col: 'name_typo_suggestions', dict: 'name_typo_dict', label: '이름 오타', key: d => d.wrong, before: d => d.wrong, after: d => d.correction, payload: d => ({ wrong: d.wrong, correction: d.correction, updatedAt: new Date().toISOString() }) },
     { col: 'building_alias_suggestions', dict: 'building_alias', label: '건물명 별칭', key: d => d.alias, before: d => d.alias, after: d => d.canonical, payload: d => ({ alias: d.alias, canonical: d.canonical, updatedAt: new Date().toISOString() }) },
     { col: 'note_hints_suggestions', dict: 'note_hints', label: '특이사항', key: d => d.hint, before: () => '', after: d => d.hint, payload: d => ({ hint: d.hint, updatedAt: new Date().toISOString() }) },
+    { col: 'note_normalize_suggestions', dict: 'note_normalize_dict', label: '특이사항 정규화', key: d => d.wrong, before: d => d.wrong, after: d => d.correction, payload: d => ({ wrong: d.wrong, correction: d.correction, updatedAt: new Date().toISOString() }) },
     { col: 'special_char_suggestions', dict: 'special_chars', label: '특수문자', key: d => d.char, before: () => '', after: d => d.char, payload: d => ({ char: d.char, addedAt: new Date().toISOString() }) },
   ];
   const learnDocId = (v) => encodeURIComponent(String(v || '').trim()).replace(/\./g, '%2E').slice(0, 1400);

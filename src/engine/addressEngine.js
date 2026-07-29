@@ -2,6 +2,7 @@ import { collection, getDocs, setDoc, doc, addDoc, serverTimestamp } from 'fireb
 import { db, auth } from '../config/firebase.js';
 import { getLocalCache, setLocalCache } from './dbCache.js';
 import { parseAptDong } from './routeSequenceEngine.js';
+import { applyNoteNormalize } from '../learn/applyNoteNormalize.js';
 
 // ══════════════════════════════════════════════════════════════════
 //  TTong NEXUS — 주소 정제 엔진  (규칙 A-1 ~ A-20)
@@ -269,6 +270,7 @@ let typoDict   = {};
 let _typoRegex = null;
 let nameTypoDict = {};       // 이름 오타 사전(Phase 4) — 주소 typo와 분리, 이름에만 적용
 let buildingAliasDict = {};  // 건물명 별칭 사전(Phase 4) — 승인된 별칭 → 표준 건물명
+let noteNormalizeDict = {};  // 특이사항 정규화 사전(#5-A) — 승인된 표기(wrong) → 표준(correction), 완전일치만
 
 // Firestore typo_dict 미로드 시에도 반드시 교정해야 하는 긴급 항목.
 // 신규 오타는 Enter 재정제로 자동 등록 → 아래 목록은 최소화.
@@ -336,11 +338,12 @@ export let typoDictReady = Promise.resolve();
 export const loadTypoDict = async () => {
   typoDictReady = (async () => {
     try {
-      const [typoSnap, spSnap, nameSnap, aliasSnap] = await Promise.all([
+      const [typoSnap, spSnap, nameSnap, aliasSnap, noteNormSnap] = await Promise.all([
         getDocs(collection(db, 'typo_dict')),
         getDocs(collection(db, 'special_chars')),
-        getDocs(collection(db, 'name_typo_dict')),   // Phase 4: 승인된 이름 오타
-        getDocs(collection(db, 'building_alias')),   // Phase 4: 승인된 건물명 별칭
+        getDocs(collection(db, 'name_typo_dict')),      // Phase 4: 승인된 이름 오타
+        getDocs(collection(db, 'building_alias')),      // Phase 4: 승인된 건물명 별칭
+        getDocs(collection(db, 'note_normalize_dict')), // #5-A: 승인된 특이사항 정규화
       ]);
       typoSnap.forEach(d => {
         const data = d.data();
@@ -355,6 +358,10 @@ export const loadTypoDict = async () => {
       aliasSnap.forEach(d => {
         const x = d.data(); const a = x.alias || d.id;
         if (a && x.canonical) buildingAliasDict[a] = x.canonical;
+      });
+      noteNormSnap.forEach(d => {
+        const x = d.data(); const w = x.wrong || d.id;
+        if (w && x.correction) noteNormalizeDict[w] = x.correction;
       });
       _buildTypoRegex();
       _buildSpecialCharRegex();
@@ -1563,6 +1570,9 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
     if (!coord) coord = await fetchKakaoCoord(road, cityPrefix, result.buildingMgtNo);
     if (coord) { result.lat = coord.lat; result.lng = coord.lng; }
   }
+
+  // ── #5-A: 특이사항 정규화 재적용 (승인된 note_normalize_dict, 완전일치만·주소 무개입) ──
+  result.특이사항 = applyNoteNormalize(result.특이사항, noteNormalizeDict);
 
   return result;
 };

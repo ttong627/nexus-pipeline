@@ -11,7 +11,7 @@ import { db, auth } from '../config/firebase.js';
 import { classifyCorrection } from './classifyCorrection.js';
 import { buildCandidate } from './buildCandidate.js';
 import { addTypoRecord } from '../engine/addressEngine.js';
-import { saveNameTypo, saveBuildingAlias, saveNoteHint } from './learnStore.js';
+import { saveNameTypo, saveBuildingAlias, saveNoteHint, saveNoteNormalize } from './learnStore.js';
 
 function safeUid() {
   try { return auth?.currentUser?.uid || ''; } catch { return ''; }
@@ -53,8 +53,10 @@ export async function captureCorrection({ field, before, after, context = {} } =
         await saveNameTypo(cls.payload.wrong, cls.payload.correct);          // 이름 오타(분리 사전)
       } else if (cls.type === 'building_alias') {
         await saveBuildingAlias(cls.payload.alias, cls.payload.canonical);   // 건물명 별칭
+      } else if (cls.type === 'note_normalize') {
+        await saveNoteNormalize(cls.payload.wrong, cls.payload.correct);     // 특이사항 정규화(재적용 대상)
       } else if (cls.type === 'note_move') {
-        await saveNoteHint(cls.payload.hint);                                // 특이사항/배송힌트
+        await saveNoteHint(cls.payload.hint);                                // 특이사항/배송힌트(축적)
       }
       // column_map은 ai_rules 구조가 복잡·오적용 위험 → 후보만 기록, 관리자 검토(Phase 3)에서 승격.
     }

@@ -87,6 +87,16 @@ service cloud.firestore {
         request.resource.data.status == 'pending';
       allow read, update, delete: if isAdmin() || isAdminEmail();
     }
+    match /note_normalize_dict/{docId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin() || isAdminEmail();
+    }
+    match /note_normalize_suggestions/{docId} {
+      allow create: if isAuthenticated() &&
+        request.resource.data.keys().hasOnly(['wrong', 'correction', 'status', 'createdAt', 'createdByUid']) &&
+        request.resource.data.status == 'pending';
+      allow read, update, delete: if isAdmin() || isAdminEmail();
+    }
 
     // ── 문의: 생성은 인증 사용자, 조회·수정·삭제는 관리자 ────────────────────
     match /inquiries/{inquiryId} {

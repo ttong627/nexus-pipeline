@@ -57,3 +57,15 @@ export async function saveNoteHint(hint) {
     suggestionFields: { hint: h },
   });
 }
+
+// 특이사항 표기 정규화(wrong→correct 완전일치 치환) — 재적용 대상.
+//   name_typo_dict와 동일 스키마(wrong·correction)로 저장해 loadTypoDict가 일관 로드.
+export async function saveNoteNormalize(wrong, correct) {
+  const w = String(wrong || '').trim(), c = String(correct || '').trim();
+  if (!w || !c || w === c || w.length > 60) return 'skip'; // 빈값·동일·과장문구 제외
+  return saveDictOrSuggestion({
+    dictName: 'note_normalize_dict', suggestionName: 'note_normalize_suggestions', docId: dictDocId(w),
+    dictPayload: { wrong: w, correction: c, updatedAt: new Date().toISOString() },
+    suggestionFields: { wrong: w, correction: c },
+  });
+}

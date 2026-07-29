@@ -110,6 +110,14 @@ export function classifyCorrection({ field, before, after, context = {} } = {}) 
     }
 
     case 'note': {
+      // before·after 둘 다 값이 있고 다르면 표기 정규화 매핑(재적용 대상: 완전일치 치환).
+      // 한쪽이 비면(추가/삭제) 매핑이 아니라 힌트 축적 — 재적용하지 않는다.
+      if (b && a) {
+        return {
+          type: 'note_normalize', risk: 'low', ruleKey: `note_norm:${b}`,
+          payload: { wrong: b, correct: a }, reason: '특이사항 표기 정규화',
+        };
+      }
       return {
         type: 'note_move', risk: 'low', ruleKey: `note:${a}`,
         payload: { hint: a }, reason: '특이사항/배송힌트',
