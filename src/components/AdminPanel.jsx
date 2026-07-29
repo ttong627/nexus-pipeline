@@ -1,11 +1,18 @@
 ﻿import { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { getDocs, getDoc, updateDoc, setDoc, deleteDoc, doc, collection, db, serverTimestamp, Timestamp, addDoc, query, orderBy, limit, writeBatch, arrayUnion, arrayRemove } from '../config/firebase.js';
+import { getDocs, getDoc, updateDoc, setDoc, deleteDoc, doc, collection, db, serverTimestamp, Timestamp, addDoc, query, orderBy, limit, writeBatch, arrayUnion, arrayRemove, getCountFromServer } from '../config/firebase.js';
 const ttl90 = () => Timestamp.fromMillis(Date.now() + 90 * 24 * 60 * 60 * 1000);
 import { X, Users, BarChart2, Clock, ShieldOff, ShieldCheck, AlertTriangle, Crown, MessageSquare, CheckCircle2, Building2, ShieldAlert, Plus, ChevronDown, TrendingUp, AlertCircle, UserX, Activity, Zap, Trash2, Truck, Edit2, RefreshCw, UserCheck, Sparkles } from 'lucide-react';
 import { REGIONS, getSigunguOptions } from '../utils/regions.js';
 import { getDriversCollection, getDriverScopeLabel } from '../utils/company.js';
+import { summarizeCandidates } from '../analysis/learnStats.js';
 
+// 자가학습 캡처 유형 한글 라벨(측정 대시보드 분포 표시용)
+const TYPE_LABELS = {
+  typo: '오타', name_change: '이름교체(검토)', address_change: '주소변경(검토)',
+  building_alias: '건물명별칭', note_normalize: '특이사항정규화', note_move: '특이사항힌트',
+  column_map: '컬럼매핑', unknown: '기타',
+};
 const getProcessedRows = (u) => Number(u?.totalRowsProcessed || u?.processedRows || u?.totalProcessedRows || 0);
 const getProcessedFiles = (u) => Number(u?.totalFilesProcessed || u?.processedFiles || u?.totalProcessedFiles || 0);
 
@@ -304,6 +311,7 @@ export default function AdminPanel({ onClose, user }) {
   // 자가학습 검토 큐 (Phase 3)
   const [learnSug, setLearnSug] = useState([]);       // 승인 대기 제안(일반사용자 제출 suggestion)
   const [learnCand, setLearnCand] = useState([]);     // 고위험 후보(검토 필요)
+  const [learnStats, setLearnStats] = useState(null); // 학습 현황 지표(누적 규칙·캡처 분포) — 읽기전용
   const [learnLoading, setLearnLoading] = useState(false);
 
   // 제안 컬렉션 → 승격 사전 매핑. before/after는 표시용, payload는 dict 승격 데이터.
@@ -334,9 +342,19 @@ export default function AdminPanel({ onClose, user }) {
         });
       });
       setLearnSug(sug);
-      const candSnap = await getDocs(query(collection(db, 'learn_candidates'), limit(200))).catch(() => ({ docs: [] }));
-      setLearnCand(candSnap.docs.map(d => ({ id: d.id, ...d.data() })).filter(c => c.risk === 'high' && c.status === 'pending'));
-    } catch { setLearnSug([]); setLearnCand([]); }
+      // 후보 표본(최근 500) — 고위험 검토큐 + 측정 집계 공용.
+      const candSnap = await getDocs(query(collection(db, 'learn_candidates'), limit(500))).catch(() => ({ docs: [] }));
+      const cands = candSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+      setLearnCand(cands.filter(c => c.risk === 'high' && c.status === 'pending'));
+      // 누적 학습 규칙 건수(집계 전용·효율) — dict별 문서 수.
+      const dictNames = [...new Set(LEARN_SUG_DEFS.map(def => def.dict))];
+      const dictCounts = {};
+      await Promise.all(dictNames.map(async (name) => {
+        try { dictCounts[name] = (await getCountFromServer(collection(db, name))).data().count; }
+        catch { dictCounts[name] = null; }
+      }));
+      setLearnStats({ dictCounts, summary: summarizeCandidates(cands), sampled: cands.length >= 500 });
+    } catch { setLearnSug([]); setLearnCand([]); setLearnStats(null); }
     finally { setLearnLoading(false); }
   };
 
@@ -1534,6 +1552,43 @@ export default function AdminPanel({ onClose, user }) {
             </div>
 
             {learnLoading && <div className="text-gray-500 text-sm">불러오는 중…</div>}
+
+            {/* 학습 현황(측정) — 읽기전용 지표: 누적 규칙 · 캡처 분포 */}
+            {learnStats && (
+              <div className="rounded-xl border border-[#333] bg-[#0d0d0d] p-4 space-y-4">
+                <h4 className="text-emerald-400 font-bold text-sm flex items-center gap-1.5"><TrendingUp size={15}/> 학습 현황</h4>
+                <div>
+                  <div className="text-gray-500 text-[11px] mb-1.5">누적 학습 규칙 (현재 정제에 적용 중인 사전)</div>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
+                    {[...new Set(LEARN_SUG_DEFS.map(d => d.dict))].map(name => {
+                      const label = LEARN_SUG_DEFS.find(d => d.dict === name)?.label || name;
+                      const cnt = learnStats.dictCounts[name];
+                      return (
+                        <div key={name} className="rounded-lg bg-[#111] border border-[#2a2a2a] px-3 py-2">
+                          <div className="text-gray-400 text-[10px] truncate" title={label}>{label}</div>
+                          <div className="text-white font-black text-lg font-mono">{cnt == null ? '—' : cnt}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-gray-500 text-[11px] mb-1.5">
+                    캡처 분포 (표본 <span className="font-mono">{learnStats.summary.total}</span>건{learnStats.sampled ? '+' : ''}) ·
+                    저위험 자동 <span className="text-emerald-400 font-mono">{learnStats.summary.autoCount}</span> ·
+                    고위험 검토 <span className="text-amber-400 font-mono">{learnStats.summary.reviewCount}</span>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {Object.entries(learnStats.summary.byType).sort((a, b) => b[1] - a[1]).map(([t, n]) => (
+                      <span key={t} className="px-2 py-1 rounded-md bg-[#111] border border-[#2a2a2a] text-[11px] text-gray-300">
+                        {TYPE_LABELS[t] || t} <span className="font-mono text-cyan-400">{n}</span>
+                      </span>
+                    ))}
+                    {learnStats.summary.total === 0 && <span className="text-gray-600 text-xs">아직 캡처된 학습이 없습니다.</span>}
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* 승인 대기 제안 */}
             <div>
