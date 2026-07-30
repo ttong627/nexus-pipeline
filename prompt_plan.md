@@ -4,7 +4,7 @@
 > 다음 후보 = **P1-b 괄호 정화**(형 승인 대기).
 
 ## ✅ 주소DB API 장애 해결 (원인: 배치 자원 경합)
-- 원인: `D:\Gemma4\govt_delivery_analysisatchatch_nexus_building.py` 가 `max_workers=8`로
+- 원인: `D:/Gemma4/govt_delivery_analysis/batch/batch_nexus_building.py` 가 `max_workers=8`로
   API를 계속 호출 → 서버 `pg.Pool` max=8(`PGPOOL_MAX` 미설정)을 **100% 점유** →
   앱·타 요청은 커넥션 획득 실패(10초 timeout) → 500. 배치도 500받고 재시도하며 재점유.
 - 해결: 배치 종료 → **응답 10,000ms → 44~215ms**, 매칭 6/6. 현재 리비전 `00039-j2h`.
