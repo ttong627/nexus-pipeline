@@ -4,6 +4,7 @@ import { getLocalCache, setLocalCache } from './dbCache.js';
 import { parseAptDong } from './routeSequenceEngine.js';
 import { applyNoteNormalize } from '../learn/applyNoteNormalize.js';
 import { buildVariantIndex, applyVariant } from '../learn/normalizeVariant.js';
+import { normalizeDongHoDetail, DONG_DASH_HO_SRC } from './dongHoFormat.js';
 
 // ══════════════════════════════════════════════════════════════════
 //  TTong NEXUS — 주소 정제 엔진  (규칙 A-1 ~ A-20)
@@ -78,8 +79,10 @@ const ROAD_NUMBER_SPACE_RE = new RegExp(`([${HANGUL}A-Za-z0-9]+(?:\\uB300\\uB85C
 // 동(棟) 단위 토큰 — 상세주소(동호수)의 일부. 숫자동(101동)·대시동(1-1동)·영문동(B동)·단일한글동(가동~하동).
 // 뒤에 공백/숫자/호/콤마/끝이 와야 매칭(건물명 중간의 '하동' 등 오절단 방지). 건물명으로 새는 버그 차단.
 const DONG_UNIT_SRC = '(?:\\d+(?:-\\d+)?|[A-Za-z]+|[가나다라마바사아자차카타파하])\\uB3D9(?=\\s|\\d|\\uD638|,|$)';
-const DETAIL_START_RE = new RegExp(`^(?:\\uC9C0\\uD558|\\uC9C0\\uCE35|\\uC625\\uD0D1|${DONG_UNIT_SRC}|\\d+\\s*(?:\\uB3D9|\\uCE35|\\uD638)(?![\\uAC00-\\uD7A3])|[A-Za-z]?\\d+\\s*\\uD638)`, 'u');
-const DETAIL_MARKER_RE = new RegExp(`__P\\d+__|\\uC9C0\\uD558|\\uC9C0\\uCE35|\\uC625\\uD0D1|${DONG_UNIT_SRC}|\\d+\\s*(?:\\uB3D9|\\uCE35|\\uD638)(?![\\uAC00-\\uD7A3])|[A-Za-z]?\\d+\\s*\\uD638`, 'u');
+// A-10 ③(형 지시 2026-07-30): 동 대신 대시로 쓰인 숫자 동(101-203호)도 상세주소(동호수)로 인식한다.
+//   없으면 "101-"이 건물명 슬롯으로 새어 동 번호가 소실된다(실측 확인). 자리수 가드는 dongHoFormat.js 참조.
+const DETAIL_START_RE = new RegExp(`^(?:\\uC9C0\\uD558|\\uC9C0\\uCE35|\\uC625\\uD0D1|${DONG_UNIT_SRC}|${DONG_DASH_HO_SRC}|\\d+\\s*(?:\\uB3D9|\\uCE35|\\uD638)(?![\\uAC00-\\uD7A3])|[A-Za-z]?\\d+\\s*\\uD638)`, 'u');
+const DETAIL_MARKER_RE = new RegExp(`__P\\d+__|\\uC9C0\\uD558|\\uC9C0\\uCE35|\\uC625\\uD0D1|${DONG_UNIT_SRC}|${DONG_DASH_HO_SRC}|\\d+\\s*(?:\\uB3D9|\\uCE35|\\uD638)(?![\\uAC00-\\uD7A3])|[A-Za-z]?\\d+\\s*\\uD638`, 'u');
 // 주소칸에 섞인 전화번호 패턴(지역번호 0XX 또는 휴대폰 01X) — 건물명/상세 오염 차단용. 한국 지번·건물번호는 0으로 시작 안 함.
 const PHONE_IN_ADDR_RE = /(?:0\d{1,2}|01[016789])[-.\s]?\d{3,4}[-.\s]?\d{4}/;
 
@@ -1292,30 +1295,12 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
   // A-17: 층/F 표기 변환 제거 — B동·F동 등 건물동 명칭과 혼동 오탐 발생
   // (3F→3층, B1→지하1층 모두 적용 안 함)
 
-  // A-10: 동호 형식 정규화
-  // 숫자 동(대단지 아파트) → 대시 + 호수 4자리 패딩: "101동 203호" → "101-  203호", "101동 1203호" → "101-1203호"
-  // 한글/영문 동(빌라·연립) → "동" 유지: "가동 101호" → "가동 101호", "B동 104호" → "B동 104호"
-  finalDetail = finalDetail.replace(
-    /([가-힣A-Za-z\d-]+)동\s*(?:(지하|[Bb])?\s*(\d+)\s*층\s*)?(?:제\s*)?(\d+)\s*호/g,
-    (_, dong, flrPfx, flr, ho) => {
-      const flrStr = flr ? ` ${flrPfx || ''}${flr}층` : '';
-      if (/^\d+$/.test(dong)) {
-        // 순수 숫자 동(대단지 아파트)만 대시 + 4자리 패딩: "101동 203호" → "101- 203호"
-        const pad = ' '.repeat(Math.max(0, 4 - ho.length));
-        return `${dong}-${pad}${ho}호${flrStr}`;
-      }
-      // 한글/영문/대시 동(빌라·연립·1-1동): "동" 그대로 유지
-      return `${dong}동 ${ho}호${flrStr}`;
-    }
-  );
-
-  // A-10 확장: 동(棟) 없이 호수만 있는 건물(예: RYUJIN VILL 302호~1009호)도 4자리 우측정렬 패딩.
-  //   3자리 호수 앞에 빈칸을 넣어 정렬 시 302 < 1008 자연 정렬. 이미 패딩된 동-호("101- 203호")는 가드로 제외.
-  finalDetail = finalDetail.replace(/(^|[\s,(])(\d{1,3})\s*호/g, (m, pre, ho, off) => {
-    const before = finalDetail.slice(Math.max(0, off - 2), off + pre.length);
-    if (/[동\-]/.test(before)) return m;   // 동-호 또는 이미 패딩된 숫자동-호는 건드리지 않음
-    return `${pre}${' '.repeat(Math.max(0, 4 - ho.length))}${ho}호`;
-  });
+  // A-10: 동호 형식 정규화 (순수함수 src/engine/dongHoFormat.js — 회귀 scripts/dong-ho-format.test.mjs)
+  //   숫자 동(대단지 아파트) → 대시 + 호수 4자리 패딩 + 층은 호 뒤로: "101동 3층 203호" → "101- 203호 3층"
+  //   비숫자 동(빌라·연립 가동·A동·1-1동) → "동" 유지 + **층 위치 원본 보존**: "가동 3층 101호" 그대로
+  //   동 없음 → 층 그대로 + 호수만 4자리 우측정렬 패딩
+  //   대시로 쓰인 숫자 동(101-203호) → 숫자 동과 동일 형식으로 저장
+  finalDetail = normalizeDongHoDetail(finalDetail);
 
   // A-9 2차: 상세주소에 남아있는 특수문자 재처리
   if (_specialCharRegex) {
