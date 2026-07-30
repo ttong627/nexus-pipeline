@@ -31,9 +31,9 @@ export const query = async (text, values = []) => {
     return await client.query(text, values);
   } finally {
     const tEnd = Date.now();
-    client.release();
     const total = tEnd - t0;
-    // 병목 위치를 분리 계측: connect(풀·커넥터) vs searchpath vs query(실행+전송).
+    client.release();
+    // 병목 위치 분리 계측: connect(풀·커넥터) vs searchpath vs query(실행+전송). 관측성 유지.
     if (total > 3000) {
       console.log(`[slow-query] total=${total}ms connect=${tConn - t0}ms searchpath=${tPath - tConn}ms query=${tEnd - tPath}ms :: ${text.replace(/\s+/g, ' ').trim().slice(0, 80)}`);
     }
