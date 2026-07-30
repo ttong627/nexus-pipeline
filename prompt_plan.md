@@ -81,18 +81,28 @@
 - 스케줄 실행·텔레그램 전송 실증 완료. 로컬 산출물은 gitignore.
 - ⚠️ `tg_send.py`가 cp949로 이모지 출력 시 죽는 문제 → `PYTHONIOENCODING=utf-8`로 회피(형 도구 무변경).
 
-## 🔄 #7 규격화 서버 이관 — Phase 0 완료, Phase 1~ 미착수
-**Phase 0(안전망) 완료**: `scripts/road-regex-parity.test.mjs` — 도로명 파싱 정규식이
-클라(`addressEngine.js`)와 서버(`normalize.js`)에 복제돼 한쪽만 고치면 조용히 갈라지는 문제를
-**소스 대조로 감지**. 현재 4/4 통과 = 동기화 상태.
-**남은 Phase 1~5**(설계 확정, 미착수):
-1. 규격화 규칙을 클라·서버 공유 순수모듈로 추출 → 이중 구현 소멸
-   ⚠️ 걸림돌: 서버는 `services/address-service/` 별도 배포 단위라 `src/`를 직접 import 불가.
-   공유 방식(빌드 시 복사 vs 패키지화) 결정 필요.
-2. 서버 `/v1/address/purify` 배치 엔드포인트(규격화+매칭+상세규격화) — firebase-admin 추가 필요(학습사전)
-3. 좌표·건물정보 서버 편입 + 브라우저 Kakao 키 제거(보안)
-4. 클라 엔진 슬림화 · 5. 구경로 제거
-**선행 조건**: Phase 1 착수 전 골든 회귀(실데이터 정제 출력 스냅샷) 필요 — 퇴행 감지 수단.
+## 🔄 #7 규격화 서버 이관 — **Phase 0·1 완료**, Phase 2~5 미착수
+### ✅ Phase 0 안전망
+`scripts/road-regex-parity.test.mjs` — 클라·서버 갈라짐 감지.
+
+### ✅ Phase 1 도로명 토큰 SSOT 통합 (커밋 `d108cd7`)
+**`services/address-service/src/shared/roadTokens.js`** 단일 출처 신설:
+`HANGUL` · `BRANCH_SUFFIX` · `ROAD_NAME_SOURCE` · `ROAD_NUMBER_TAIL` · `normalizeCommonRoadTypos`
+- **★위치가 서버 쪽인 이유(중요)**: 서버 Docker 빌드 컨텍스트 = `services/address-service/`,
+  Dockerfile = `COPY src ./src`. 거기 있어야 **배포 파이프라인 변경 없이** 서버가 가져간다.
+  루트 `src/`에 두면 서버 이미지에 안 들어간다. 클라(Vite)는 루트 내 상대경로 import 가능 → 빌드 검증 완료.
+- 서버·클라 양쪽 인라인 정의 제거 → import. `ROAD_ADDRESS_RE`만 각자 조립(클라는 선행 구분자 캡처 필요 = 의도된 차이).
+- **값이 문자 단위로 동일해 동작 무변경** → 서버 재배포 없이도 현재 동작과 같다.
+  ⚠️ 다만 **다음 서버 배포 때 새 코드가 반드시 포함**돼야 한다(이미지 재빌드 필요).
+- 잠금: 패리티 테스트가 '양쪽이 SSOT를 import 하는가 + 재정의하지 않는가'를 검사(7건).
+
+### ▶ 남은 Phase 2~5 (미착수)
+2. 서버 `/v1/address/purify` 배치 엔드포인트(규격화+매칭+상세규격화) — **firebase-admin 추가 필요**
+   (학습사전 typo_dict·name_typo_dict·building_alias·note_normalize_dict가 현재 클라 전용) + IAM 확인
+3. 좌표·건물정보 서버 편입 + **브라우저 Kakao 키 제거**(보안 — 현재 `VITE_KAKAO_REST_KEY` 번들 노출)
+4. 클라 엔진 슬림화 · 5. 플래그 전환 후 구경로 제거
+**선행**: 골든 회귀(실데이터 정제 출력 스냅샷). 클라 엔진이 firebase를 import해 node 단독 실행이
+불가한 점이 걸림돌 — 의존성 주입 또는 브라우저 덤프 방식 결정 필요.
 
 ## ▶ 남은 276건의 성격## ▶ 남은 276건의 성격 (자동 처리 불가 — 개별 판단 필요)
 1. **동률·근소차 28그룹** — `남경오피스텔`↔`성진남경오피스텔` · `시그니처오피스텔`↔`시그니처아파트`
