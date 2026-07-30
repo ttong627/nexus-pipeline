@@ -160,6 +160,10 @@ CREATE INDEX IF NOT EXISTS building_core_name_trgm
   ON building_core USING gin (building_name_key gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS building_core_road_key_trgm
   ON building_core USING gin (road_key gin_trgm_ops);
+-- buildingMatch 퍼지: (road_key||building_name_key) 트리그램. 없으면 21M행 seq scan(28s).
+--   식은 buildingMatch WHERE/score의 (coalesce(road_key,'')||coalesce(building_name_key,''))와 정확히 일치해야 인덱스 사용.
+CREATE INDEX IF NOT EXISTS building_core_roadbld_trgm
+  ON building_core USING gin ((coalesce(road_key, '') || coalesce(building_name_key, '')) gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS building_core_road_exact
   ON building_core (version_id, road_code, underground_yn, building_main_no, building_sub_no);
 CREATE INDEX IF NOT EXISTS building_core_roadname_exact

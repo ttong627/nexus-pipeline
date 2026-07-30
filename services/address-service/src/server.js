@@ -216,11 +216,13 @@ const buildingMatch = async (version, normalized, cityLabel) => {
       b.building_mgt_no,
       b.zip_no,
       b.is_apartment,
-      greatest(similarity(b.building_name_key, $2), similarity(concat_ws('', b.road_key, b.building_name_key), $2)) AS score
+      greatest(similarity(b.building_name_key, $2), similarity((coalesce(b.road_key, '') || coalesce(b.building_name_key, '')), $2)) AS score
     FROM ${ADDRESS_SCHEMA}.building_core b
     WHERE b.version_id = $1
       AND b.building_name_key <> ''
-      AND (b.building_name_key % $2 OR concat_ws('', b.road_key, b.building_name_key) % $2)
+      -- concat_ws는 STABLE이라 인덱스 불가 → 동등한 불변식(coalesce||coalesce)으로 교체.
+      --   이 식에 GIN 트리그램 인덱스(building_core_roadbld_trgm)를 태워 28s seq scan → ~0.4s.
+      AND (b.building_name_key % $2 OR (coalesce(b.road_key, '') || coalesce(b.building_name_key, '')) % $2)
       AND ($3 = '' OR concat_ws(' ', b.sido, b.sigungu) ILIKE '%' || $3 || '%')
     ORDER BY score DESC, b.is_apartment DESC, length(b.road_address) ASC
     LIMIT 5
