@@ -32,7 +32,7 @@ const ResultGrid = memo(function ResultGrid({
   onConfirmAddress, onMarkPhoneCheck,
   onFetchBaseNotes, isFetchingNotes,
   workflowMode = 'cleaningOnly', onWorkflowModeChange,
-  addressDisplayMode = 'parenBeforeDetail', onToggleAddressDisplayMode,
+  addressDisplayMode = 'detailBeforeParen', onToggleAddressDisplayMode,   // A-11 기본: 상세 먼저, 건물명(괄호) 맨 뒤
   exportColOrder = [], setExportColOrder, defaultExportCols = [],
 }) {
   const [selectedIds, setSelectedIds] = useState(new Set());
