@@ -8,6 +8,8 @@ import { normalizeDongHoDetail, DONG_DASH_HO_SRC } from './dongHoFormat.js';
 import { protectParenBlocks, balanceParens } from '../utils/addressFormat.js';
 // 도로명 토큰 SSOT — 서버(services/address-service)와 **같은 파일**을 쓴다(P7 Phase1).
 import { HANGUL, BRANCH_SUFFIX, ROAD_NAME_SOURCE, ROAD_NUMBER_TAIL, normalizeCommonRoadTypos } from '../../services/address-service/src/shared/roadTokens.js';
+// P7 Phase2: 순수 규격화(A-3·4·6·15·16·21)를 클라·서버 공용 SSOT로 통합. stripLeadingAddressJunk도 여기서.
+import { normalizeAddressPreamble, normalizeCenterName, stripLeadingAddressJunk } from '../../services/address-service/src/shared/textNormalize.js';
 
 // ══════════════════════════════════════════════════════════════════
 //  TTong NEXUS — 주소 정제 엔진  (규칙 A-1 ~ A-20)
@@ -97,7 +99,7 @@ const normalizeRoadAddressSpacing = (value) =>
     .trim();
 
 const stripAddressDelimiters = (value) => String(value || '').replace(/^[\s,;:：；ㆍ·/\\|]+|[\s,;:：；ㆍ·/\\|]+$/g, '').trim();
-const stripLeadingAddressJunk = (value) => String(value || '').replace(/^[\s,;:：；ㆍ·/\\|]+/g, '').trimStart();
+// stripLeadingAddressJunk 는 shared/textNormalize.js SSOT 에서 import (규격화 프리앰블과 공용).
 const normalizeAddressDetail = (value) =>
   stripAddressDelimiters(String(value || '')
     .replace(/\(\s*\)/g, ' ')
@@ -832,35 +834,11 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
   text = normalizeCommonRoadTypos(text);   // SSOT: shared/roadTokens.js (same rule as server)
   if (beforeCommonRoadTypo !== text) addCorrectionLog('재기로', '제기로', '도로명 오타 보정');
 
-  // ── A-3: 유니코드 정규화 ──────────────────────────────────────────
-  text = text
-    .normalize('NFC')
-    .replace(/[​‌‍﻿­]/g, '')  // Zero-width / Soft-hyphen 제거
-    .replace(/[　\xA0\t\n\r\f\v]/g, ' ')           // 전각 공백·NBSP·제어문자 → 공백
-    .replace(/["""'''＂＇]/g, '')                        // 따옴표 전각·반각 모두 제거
-    .replace(/\s{2,}/g, ' ')                            // 연속 공백 → 단일
-    .trim();
-  text = stripLeadingAddressJunk(text);
-
-  // ── A-4: 미닫힌 괄호 제거 ─────────────────────────────────────────
-  text = text.replace(/\([^)]*$/, '').trim();
-
-  // ── A-6: 통·반 제거 ───────────────────────────────────────────────
-  text = text.replace(/\s*제?\d{1,2}통\s*제?\d{1,2}반\s*/g, ' ').trim();
-
-  // ── A-15: 도로명 번호 뒤 "." → "," ───────────────────────────────
-  // 예: "테헤란로 123. 456호" → "테헤란로 123, 456호"
-  text = text.replace(/(\d)\.\s+(?=\S)/g, '$1, ');
-  text = text.replace(/[,\s]+$/, '').replace(/,(?=\S)/g, ', ');
-  text = stripLeadingAddressJunk(text);
-
-  // ── A-16: 번지 표기 제거 ──────────────────────────────────────────
-  // 예: "테헤란로 123번지" → "테헤란로 123" / "신남리 123-5번지" → "신남리 123-5"
-  text = text.replace(/(\d+)\s*번지/g, '$1');
-
-  // ── A-21: 동사무소/읍사무소/면사무소 → 주민센터 정규화 ───────────────
-  text = text.replace(/동사무소|읍사무소|면사무소/g, '주민센터');
-  const normalizedInputNote = inputNote.replace(/동사무소|읍사무소|면사무소/g, '주민센터');
+  // ── A-3·A-4·A-6·A-15·A-16·A-21: 순수 규격화 프리앰블 (shared SSOT) ──
+  //   유니코드 정규화·미닫힌괄호·통반·점→쉼표·번지제거·주민센터. 외부 의존 없는 순수 변형.
+  //   구현·정규식은 services/address-service/src/shared/textNormalize.js 단일 소스.
+  text = normalizeAddressPreamble(text);
+  const normalizedInputNote = normalizeCenterName(inputNote);
 
   // ── A-9: 특수문자 이후 내용 → 특이사항 (전체 텍스트 1차 적용) ─────
   // 위치 < 5자이면 주소 앞부분 → 건너뜀

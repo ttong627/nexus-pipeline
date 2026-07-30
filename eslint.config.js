@@ -57,6 +57,10 @@ export default defineConfig([
       'no-useless-escape': 'warn',
       'no-control-regex': 'warn',
       'preserve-caught-error': 'warn',
+      // 주소 규격화 SSOT(shared/textNormalize.js)가 클라(src/)와 같은 정규식을 담는다.
+      // src/ 블록과 동일 정책 — 유니코드 whitespace·문자클래스 룰은 warn(주소 정제 특성상 불가피).
+      'no-irregular-whitespace': 'warn',
+      'no-misleading-character-class': 'warn',
     },
   },
 ])
