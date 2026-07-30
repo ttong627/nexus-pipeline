@@ -1,3 +1,5 @@
+import { HANGUL, BRANCH_SUFFIX, ROAD_NAME_SOURCE, ROAD_NUMBER_TAIL, normalizeCommonRoadTypos } from './shared/roadTokens.js';
+
 const EMPTY_PARENS_RE = /\([^)]*\)/g;
 const QUOTE_RE = /["'`“”‘’]/g;
 
@@ -17,16 +19,11 @@ export const normalizeSearchKey = (value) =>
     .replace(/\s+/g, '')
     .toLowerCase();
 
-const HANGUL = '\\uAC00-\\uD7A3';
-const BRANCH_SUFFIX =
-  '(?:\\uBC88\\uAE38|\\uBC88\\uAC00\\uAE38|\\uAC00\\uAE38|\\uB098\\uAE38|\\uB2E4\\uAE38|\\uB77C\\uAE38|\\uB9C8\\uAE38|\\uBC14\\uAE38|\\uC0AC\\uAE38|\\uC544\\uAE38|\\uC790\\uAE38|\\uCC28\\uAE38|\\uCE74\\uAE38|\\uD0C0\\uAE38|\\uD30C\\uAE38|\\uD558\\uAE38|\\uAE38)';
-const ROAD_NAME_SOURCE =
-  `(?:[${HANGUL}A-Za-z0-9]+(?:\\uB300\\uB85C|\\uB85C)\\s*\\d+[${HANGUL}0-9]*${BRANCH_SUFFIX}|[${HANGUL}A-Za-z0-9]+(?:\\uB300\\uB85C|\\uB85C|\\uAE38))`;
-const ROAD_ADDRESS_RE = new RegExp(`(${ROAD_NAME_SOURCE})\\s*(\\uC9C0\\uD558\\s*)?(\\d{1,5})(?:\\s*-\\s*(\\d{1,5}))?`, 'u');
+// P7 Phase1(2026-07-30): \uB3C4\uB85C\uBA85 \uD1A0\uD070 \uC815\uC758\uB97C **\uD074\uB77C\u00B7\uC11C\uBC84 \uACF5\uC6A9 SSOT**(`./shared/roadTokens.js`)\uB85C \uD1B5\uD569.
+//   \uC608\uC804\uC5D4 \uC774 \uD30C\uC77C\uACFC `src/engine/addressEngine.js`\uC5D0 \uAC19\uC740 \uD328\uD134\uC774 \uBCF5\uC81C\uB3FC \uD55C\uCABD\uB9CC \uACE0\uCE58\uBA74 \uC870\uC6A9\uD788 \uAC08\uB77C\uC84C\uB2E4.
+//   \uD68C\uADC0 \uAC10\uC2DC = `scripts/road-regex-parity.test.mjs`.
+const ROAD_ADDRESS_RE = new RegExp(`(${ROAD_NAME_SOURCE})${ROAD_NUMBER_TAIL}`, 'u');
 const ROAD_BRANCH_SPACE_RE = new RegExp(`([${HANGUL}A-Za-z]+(?:\\uB300\\uB85C|\\uB85C))\\s+(\\d+[${HANGUL}0-9]*${BRANCH_SUFFIX})`, 'gu');
-
-const normalizeCommonRoadTypos = (value) =>
-  String(value || '').replace(/\uC7AC\uAE30\uB85C(?=\d*\uAE38|\s*\d)/g, '\uC81C\uAE30\uB85C');
 
 const normalizeBranchRoadSpacing = (value) =>
   normalizeCommonRoadTypos(cleanText(value)).replace(ROAD_BRANCH_SPACE_RE, '$1$2');

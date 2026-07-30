@@ -6,6 +6,8 @@ import { applyNoteNormalize } from '../learn/applyNoteNormalize.js';
 import { buildVariantIndex, applyVariant } from '../learn/normalizeVariant.js';
 import { normalizeDongHoDetail, DONG_DASH_HO_SRC } from './dongHoFormat.js';
 import { protectParenBlocks, balanceParens } from '../utils/addressFormat.js';
+// 도로명 토큰 SSOT — 서버(services/address-service)와 **같은 파일**을 쓴다(P7 Phase1).
+import { HANGUL, BRANCH_SUFFIX, ROAD_NAME_SOURCE, ROAD_NUMBER_TAIL, normalizeCommonRoadTypos } from '../../services/address-service/src/shared/roadTokens.js';
 
 // ══════════════════════════════════════════════════════════════════
 //  TTong NEXUS — 주소 정제 엔진  (규칙 A-1 ~ A-20)
@@ -64,12 +66,12 @@ const normalizePlaceKey = (value) => String(value || '').replace(/\s+/g, '').tri
 const ROAD_DETAIL_SEPARATOR = ', ';
 const ADDRESS_EXTRA_SEPARATOR = ' / ';
 
-const HANGUL = '\\uAC00-\\uD7A3';
-const BRANCH_SUFFIX =
-  '(?:\\uBC88\\uAE38|\\uBC88\\uAC00\\uAE38|\\uAC00\\uAE38|\\uB098\\uAE38|\\uB2E4\\uAE38|\\uB77C\\uAE38|\\uB9C8\\uAE38|\\uBC14\\uAE38|\\uC0AC\\uAE38|\\uC544\\uAE38|\\uC790\\uAE38|\\uCC28\\uAE38|\\uCE74\\uAE38|\\uD0C0\\uAE38|\\uD30C\\uAE38|\\uD558\\uAE38|\\uAE38)';
-const ROAD_NAME_SOURCE =
-  `(?:[${HANGUL}A-Za-z0-9]+(?:\\uB300\\uB85C|\\uB85C)\\s*\\d+[${HANGUL}0-9]*${BRANCH_SUFFIX}|[${HANGUL}A-Za-z0-9]+(?:\\uB300\\uB85C|\\uB85C|\\uAE38))`;
-const ROAD_ADDRESS_RE = new RegExp(`(^|[\\s,/\\(])(${ROAD_NAME_SOURCE})\\s*(\\uC9C0\\uD558\\s*)?(\\d{1,5})(?:\\s*-\\s*(\\d{1,5}))?`, 'u');
+// P7 Phase1(2026-07-30): 도로명 토큰 정의를 **클라·서버 공용 SSOT**로 통합.
+//   정의 위치가 서버 쪽인 이유 = 서버 Docker 빌드 컨텍스트(`COPY src ./src`)에 포함시키려면
+//   거기 있어야 한다. 클라(Vite)는 루트 내 상대경로 import가 가능하므로 이쪽이 가져다 쓴다.
+//   회귀 감시 = `scripts/road-regex-parity.test.mjs`.
+// ※ 선행 구분자 캡처는 클라만 필요하다(문장 중간에서 도로명을 찾으므로). 서버는 정제된 질의를 받는다.
+const ROAD_ADDRESS_RE = new RegExp(`(^|[\\s,/\\(])(${ROAD_NAME_SOURCE})${ROAD_NUMBER_TAIL}`, 'u');
 // A-23: 베이스 도로명이 로·대로·길로 끝나는 경우 모두 처리 — "홍양길 43번길" → "홍양길43번길"
 // (길=길 추가. 누락 시 파서가 "홍양길"에서 끊겨 "번길 40-25"가 괄호로 오분류됨)
 const ROAD_BRANCH_SPACE_RE = new RegExp(`([${HANGUL}A-Za-z]+(?:\\uB300\\uB85C|\\uB85C|\\uAE38))\\s+(\\d+[${HANGUL}0-9]*${BRANCH_SUFFIX})`, 'gu');
@@ -827,7 +829,7 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
     if (_bn !== result.정제된이름) addCorrectionLog(_bn, result.정제된이름, '학습 이름 보정');
   }
   const beforeCommonRoadTypo = text;
-  text = text.replace(/\uC7AC\uAE30\uB85C(?=\d*\uAE38|\s*\d)/g, '\uC81C\uAE30\uB85C');
+  text = normalizeCommonRoadTypos(text);   // SSOT: shared/roadTokens.js (same rule as server)
   if (beforeCommonRoadTypo !== text) addCorrectionLog('재기로', '제기로', '도로명 오타 보정');
 
   // ── A-3: 유니코드 정규화 ──────────────────────────────────────────
