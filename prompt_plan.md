@@ -1,39 +1,33 @@
 # 세션 핸드오프 (재부팅 후 이어서 — /sync로 불러오기)
 
-> 2026-07-30 갱신. **P0 완료·배포·백필 반영**(`d971b97`). **P1 도구 완료·실행 보류**(`ae951f1`).
-> 🔴 **차단**: 전국 주소DB(nexus-address-api) 장애 — 복구가 P1 선행 조건.
+> 2026-07-30 갱신. **P0 완료·배포·백필45건** · **P1 완료·반영30건** · **주소DB 장애 해결**.
+> 다음 후보 = **P1-b 괄호 정화**(형 승인 대기).
 
-## 🔴 최우선 — 전국 주소DB API 장애 (2026-07-30 발견, 미해결)
-- 증상: `/v1/address/match` **전부 500**, `/v1/address/db-status` → `timeout exceeded when trying to connect`.
-  Cloud Run 로그 = 요청마다 **latency 10.0초 후 500**(DB 연결 timeout).
-- 배제된 원인: Cloud SQL `nexus-address-pg` **RUNNABLE** / cloudsql-instances 주석 정상 부착 /
-  트래픽 **100% 최신 리비전 `00037-b5q`**(`00021-nof`는 canary 태그 별도 URL).
-- 남은 후보: 커넥션 풀 소진 · DB 과부하 · Cloud SQL 커넥터 소켓 · Cloud Run SA 권한.
-- **영향**: 명단 정제 시 DB 매칭 전부 실패 → JUSO/Kakao 폴백(법정동·건물명 품질 저하). P1 실행 불가.
-- 조사 도구: `gcloud config set account ttong627@gmail.com` 후 logis-op 조회 가능(ttong0627 권한 없음).
+## ✅ 주소DB API 장애 해결 (원인: 배치 자원 경합)
+- 원인: `D:\Gemma4\govt_delivery_analysisatchatch_nexus_building.py` 가 `max_workers=8`로
+  API를 계속 호출 → 서버 `pg.Pool` max=8(`PGPOOL_MAX` 미설정)을 **100% 점유** →
+  앱·타 요청은 커넥션 획득 실패(10초 timeout) → 500. 배치도 500받고 재시도하며 재점유.
+- 해결: 배치 종료 → **응답 10,000ms → 44~215ms**, 매칭 6/6. 현재 리비전 `00039-j2h`.
+- ⚠️ 배치 재실행 시 **`max_workers`를 3 이하로** 낮출 것(캐시로 이어서 재개 가능).
+- ★교훈: `db-status`는 200인데 특정 API만 timeout이면 **DB 장애가 아니라 커넥션 풀 경합**부터 의심.
+  로그의 `httpRequest.userAgent`·`remoteIp`로 누가 호출 중인지 먼저 확인.
+- gcloud는 **매 호출에 `--account=ttong627@gmail.com` 명시**(config set이 자꾸 되돌아감).
 
-## ▶ P1 건물명 통일 — 도구 완료, DB 복구 후 실행
-`src/utils/buildingUnify.js`(순수함수 `pickCanonicalBuilding`·`rebuildParen`, 테스트 23건) +
-`scripts/unify-building-name.mjs`(기본 dry-run). 현재 dry-run = 표기 갈린 56그룹 **전부 보류**(정본 부재).
+## ✅ P1 건물명 통일 — 완료·반영(30건)
+- 통일 11그룹/30건(`addressMatchSource='building-name-unify'`) + `building_alias` 7개 학습.
+- **표기 갈림 73그룹/318건 → 69그룹/274건**. 재실행 대상 0건.
+- dry-run이 위험 2건 추가 차단: ①같은 도로명 다른 건물 이름 유입 → **응답 buildingMgtNo 일치 검증**(5그룹 폐기)
+  ②DB가 용도명(`다세대주택`) 반환 → `isGenericUseName` 배제.
 
-### ★dry-run이 막은 사고 2건 → 안전 기본값으로 확정
-1) 같은 도로명주소를 같은 건물로 보면 다세대 밀집지에서 **다른 건물을 합침**
-   (실측 시도: `영안아파트`→`태림홈타운`, `명성다세대`→`중동빌라`)
-2) 오염 표기를 정답으로 채택 — `◆상동, 상동대우마이빌`(A-9 특수문자 + 법정동 혼입)
-
-### 확정 안전 기본값 (되돌리지 말 것)
-- 그룹키 = **건물관리번호만** (도로명주소 기준은 `--include-road` 명시)
-- 정답 = **DB 정본 건물명만** (최다표기는 `--allow-majority` 명시)
-- 정답 후보 위생 검사: `◆★` 등 A-9 잔재 · 콤마로 뭉친 값 · 법정동 혼입 배제
-- 빈 건물명으로 통일 금지 · 동률·근소차 보류 · 비건물명 값은 특이사항 이관
-- 상세주소·A-22 참고블록·건물명 속 괄호 보존
-
-### DB 복구 후 순서
-① `node scripts/unify-building-name.mjs` dry-run → 형 확인 ② `--write --learn` 반영
-③ `node scripts/diag-address-consistency.mjs` 로 표기 변이 감소 확인
+## ▶ P1-b 괄호 정화 (제안·형 승인 대기)
+남은 274건은 건물명 통일이 아니라 **괄호 오염** 문제다. DB에 건물명이 없어 정답을 못 정하지만,
+괄호에서 **건물명이 아닌 값**을 빼 특이사항으로 이관하면 정답 없이도 표기가 통일된다.
+- `(장안동, 5층 식당보관, E (장안동))` → `(장안동)` + 특이사항 `5층 식당보관`
+- `(신설동, 8652 (신설동))` → `(신설동)` + 특이사항 `8652`
+- 안전조건: 건물명 키워드(BLDG_KW) 매칭 값은 절대 제거 금지 · dry-run 선행 · 원문 삭제 금지
 
 ## ▶ P2 (대기)
-`buildingMgtNo` 미보유 41.9% 보강 조회 → 동일성 판정 키 강화. DB 복구 선행.
+`buildingMgtNo` 미보유 41.9% 보강 조회 → 동일성 판정 키 강화.
 
 ## ✅ 완료된 작업 — P0 괄호 중첩 근본수리 + 45건 백필
 
