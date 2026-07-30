@@ -1,101 +1,71 @@
-# 세션 핸드오프 — nexus 주소 정제 (2026-07-30 마감)
+# 세션 핸드오프 — nexus 주소 서비스 (2026-07-31 마감)
 
 > 새 세션에서 **"이어서"** 하면 이 문서부터 읽는다.
-> 이번 세션: 데이터 정화 **324건** · 식별자 보강 **37,045건** · 주소DB 장애 해결 · 테스트 81→**146건**.
+> 관련 메모리: `project_nexus_address_format_rules`(★match 인시던트 3원인·진단 인프라 접근법) · `project_nexus_self_learning`
 
 ---
 
-## ▶ 새 세션에서 할 일 (우선순위 순)
-
-### 1️⃣ 형 실동작 확인 — **가장 급함, 아직 한 번도 안 됨**
-오늘 코드 4건을 배포했는데 **형 눈으로 확인한 적이 없다.** 테스트·시뮬레이션은 통과했지만
-실제 엑셀로 정제했을 때 의도대로 나오는지는 형만 판단할 수 있다.
-```
-logis-op.web.app → Ctrl+Shift+R (PWA 캐시 갱신) → 명단 정제
-```
-확인 포인트: ①층 위치(`가동 3층 101호` 유지 / `101동 3층 203호`→`101- 203호 3층`)
-②대시 동호(`101-203호`→`101- 203호`) ③건물명이 맨 뒤 ④괄호에 잡값 없음
-
-### 2️⃣ P7 Phase 2~5 — 규격화 서버 이관 (Phase 0·1 완료)
-**선행: 골든 회귀 방식 결정.** 클라 엔진이 firebase를 import해 node 단독 실행이 안 된다.
-→ ⓐ의존성 주입으로 리팩터 ⓑ브라우저에서 정제 결과 덤프 — **둘 중 하나 정해야 착수 가능**.
-- **Phase 2** 서버 `/v1/address/purify` 배치 엔드포인트(규격화+매칭+상세규격화)
-  걸림돌: 학습사전 4종(`typo_dict`·`name_typo_dict`·`building_alias`·`note_normalize_dict`)이
-  **클라 전용** → 서버에 `firebase-admin` 추가 + IAM 확인 필요
-- **Phase 3** 좌표·건물정보 서버 편입 + **브라우저 Kakao 키 제거**(보안: `VITE_KAKAO_REST_KEY` 번들 노출 중)
-- **Phase 4·5** 클라 엔진 슬림화 → 플래그 전환 → 구경로 제거
-
-### 3️⃣ 남은 표기 갈림 276건 — 자동 처리 불가
-- **동률·근소차 28그룹**: `남경오피스텔`↔`성진남경오피스텔` · `시그니처오피스텔`↔`시그니처아파트`
-  → DB에 건물명이 없어 정답 확정 불가. **형이 현장을 알면 개별 지정만이 방법**
-- **괄호에 층 정보**: `(서초동, 지하층)` → **의도적으로 남김.** "비법정동 값이 하나뿐이면 미개입"
-  규칙을 풀면 정상 건물명(`호매실 엔루체` 등)까지 훼손됨
-- **도로명 부번 차이**: `박석로25번길 32`↔`32-5` → 건물명 통일로는 해결 불가
-
-### 4️⃣ 형이 하실 것
-- **배치 재실행**: `D:/Gemma4/govt_delivery_analysis/batch/batch_nexus_building.py`
-  (`max_workers` 8→**3** 수정 완료, 캐시로 이어서 재개)
-- 자가학습 실동작 확인(이전 세션부터 대기): 관리자패널 `학습 검토` 탭 → 특이사항 편집→저장→승인→재정제
-- 기사앱 배송완료 버튼 — 형 폰 실기기 테스트
-
----
-
-## 🔑 이어가기 전 필수 지식 (함정 — 모르면 시간 날림)
-
-| 상황 | 반드시 |
-|---|---|
-| `gcloud` 실행 | **매 호출에 `--account=ttong627@gmail.com`** (config set이 자꾸 ttong0627로 되돌아감) |
-| `git push` | 직전에 `gh auth switch --user ttong627` |
-| 앱 배포 | `cmd //c 'I:\...\_deploy_done.bat' < /dev/null` (Bash, `dangerouslyDisableSandbox:true`). 직접 `firebase deploy`는 classifier 차단 |
-| **서버 배포** | ⚠️ **이미지 재빌드 필요** — Phase1 SSOT 새 코드가 아직 배포본에 없음(동작은 동일해 급하진 않음) |
-| 운영 데이터 백필 | **무조건 dry-run 먼저.** 이번 세션에 dry-run이 **사고 6건**을 막았다 |
-| 주소 API 호출 | **동시성 3 이하.** 서버 `pg.Pool`=15(상향 완료), 8이었을 때 배치가 독점해 전면 장애 |
-| `tg_send.py` 사용 | `PYTHONIOENCODING=utf-8` 지정 (cp949에서 이모지 출력 시 죽음) |
-| 도로명 정규식 수정 | `services/address-service/src/shared/roadTokens.js` **한 곳만** 고친다(클라·서버 공용) |
-
-### 진단·백필 도구 (전부 기본 dry-run)
-```bash
-node scripts/diag-address-consistency.mjs      # 현황 측정(읽기전용)
-node scripts/monitor-address-quality.mjs       # 악화 시 텔레그램(매주 월 09:00 자동)
-node scripts/repair-nested-paren.mjs           # 괄호 붕괴 수리
-node scripts/cleanup-paren-junk.mjs            # 괄호 잡값 → 특이사항 이관
-node scripts/unify-building-name.mjs           # 건물명 통일(--allow-majority로 다수결)
-node scripts/backfill-building-mgtno.mjs       # 건물관리번호 보강
-```
-
-### 현재 기준선 (모니터 스냅샷)
-괄호붕괴 **0** · 괄호잡값 **0** · 표기갈림 **85그룹** · 건물관리번호 **100%** · 정본 **100%**
-
----
-
-## ✅ 이번 세션 완료 (2026-07-30)
+## ✅ 이번 세션 완료 (2026-07-31, 커밋 `5b3a957`~`5b612de`, origin push 완료)
 
 | 작업 | 결과 | 커밋 |
 |---|---|---|
-| A-10 층 규칙 + 대시 동호 인식 | 배포 | `6d5c9fa` |
-| A-11 건물명 맨 뒤 SSOT 정정 | 배포 | `1fadbfe` |
-| P0 괄호 중첩 근본수리 + 백필 | 45건 | `d971b97` |
-| **주소DB 장애 해결** | 10,000ms→44~215ms | — |
-| P1 건물명 통일(DB 정본) | 30건 | `ae951f1`·`e681f8d` |
-| P1-b 괄호 정화 | 73건 | `a18e865` |
-| 다수결 통일 1·2차 | 48+113건 | — |
-| P1 재실행(DB 정본) | 15건 | — |
-| P2 건물관리번호 보강 | **37,045건** | `e5e38f1` |
-| #8 `PGPOOL_MAX` 8→15 | 리비전 `00040-pvr` | — |
-| #9 정기 모니터링 | 매주 월 09:00 | `421394b` |
-| #7 Phase0·1 SSOT 통합 | 도로명 토큰 단일화 | `d108cd7` |
+| 골든 회귀 안전망(vite SSR 로더+fetch 카세트) | offline+api 2단 | `5b3a957` |
+| 순수 규격화 프리앰블 A-3·4·6·15·16·21 → shared SSOT | 클라 출력 불변(골든 증명) | `78d272e` |
+| slow-query 로그 connect/searchpath/query 분리 계측 | 관측성 개선 | `87b2410` |
+| **buildingMatch 28s seq scan 수정** | 함수 GIN 인덱스+불변식 | `083261e` |
+| api 골든 녹화(match 정상화 후) | 41건·재녹화 변경0 | `5b612de` |
 
-**주소DB 장애 원인(재발 시 여기부터)**: 형 PC 배치가 `max_workers=8`로 서버 `pg.Pool`(당시 8)을
-100% 점유 → 앱 요청이 커넥션 획득 실패(10초 timeout) → 500. **`db-status`는 200인데 특정 API만
-timeout이면 DB 장애가 아니라 풀 경합을 먼저 의심**하고, 로그의 `userAgent`·`remoteIp`로 호출자부터 찾을 것.
+**서버 배포**: `nexus-address-api` 리비전 `00049-p76`(logis-op, asia-northeast3). 클라 hosting 변경 없음.
 
-**dry-run이 막은 사고 6건**: 정상 주소 311건 오판 삭제 · 특이사항 중복 누적 · 깨진 괄호 통째 이관 ·
-다른 건물 이름 덮어쓰기 · 용도명으로 실제 이름 대체 · 건물명 `보성,유원아파트` 훼손.
+### ★ match "장애" 실제 원인 3가지 (전부 해결)
+1. **buildingMatch `concat_ws('',road_key,building_name_key) % $2`가 무인덱스** → building_core 21M행 seq scan(28.8s). → `(coalesce(road_key,'')||coalesce(building_name_key,''))` 불변식 교체 + 함수 GIN 인덱스 `building_core_roadbld_trgm`(운영 CREATE INDEX CONCURRENTLY 완료·비잠금·schema.sql+applySchema 반영).
+2. **06:18 Cloud SQL 재시작 후 플래너 통계 낡음** → `ANALYZE building_core, address_core`로 해결.
+3. **★Windows Git Bash `curl -d`가 한글 POST 본문을 깨뜨림** → "404·슬로우 관측 상당수가 테스트 아티팩트". **한글 POST 테스트는 python `urllib`(UTF-8)로**. 실측: python POST 전부 200·0.1~0.16s.
+- road_key equality는 이미 빠름(7~14ms) → btree 불필요(형이 승인했으나 실측으로 불요 판명).
+
+---
+
+## ▶ 새 세션에서 할 일
+
+### 1️⃣ Phase 2 본체 — 서버 `/v1/address/purify` 엔드포인트 (다음 대작업)
+**목표**: 규격화+매칭+상세규격화를 서버에서 배치 수행(대량 백필 서버화 + 브라우저 Kakao 키 제거 발판).
+**이제 가능**: offline+api 골든 둘 다 있어 "서버 출력 = 클라 출력" 대조 가능.
+**걸림돌**: 학습사전 4종(`typo_dict`·`name_typo_dict`·`building_alias`·`note_normalize_dict`)이 **클라 전용** → 서버에 `firebase-admin` 추가 + IAM(서버 SA에 Firestore read) 필요.
+**착수 순서 제안**:
+- ⓐ 서버에 firebase-admin 추가 + 학습사전 로더(캐시).
+- ⓑ shared로 A-5·A-9 등 나머지 순수화 가능분 추가 이관(지금은 A-3·4·6·15·16·21만 SSOT).
+- ⓒ `/v1/address/purify` 엔드포인트: normalize(shared) → match(기존) → 상세규격화(dongHoFormat 등).
+- ⓓ 골든으로 서버=클라 대조.
+
+### 2️⃣ 형 실동작 확인 (지난 세션부터 대기)
+`logis-op.web.app` → Ctrl+Shift+R → 명단 정제 → ①층 위치(가동 3층 101호 유지/101동 3층 203호→101- 203호 3층) ②대시 동호 ③건물명 맨뒤 ④괄호 잡값 없음. + 자가학습 '학습 검토' 탭.
+
+### 3️⃣ 남은 표기 갈림 276건 (자동 처리 불가) — 지난 세션 기록 유지
+동률·근소차 28그룹·괄호 층정보·도로명 부번차. 형 현장 지식 필요.
+
+---
+
+## 🔑 이어가기 전 필수 지식 (함정)
+
+| 상황 | 반드시 |
+|---|---|
+| `gcloud` 실행 | 매 호출 `--account=ttong627@gmail.com`. 프로젝트=**logis-op** |
+| `git push` | `gh auth switch --user ttong627` 먼저 |
+| 클라 배포 | `npm run build` 후 firebase hosting. tsc 게이트 기존 에러 13건(무관·vite build는 그린) |
+| **서버 배포** | `cd services/address-service && gcloud run deploy nexus-address-api --source=. --region=asia-northeast3 --project=logis-op --account=ttong627@gmail.com` |
+| **한글 POST 테스트** | ★curl -d 금지(본문 깨짐). python urllib(UTF-8) 사용 |
+| 주소DB 직접 진단 | Secret `ADDRESS_DATABASE_URL`(소켓형)→공인IP `34.158.197.192`(requireSsl=False)에 내IP authorized-networks 임시추가→node pg EXPLAIN→**끝나면 `--clear-authorized-networks` 원복** |
+| 느린 쿼리 식별 | 80자 로그 truncation이 다른 쿼리를 같게 보이게 함 → **EXPLAIN 플랜으로 식별** |
+| 골든 갱신 | `node scripts/golden/record.mjs [--mode record]`. 테스트 `node --test scripts/address-golden.test.mjs` |
+| 규격화 정규식 수정 | `services/address-service/src/shared/`(roadTokens·textNormalize) 한 곳. 클라·서버 공용 |
+
+### 현재 기준선
+match 실존주소 200·0.1~0.16s(리비전 00049) · 골든 offline+api 3/3 · 인덱스 `building_core_roadbld_trgm` 운영 반영.
 
 ---
 
 ## 📌 재착수 금지 (형 확정)
-- **column_map 자동화** — 서버 자동매핑·저장매핑복원·columnRules 3중이 이미 존재. 충돌 위험 > 실익
-- **정본 문자열 그대로 저장** — 정본은 이미 100% 보유, 갈림은 1% 미만인데 8.8만건 형식 변경 리스크 과도
-
-관련 메모리: `project_nexus_address_format_rules` · `project_nexus_self_learning` · `project_nexus_legaldong_backfill`
+- **column_map 자동화** — 서버 3중 매핑 존재. 충돌>실익.
+- **정본 문자열 그대로 저장** — 정본 100% 보유, 갈림 1%<.
+- **road_key btree 인덱스** — equality 이미 7~14ms로 빠름. 불필요.
+- 기존 저장 명단 소급 미적용 — 새 정제 명단만 새 규칙(형 지시 시 백필 별도).
