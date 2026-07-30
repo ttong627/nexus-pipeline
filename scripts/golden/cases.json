@@ -1,0 +1,132 @@
+{
+  "_readme": [
+    "골든 회귀 케이스 코퍼스 (P7 Phase2 선행).",
+    "★PII 금지: 실제 수령자 이름·실제 배송지는 절대 넣지 않는다. 이름은 합성, 주소는 규칙 재현용 표본만.",
+    "tags: offline = 외부 호출 없이 결정적으로 재현되는 규격화 규칙 / api = 주소DB·Kakao 응답이 있어야 완성되는 규칙(카세트 필요).",
+    "새 규칙을 고치거나 사고를 수리하면 여기에 케이스를 먼저 추가하고 골든을 갱신한다."
+  ],
+  "cases": [
+    { "id": "A01-name-over5", "rule": "A-1", "desc": "이름 5자 초과 → 5자 절단 + 본명 보관", "tags": ["offline"],
+      "input": { "addr": "동대문구 왕산로 72", "name": "김하늘별님구름", "cityLabel": "서울특별시 동대문구" } },
+
+    { "id": "A03-control-chars", "rule": "A-3", "desc": "제어문자·NBSP·따옴표 제거 + NFC", "tags": ["offline"],
+      "input": { "addr": "동대문구 왕산로 72,\t\"201호\"", "cityLabel": "서울특별시 동대문구" } },
+
+    { "id": "A04-unclosed-paren", "rule": "A-4", "desc": "미닫힌 괄호 제거", "tags": ["offline"],
+      "input": { "addr": "동대문구 왕산로 72, 201호 (장안동", "cityLabel": "서울특별시 동대문구" } },
+
+    { "id": "A06-tong-ban", "rule": "A-6", "desc": "통·반 표기 제거", "tags": ["offline"],
+      "input": { "addr": "동대문구 왕산로 72 제3통 제2반, 201호", "cityLabel": "서울특별시 동대문구" } },
+
+    { "id": "A09-special-char-split", "rule": "A-9", "desc": "특수문자 이후 → 특이사항 이동", "tags": ["offline"],
+      "input": { "addr": "동대문구 왕산로 72, 201호 ※ 부재시 경비실", "cityLabel": "서울특별시 동대문구" } },
+
+    { "id": "A10-1-numeric-dong", "rule": "A-10 ①", "desc": "숫자 동 → 대시+호수 패딩", "tags": ["offline"],
+      "input": { "addr": "권선구 권선로 472, 101동 203호", "cityLabel": "경기도 수원시 권선구" } },
+
+    { "id": "A10-1-numeric-dong-floor", "rule": "A-10 ①", "desc": "숫자 동일 때만 층을 호 뒤로", "tags": ["offline"],
+      "input": { "addr": "권선구 권선로 472, 101동 3층 203호", "cityLabel": "경기도 수원시 권선구" } },
+
+    { "id": "A10-2-hangul-dong-floor-keep", "rule": "A-10 ②", "desc": "★한글 동은 층 위치 원본 보존(형 지시 2026-07-30)", "tags": ["offline"],
+      "input": { "addr": "동대문구 왕산로 72, 가동 3층 101호", "cityLabel": "서울특별시 동대문구" } },
+
+    { "id": "A10-2-alpha-dong-floor-keep", "rule": "A-10 ②", "desc": "영문 동도 층 위치 보존", "tags": ["offline"],
+      "input": { "addr": "동대문구 왕산로 72, B동 지하1층 104호", "cityLabel": "서울특별시 동대문구" } },
+
+    { "id": "A10-2-no-dong-floor-keep", "rule": "A-10 ②", "desc": "동 없으면 층 위치 보존", "tags": ["offline"],
+      "input": { "addr": "동대문구 왕산로 72, 3층 101호", "cityLabel": "서울특별시 동대문구" } },
+
+    { "id": "A10-3-dash-dongho", "rule": "A-10 ③", "desc": "대시 동호 인식 → 숫자 동과 동일 형식", "tags": ["offline"],
+      "input": { "addr": "권선구 권선로 472, 101-203호", "cityLabel": "경기도 수원시 권선구" } },
+
+    { "id": "A10-3-dash-dongho-floor", "rule": "A-10 ③", "desc": "대시 동호 + 층", "tags": ["offline"],
+      "input": { "addr": "권선구 권선로 472, 101-3층 203호", "cityLabel": "경기도 수원시 권선구" } },
+
+    { "id": "A10-3-guard-jibun-subno", "rule": "A-10 ③ 가드", "desc": "★지번 부번(40-25호)에 미개입 — 주소 변조 차단", "tags": ["offline"],
+      "input": { "addr": "홍성군 광덕면 신흥리 40-25호", "cityLabel": "충청남도 홍성군" } },
+
+    { "id": "A10-3-guard-multiunit", "rule": "A-10 ③ 가드", "desc": "★다가구(1-2호)에 미개입", "tags": ["offline"],
+      "input": { "addr": "동대문구 왕산로 72, 1-2호", "cityLabel": "서울특별시 동대문구" } },
+
+    { "id": "A10-3-guard-no-ho", "rule": "A-10 ③ 가드", "desc": "★'호' 표기 없는 대시(101-203)에 미개입", "tags": ["offline"],
+      "input": { "addr": "동대문구 왕산로 72, 101-203", "cityLabel": "서울특별시 동대문구" } },
+
+    { "id": "A10-dash-not-building", "rule": "A-10 ※", "desc": "★'래미안 101-203호' → 건물명/상세 분리(동 번호 소실 차단)", "tags": ["offline"],
+      "input": { "addr": "권선구 권선로 472 래미안 101-203호", "cityLabel": "경기도 수원시 권선구" } },
+
+    { "id": "A15-dot-separator", "rule": "A-15", "desc": "도로명 번호 뒤 '숫자. ' → '숫자, '", "tags": ["offline"],
+      "input": { "addr": "강남구 테헤란로 123. 456호", "cityLabel": "서울특별시 강남구" } },
+
+    { "id": "A16-bunji", "rule": "A-16", "desc": "'123번지' → '123'", "tags": ["offline"],
+      "input": { "addr": "홍성군 광덕면 신흥리 123번지", "cityLabel": "충청남도 홍성군" } },
+
+    { "id": "A17-floor-notation-off", "rule": "A-17", "desc": "★3F→3층 변환 안 함(B동/F동 오탐 방지)", "tags": ["offline"],
+      "input": { "addr": "동대문구 왕산로 72, 3F 101호", "cityLabel": "서울특별시 동대문구" } },
+
+    { "id": "A18-je-prefix", "rule": "A-18", "desc": "제(第) 접두어 제거", "tags": ["offline"],
+      "input": { "addr": "권선구 권선로 472, 제101동 제205호", "cityLabel": "경기도 수원시 권선구" } },
+
+    { "id": "A19-dongho-nospace", "rule": "A-19", "desc": "동호 붙여쓰기 분리", "tags": ["offline"],
+      "input": { "addr": "권선구 권선로 472, 101동205호", "cityLabel": "경기도 수원시 권선구" } },
+
+    { "id": "A23-branch-road-space", "rule": "A-23", "desc": "번길/가길 공백 제거", "tags": ["offline"],
+      "input": { "addr": "중랑구 사가정로 2길 15, 201호", "cityLabel": "서울특별시 중랑구" } },
+
+    { "id": "A23-beonstreet", "rule": "A-23", "desc": "XX로 14번길 → XX로14번길", "tags": ["offline"],
+      "input": { "addr": "동대문구 왕산로 14번길 3, 201호", "cityLabel": "서울특별시 동대문구" } },
+
+    { "id": "A28-nested-paren", "rule": "A-28", "desc": "★중첩 괄호 잔여 ')' 제거 — 절대 되돌리지 말 것", "tags": ["offline"],
+      "input": { "addr": "동대문구 왕산로 72, 삼화에코빌(6차) 103동 501호", "cityLabel": "서울특별시 동대문구" } },
+
+    { "id": "P0-paren-in-building", "rule": "P0", "desc": "★건물명 자체에 괄호 — 호매실 엔루체(NLUCE)", "tags": ["offline"],
+      "input": { "addr": "권선구 호매실로 100 호매실 엔루체(NLUCE) 201호", "cityLabel": "경기도 수원시 권선구" } },
+
+    { "id": "P0-corp-prefix-building", "rule": "P0", "desc": "★법인 접두 괄호 — (주)젠터스 에이동", "tags": ["offline"],
+      "input": { "addr": "동대문구 왕산로 72 (주)젠터스 에이동 201호", "cityLabel": "서울특별시 동대문구" } },
+
+    { "id": "P1b-comma-in-building", "rule": "P1-b", "desc": "★'보성,유원아파트'는 한 단지명 — 쪼개서 훼손 금지", "tags": ["offline"],
+      "input": { "addr": "권선구 권선로 472 (권선동, 보성,유원아파트) 101동 203호", "cityLabel": "경기도 수원시 권선구" } },
+
+    { "id": "A29-dong-not-in-paren", "rule": "A-29", "desc": "★건물 동이 괄호로 새지 않음 — 푸르지오 101동", "tags": ["offline"],
+      "input": { "addr": "권선구 권선로 472 푸르지오 101동 203호", "cityLabel": "경기도 수원시 권선구" } },
+
+    { "id": "A29-hangul-dong-with-ho", "rule": "A-29", "desc": "단일 한글 동은 호수 동반 시에만 분리(법정동 사동·본동 오인 방지)", "tags": ["offline"],
+      "input": { "addr": "동대문구 왕산로 72 은혜빌라 가동 101호", "cityLabel": "서울특별시 동대문구" } },
+
+    { "id": "A12-empty-addr", "rule": "A-12 ①", "desc": "주소 공란 → 확인필요", "tags": ["offline"],
+      "input": { "addr": "", "name": "김철수", "cityLabel": "서울특별시 동대문구" } },
+
+    { "id": "A12-too-short", "rule": "A-12 ③", "desc": "변환 후 3자 미만 → 확인필요", "tags": ["offline"],
+      "input": { "addr": "??", "cityLabel": "서울특별시 동대문구" } },
+
+    { "id": "A05-jibun-keep-dong", "rule": "A-5", "desc": "도로명 없는 지번·건물명 주소는 법정동 토큰 보존", "tags": ["offline"],
+      "input": { "addr": "동대문구 용두동 행복아파트 201호", "cityLabel": "서울특별시 동대문구" } },
+
+    { "id": "A20-ri-jibun", "rule": "A-20", "desc": "리(里) 지번 인식", "tags": ["offline"],
+      "input": { "addr": "홍성군 광덕면 신남리 123-5", "adminDong": "광덕면", "cityLabel": "충청남도 홍성군" } },
+
+    { "id": "A21-dongsamuso", "rule": "A-21", "desc": "동사무소 → 주민센터 정규화", "tags": ["offline"],
+      "input": { "addr": "동대문구 왕산로 72, 201호", "note": "장안동사무소 앞", "cityLabel": "서울특별시 동대문구" } },
+
+    { "id": "PHONE-in-addr", "rule": "무손실", "desc": "주소에 섞인 전화번호 → 특이사항 이동", "tags": ["offline"],
+      "input": { "addr": "동대문구 왕산로 72, 201호 010-1234-5678", "cityLabel": "서울특별시 동대문구" } },
+
+    { "id": "A24-legal-dong-priority", "rule": "A-24", "desc": "괄호 안은 반드시 법정동(행정동 아님)", "tags": ["api"],
+      "input": { "addr": "동대문구 왕산로 72, 201호", "adminDong": "전농1동", "cityLabel": "서울특별시 동대문구" } },
+
+    { "id": "A27-admin-dong-number-strip", "rule": "A-27", "desc": "답십리2동 → 답십리동", "tags": ["api"],
+      "input": { "addr": "동대문구 답십리로 200, 201호", "adminDong": "답십리2동", "cityLabel": "서울특별시 동대문구" } },
+
+    { "id": "A31-legal-dong-fill", "rule": "A-31", "desc": "법정동 빠짐 방지(캐시 품질 게이트·Kakao 보강)", "tags": ["api"],
+      "input": { "addr": "수원시 팔달구 매산로2가 100", "cityLabel": "경기도 수원시 팔달구" } },
+
+    { "id": "A32-eup-ri-fill", "rule": "A-32 ②", "desc": "읍/면만 온 경우 리까지 보강", "tags": ["api"],
+      "input": { "addr": "홍성군 홍북읍 신경리 100", "adminDong": "홍북읍", "cityLabel": "충청남도 홍성군" } },
+
+    { "id": "A30-same-dong-other-city", "rule": "A-30", "desc": "★전국 동명 오매칭 차단(시흥시 군자동 vs 광진구 군자동)", "tags": ["api"],
+      "input": { "addr": "군자동 주민센터", "adminDong": "군자동", "cityLabel": "경기도 시흥시" } },
+
+    { "id": "A22-note-center", "rule": "A-22", "desc": "특이사항 주민센터 → 주소 앞에 부착", "tags": ["api"],
+      "input": { "addr": "동대문구 왕산로 72, 201호", "note": "전농1동 주민센터로 배송", "adminDong": "전농1동", "cityLabel": "서울특별시 동대문구" } }
+  ]
+}
