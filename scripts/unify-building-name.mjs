@@ -120,12 +120,23 @@ const main = async () => {
   if (!split.length) { console.log('\n(통일 대상 없음)\n'); process.exit(0); }
 
   // ── 3단계: 그룹별 DB 정본 건물명 조회 ──
+  //   ★조회는 도로명주소로만 가능한데, **같은 도로명주소에 건물이 여러 채**인 경우가 있다
+  //     (실측: 부흥로 174 → '태림홈타운'과 '영안아파트'가 각각 다른 건물관리번호).
+  //     그래서 응답의 buildingMgtNo가 **그룹의 건물관리번호와 일치할 때만** 그 건물명을 채택한다.
+  //     불일치하면 다른 건물의 이름이므로 폐기(보류) — 남의 건물 이름을 덮어쓰는 사고 차단.
   console.log(`\nDB 정본 건물명 조회 중... (${split.length}그룹)`);
-  const dbNames = await pool(split, 8, async ([, g]) => {
+  let mgtMismatch = 0;
+  const dbNames = await pool(split, 4, async ([gkey, g]) => {
     if (!g.std) return '';
     const data = await matchOne(g.std, g.city);
-    return norm(data?.buildingName);
+    const name = norm(data?.buildingName);
+    if (!name) return '';
+    const groupMgt = gkey.startsWith('mgt:') ? gkey.slice(4) : '';
+    const respMgt = norm(data?.buildingMgtNo);
+    if (groupMgt && respMgt && groupMgt !== respMgt) { mgtMismatch++; return ''; }  // 다른 건물 → 폐기
+    return name;
   });
+  if (mgtMismatch) console.log(`  ⚠️ 건물관리번호 불일치로 폐기: ${mgtMismatch}그룹 (같은 도로명 다른 건물)`);
 
   // ── 4단계: 정답 결정 + 재조립 ──
   const stat = { groups: split.length, unified: 0, held: 0, records: 0, noteMoved: 0, written: 0 };

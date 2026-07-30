@@ -31,6 +31,17 @@ const cmpKey = (v) => String(v || '').replace(/[\s()[\]·,./\\-]/g, '');
 // A-9 특수문자 잔재(◆★☆*|~#§※) — 이런 표기를 정답으로 삼으면 오염이 그룹 전체로 번진다.
 const DIRTY_MARK_RE = /[◆★☆*|~#§※]/;
 
+// 건물 '용도명'(이름이 아님) — DB가 고유명 대신 용도만 주는 경우가 있다.
+// 이걸 정답으로 쓰면 실제 이름('영신빌라')을 용도명('다세대주택')으로 덮어써 정보가 열화된다.
+const GENERIC_USE_RE = /^(다세대주택|단독주택|공동주택|연립주택|아파트|근린생활시설|제\d종근린생활시설|오피스텔|상가|주택|빌라|건물)$/;
+
+/**
+ * 고유명이 아니라 '용도명'인가 — 정답 후보에서 제외한다.
+ * @param {string} name
+ * @returns {boolean}
+ */
+export const isGenericUseName = (name) => GENERIC_USE_RE.test(cleanAddressPiece(name));
+
 /**
  * 정답 후보로 쓸 수 있는 건물명인가 — 오염 표기를 정답으로 삼아 그룹에 번지게 하는 것을 막는다.
  * @param {string} name
@@ -42,6 +53,7 @@ const isCleanCandidate = (name, legalDong) => {
   if (!v) return false;
   if (DIRTY_MARK_RE.test(v)) return false;                 // 특수문자 잔재
   if (v.includes(',')) return false;                       // 콤마 = 여러 값이 뭉친 오염
+  if (isGenericUseName(v)) return false;                   // 용도명은 고유명이 아니다
   const dong = cleanAddressPiece(legalDong);
   if (dong && cmpKey(v).startsWith(cmpKey(dong)) && cmpKey(v) !== cmpKey(dong)) {
     // '상동대우마이빌'처럼 법정동이 이름 앞에 자연스럽게 붙는 경우는 허용해야 하므로
@@ -60,8 +72,10 @@ export const pickCanonicalBuilding = ({ variants, dbName, legalDong = '', minSha
   const list = (Array.isArray(variants) ? variants : [])
     .map(v => ({ name: cleanAddressPiece(v?.name), count: Number(v?.count) || 0 }));
 
-  // ① DB 정본 최우선 — 표기가 갈렸는지와 무관하게 정답(위생 검사 통과로 신뢰)
-  const db = cleanAddressPiece(dbName);
+  // ① DB 정본 최우선 — 단, DB가 고유명 대신 '용도명'(다세대주택 등)을 준 경우는 정답으로 쓰지 않는다.
+  //    실제 이름('영신빌라')을 용도명으로 덮어쓰면 정보가 열화된다.
+  const dbRaw = cleanAddressPiece(dbName);
+  const db = isGenericUseName(dbRaw) ? '' : dbRaw;
   if (db) {
     const allMatch = list.length > 0 && list.every(v => cmpKey(v.name) === cmpKey(db));
     if (allMatch) return null;                          // 이미 전부 정본 = 통일 불필요

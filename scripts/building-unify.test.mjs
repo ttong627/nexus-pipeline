@@ -111,6 +111,23 @@ test('DB 정본은 위생 검사를 통과한 것으로 신뢰', () => {
   assert.equal(r.source, 'db');
 });
 
+test('용도명(다세대주택·단독주택 등)은 정답으로 쓰지 않음 — 실제 이름을 덮어쓰면 정보 열화', () => {
+  const r = pickCanonicalBuilding({
+    variants: [{ name: '영신빌라', count: 1 }, { name: '다세대주택', count: 1 }],
+    dbName: '다세대주택',
+  });
+  // DB가 용도명만 줬다면 그것으로 통일하지 않는다 → 실제 이름 후보로 판단
+  assert.notEqual(r?.canonical, '다세대주택');
+});
+
+test('용도명만 있고 실제 이름이 없으면 보류', () => {
+  const r = pickCanonicalBuilding({
+    variants: [{ name: '다세대주택', count: 2 }, { name: '', count: 1 }],
+    dbName: '다세대주택',
+  });
+  assert.equal(r, null);
+});
+
 // ── rebuildParen ───────────────────────────────────────────
 test('괄호를 (법정동, 정답건물명)으로 재작성', () => {
   const r = rebuildParen('장한로29길 34, 101- 203호 (장안동)', '장안동', '가든시티2차');
