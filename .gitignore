@@ -65,3 +65,9 @@ _tmp_*
 /playwright-report/
 /blob-report/
 /playwright/.cache/
+
+# 주소품질 모니터링 로컬 산출물 (기준선 스냅샷·로그·런처)
+.address-quality-snapshot.json
+scripts/monitor.log
+_monitor_address.bat
+_monitor_address.vbs
