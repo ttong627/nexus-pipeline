@@ -23,13 +23,20 @@ export const getPool = () => {
 export const query = async (text, values = []) => {
   const t0 = Date.now();
   const client = await getPool().connect();
+  const tConn = Date.now();                       // 커넥션 획득 완료 시각
+  let tPath = tConn;
   try {
     await client.query(`SET search_path TO ${config.dbSchema}, public`);
+    tPath = Date.now();                           // SET search_path 완료 시각
     return await client.query(text, values);
   } finally {
+    const tEnd = Date.now();
     client.release();
-    const dt = Date.now() - t0;
-    if (dt > 3000) console.log(`[slow-query] ${dt}ms :: ${text.replace(/\s+/g, ' ').trim().slice(0, 80)}`);
+    const total = tEnd - t0;
+    // 병목 위치를 분리 계측: connect(풀·커넥터) vs searchpath vs query(실행+전송).
+    if (total > 3000) {
+      console.log(`[slow-query] total=${total}ms connect=${tConn - t0}ms searchpath=${tPath - tConn}ms query=${tEnd - tPath}ms :: ${text.replace(/\s+/g, ' ').trim().slice(0, 80)}`);
+    }
   }
 };
 
