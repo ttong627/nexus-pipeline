@@ -5,6 +5,7 @@ import { parseAptDong } from './routeSequenceEngine.js';
 import { applyNoteNormalize } from '../learn/applyNoteNormalize.js';
 import { buildVariantIndex, applyVariant } from '../learn/normalizeVariant.js';
 import { normalizeDongHoDetail, DONG_DASH_HO_SRC } from './dongHoFormat.js';
+import { protectParenBlocks, balanceParens } from '../utils/addressFormat.js';
 
 // ══════════════════════════════════════════════════════════════════
 //  TTong NEXUS — 주소 정제 엔진  (규칙 A-1 ~ A-20)
@@ -924,15 +925,14 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
   }
   text = kept.join(' ');
 
-  // ── 괄호 내부 보호 (쉼표 분리 전) ────────────────────────────────
-  const parens = [];
-  text = text.replace(/\(.*?\)/g, m => {
-    if (!m.replace(/[()]/g, '').trim()) return ' ';
-    parens.push(m);
-    return `__P${parens.length - 1}__`;
-  });
-  // A-28: 짝 없는 닫는 괄호 제거 — 중첩 괄호(삼화에코빌(6차)) 입력 시 non-greedy 추출 후
-  // 바깥 ')' 가 text에 잔류하여 "103- 501호 ) (장안동)" 형태로 출력되는 버그 방지
+  // ── 괄호 내부 보호 (쉼표 분리 전) — depth 인식 (P0, 형 지시 2026-07-30 · 되돌리지 말 것) ──
+  //   예전 non-greedy `/\(.*?\)/` 는 중첩 괄호(`(호매실동, 엔루체(NLUCE))`)를 중간에서 끊어
+  //   바깥 ')' 를 텍스트에 잔류시켰고, A-28이 그 ')' 를 무조건 지워 내용이 유실됐다.
+  //   재정제할 때마다 잔재가 쌓여 같은 건물의 표기가 갈렸다(실측 743건).
+  //   protectParenBlocks는 중첩 전체를 한 블록으로 보호한다.
+  const { text: protectedText, blocks: parens } = protectParenBlocks(text);
+  text = protectedText;
+  // A-28: 보호를 통과하고 남은 ')' 는 짝 없는 것뿐이므로 그것만 제거한다(균형 괄호는 __P__ 로 보호됨).
   text = text.replace(/\)/g, '');
 
   // ── 본주소 / 상세주소 분리 ────────────────────────────────────────
@@ -1378,7 +1378,9 @@ export const processAddress = async (inputAddr, inputName = '', adminDong = '', 
   // 도로명주소 바로 뒤 첫 구분자는 ","를 유지한다.
   // 이후 추가 구분이 필요하면 "/"를 쓰고, 괄호 내부의 법정동·건물명 구분 콤마는 예외로 유지한다.
   // 명단에 적힌 상세/부가 내용은 삭제하지 않고 finalDetail 또는 특이사항으로 보존한다.
-  const parenParts  = [dongPart, buildingName].filter(Boolean);
+  // P0: 건물명의 괄호 짝이 깨져 있으면(원본·DB 유래) 조립 시 전체 괄호 구조가 붕괴한다.
+  //   짝 맞는 괄호는 그대로 보존(`호매실 엔루체(NLUCE)`), 짝 없는 기호만 제거해 내용은 살린다.
+  const parenParts  = [dongPart, balanceParens(buildingName)].filter(Boolean);
   const parenInner  = parenParts.join(', ').replace(/,\s*$/, '').trim();
   const parenStr    = parenInner ? `(${parenInner})` : '';
 

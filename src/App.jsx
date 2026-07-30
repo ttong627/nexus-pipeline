@@ -131,35 +131,10 @@ const ADDRESS_DISPLAY_MODES = {
   DETAIL_BEFORE_PAREN: 'detailBeforeParen',
 };
 
-const findTopLevelSeparator = (value) => {
-  let depth = 0;
-  for (let i = 0; i < value.length; i++) {
-    const ch = value[i];
-    if (ch === '(') depth++;
-    else if (ch === ')') depth = Math.max(0, depth - 1);
-    else if (depth === 0 && (ch === ',' || ch === '/')) return i;
-  }
-  return -1;
-};
-
-const cleanAddressPiece = (value) => String(value || '')
-  .replace(/\s+/g, ' ')
-  .replace(/^[,\s/]+|[,\s/]+$/g, '')
-  .trim();
-
-const parseDisplayedAddress = (address) => {
-  const text = cleanAddressPiece(address);
-  if (!text) return { road: '', detail: '', paren: '' };
-  const sepIdx = findTopLevelSeparator(text);
-  const road = sepIdx >= 0 ? cleanAddressPiece(text.slice(0, sepIdx)) : text;
-  const rest = sepIdx >= 0 ? cleanAddressPiece(text.slice(sepIdx + 1)) : '';
-  const parenMatch = rest.match(/\(([^)]*)\)/);
-  const paren = parenMatch ? cleanAddressPiece(parenMatch[1]) : '';
-  const detail = parenMatch
-    ? cleanAddressPiece(`${rest.slice(0, parenMatch.index)} ${rest.slice(parenMatch.index + parenMatch[0].length)}`)
-    : cleanAddressPiece(rest);
-  return { road, detail, paren };
-};
+// P0(2026-07-30): 주소 파싱 3함수 중복 구현 제거 — utils/addressFormat.js 단일 출처(SSOT)를 쓴다.
+//   기존 사본은 괄호 추출이 `/\(([^)]*)\)/` 여서 건물명 속 괄호(`엔루체(NLUCE)`)를 못 읽고
+//   재정제마다 잔재를 누적시켰다. addressFormat.js 쪽은 depth 인식으로 교체됨.
+//   (cleanAddressPiece · parseDisplayedAddress 는 아래 import 로 주입)
 
 const roadFromAddressMeta = (row) => {
   const roadName = cleanAddressPiece(row?._roadName || row?.roadName || '');
@@ -222,7 +197,7 @@ import { processAddress, asyncPool, addTypoRecord, loadTypoDict } from "./engine
 import { parsePhoneNumbers, parseSMS, parseBirthDate, normalizeBirth, extractPhoneNote, formatPhone } from "./utils/parsers.js";
 import { canUseRouteMap, canUseDbOverview, getMonthlyLimit } from "./utils/tierUtils.js";
 import { getCachedCoord, saveCoordCache } from "./utils/coordCache.js";
-import { guardAddressDetail } from "./utils/addressFormat.js";
+import { guardAddressDetail, cleanAddressPiece, parseDisplayedAddress } from "./utils/addressFormat.js";
 import { buildStepStatus, getVisibleWorkflowSteps, getWorkflowMeta, getWorkflowMode, WORKFLOW_STEP_LABELS } from "./utils/workflow.js";
 import { LogOut, ShieldCheck, Database, Crown, Layers, UserCircle, Undo2, BarChart3, MapPin, Map as MapIcon, Truck, CalendarDays, FileSpreadsheet, Home, ChevronLeft, ChevronRight, BookOpen, HardDrive, HelpCircle } from "lucide-react";
 
