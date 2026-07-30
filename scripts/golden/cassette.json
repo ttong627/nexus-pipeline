@@ -1,0 +1,154 @@
+{
+  "GET https://dapi.kakao.com/v2/local/search/address.json?query=%EB%8F%99%EB%8C%80%EB%AC%B8%EA%B5%AC%20%EB%8B%B5%EC%8B%AD%EB%A6%AC%EB%A1%9C%20200&size=1": {
+    "status": 400,
+    "body": "{\"errorType\":\"BadRequest\",\"message\":\"API limit has been exceeded.\",\"code\":-10,\"msg\":\"API limit has been exceeded.\"}"
+  },
+  "GET https://dapi.kakao.com/v2/local/search/address.json?query=%EB%8F%99%EB%8C%80%EB%AC%B8%EA%B5%AC%20%EC%99%95%EC%82%B0%EB%A1%9C14%EB%B2%88%EA%B8%B8%203&size=1": {
+    "status": 400,
+    "body": "{\"errorType\":\"BadRequest\",\"message\":\"API limit has been exceeded.\",\"code\":-10,\"msg\":\"API limit has been exceeded.\"}"
+  },
+  "GET https://dapi.kakao.com/v2/local/search/address.json?query=%EB%8F%99%EB%8C%80%EB%AC%B8%EA%B5%AC%20%EC%9A%A9%EB%91%90%EB%8F%99%20%ED%96%89%EB%B3%B5%EC%95%84%ED%8C%8C%ED%8A%B8&size=1": {
+    "status": 400,
+    "body": "{\"errorType\":\"BadRequest\",\"message\":\"API limit has been exceeded.\",\"code\":-10,\"msg\":\"API limit has been exceeded.\"}"
+  },
+  "GET https://dapi.kakao.com/v2/local/search/address.json?query=%EC%A4%91%EB%9E%91%EA%B5%AC%20%EC%82%AC%EA%B0%80%EC%A0%95%EB%A1%9C2%EA%B8%B8%2015&size=1": {
+    "status": 400,
+    "body": "{\"errorType\":\"BadRequest\",\"message\":\"API limit has been exceeded.\",\"code\":-10,\"msg\":\"API limit has been exceeded.\"}"
+  },
+  "GET https://dapi.kakao.com/v2/local/search/address.json?query=%ED%99%8D%EC%84%B1%EA%B5%B0%20%EA%B4%91%EB%8D%95%EB%A9%B4%20%EC%8B%A0%EB%82%A8%EB%A6%AC%20123-5&size=1": {
+    "status": 400,
+    "body": "{\"errorType\":\"BadRequest\",\"message\":\"API limit has been exceeded.\",\"code\":-10,\"msg\":\"API limit has been exceeded.\"}"
+  },
+  "GET https://dapi.kakao.com/v2/local/search/address.json?query=%ED%99%8D%EC%84%B1%EA%B5%B0%20%EA%B4%91%EB%8D%95%EB%A9%B4%20%EC%8B%A0%ED%9D%A5%EB%A6%AC%20123&size=1": {
+    "status": 400,
+    "body": "{\"errorType\":\"BadRequest\",\"message\":\"API limit has been exceeded.\",\"code\":-10,\"msg\":\"API limit has been exceeded.\"}"
+  },
+  "GET https://dapi.kakao.com/v2/local/search/address.json?query=%ED%99%8D%EC%84%B1%EA%B5%B0%20%EA%B4%91%EB%8D%95%EB%A9%B4%20%EC%8B%A0%ED%9D%A5%EB%A6%AC%2040-25%ED%98%B8&size=1": {
+    "status": 400,
+    "body": "{\"errorType\":\"BadRequest\",\"message\":\"API limit has been exceeded.\",\"code\":-10,\"msg\":\"API limit has been exceeded.\"}"
+  },
+  "GET https://dapi.kakao.com/v2/local/search/address.json?query=%ED%99%8D%EC%84%B1%EA%B5%B0%20%ED%99%8D%EB%B6%81%EC%9D%8D%20%EC%8B%A0%EA%B2%BD%EB%A6%AC%20100&size=1": {
+    "status": 400,
+    "body": "{\"errorType\":\"BadRequest\",\"message\":\"API limit has been exceeded.\",\"code\":-10,\"msg\":\"API limit has been exceeded.\"}"
+  },
+  "GET https://dapi.kakao.com/v2/local/search/keyword.json?query=%EB%8F%99%EB%8C%80%EB%AC%B8%EA%B5%AC%20%EC%9A%A9%EB%91%90%EB%8F%99%20%EC%A3%BC%EB%AF%BC%EC%84%BC%ED%84%B0&size=1": {
+    "status": 200,
+    "body": "{\"documents\":[{\"address_name\":\"서울 동대문구 용두동 792-5\",\"category_group_code\":\"PO3\",\"category_group_name\":\"공공기관\",\"category_name\":\"사회,공공기관 \\u003e 지방행정기관 \\u003e 행정복지센터 \\u003e 동행정복지센터\",\"distance\":\"\",\"id\":\"8022625\",\"phone\":\"02-2171-6022\",\"place_name\":\"용두동주민센터\",\"place_url\":\"http://place.map.kakao.com/8022625\",\"road_address_name\":\"서울 동대문구 천호대로27길 35\",\"x\":\"127.037262280131\",\"y\":\"37.5758031741873\"}],\"meta\":{\"is_end\":false,\"pageable_count\":2,\"same_name\":{\"keyword\":\"용두동 주민센터\",\"region\":[],\"selected_region\":\"서울 동대문구\"},\"total_count\":2}}"
+  },
+  "GET https://dapi.kakao.com/v2/local/search/keyword.json?query=%EB%8F%99%EB%8C%80%EB%AC%B8%EA%B5%AC%20%EC%9A%A9%EB%91%90%EB%8F%99%20%ED%96%89%EB%B3%B5%EC%95%84%ED%8C%8C%ED%8A%B8&size=1": {
+    "status": 200,
+    "body": "{\"documents\":[{\"address_name\":\"서울 성동구 마장동 768-17\",\"category_group_code\":\"\",\"category_group_name\":\"\",\"category_name\":\"부동산 \\u003e 주거시설 \\u003e 아파트\",\"distance\":\"\",\"id\":\"15225428\",\"phone\":\"\",\"place_name\":\"행복드림아파트\",\"place_url\":\"http://place.map.kakao.com/15225428\",\"road_address_name\":\"서울 성동구 마장로39가길 61\",\"x\":\"127.044104143225\",\"y\":\"37.5677927720827\"}],\"meta\":{\"is_end\":true,\"pageable_count\":1,\"same_name\":{\"keyword\":\"행복아파트\",\"region\":[],\"selected_region\":\"서울 동대문구 용두동\"},\"total_count\":1}}"
+  },
+  "GET https://dapi.kakao.com/v2/local/search/keyword.json?query=%EC%84%9C%EC%9A%B8%ED%8A%B9%EB%B3%84%EC%8B%9C%20%EB%8F%99%EB%8C%80%EB%AC%B8%EA%B5%AC%20%EC%9A%A9%EB%91%90%EB%8F%99%20%ED%96%89%EB%B3%B5%EC%95%84%ED%8C%8C%ED%8A%B8&size=1": {
+    "status": 200,
+    "body": "{\"documents\":[{\"address_name\":\"서울 성동구 마장동 768-17\",\"category_group_code\":\"\",\"category_group_name\":\"\",\"category_name\":\"부동산 \\u003e 주거시설 \\u003e 아파트\",\"distance\":\"\",\"id\":\"15225428\",\"phone\":\"\",\"place_name\":\"행복드림아파트\",\"place_url\":\"http://place.map.kakao.com/15225428\",\"road_address_name\":\"서울 성동구 마장로39가길 61\",\"x\":\"127.044104143225\",\"y\":\"37.5677927720827\"}],\"meta\":{\"is_end\":true,\"pageable_count\":1,\"same_name\":{\"keyword\":\"행복아파트\",\"region\":[],\"selected_region\":\"서울 동대문구 용두동\"},\"total_count\":1}}"
+  },
+  "POST {ADDRESS_API}/v1/address/match\n{\"query\":\"강남구 테헤란로 123\",\"cityLabel\":\"서울특별시 강남구\",\"allowJusoFallback\":false}": {
+    "status": 200,
+    "body": "{\"ok\":true,\"data\":{\"standardRoadAddress\":\"서울특별시 강남구 테헤란로 123\",\"roadName\":\"테헤란로\",\"buildingMainNo\":123,\"buildingSubNo\":0,\"buildingName\":\"여삼빌딩\",\"matchedSido\":\"서울특별시\",\"matchedSigungu\":\"강남구\",\"buildingMgtNo\":\"1168010100106480024023791\",\"addressMgtNo\":\"11680101312201000012300000\",\"isApartment\":false,\"legalDong\":\"역삼동\",\"roadAddrPart1\":\"서울특별시 강남구 테헤란로 123\",\"roadAddr\":\"서울특별시 강남구 테헤란로 123\",\"rn\":\"테헤란로\",\"buldMnnm\":\"123\",\"buldSlno\":\"0\",\"bdNm\":\"여삼빌딩\",\"bdKdcd\":\"0\",\"emdNm\":\"역삼동\",\"zipNo\":\"\",\"bdMgtSn\":\"1168010100106480024023791\",\"_addressMgtNo\":\"11680101312201000012300000\",\"_matchSource\":\"national_address_db\",\"_matchConfidence\":0.98,\"_routeHints\":{\"apartmentGroupKey\":\"서울특별시강남구테헤란로123|123|0\",\"buildingGroupKey\":\"1168010100106480024023791\",\"roadSideKey\":\"테헤란로:left\"}}}"
+  },
+  "POST {ADDRESS_API}/v1/address/match\n{\"query\":\"광덕면 신남리 123-5\",\"cityLabel\":\"충청남도 홍성군\",\"allowJusoFallback\":false}": {
+    "status": 404,
+    "body": "{\"ok\":false,\"data\":null}"
+  },
+  "POST {ADDRESS_API}/v1/address/match\n{\"query\":\"광덕면 신흥리 123\",\"cityLabel\":\"충청남도 홍성군\",\"allowJusoFallback\":false}": {
+    "status": 404,
+    "body": "{\"ok\":false,\"data\":null}"
+  },
+  "POST {ADDRESS_API}/v1/address/match\n{\"query\":\"광덕면 신흥리 40-25호\",\"cityLabel\":\"충청남도 홍성군\",\"allowJusoFallback\":false}": {
+    "status": 404,
+    "body": "{\"ok\":false,\"data\":null}"
+  },
+  "POST {ADDRESS_API}/v1/address/match\n{\"query\":\"권선구 권선로 472\",\"cityLabel\":\"경기도 수원시 권선구\",\"allowJusoFallback\":false}": {
+    "status": 200,
+    "body": "{\"ok\":true,\"data\":{\"standardRoadAddress\":\"경기도 수원시 권선구 권선로 472\",\"roadName\":\"권선로\",\"buildingMainNo\":472,\"buildingSubNo\":0,\"buildingName\":\"세지빌딩\",\"matchedSido\":\"경기도\",\"matchedSigungu\":\"수원시 권선구\",\"buildingMgtNo\":\"4111312600101790000034945\",\"addressMgtNo\":\"\",\"isApartment\":false,\"legalDong\":\"세류동\",\"roadAddrPart1\":\"경기도 수원시 권선구 권선로 472\",\"roadAddr\":\"경기도 수원시 권선구 권선로 472\",\"rn\":\"권선로\",\"buldMnnm\":\"472\",\"buldSlno\":\"0\",\"bdNm\":\"세지빌딩\",\"bdKdcd\":\"0\",\"emdNm\":\"세류동\",\"zipNo\":\"\",\"bdMgtSn\":\"4111312600101790000034945\",\"_addressMgtNo\":\"\",\"_matchSource\":\"national_address_db\",\"_matchConfidence\":0.97,\"_routeHints\":{\"apartmentGroupKey\":\"경기도수원시권선구권선로472|472|0\",\"buildingGroupKey\":\"4111312600101790000034945\",\"roadSideKey\":\"권선로:right\"}}}"
+  },
+  "POST {ADDRESS_API}/v1/address/match\n{\"query\":\"권선구 호매실로 100\",\"cityLabel\":\"경기도 수원시 권선구\",\"allowJusoFallback\":false}": {
+    "status": 200,
+    "body": "{\"ok\":true,\"data\":{\"standardRoadAddress\":\"경기도 수원시 권선구 호매실로 100\",\"roadName\":\"호매실로\",\"buildingMainNo\":100,\"buildingSubNo\":0,\"buildingName\":\"\",\"matchedSido\":\"경기도\",\"matchedSigungu\":\"수원시 권선구\",\"buildingMgtNo\":\"4111313500114060003000001\",\"addressMgtNo\":\"\",\"isApartment\":false,\"legalDong\":\"호매실동\",\"roadAddrPart1\":\"경기도 수원시 권선구 호매실로 100\",\"roadAddr\":\"경기도 수원시 권선구 호매실로 100\",\"rn\":\"호매실로\",\"buldMnnm\":\"100\",\"buldSlno\":\"0\",\"bdNm\":\"\",\"bdKdcd\":\"0\",\"emdNm\":\"호매실동\",\"zipNo\":\"\",\"bdMgtSn\":\"4111313500114060003000001\",\"_addressMgtNo\":\"\",\"_matchSource\":\"national_address_db\",\"_matchConfidence\":0.97,\"_routeHints\":{\"apartmentGroupKey\":\"경기도수원시권선구호매실로100|100|0\",\"buildingGroupKey\":\"4111313500114060003000001\",\"roadSideKey\":\"호매실로:right\"}}}"
+  },
+  "POST {ADDRESS_API}/v1/address/match\n{\"query\":\"답십리로 200\",\"cityLabel\":\"서울특별시 동대문구\",\"allowJusoFallback\":false}": {
+    "status": 404,
+    "body": "{\"ok\":false,\"data\":null}"
+  },
+  "POST {ADDRESS_API}/v1/address/match\n{\"query\":\"동대문구 ??\",\"cityLabel\":\"서울특별시 동대문구\",\"allowJusoFallback\":false}": {
+    "status": 200,
+    "body": "{\"ok\":true,\"data\":{\"standardRoadAddress\":\"서울특별시 동대문구 천호대로 145\",\"roadName\":\"천호대로\",\"buildingMainNo\":145,\"buildingSubNo\":0,\"buildingName\":\"동대문구청\",\"matchedSido\":\"서울특별시\",\"matchedSigungu\":\"동대문구\",\"buildingMgtNo\":\"1123010200100390009039004\",\"addressMgtNo\":\"\",\"isApartment\":false,\"legalDong\":\"용두동\",\"roadAddrPart1\":\"서울특별시 동대문구 천호대로 145\",\"roadAddr\":\"서울특별시 동대문구 천호대로 145\",\"rn\":\"천호대로\",\"buldMnnm\":\"145\",\"buldSlno\":\"0\",\"bdNm\":\"동대문구청\",\"bdKdcd\":\"0\",\"emdNm\":\"용두동\",\"zipNo\":\"\",\"bdMgtSn\":\"1123010200100390009039004\",\"_addressMgtNo\":\"\",\"_matchSource\":\"national_address_db\",\"_matchConfidence\":0.5714286,\"_routeHints\":{\"apartmentGroupKey\":\"서울특별시동대문구천호대로145|145|0\",\"buildingGroupKey\":\"1123010200100390009039004\",\"roadSideKey\":\"천호대로:left\"}}}"
+  },
+  "POST {ADDRESS_API}/v1/address/match\n{\"query\":\"동대문구 답십리로 200\",\"cityLabel\":\"서울특별시 동대문구\",\"allowJusoFallback\":false}": {
+    "status": 404,
+    "body": "{\"ok\":false,\"data\":null}"
+  },
+  "POST {ADDRESS_API}/v1/address/match\n{\"query\":\"동대문구 왕산로 72\",\"cityLabel\":\"서울특별시 동대문구\",\"allowJusoFallback\":false}": {
+    "status": 200,
+    "body": "{\"ok\":true,\"data\":{\"standardRoadAddress\":\"서울특별시 동대문구 왕산로 72\",\"roadName\":\"왕산로\",\"buildingMainNo\":72,\"buildingSubNo\":0,\"buildingName\":\"동대문한양아이클래스\",\"matchedSido\":\"서울특별시\",\"matchedSigungu\":\"동대문구\",\"buildingMgtNo\":\"1123010200101120008000001\",\"addressMgtNo\":\"11230102310500800007200000\",\"isApartment\":false,\"legalDong\":\"용두동\",\"roadAddrPart1\":\"서울특별시 동대문구 왕산로 72\",\"roadAddr\":\"서울특별시 동대문구 왕산로 72\",\"rn\":\"왕산로\",\"buldMnnm\":\"72\",\"buldSlno\":\"0\",\"bdNm\":\"동대문한양아이클래스\",\"bdKdcd\":\"0\",\"emdNm\":\"용두동\",\"zipNo\":\"\",\"bdMgtSn\":\"1123010200101120008000001\",\"_addressMgtNo\":\"11230102310500800007200000\",\"_matchSource\":\"national_address_db\",\"_matchConfidence\":0.98,\"_routeHints\":{\"apartmentGroupKey\":\"서울특별시동대문구왕산로72|72|0\",\"buildingGroupKey\":\"1123010200101120008000001\",\"roadSideKey\":\"왕산로:right\"}}}"
+  },
+  "POST {ADDRESS_API}/v1/address/match\n{\"query\":\"동대문구 왕산로14번길 3\",\"cityLabel\":\"서울특별시 동대문구\",\"allowJusoFallback\":false}": {
+    "status": 404,
+    "body": "{\"ok\":false,\"data\":null}"
+  },
+  "POST {ADDRESS_API}/v1/address/match\n{\"query\":\"동대문구 용두동 주민센터\",\"cityLabel\":\"서울특별시 동대문구\",\"allowJusoFallback\":false}": {
+    "status": 404,
+    "body": "{\"ok\":false,\"data\":null}"
+  },
+  "POST {ADDRESS_API}/v1/address/match\n{\"query\":\"동대문구 용두동 행복아파트\",\"cityLabel\":\"서울특별시 동대문구\",\"allowJusoFallback\":false}": {
+    "status": 404,
+    "body": "{\"ok\":false,\"data\":null}"
+  },
+  "POST {ADDRESS_API}/v1/address/match\n{\"query\":\"동대문구 전농1동 주민센터\",\"cityLabel\":\"서울특별시 동대문구\",\"allowJusoFallback\":false}": {
+    "status": 200,
+    "body": "{\"ok\":true,\"data\":{\"standardRoadAddress\":\"서울특별시 동대문구 서울시립대로9길 21\",\"roadName\":\"서울시립대로9길\",\"buildingMainNo\":21,\"buildingSubNo\":0,\"buildingName\":\"전농1동 주민센터\",\"matchedSido\":\"서울특별시\",\"matchedSigungu\":\"동대문구\",\"buildingMgtNo\":\"1123010400106780001029885\",\"addressMgtNo\":\"\",\"isApartment\":false,\"legalDong\":\"전농동\",\"roadAddrPart1\":\"서울특별시 동대문구 서울시립대로9길 21\",\"roadAddr\":\"서울특별시 동대문구 서울시립대로9길 21\",\"rn\":\"서울시립대로9길\",\"buldMnnm\":\"21\",\"buldSlno\":\"0\",\"bdNm\":\"전농1동 주민센터\",\"bdKdcd\":\"0\",\"emdNm\":\"전농동\",\"zipNo\":\"\",\"bdMgtSn\":\"1123010400106780001029885\",\"_addressMgtNo\":\"\",\"_matchSource\":\"national_address_db\",\"_matchConfidence\":0.46666667,\"_routeHints\":{\"apartmentGroupKey\":\"서울특별시동대문구서울시립대로9길21|21|0\",\"buildingGroupKey\":\"1123010400106780001029885\",\"roadSideKey\":\"\"}}}"
+  },
+  "POST {ADDRESS_API}/v1/address/match\n{\"query\":\"사가정로2길 15\",\"cityLabel\":\"서울특별시 중랑구\",\"allowJusoFallback\":false}": {
+    "status": 404,
+    "body": "{\"ok\":false,\"data\":null}"
+  },
+  "POST {ADDRESS_API}/v1/address/match\n{\"query\":\"서울 동대문구 천호대로27길 35\",\"cityLabel\":\"서울특별시 동대문구\",\"allowJusoFallback\":false}": {
+    "status": 200,
+    "body": "{\"ok\":true,\"data\":{\"standardRoadAddress\":\"서울특별시 동대문구 천호대로27길 35\",\"roadName\":\"천호대로27길\",\"buildingMainNo\":35,\"buildingSubNo\":0,\"buildingName\":\"용신동주민센터\",\"matchedSido\":\"서울특별시\",\"matchedSigungu\":\"동대문구\",\"buildingMgtNo\":\"1123010200100650028000001\",\"addressMgtNo\":\"\",\"isApartment\":false,\"legalDong\":\"용두동\",\"roadAddrPart1\":\"서울특별시 동대문구 천호대로27길 35\",\"roadAddr\":\"서울특별시 동대문구 천호대로27길 35\",\"rn\":\"천호대로27길\",\"buldMnnm\":\"35\",\"buldSlno\":\"0\",\"bdNm\":\"용신동주민센터\",\"bdKdcd\":\"0\",\"emdNm\":\"용두동\",\"zipNo\":\"\",\"bdMgtSn\":\"1123010200100650028000001\",\"_addressMgtNo\":\"\",\"_matchSource\":\"national_address_db\",\"_matchConfidence\":0.97,\"_routeHints\":{\"apartmentGroupKey\":\"서울특별시동대문구천호대로27길35|35|0\",\"buildingGroupKey\":\"1123010200100650028000001\",\"roadSideKey\":\"\"}}}"
+  },
+  "POST {ADDRESS_API}/v1/address/match\n{\"query\":\"서울특별시 동대문구 용두동 행복아파트\",\"cityLabel\":\"서울특별시 동대문구\",\"allowJusoFallback\":false}": {
+    "status": 404,
+    "body": "{\"ok\":false,\"data\":null}"
+  },
+  "POST {ADDRESS_API}/v1/address/match\n{\"query\":\"시흥시 군자동 주민센터\",\"cityLabel\":\"경기도 시흥시\",\"allowJusoFallback\":false}": {
+    "status": 200,
+    "body": "{\"ok\":true,\"data\":{\"standardRoadAddress\":\"경기도 시흥시 도일로102번길 11\",\"roadName\":\"도일로102번길\",\"buildingMainNo\":11,\"buildingSubNo\":0,\"buildingName\":\"군자동주민센터\",\"matchedSido\":\"경기도\",\"matchedSigungu\":\"시흥시\",\"buildingMgtNo\":\"4139012700116600002008978\",\"addressMgtNo\":\"\",\"isApartment\":false,\"legalDong\":\"거모동\",\"roadAddrPart1\":\"경기도 시흥시 도일로102번길 11\",\"roadAddr\":\"경기도 시흥시 도일로102번길 11\",\"rn\":\"도일로102번길\",\"buldMnnm\":\"11\",\"buldSlno\":\"0\",\"bdNm\":\"군자동주민센터\",\"bdKdcd\":\"0\",\"emdNm\":\"거모동\",\"zipNo\":\"\",\"bdMgtSn\":\"4139012700116600002008978\",\"_addressMgtNo\":\"\",\"_matchSource\":\"national_address_db\",\"_matchConfidence\":0.46153846,\"_routeHints\":{\"apartmentGroupKey\":\"경기도시흥시도일로102번길11|11|0\",\"buildingGroupKey\":\"4139012700116600002008978\",\"roadSideKey\":\"\"}}}"
+  },
+  "POST {ADDRESS_API}/v1/address/match\n{\"query\":\"왕산로14번길 3\",\"cityLabel\":\"서울특별시 동대문구\",\"allowJusoFallback\":false}": {
+    "status": 404,
+    "body": "{\"ok\":false,\"data\":null}"
+  },
+  "POST {ADDRESS_API}/v1/address/match\n{\"query\":\"용두동 행복아파트\",\"cityLabel\":\"서울특별시 동대문구\",\"allowJusoFallback\":false}": {
+    "status": 404,
+    "body": "{\"ok\":false,\"data\":null}"
+  },
+  "POST {ADDRESS_API}/v1/address/match\n{\"query\":\"중랑구 사가정로2길 15\",\"cityLabel\":\"서울특별시 중랑구\",\"allowJusoFallback\":false}": {
+    "status": 404,
+    "body": "{\"ok\":false,\"data\":null}"
+  },
+  "POST {ADDRESS_API}/v1/address/match\n{\"query\":\"팔달구 매산로 2\",\"cityLabel\":\"경기도 수원시 팔달구\",\"allowJusoFallback\":false}": {
+    "status": 200,
+    "body": "{\"ok\":true,\"data\":{\"standardRoadAddress\":\"경기도 수원시 팔달구 매산로 2\",\"roadName\":\"매산로\",\"buildingMainNo\":2,\"buildingSubNo\":0,\"buildingName\":\"\",\"matchedSido\":\"경기도\",\"matchedSigungu\":\"수원시 팔달구\",\"buildingMgtNo\":\"4111513400100580020050001\",\"addressMgtNo\":\"41115134317600700000200000\",\"isApartment\":false,\"legalDong\":\"매산로1가\",\"roadAddrPart1\":\"경기도 수원시 팔달구 매산로 2\",\"roadAddr\":\"경기도 수원시 팔달구 매산로 2\",\"rn\":\"매산로\",\"buldMnnm\":\"2\",\"buldSlno\":\"0\",\"bdNm\":\"\",\"bdKdcd\":\"0\",\"emdNm\":\"매산로1가\",\"zipNo\":\"\",\"bdMgtSn\":\"4111513400100580020050001\",\"_addressMgtNo\":\"41115134317600700000200000\",\"_matchSource\":\"national_address_db\",\"_matchConfidence\":0.98,\"_routeHints\":{\"apartmentGroupKey\":\"경기도수원시팔달구매산로2|2|0\",\"buildingGroupKey\":\"4111513400100580020050001\",\"roadSideKey\":\"매산로:right\"}}}"
+  },
+  "POST {ADDRESS_API}/v1/address/match\n{\"query\":\"홍북읍 신경리 100\",\"cityLabel\":\"충청남도 홍성군\",\"allowJusoFallback\":false}": {
+    "status": 404,
+    "body": "{\"ok\":false,\"data\":null}"
+  },
+  "POST {ADDRESS_API}/v1/address/match\n{\"query\":\"홍성군 광덕면 신남리 123-5\",\"cityLabel\":\"충청남도 홍성군\",\"allowJusoFallback\":false}": {
+    "status": 404,
+    "body": "{\"ok\":false,\"data\":null}"
+  },
+  "POST {ADDRESS_API}/v1/address/match\n{\"query\":\"홍성군 광덕면 신흥리 123\",\"cityLabel\":\"충청남도 홍성군\",\"allowJusoFallback\":false}": {
+    "status": 404,
+    "body": "{\"ok\":false,\"data\":null}"
+  },
+  "POST {ADDRESS_API}/v1/address/match\n{\"query\":\"홍성군 광덕면 신흥리 40-25호\",\"cityLabel\":\"충청남도 홍성군\",\"allowJusoFallback\":false}": {
+    "status": 404,
+    "body": "{\"ok\":false,\"data\":null}"
+  },
+  "POST {ADDRESS_API}/v1/address/match\n{\"query\":\"홍성군 홍북읍 신경리 100\",\"cityLabel\":\"충청남도 홍성군\",\"allowJusoFallback\":false}": {
+    "status": 404,
+    "body": "{\"ok\":false,\"data\":null}"
+  }
+}
