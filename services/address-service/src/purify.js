@@ -148,6 +148,15 @@ export const createPurifyDeps = ({ matchAddress, dicts, kakaoRestKey = config.ka
 /**
  * 정제기 생성. 서버(server.js)와 파리티 테스트가 **같은 조립**을 쓴다 —
  * 테스트가 실제 배포 경로를 검증하도록 하기 위한 구조다.
+ *
+ * ★★배치 직렬화(2026-08-01 실측 사고 · 절대 풀지 말 것)
+ *   purify는 **운영 엔드포인트 `/v1/address/match`와 커넥션 풀을 공유한다.**
+ *   배포 후 정제 배치를 돌렸더니 match가 정확히 10초 뒤 500
+ *   (`timeout exceeded when trying to connect` = pg connectionTimeoutMillis)을 뱉었다.
+ *   2026-07-30 외부 배치가 일으킨 장애와 **같은 메커니즘**이다.
+ *   정제는 지연돼도 되지만 **운영 매칭은 지연되면 안 된다** → 인스턴스당 배치를 한 번에
+ *   하나만 돌리고(아래 큐), 그 안에서도 동시성을 낮게 유지해 풀에 여유를 남긴다.
+ *   (요청이 동시에 와도 DB 동시 쿼리는 concurrency개를 넘지 않는다.)
  */
 export const createPurifier = ({
   matchAddress,
@@ -160,7 +169,7 @@ export const createPurifier = ({
   const processAddress = createProcessAddress(deps);
 
   /** @param {Array<{addr?:string,name?:string,adminDong?:string,cityLabel?:string,note?:string}>} records */
-  const purifyRecords = async (records) => runPool(concurrency, records, async (record) => {
+  const runBatch = async (records) => runPool(concurrency, records, async (record) => {
     const r = record || {};
     try {
       return await processAddress(
@@ -176,6 +185,14 @@ export const createPurifier = ({
       return { 원주소: r.addr || r.address || '', _error: String(error?.message || error) };
     }
   });
+
+  // 인스턴스당 배치 큐 — 동시에 들어온 요청도 한 줄로 세운다(위 ★★ 참조).
+  let queue = Promise.resolve();
+  const purifyRecords = (records) => {
+    const started = queue.then(() => runBatch(records), () => runBatch(records));
+    queue = started.then(() => {}, () => {});   // 실패해도 다음 배치가 막히지 않게
+    return started;
+  };
 
   return { purifyRecords, processAddress, dictStore };
 };
