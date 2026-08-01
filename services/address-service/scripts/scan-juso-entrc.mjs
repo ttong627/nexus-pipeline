@@ -16,6 +16,38 @@ import path from 'node:path';
 
 import { detectLayout, isBuildingGroup, parseEntranceLine } from '../src/entrance/entrcParser.js';
 import { looksMojibake, readEntranceLines } from '../src/entrance/entrcReader.js';
+import { tmToWgs84 } from '../src/shared/tmProjection.js';
+
+/**
+ * 시도명 → 경위도 대역. 변환 결과가 제 시도 밖이면 좌표계·필드정렬 사고다.
+ *
+ * ⚠️ 이 박스는 **행정구역 실제 범위**여야 한다. 처음엔 "대충 아는 범위"로 적었다가
+ *    멀쩡한 변환을 오탐했다(실측 2026-08-01):
+ *      · 경북 하한 35.70 → 경주시(35.6대)를 잘랐다
+ *      · 대구 상한 36.02 → **2023년 편입된 군위군(36.2대)**을 잘랐다
+ *      · 인천 서한계 125.95 → **백령도(124.7)** 등 서해5도를 잘랐다
+ *    도서·편입 지역을 빠뜨리면 정상 좌표가 사고로 보고된다. 넉넉하게 잡되,
+ *    "다른 시도로 넘어갈 만큼"은 넓히지 않는다(그래야 진짜 사고를 잡는다).
+ */
+const SIDO_BOX = {
+  '서울특별시': [37.40, 37.72, 126.75, 127.20],
+  '부산광역시': [34.85, 35.42, 128.70, 129.35],
+  '대구광역시': [35.58, 36.35, 128.30, 128.85],   // 군위군 편입(2023) 반영
+  '인천광역시': [36.95, 38.00, 124.60, 126.80],   // 백령·대청 등 서해5도 포함
+  '광주광역시': [35.03, 35.26, 126.60, 127.05],
+  '대전광역시': [36.15, 36.52, 127.25, 127.58],
+  '울산광역시': [35.30, 35.80, 128.95, 129.50],   // 울주군 남부(서생·온양) 포함
+  '세종특별자치시': [36.40, 36.78, 127.10, 127.50],
+  '경기도': [36.85, 38.32, 126.30, 127.90],
+  '강원특별자치도': [37.00, 38.65, 127.00, 129.40],
+  '충청북도': [36.00, 37.30, 127.25, 128.75],
+  '충청남도': [35.95, 37.10, 125.90, 127.65],
+  '전북특별자치도': [35.28, 36.25, 126.30, 128.00],
+  '전라남도': [33.85, 35.55, 125.00, 128.00],
+  '경상북도': [35.55, 37.60, 127.75, 132.00],     // 경주 남단~울릉/독도
+  '경상남도': [34.45, 35.95, 127.50, 129.35],
+  '제주특별자치도': [33.05, 34.05, 126.00, 127.00], // 추자도(33.94)는 제주시 소속
+};
 
 const argv = process.argv.slice(2);
 const dir = argv.find((a) => !a.startsWith('--'));
@@ -42,6 +74,7 @@ const sum = {
 };
 const skipSamples = [];
 const mojibakeSamples = [];
+const projSamples = [];
 const outOfRange = [];
 
 // EPSG:5179 한국 대략 범위 — 좌표가 엉뚱하면 파싱이 밀린 것이다(조기 경보).
@@ -49,7 +82,7 @@ const X_MIN = 700000, X_MAX = 1400000;
 const Y_MIN = 1300000, Y_MAX = 2100000;
 
 async function scanFile(fp) {
-  const st = { total: 0, ok: 0, skipped: 0, noCoord: 0, byLayout: {}, group: 0, mojibake: 0 };
+  const st = { total: 0, ok: 0, skipped: 0, noCoord: 0, byLayout: {}, group: 0, mojibake: 0, projOk: 0, projFail: 0, projOutOfSido: 0 };
   // ★cp949 로 디코딩해 읽는다. 바이트만 봐도 구조 검증은 되지만, 그러면 건물명이
   //   깨진 걸 못 잡는다(1차 스캔이 실제로 그랬다).
   for await (const line of readEntranceLines(fp, { limit: SAMPLE })) {
@@ -79,6 +112,21 @@ async function scanFile(fp) {
         outOfRange.push({ file: path.basename(fp), x: rec.x, y: rec.y, head: line.slice(0, 90) });
       }
     }
+    // ★좌표 변환 검증 — 5179 를 WGS84 로 바꿔 그 시도 안에 떨어지는지 본다.
+    if (rec.x !== null && rec.y !== null) {
+      const g = tmToWgs84(rec.x, rec.y, 5179);
+      if (!g) st.projFail += 1;
+      else {
+        st.projOk += 1;
+        const box = SIDO_BOX[rec.sido];
+        if (box && (g.lat < box[0] || g.lat > box[1] || g.lng < box[2] || g.lng > box[3])) {
+          st.projOutOfSido += 1;
+          if (projSamples.length < 8) {
+            projSamples.push({ file: path.basename(fp), sido: rec.sido, lat: g.lat, lng: g.lng, road: rec.roadName });
+          }
+        }
+      }
+    }
     if (isBuildingGroup(rec)) st.group += 1;
     if (rec.buildingName) sum.withBuildingName += 1;
     if (rec.buildingUse) sum.withUse += 1;
@@ -104,6 +152,9 @@ for (const name of files) {
   sum.files += 1;
   sum.total += st.total; sum.ok += st.ok; sum.skipped += st.skipped; sum.noCoord += st.noCoord; sum.group += st.group;
   sum.mojibake = (sum.mojibake || 0) + st.mojibake;
+  sum.projOk = (sum.projOk || 0) + st.projOk;
+  sum.projFail = (sum.projFail || 0) + st.projFail;
+  sum.projOutOfSido = (sum.projOutOfSido || 0) + st.projOutOfSido;
   const layouts = Object.keys(st.byLayout).join(',');
   console.log(
     `${name.slice(0, 44).padEnd(46)}${fmt(st.total).padStart(12)}${fmt(st.ok).padStart(12)}` +
@@ -121,6 +172,7 @@ console.log(`  건물군(=1)  ${fmt(sum.group)}  ← 300002 동 도형 연결 �
 console.log(`  건물명 보유 ${fmt(sum.withBuildingName)} · 건물용도 보유 ${fmt(sum.withUse)}`);
 console.log(`  레이아웃    ${JSON.stringify(sum.byLayout)}`);
 console.log(`  인코딩 깨짐 ${fmt(sum.mojibake || 0)}  ← cp949 디코딩이 맞으면 0 이어야 한다`);
+console.log(`  좌표변환    성공 ${fmt(sum.projOk || 0)} · 실패 ${fmt(sum.projFail || 0)} · 시도이탈 ${fmt(sum.projOutOfSido || 0)}`);
 if (Object.keys(sum.byReason).length) console.log(`  이동사유    ${JSON.stringify(sum.byReason)}`);
 
 if (skipSamples.length) {
@@ -130,6 +182,10 @@ if (skipSamples.length) {
 if (mojibakeSamples.length) {
   console.log('\n⚠️ [인코딩 깨짐 표본 — cp949 디코딩 실패]');
   for (const s2 of mojibakeSamples) console.log(`  ${s2.file}: ${s2.head}`);
+}
+if (projSamples.length) {
+  console.log('\n⚠️ [좌표변환 결과가 해당 시도 밖 — 표본]');
+  for (const s2 of projSamples) console.log(`  ${s2.sido} ${s2.road} -> ${s2.lat.toFixed(5)},${s2.lng.toFixed(5)} (${s2.file})`);
 }
 if (outOfRange.length) {
   console.log('\n⚠️ [좌표 범위 이탈 — 파싱이 밀렸을 가능성]');
