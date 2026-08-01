@@ -11,12 +11,11 @@
  *
  * 출력: 파일별 + 전체 집계, 그리고 폐기된 줄 표본(원인 파악용).
  */
-import { createReadStream } from 'node:fs';
 import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
-import { createInterface } from 'node:readline';
 
 import { detectLayout, isBuildingGroup, parseEntranceLine } from '../src/entrance/entrcParser.js';
+import { looksMojibake, readEntranceLines } from '../src/entrance/entrcReader.js';
 
 const argv = process.argv.slice(2);
 const dir = argv.find((a) => !a.startsWith('--'));
@@ -42,6 +41,7 @@ const sum = {
   byLayout: {}, byReason: {}, group: 0, withBuildingName: 0, withUse: 0,
 };
 const skipSamples = [];
+const mojibakeSamples = [];
 const outOfRange = [];
 
 // EPSG:5179 한국 대략 범위 — 좌표가 엉뚱하면 파싱이 밀린 것이다(조기 경보).
@@ -49,15 +49,17 @@ const X_MIN = 700000, X_MAX = 1400000;
 const Y_MIN = 1300000, Y_MAX = 2100000;
 
 async function scanFile(fp) {
-  const st = { total: 0, ok: 0, skipped: 0, noCoord: 0, byLayout: {}, group: 0 };
-  const rl = createInterface({
-    input: createReadStream(fp),   // 행안부 TXT 는 EUC-KR 이지만 구조 검증엔 바이트만으로 충분.
-    crlfDelay: Infinity,           // 한글 표시가 깨져도 필드 위치·좌표 검증은 정확하다.
-  });
-  for await (const line of rl) {
-    if (!line || !line.trim()) continue;
+  const st = { total: 0, ok: 0, skipped: 0, noCoord: 0, byLayout: {}, group: 0, mojibake: 0 };
+  // ★cp949 로 디코딩해 읽는다. 바이트만 봐도 구조 검증은 되지만, 그러면 건물명이
+  //   깨진 걸 못 잡는다(1차 스캔이 실제로 그랬다).
+  for await (const line of readEntranceLines(fp, { limit: SAMPLE })) {
     st.total += 1;
-    if (SAMPLE && st.total > SAMPLE) { rl.close(); break; }
+    if (looksMojibake(line)) {
+      st.mojibake += 1;
+      if (mojibakeSamples.length < 5) {
+        mojibakeSamples.push({ file: path.basename(fp), head: line.slice(0, 80) });
+      }
+    }
 
     const rec = parseEntranceLine(line);
     if (!rec) {
@@ -101,6 +103,7 @@ for (const name of files) {
   const st = await scanFile(fp);
   sum.files += 1;
   sum.total += st.total; sum.ok += st.ok; sum.skipped += st.skipped; sum.noCoord += st.noCoord; sum.group += st.group;
+  sum.mojibake = (sum.mojibake || 0) + st.mojibake;
   const layouts = Object.keys(st.byLayout).join(',');
   console.log(
     `${name.slice(0, 44).padEnd(46)}${fmt(st.total).padStart(12)}${fmt(st.ok).padStart(12)}` +
@@ -117,11 +120,16 @@ console.log(`  무좌표      ${fmt(sum.noCoord)} (${pct(sum.noCoord, sum.ok)}%)
 console.log(`  건물군(=1)  ${fmt(sum.group)}  ← 300002 동 도형 연결 대상`);
 console.log(`  건물명 보유 ${fmt(sum.withBuildingName)} · 건물용도 보유 ${fmt(sum.withUse)}`);
 console.log(`  레이아웃    ${JSON.stringify(sum.byLayout)}`);
+console.log(`  인코딩 깨짐 ${fmt(sum.mojibake || 0)}  ← cp949 디코딩이 맞으면 0 이어야 한다`);
 if (Object.keys(sum.byReason).length) console.log(`  이동사유    ${JSON.stringify(sum.byReason)}`);
 
 if (skipSamples.length) {
   console.log('\n[폐기된 줄 표본]');
   for (const s of skipSamples) console.log(`  (${s.layout ?? '판별불가'}) ${s.file}: ${s.head}`);
+}
+if (mojibakeSamples.length) {
+  console.log('\n⚠️ [인코딩 깨짐 표본 — cp949 디코딩 실패]');
+  for (const s2 of mojibakeSamples) console.log(`  ${s2.file}: ${s2.head}`);
 }
 if (outOfRange.length) {
   console.log('\n⚠️ [좌표 범위 이탈 — 파싱이 밀렸을 가능성]');
