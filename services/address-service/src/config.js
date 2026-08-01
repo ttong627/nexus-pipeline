@@ -19,6 +19,13 @@ export const config = {
   kakaoRestKey: process.env.KAKAO_REST_KEY || '',
   vworldKey: process.env.VWORLD_KEY || '',
   importBatchSize: Number.parseInt(process.env.ADDRESS_IMPORT_BATCH_SIZE || '1000', 10),
+  // ★API 쿼리 상한(2026-08-01 실측). 퍼지·건물명 트리그램이 **60~76초** 돌면서 커넥션을
+  //   붙잡는 사례를 로그에서 확인했다. 클라는 3초에 abort하는데 서버 쿼리는 끝까지 돌기 때문에,
+  //   사용자가 이상한 주소 하나를 넣을 때마다 커넥션이 1분 넘게 묶이고 다른 요청이 500이 났다.
+  //   → `db.js query()`(=API 경로)에만 statement_timeout을 건다.
+  //   ⚠️ import-job은 `withClient`만 쓰므로 대량 적재·CREATE INDEX·ANALYZE는 영향받지 않는다.
+  //   값 근거: 정상 쿼리 0.01~1초, 부하 중 관측 최대 11.4초 → 15초면 정상은 살리고 폭주만 끊는다.
+  statementTimeoutMs: Number.parseInt(process.env.ADDRESS_STATEMENT_TIMEOUT_MS || '15000', 10),
   // P7 Phase2 ⓐ: 학습사전(Firestore) 로더. ADC를 쓰므로 키파일은 없다 —
   // 프로젝트는 보통 런타임이 알려주지만(GOOGLE_CLOUD_PROJECT), 명시 지정도 허용한다.
   firebaseProjectId: process.env.FIREBASE_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || '',

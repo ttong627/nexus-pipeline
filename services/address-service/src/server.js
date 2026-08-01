@@ -169,7 +169,23 @@ const exactBuildingRoadMatch = async (version, queryText, cityLabel) => {
   return rows[0] || null;
 };
 
-const fuzzyMatch = async (version, normalized, cityLabel) => {
+// 퍼지·건물명 폴백은 statement_timeout(57014)에 걸릴 수 있다. 그건 장애가 아니라
+// "상한 안에 쓸 만한 후보를 못 찾았다"는 뜻이므로 **미매칭(null)** 으로 돌려준다.
+// 여기서 throw하면 정상 폴백 실패가 500으로 둔갑해, 이전보다 사용자 경험이 나빠진다.
+// ※ exact 매칭(7~14ms)은 감싸지 않는다 — 거기서 상한에 걸리면 진짜 이상 신호다.
+const nullOnQueryTimeout = async (label, run) => {
+  try {
+    return await run();
+  } catch (error) {
+    if (error?.code === '57014') {
+      console.warn(`[address-api] ${label} 쿼리 상한 초과 — 미매칭 처리(커넥션 점유 차단)`);
+      return null;
+    }
+    throw error;
+  }
+};
+
+const fuzzyMatch = async (version, normalized, cityLabel) => nullOnQueryTimeout('fuzzyMatch', async () => {
   const { rows } = await query(`
     SELECT
       a.address_mgt_no,
@@ -200,9 +216,9 @@ const fuzzyMatch = async (version, normalized, cityLabel) => {
   `, [version, normalized, cleanText(cityLabel)]);
   const winner = rows[0];
   return winner && Number(winner.score) >= 0.42 ? winner : null;
-};
+});
 
-const buildingMatch = async (version, normalized, cityLabel) => {
+const buildingMatch = async (version, normalized, cityLabel) => nullOnQueryTimeout('buildingMatch', async () => {
   const { rows } = await query(`
     SELECT
       '' AS address_mgt_no,
@@ -230,7 +246,7 @@ const buildingMatch = async (version, normalized, cityLabel) => {
   `, [version, normalized, cleanText(cityLabel)]);
   const winner = rows[0];
   return winner && Number(winner.score) >= 0.45 ? winner : null;
-};
+});
 
 const getFallbackCache = async (normalized) => {
   const { rows } = await query(`

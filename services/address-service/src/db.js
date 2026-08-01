@@ -20,6 +20,13 @@ export const getPool = () => {
 
 // search_path를 매 쿼리 전 같은 클라이언트에 명시적으로 건다. pg_trgm GIN 인덱스가
 // nexus_address 스키마에 있어 search_path 미설정 시 인덱스를 못 타는 경로가 있었다(2026-07-11).
+//
+// ★statement_timeout도 여기서 건다(2026-08-01). 이 함수는 **API 경로 전용**이다
+//   (server.js만 사용 · import-job은 withClient만 사용) → 대량 적재·CREATE INDEX·ANALYZE는
+//   영향받지 않는다. 아래 withClient에는 절대 넣지 말 것 — 적재가 중간에 끊긴다.
+//   왜 필요한가: 퍼지·건물명 트리그램이 60~76초 돌며 커넥션을 붙잡는 사례를 실측했고,
+//   클라는 3초에 abort하므로 그 시간은 **아무도 기다리지 않는 순수 낭비**이면서
+//   다른 요청을 500(pool connect timeout)으로 만든다.
 export const query = async (text, values = []) => {
   const t0 = Date.now();
   const client = await getPool().connect();
@@ -27,6 +34,9 @@ export const query = async (text, values = []) => {
   let tPath = tConn;
   try {
     await client.query(`SET search_path TO ${config.dbSchema}, public`);
+    if (config.statementTimeoutMs > 0) {
+      await client.query(`SET statement_timeout = ${Number(config.statementTimeoutMs)}`);
+    }
     tPath = Date.now();                           // SET search_path 완료 시각
     return await client.query(text, values);
   } finally {
