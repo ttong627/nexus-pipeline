@@ -121,6 +121,35 @@ test('조회 결과 "없음"은 캐시한다 — 같은 주소를 반복 조회�
   assert.equal(calls, after, '미매칭 결과가 캐시되지 않아 DB를 반복 조회한다');
 });
 
+// ★★2026-08-01 실측 사고 — 회귀 금지.
+//   purify는 운영 /v1/address/match와 커넥션 풀을 공유한다. 배치를 돌리자 match가
+//   10초 뒤 500(`timeout exceeded when trying to connect`)을 뱉었다. 정제는 느려도 되지만
+//   운영 매칭은 느려지면 안 된다 → 동시 DB 쿼리 수를 concurrency로 확실히 묶는다.
+test('★동시 요청이 와도 DB 동시 쿼리는 concurrency를 넘지 않는다(풀 잠식 방지)', async () => {
+  let inFlight = 0;
+  let peak = 0;
+  const purifier = createPurifier({
+    matchAddress: async () => {
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      await new Promise((r) => setTimeout(r, 5));
+      inFlight -= 1;
+      return null;
+    },
+    dictStore: emptyDictStore(), kakaoRestKey: '',
+    fetchImpl: async () => { throw new TypeError('no network'); },
+    concurrency: 2,
+  });
+
+  const batch = () => purifier.purifyRecords(
+    Array.from({ length: 6 }, (_, i) => ({ addr: `왕산로 ${i + 1}`, cityLabel: '서울특별시 동대문구' })),
+  );
+  // 배치 3개를 동시에 던진다 = 실서버에서 요청 3개가 겹친 상황
+  await Promise.all([batch(), batch(), batch()]);
+
+  assert.ok(peak <= 2, `동시 DB 쿼리 ${peak}건 — concurrency(2)를 넘었다. 배치 직렬화가 풀렸다`);
+});
+
 test('빈 records·초과 요청은 배치 실행기가 안전하게 처리한다', async () => {
   const purifier = createPurifier({
     matchAddress: async () => null, dictStore: emptyDictStore(), kakaoRestKey: '',
