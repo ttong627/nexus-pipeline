@@ -3,6 +3,7 @@ import { config, requireConfig } from './config.js';
 import { query } from './db.js';
 import { cleanText, formatRoadLookupQuery, normalizeSearchKey, parseRoadNumber, roadSideKey } from './normalize.js';
 import { geocodeRoad, matchDongCoord, parseDongNo } from './vworld.js';
+import { createPurifier } from './purify.js';
 
 const ADDRESS_SCHEMA = config.dbSchema;
 let currentJusoKey = 0;
@@ -396,6 +397,10 @@ const status = async () => {
   return rows[0] || null;
 };
 
+// P7 Phase2 ⓒ-2: 정제기(공용 코어 + 서버 deps). matchAddress를 in-process로 넘겨
+// 자기 자신에게 HTTP를 치지 않는다. 학습사전은 dictStore가 TTL 캐시로 관리한다.
+const purifier = createPurifier({ matchAddress });
+
 const server = createServer(async (req, res) => {
   const headers = corsHeaders(req);
   if (req.method === 'OPTIONS') return json(res, 204, {}, headers);
@@ -465,6 +470,29 @@ const server = createServer(async (req, res) => {
       }
       return json(res, data ? 200 : 404, { ok: Boolean(data), data }, headers);
     }
+    // ── P7 Phase2 ⓒ-2: 주소 규격화(정제) 배치 — 클라와 **같은 코어**(shared/purifyCore.js) ──
+    // 클라 processAddress와 동일한 키를 돌려준다. 좌표는 범위 밖(includeCoords:false 고정).
+    if (req.method === 'POST' && url.pathname === '/v1/address/purify') {
+      const body = await readBody(req);
+      const records = Array.isArray(body.records) ? body.records : [];
+      if (!records.length) {
+        return json(res, 400, { ok: false, error: 'records 배열이 필요합니다.' }, headers);
+      }
+      if (records.length > config.purifyMaxRecords) {
+        // 한 요청이 커넥션 풀을 오래 붙잡지 않도록 상한을 둔다(2026-07-30 풀 경합 사고 방지).
+        return json(res, 413, {
+          ok: false,
+          error: `한 번에 최대 ${config.purifyMaxRecords}건까지 정제합니다(요청 ${records.length}건).`,
+        }, headers);
+      }
+      const data = await purifier.purifyRecords(records);
+      return json(res, 200, { ok: true, count: data.length, data }, headers);
+    }
+    if (req.method === 'GET' && url.pathname === '/v1/address/dict-status') {
+      // 학습사전이 실제로 로드됐는지 확인용(권한 미부여 시 전부 0으로 보인다).
+      await purifier.dictStore.refresh();
+      return json(res, 200, { ok: true, data: purifier.dictStore.stats() }, headers);
+    }
     return json(res, 404, { ok: false, error: '존재하지 않는 주소 API 엔드포인트입니다.' }, headers);
   } catch (error) {
     console.error('[address-api]', error);
@@ -481,6 +509,14 @@ const ensureGeocodeColumns = async () => {
       ADD COLUMN IF NOT EXISTS match_type text
   `);
 };
+
+// 2차 방어선 — 서드파티 라이브러리가 우리 try/catch 밖에서 던지는 비동기 예외로
+// API 프로세스가 통째로 죽는 것을 막는다(2026-08-01 firebase-admin ADC 미설정 시 실측).
+// 삼키기가 아니라 **기록하고 계속 서비스**하는 것이 목적이다 — 요청 하나의 실패가
+// 전체 정지로 번지면 안 된다. 원인 수정은 각 호출부에서 별도로 한다.
+process.on('unhandledRejection', (reason) => {
+  console.error('[address-api] 처리되지 않은 비동기 예외(서비스는 계속):', reason?.message || reason);
+});
 
 requireConfig('databaseUrl');
 try {

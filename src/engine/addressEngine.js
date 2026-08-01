@@ -11,6 +11,19 @@ import {
   isCandidateInSelectedMunicipality,
   LEGAL_DONG_RE,
 } from '../../services/address-service/src/shared/purifyHelpers.js';
+// 학습사전 → 정규식 조립 규칙도 서버(dictStore)와 공유한다 — 복제하면 A-2·A-9가 갈라진다.
+import {
+  DEFAULT_SPECIAL_CHARS,
+  buildTypoRegex,
+  buildSpecialCharRegex,
+} from '../../services/address-service/src/shared/dictRegex.js';
+// Kakao 검색어 조립·법정동 채택(A-30·A-31)도 서버 어댑터와 공유 — 복제하면 괄호가 갈라진다.
+import {
+  kakaoAddressSearchUrl,
+  kakaoKeywordSearchUrl,
+  buildLegalDongQuery,
+  pickLegalDongFromKakao,
+} from '../../services/address-service/src/shared/kakaoQueries.js';
 // P7 Phase2 ⓒ-1 본체: 정제 코어(A-1~A-34 전체)는 서버와 공유하는 단일 파일에 있다.
 // 이 파일은 코어에 **클라 전용 IO·부수효과·학습사전을 주입**하는 어댑터 역할만 한다.
 import { createProcessAddress } from '../../services/address-service/src/shared/purifyCore.js';
@@ -86,12 +99,8 @@ let noteNormalizeDict = {};  // 특이사항 정규화 사전(#5-A) — 승인�
 let buildingAliasVariantIndex = {}; // 건물명 표기변이 정규화 인덱스(D) — 공백·기호 무시 완전일치 폴백
 let noteNormalizeVariantIndex = {}; // 특이사항 표기변이 정규화 인덱스(D)
 
-const _buildTypoRegex = () => {
-  const keys = Object.keys(typoDict);
-  if (!keys.length) { _typoRegex = null; return; }
-  const esc = keys.map(k => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-  _typoRegex = new RegExp(esc.join('|'), 'g');
-};
+// 정규식 조립 규칙은 shared/dictRegex.js SSOT — 서버(dictStore)와 같은 파일을 쓴다.
+const _buildTypoRegex = () => { _typoRegex = buildTypoRegex(typoDict); };
 
 const dictDocId = (value) =>
   encodeURIComponent(String(value || '').trim()).replace(/\./g, '%2E').slice(0, 1400);
@@ -115,14 +124,10 @@ const saveDictOrSuggestion = async ({ dictName, suggestionName, docId, dictPaylo
 };
 
 // ── A-9: 특수문자 구분자 사전 ─────────────────────────────────────
-let specialChars      = new Set(['**', '/', '☆', '★', '*', '｜', '|', '~', '#', '§', '※', '=>', '->']);
+const specialChars    = new Set(DEFAULT_SPECIAL_CHARS);   // 기본값도 shared SSOT
 let _specialCharRegex = null;
 
-const _buildSpecialCharRegex = () => {
-  const sorted = [...specialChars].sort((a, b) => b.length - a.length); // 길이 내림차순 → '**'가 '*'보다 우선
-  const esc    = sorted.map(c => c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-  _specialCharRegex = new RegExp(`(${esc.join('|')})(.*)`);
-};
+const _buildSpecialCharRegex = () => { _specialCharRegex = buildSpecialCharRegex(specialChars); };
 _buildSpecialCharRegex();
 
 export const addSpecialChar = async (ch) => {
@@ -301,35 +306,22 @@ const fetchDongCoord = async (roadAddr, dongNo, sigungu = '') => {
 const legalDongCache   = new Map();
 const legalDongPending = new Map();
 const fetchKakaoLegalDong = async (addr, cityLabel = '') => {
-  if (!KAKAO_REST_KEY || !addr || addr.trim().length < 4) return null;
-  const hasCity = /특별시|광역시|특별자치시|도$|시$/.test(addr.slice(0, 10));
-  const sggPfx  = hasCity ? '' : (extractSigungu(cityLabel) || (cityLabel || '').trim().split(/\s+/).pop() || '');
-  const query   = `${sggPfx ? `${sggPfx} ` : ''}${addr}`.trim();
-  const key     = `${cityLabel.trim()}::${query}`;
+  if (!KAKAO_REST_KEY || !addr) return null;
+  // 검색어 조립·채택 규칙은 shared/kakaoQueries.js SSOT — 서버 어댑터와 같은 파일을 쓴다.
+  const query = buildLegalDongQuery(addr, cityLabel);
+  if (!query) return null;
+  const key   = `${cityLabel.trim()}::${query}`;
   if (legalDongCache.has(key)) return legalDongCache.get(key);
   if (!legalDongPending.has(key)) {
     const p = (async () => {
       try {
         const res = await fetchWithTimeout(
-          `https://dapi.kakao.com/v2/local/search/address.json?query=${encodeURIComponent(query)}&size=1`,
+          kakaoAddressSearchUrl(query),
           { headers: { Authorization: `KakaoAK ${KAKAO_REST_KEY}` } },
           KAKAO_TIMEOUT_MS
         );
         if (!res.ok) return null;
-        const d = (await res.json()).documents?.[0];
-        if (!d) return null;
-        const ra = d.road_address || null;
-        const ad = d.address || null;
-        // A-30: 지역 검증 — 전국 동명 오매칭 차단(시흥시 군자동 vs 광진구 군자동)
-        const sido = ra?.region_1depth_name || ad?.region_1depth_name || '';
-        const sgg  = ra?.region_2depth_name || ad?.region_2depth_name || '';
-        if (!isCandidateInSelectedMunicipality({ matchedSido: sido, matchedSigungu: sgg }, cityLabel)) return null;
-        const legal = String(ra?.region_3depth_name || ad?.region_3depth_name || '').trim();
-        if (!legal || !LEGAL_DONG_RE.test(legal)) return null;
-        return {
-          legalDong:    legal,
-          buildingName: String(ra?.building_name || '').trim(),
-        };
+        return pickLegalDongFromKakao((await res.json()).documents?.[0], cityLabel);
       } catch { return null; }
     })().finally(() => legalDongPending.delete(key));
     legalDongPending.set(key, p);
@@ -348,7 +340,7 @@ const searchKakaoFull = async (query) => {
     const p = (async () => {
       try {
         const res = await fetchWithTimeout(
-          `https://dapi.kakao.com/v2/local/search/keyword.json?query=${encodeURIComponent(key)}&size=1`,
+          kakaoKeywordSearchUrl(key),
           { headers: { Authorization: `KakaoAK ${KAKAO_REST_KEY}` } },
           KAKAO_TIMEOUT_MS
         );

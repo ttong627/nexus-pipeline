@@ -29,8 +29,8 @@ export const loadCases = () => JSON.parse(fs.readFileSync(CASES_PATH, 'utf8')).c
 export const selectCases = (cases, mode) =>
   (mode === 'offline' ? cases.filter((c) => c.tags.includes('offline')) : cases);
 
-/** 결정적으로 비교 가능한 필드만 정렬해 담는다(입력 에코 제외). */
-const snapshot = (result) => {
+/** 결정적으로 비교 가능한 필드만 정렬해 담는다(입력 에코 제외). 서버 파리티도 이 함수를 쓴다. */
+export const snapshot = (result) => {
   const out = {};
   for (const key of Object.keys(result).sort()) {
     if (key === '원주소' || key === '_learnBaseline') continue;
