@@ -1,7 +1,33 @@
-# 세션 핸드오프 — nexus 주소 서비스 (2026-08-01 P7 Phase2 ⓒ-1 **본체 완료**)
+# 세션 핸드오프 — nexus 주소 서비스 (2026-08-01 P7 Phase2 **ⓐ+ⓒ+ⓓ 완료 · 서버 정제 가동**)
 
 > 새 세션에서 **"이어서"** 하면 이 문서부터 읽는다.
 > 관련 메모리: `project_nexus_address_format_rules`(★match 인시던트·진단 인프라·서버이관 로드맵) · `project_nexus_self_learning`
+
+---
+
+## ✅ 이번 세션 완료 ②(2026-08-01, 커밋 `116fcd7`) — 서버 정제 `/v1/address/purify`
+
+**서버가 클라와 같은 코어로 정제한다. "같은가?"를 눈이 아니라 테스트가 답한다 — 파리티 35/35.**
+
+| 작업 | 결과 |
+|---|---|
+| ⓐ `src/dictStore.js` | firebase-admin **ADC**(키파일 불요) 학습사전 5종 로더. **지연 import**·TTL 5분·in-flight 합류. 컬렉션·필드·폴백은 클라 `loadTypoDict`와 동일 |
+| ⓒ-2 `src/purify.js` + 라우트 | `POST /v1/address/purify`(배치) · `GET /v1/address/dict-status`. lookupAddr=`matchAddress` **in-process**(자기 HTTP 금지)+A-30 게이트+1000건 캐시. 동시성 3·최대 500건 |
+| ⓓ `scripts/server-parity.test.mjs` | 서버 출력 == 클라 `golden-offline.json` **35/35 deepEqual** |
+| SSOT 2종 신설 | `shared/dictRegex.js`(A-2·A-9 정규식 조립) · `shared/kakaoQueries.js`(검색어·A-30/A-31 법정동 채택). 클라도 같은 파일 사용 |
+
+### ★파리티·스모크가 잡은 실제 결함 2건 (되돌리지 말 것)
+1. **특수문자 사전이 비면 상세주소가 통째로 사라진다** — `buildSpecialCharRegex([])`가 `()(.*)`를 만들어 모든 문자열 0번 위치에서 매칭. A-9 2차(상세)에는 위치 가드가 없어 `201호`가 특이사항으로 넘어가고 상세가 빈다(35케이스 중 **28건**에서 검출). → 빈 목록이면 **null 반환** + dictStore는 기본값 폴백. 잠금=`scripts/dict-regex.test.mjs`.
+2. **ADC 미설정 시 API 프로세스가 죽는다** — google-gax가 gRPC stub 생성 중 **try/catch 밖에서** unhandledRejection을 던짐(실측: 프로세스 종료). → Firestore 클라이언트 만들기 **전에** `credential.getAccessToken()`으로 선검사(잡히는 실패로 전환) + `server.js` 2차 방어선(기록 후 서비스 계속).
+
+- **검증(증거)**: 파리티 35/35 · 전체 유닛 **174/174** · 골든 3/3 · eslint 0 error · vite build EXIT=0 · **HTTP 실측**(ADC·DB 둘 다 없는 상태) 200/400/413 정상 + A-9·A-10 적용 확인 + 사전 로드 실패에도 **서버 생존**.
+- firebase-admin이 새로 추가한 취약점 **0건**(기존 audit 6건은 전부 `@google-cloud/storage` 경로).
+
+### ⏭ 서버 배포 전 필수 (아직 안 함 — 형 확인 대기)
+1. `gcloud run deploy nexus-address-api --source=. --region=asia-northeast3 --project=logis-op --account=ttong627@gmail.com` (services/address-service에서)
+2. **런타임 SA에 `roles/datastore.viewer`** 부여 — 없으면 학습사전만 비고(서버는 정상) `dict-status`가 전부 0으로 보인다.
+3. 배포 후 `GET /v1/address/dict-status`로 사전 건수 확인 → 0이면 IAM 미부여.
+4. ⚠️ 배포 전 `ADDRESS_PURIFY_CONCURRENCY`를 올리지 말 것(PGPOOL_MAX 이하).
 
 ---
 
@@ -54,22 +80,14 @@
 
 ## ▶ 새 세션에서 할 일
 
-### 1️⃣ ⓐ dictStore(firebase-admin 학습사전 로더) — **다음 1순위**
-**코어는 끝났다. 남은 건 서버가 코어에 넣어줄 deps 3종을 만드는 일뿐이다.**
-`deps.dicts`를 서버에서 채우려면 Firestore 5컬렉션을 서버가 읽어야 한다 → 신규 `services/address-service/src/dictStore.js`:
-- `firebase-admin` 추가 + `admin.credential.applicationDefault()`(ADC, 키파일 불요) + Cloud Run 런타임 SA에 `roles/datastore.viewer`.
-- 5컬렉션(typo_dict·special_chars·name_typo_dict·building_alias·note_normalize_dict) TTL 캐시 로드. `buildVariantIndex`(shared) 재사용 + `typoRegex`·`specialCharRegex` 조립(클라 `_buildTypoRegex`·`_buildSpecialCharRegex`와 **같은 규칙**).
-- ★반드시 **getter 객체**로 넘길 것(값 주입 금지 — `scripts/purify-core-deps.test.mjs` ③ 참조).
-- 사전이 없어도(권한 미부여 등) 코어는 동작해야 한다 → 빈 사전 + `ready=Promise.resolve()` 폴백.
+### 1️⃣ 서버 배포 + IAM (형 확인 후) — **다음 1순위**
+위 "⏭ 서버 배포 전 필수" 4단계. 배포해야 서버 정제가 실제로 쓰인다(현재는 코드만 있고 미배포).
 
-### 2️⃣ ⓒ-2 `/v1/address/purify` 라우트 + ⓓ 파리티
-- 서버 `deps.io`: `lookupAddr`=`matchAddress` in-process 래핑(HTTP 불요) · `fetchKakaoLegalDong`/`searchKakaoFull`=config.kakaoRestKey · 좌표 2종은 **null 반환 스텁**(`includeCoords:false`라 미사용) · `parseAptDong`은 좌표용이라 no-op 가능.
-- `deps.side.addSpecialChar` = no-op(또는 제안 큐 적재).
-- **ⓓ 파리티**: `scripts/golden/cases.json`(offline) 재사용 → 서버 deps로 `createProcessAddress` 실행 → `golden-offline.json` deepEqual. 신규 `scripts/golden/server-parity.test.mjs`. **이게 통과해야 서버 정제를 신뢰할 수 있다.**
-- 라우트는 `server.js` 468행 `return 404` 직전 블록. 배치 동시성 ≤3~8(PGPOOL 경합 재발 방지).
-
-- 요청 형식: body `{ records:[{addr,name,adminDong,cityLabel,note}], options }` 배치, `includeCoords:false` 고정(좌표는 클라 잔류). 응답은 **processAddress와 동일 키**.
-- ※ 예전 계획의 "normalizeCore→조립을 서버에 새로 짠다"는 **이제 불필요**하다. 코어가 통째로 공유되므로 서버가 할 일은 deps 3종 조립뿐이다.
+### 2️⃣ 클라를 서버 정제로 전환 (Phase3 — 미착수·형 승인 필요)
+지금은 **서버 정제가 준비만 된 상태**다. 클라는 여전히 브라우저에서 정제한다.
+- 전환 시 이득: 대량 백필 서버화 · **브라우저 Kakao 키 제거**(현재 `VITE_KAKAO_REST_KEY` 번들 노출) · 클라 슬림화.
+- 전환 시 주의: 좌표는 여전히 클라(purify는 includeCoords 미지원) → 서버 정제 후 클라가 좌표만 붙이는 2단 구성이 필요.
+- **전환 전 반드시**: 배포된 서버로 파리티를 한 번 더(실DB·실Kakao 조건). 지금 파리티는 offline 조건이다.
 
 ### 3️⃣ 형 실동작 확인 (지난 세션부터 대기)
 `logis-op.web.app` → Ctrl+Shift+R → 명단 정제 → ①층 위치 ②대시 동호 ③건물명 맨뒤 ④괄호 잡값 없음 + 자가학습 '학습 검토' 탭. **이번 이관은 클라 출력 불변이라 결과 동일해야 함**.
@@ -88,6 +106,9 @@
 | **대량 코드 이동** | 손으로 옮겨 적지 말 것. 스크립트로 원문 추출 → 참조만 치환 → 골든 게이트. 이번 780줄 이관을 이 방식으로 회귀 0 달성 |
 | **이관 후 eslint 블록 변경** | `src/`와 `services/`는 eslint 규칙 세트가 다르다. 코드를 옮기면 warn이 error로 바뀔 수 있음(이번 `no-useless-assignment`) → **로직을 고치지 말고 정책을 맞출 것** |
 | **안전 분할 순서** | 순수 잎(헬퍼)부터 shared → 마지막에 코어 본체 deps 주입. 각 단계 골든 게이트 |
+| **★빈 사전 = 상세주소 소멸** | `buildSpecialCharRegex([])`는 반드시 null. `()(.*)`는 모든 문자열을 0번에서 매칭해 A-9 2차가 상세를 통째로 삼킨다(28/35 실측) |
+| **firebase-admin ADC** | Firestore 클라이언트 만들기 **전에** `credential.getAccessToken()`로 선검사. 안 그러면 google-gax가 try/catch 밖에서 터져 **프로세스가 죽는다** |
+| **서버 스모크** | DB·ADC 없이도 돌려볼 것 — `PORT=8791 DATABASE_URL=postgres://u:p@127.0.0.1:1/none node src/server.js` 후 python urllib로 POST. 이 조건이 장애 시나리오 그 자체다 |
 | `gcloud` 실행 | 매 호출 `--account=ttong627@gmail.com`. 프로젝트=**logis-op** |
 | `git push` | `gh auth switch --user ttong627` 먼저 |
 | 클라 빌드 검증 | **`npx vite build` 직접**(그린). `npm run build`는 prebuild `tsc --noEmit` 게이트에 **기존 tsc 에러 13건**(무관)으로 막힘 — 회귀 아님 |
@@ -99,7 +120,8 @@
 | 골든 갱신/검증 | `node scripts/golden/record.mjs [--mode record]` / `node --test scripts/address-golden.test.mjs`. 전체 유닛=`node --test scripts/*.test.mjs` |
 
 ### 현재 기준선
-골든 offline+replay 3/3 · 전체 유닛 **164/164** · **shared 모듈 9종**(roadTokens·textNormalize·dongHoFormat·addressFormat·normalizeVariant·applyNoteNormalize·detailNormalize·purifyHelpers·**purifyCore**) · 클라 addressEngine.js **501줄**(어댑터) · match 실존주소 200·0.1~0.16s(리비전 00049) · 인덱스 `building_core_roadbld_trgm` 운영 반영.
+골든 3/3 · **서버 파리티 35/35** · 전체 유닛 **174/174** · **shared 모듈 11종**(roadTokens·textNormalize·dongHoFormat·addressFormat·normalizeVariant·applyNoteNormalize·detailNormalize·purifyHelpers·purifyCore·**dictRegex**·**kakaoQueries**) · 클라 addressEngine.js **501줄**(어댑터) · match 실존주소 200·0.1~0.16s(리비전 00049) · 인덱스 `building_core_roadbld_trgm` 운영 반영.
+검증 명령: `node --test scripts/*.test.mjs`(파리티 포함) · `node --test scripts/address-golden.test.mjs` · `npx eslint .` · `npx vite build`.
 
 ---
 
