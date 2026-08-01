@@ -154,3 +154,21 @@ DB 표준 표현을 확정하지 못한 건은 프론트 주소 정제 fallback 
 - JUSO 키와 Kakao REST 키는 브라우저 fallback 제거가 끝나는 시점에 프론트 환경변수에서 빼고 Secret Manager로만 관리한다.
 - 공개 API로 운영할 때는 Cloud Armor 또는 API Gateway/인증 프록시에서 호출량 제한을 둔다.
 - `ADDRESS_ALLOWED_ORIGINS=*` 는 개발용 기본값이다. 운영 서비스는 Firebase Hosting 도메인만 허용한다.
+
+## 행안부 출입구 적재 (entrance_core · 버전 독립)
+
+국가 원본 출입구 좌표를 `entrance_core` 에 적재한다. 기존 월 재적재(`import-job.js`)와 **완전히 분리된 버전 독립 테이블**이다 — `resetVersionData` 대상에 절대 넣지 말 것(넣으면 매달 증발한다).
+
+```bash
+npm run juso:test                                  # 유닛(파서·리더·좌표변환·격리기)
+npm run juso:scan  -- "<자료폴더>"                  # 읽기 전용 전수 스캔
+npm run juso:load  -- "<자료폴더>"                  # 예행(dry-run) — DB 접근 없음
+npm run juso:load  -- "<자료폴더>" --apply          # 실제 적재(DATABASE_URL 필요)
+npm run juso:load  -- "<자료폴더>" --only daily     # 일변동만
+```
+
+- **기본이 예행이다.** 쓰기는 `--apply` 를 명시했을 때만 일어난다.
+- **적용 순서**는 스크립트가 강제한다: 전체분 요약(`entrc_*`) → 전체분 연계(`RNENTDATA_*`) → 일변동(`AlterD.JUSUEC.*` 날짜 오름차순). 순서가 바뀌면 폐지된 주소가 되살아난다.
+- **이상좌표 격리**: 자기 도로명코드의 좌표 중앙값에서 100km 넘게 떨어진 좌표는 `entrance_core` 에 넣지 않고 `entrance_coord_quarantine` 에 증거만 남긴다. 전국 실측 12,848,027행 중 82건(0.0006%)이 걸린다 — 전부 바다 위 좌표다. 주소 행 자체는 남고 좌표만 비운다.
+- **폐지(이동사유 63) 반영**: 일변동의 63 은 `is_retired=true` 로 표시한다(하드 삭제 아님). 전체분은 폐지를 해제하지 않는다 — 해제는 일변동 31·34 만 할 수 있다.
+- 미지원 자료(동 도형 SHP 세트·`*.Deletion.TXT`)는 조용히 넘어가지 않고 "미처리 N개 — 사유" 로 출력한다.

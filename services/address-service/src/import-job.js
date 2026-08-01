@@ -291,6 +291,9 @@ const applySchema = async (client) => {
   await client.query('SET search_path TO nexus_address, public');
 };
 
+// ⚠️ 여기에 새 테이블을 추가하기 전에 생각할 것: 이 목록은 월 재적재 때 통째로 지워진다.
+//    몇 달에 걸쳐 쌓는 데이터(건축물대장·출입구 일변동 누적·폐지 이력)를 넣으면 매달 증발한다.
+//    그런 데이터는 version_id 없는 버전독립 테이블에 둔다 — 예: entrance_core(sql/entrance.sql).
 const resetVersionData = async (client) => {
   const tables = [
     'address_search_keys',
