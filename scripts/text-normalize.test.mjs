@@ -58,11 +58,17 @@ test('빈값·비문자 방어', () => {
   assert.equal(normalizeCenterName(null), '');
 });
 
-// ── 잠금장치: 클라가 shared SSOT를 import 하고 규격화를 재정의하지 않는다 ──
-test('클라(addressEngine.js)가 규격화 프리앰블을 shared에서 import 한다', () => {
-  const client = readFileSync(new URL('../src/engine/addressEngine.js', import.meta.url), 'utf8');
-  assert.match(client, /import\s*\{[^}]*normalizeAddressPreamble[^}]*\}\s*from\s*['"][^'"]*shared\/textNormalize\.js['"]/);
-  assert.match(client, /normalizeAddressPreamble\(text\)/);
+// ── 잠금장치: 클라 정제 경로가 shared SSOT를 쓰고 규격화를 재정의하지 않는다 ──
+// P7 Phase2 ⓒ-1에서 정제 본체가 addressEngine.js → shared/purifyCore.js 로 이동했다.
+// 클라 경로 = addressEngine.js(IO·사전 주입 어댑터) + purifyCore.js(코어). 둘 다 검사한다.
+test('클라 정제 경로가 규격화 프리앰블을 shared에서 import 한다', () => {
+  const adapter = readFileSync(new URL('../src/engine/addressEngine.js', import.meta.url), 'utf8');
+  const core    = readFileSync(new URL('../services/address-service/src/shared/purifyCore.js', import.meta.url), 'utf8');
+  assert.match(adapter, /from\s*['"][^'"]*shared\/purifyCore\.js['"]/, '⚠️ 클라가 공용 코어를 안 쓴다 — 복제되면 갈라진다');
+  assert.match(core, /import\s*\{[^}]*normalizeAddressPreamble[^}]*\}\s*from\s*['"][^'"]*textNormalize\.js['"]/);
+  assert.match(core, /normalizeAddressPreamble\(text\)/);
   // 프리앰블을 로컬에서 다시 정의(복제)하면 실패.
-  assert.doesNotMatch(client, /const\s+stripLeadingAddressJunk\s*=/, '클라에 stripLeadingAddressJunk 재정의가 남아 있다(복제 금지)');
+  for (const [name, src] of [['어댑터', adapter], ['코어', core]]) {
+    assert.doesNotMatch(src, /const\s+stripLeadingAddressJunk\s*=/, `${name}에 stripLeadingAddressJunk 재정의가 남아 있다(복제 금지)`);
+  }
 });

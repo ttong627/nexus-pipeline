@@ -61,6 +61,10 @@ export default defineConfig([
       // src/ 블록과 동일 정책 — 유니코드 whitespace·문자클래스 룰은 warn(주소 정제 특성상 불가피).
       'no-irregular-whitespace': 'warn',
       'no-misleading-character-class': 'warn',
+      // shared/purifyCore.js는 클라(src/engine/addressEngine.js)에 있던 정제 본체를
+      // **한 글자도 바꾸지 않고** 옮겨온 공용 코어다(P7 Phase2 ⓒ-1). src/ 블록에서 warn이던
+      // 규칙이 여기서 error가 되면, 검증된 로직을 규칙 때문에 손대야 한다 → src/와 동일 정책.
+      'no-useless-assignment': 'warn',
     },
   },
 ])

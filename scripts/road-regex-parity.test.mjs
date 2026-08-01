@@ -15,7 +15,11 @@ import {
   HANGUL, BRANCH_SUFFIX, ROAD_NAME_SOURCE, ROAD_NUMBER_TAIL, normalizeCommonRoadTypos,
 } from '../services/address-service/src/shared/roadTokens.js';
 
-const client = readFileSync(new URL('../src/engine/addressEngine.js', import.meta.url), 'utf8');
+// 클라 정제 경로 = addressEngine.js(IO·사전 주입 어댑터) + shared/purifyCore.js(코어).
+// P7 Phase2 ⓒ-1에서 정제 본체가 코어로 이동했으므로 도로명 토큰 import도 코어가 갖는다.
+const clientAdapter = readFileSync(new URL('../src/engine/addressEngine.js', import.meta.url), 'utf8');
+const clientCore    = readFileSync(new URL('../services/address-service/src/shared/purifyCore.js', import.meta.url), 'utf8');
+const client = `${clientAdapter}\n${clientCore}`;
 const server = readFileSync(new URL('../services/address-service/src/normalize.js', import.meta.url), 'utf8');
 
 // ── ① 공유 모듈 자체 동작 ──
@@ -48,10 +52,19 @@ test('공통 오타보정: 재기로 → 제기로', () => {
 });
 
 // ── ② 양쪽이 재정의하지 않고 SSOT를 쓰는가 (갈라짐 잠금) ──
-const SHARED_IMPORT = /from\s+['"][^'"]*shared\/roadTokens\.js['"]/;
+// shared 내부(purifyCore) 에서는 './roadTokens.js', 바깥(서버 normalize.js·클라)에서는
+// '.../shared/roadTokens.js' 로 들어온다. 파일명은 shared에만 존재하므로 이 매칭으로 충분하다.
+const SHARED_IMPORT = /from\s+['"][^'"]*roadTokens\.js['"]/;
 
-test('클라(addressEngine.js)가 공유 토큰을 import 한다', () => {
+test('클라 정제 경로가 공유 토큰을 import 한다', () => {
   assert.match(client, SHARED_IMPORT, '⚠️ 클라가 SSOT를 안 쓴다 — 재복제되면 갈라진다');
+});
+
+test('클라 어댑터가 정제 본체를 공용 코어(purifyCore)에 위임한다', () => {
+  assert.match(clientAdapter, /from\s+['"][^'"]*shared\/purifyCore\.js['"]/,
+    '⚠️ 어댑터가 코어를 안 쓴다 — 코어를 복제하면 클라·서버가 갈라진다');
+  assert.doesNotMatch(clientAdapter, /^export const processAddress = async \(/m,
+    '⚠️ 어댑터에 정제 본체가 되살아났다 — 본체는 purifyCore.js 하나뿐이어야 한다');
 });
 
 test('서버(normalize.js)가 공유 토큰을 import 한다', () => {
