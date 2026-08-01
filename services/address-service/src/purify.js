@@ -61,36 +61,43 @@ export const createPurifyDeps = ({ matchAddress, dicts, kakaoRestKey = config.ka
   const legalDongCache = new Map();
   const kakaoCache = new Map();
 
+  // ★실패는 던진다(삼키지 않는다). 호출부가 "진짜 없음"과 "일시 실패"를 구분해
+  //   일시 실패를 캐시하지 않도록 하기 위해서다 — 아래 캐시 정책 주석 참조.
   const kakaoGet = async (url) => {
-    if (!kakaoRestKey) return null;
-    try {
-      const res = await doFetch(url, {
-        headers: { Authorization: `KakaoAK ${kakaoRestKey}` },
-        signal: AbortSignal.timeout(KAKAO_TIMEOUT_MS),
-      });
-      if (!res.ok) return null;
-      return (await res.json()).documents?.[0] || null;
-    } catch { return null; }
+    if (!kakaoRestKey) return null;   // 키 미설정은 항상 같은 결과 → 캐시해도 안전
+    const res = await doFetch(url, {
+      headers: { Authorization: `KakaoAK ${kakaoRestKey}` },
+      signal: AbortSignal.timeout(KAKAO_TIMEOUT_MS),
+    });
+    if (!res.ok) throw new Error(`Kakao HTTP ${res.status}`);
+    return (await res.json()).documents?.[0] || null;
   };
 
   return {
     io: {
       // 클라는 /v1/address/match를 HTTP로 부르지만 서버는 같은 프로세스 안이다.
       // allowJusoFallback:false 도 클라 요청과 동일(클라는 JUSO 키가 비어 있어 실질 미사용).
+      // ★★캐시 정책(2026-08-01 실측 사고로 확정 · 되돌리지 말 것)
+      //   "조회 결과 없음"은 캐시하고, "조회 실패"는 **절대 캐시하지 않는다.**
+      //   서버 인스턴스는 minScale=1로 오래 살아 있어서, DB 커넥션 일시 실패를 null로
+      //   캐시하면 그 주소는 인스턴스가 죽을 때까지 영구 미매칭이 된다. 실제로 배포 직후
+      //   커넥션 콜드스타트로 '왕산로 72'가 법정동·건물명 없이 정제됐고, 웜 상태(0.09초)에서도
+      //   같은 결과가 반복됐다. 브라우저는 새로고침하면 캐시가 날아가지만 서버는 안 날아간다.
       lookupAddr: async (keyword, cityLabel = '') => {
         const kw = String(keyword || '').trim();
         if (kw.length < 2) return null;
         const key = `${String(cityLabel || '').trim()}::${kw}`;
         if (lookupCache.has(key)) return lookupCache.get(key);
-        let out = null;
+        let hit;
         try {
-          const hit = await matchAddress({ queryText: kw, cityLabel, allowJusoFallback: false });
-          // A-30: 클라 lookupAddr과 동일한 지역 게이트 — 타지역 결과는 채택하지 않는다.
-          out = (hit && isCandidateInSelectedMunicipality(hit, cityLabel)) ? hit : null;
+          hit = await matchAddress({ queryText: kw, cityLabel, allowJusoFallback: false });
         } catch (error) {
-          // 한 건의 조회 실패로 배치 전체가 죽으면 안 된다(부정 캐시로 재난타도 막는다).
-          console.error('[purify] lookupAddr 실패:', error.message);
+          // 일시 실패 — 이 건은 포기하되 캐시하지 않아 다음 요청이 다시 시도한다.
+          console.error('[purify] lookupAddr 실패(미캐시·재시도 가능):', error.message);
+          return null;
         }
+        // A-30: 클라 lookupAddr과 동일한 지역 게이트 — 타지역 결과는 채택하지 않는다.
+        const out = (hit && isCandidateInSelectedMunicipality(hit, cityLabel)) ? hit : null;
         boundedSet(lookupCache, key, out);
         return out;
       },
@@ -98,7 +105,13 @@ export const createPurifyDeps = ({ matchAddress, dicts, kakaoRestKey = config.ka
         const key = String(query || '').trim();
         if (!key) return null;
         if (kakaoCache.has(key)) return kakaoCache.get(key);
-        const doc = await kakaoGet(kakaoKeywordSearchUrl(key));
+        let doc;
+        try {
+          doc = await kakaoGet(kakaoKeywordSearchUrl(key));
+        } catch (error) {
+          console.error('[purify] Kakao 키워드검색 실패(미캐시):', error.message);
+          return null;
+        }
         boundedSet(kakaoCache, key, doc);
         return doc;
       },
@@ -108,7 +121,14 @@ export const createPurifyDeps = ({ matchAddress, dicts, kakaoRestKey = config.ka
         if (!query) return null;
         const key = `${String(cityLabel || '').trim()}::${query}`;
         if (legalDongCache.has(key)) return legalDongCache.get(key);
-        const out = pickLegalDongFromKakao(await kakaoGet(kakaoAddressSearchUrl(query)), cityLabel);
+        let doc;
+        try {
+          doc = await kakaoGet(kakaoAddressSearchUrl(query));
+        } catch (error) {
+          console.error('[purify] Kakao 법정동조회 실패(미캐시):', error.message);
+          return null;
+        }
+        const out = pickLegalDongFromKakao(doc, cityLabel);
         boundedSet(legalDongCache, key, out);
         return out;
       },
