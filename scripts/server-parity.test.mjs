@@ -74,6 +74,53 @@ test('서버는 자기 자신에게 HTTP를 치지 않는다 — matchAddress는
   assert.equal(calls.fetch, 0, 'Kakao 키가 없는데 fetch가 나갔다(불필요한 외부 호출)');
 });
 
+// ★★2026-08-01 배포 직후 실측 사고 — 회귀 금지.
+//   DB 커넥션이 일시적으로 실패했는데 그 실패를 null로 캐시해버려, 커넥션이 회복된 뒤에도
+//   '왕산로 72'가 법정동·건물명 없이 정제됐다(웜 0.09초에도 동일). 서버 인스턴스는 minScale=1로
+//   오래 살아 있어서 브라우저처럼 새로고침으로 캐시가 날아가지 않는다.
+test('★조회 실패는 캐시하지 않는다 — 회복되면 즉시 정상 매칭', async () => {
+  let dbUp = false;   // 한 배치는 lookupAddr을 여러 번 부른다 → 호출 횟수가 아니라 'DB 상태'로 재현
+  const matched = {
+    roadAddrPart1: '서울특별시 동대문구 왕산로 72', standardRoadAddress: '서울특별시 동대문구 왕산로 72',
+    legalDong: '용두동', emdNm: '용두동', bdNm: '동대문한양아이클래스', bdMgtSn: 'X',
+    matchedSido: '서울특별시', matchedSigungu: '동대문구', _matchSource: 'national_address_db',
+  };
+  const purifier = createPurifier({
+    matchAddress: async () => {
+      if (!dbUp) throw new Error('timeout exceeded when trying to connect');   // 커넥션 일시 실패
+      return matched;
+    },
+    dictStore: emptyDictStore(), kakaoRestKey: '',
+    fetchImpl: async () => { throw new TypeError('no network'); },
+    concurrency: 1,
+  });
+
+  const input = [{ addr: '동대문구 왕산로 72, 201호', name: '홍길동', cityLabel: '서울특별시 동대문구' }];
+  const [first] = await purifier.purifyRecords(input);
+  assert.equal(first.법정동, '', 'DB가 죽어 있는 동안 보강이 안 되는 것은 정상');
+
+  dbUp = true;                                   // 커넥션 회복
+  const [second] = await purifier.purifyRecords(input);
+  assert.equal(second.법정동, '용두동',
+    '⚠️ 실패를 캐시했다 — DB가 회복돼도 이 주소는 영원히 법정동·건물명 없이 정제된다');
+  assert.equal(second.buildingName, '동대문한양아이클래스');
+});
+
+test('조회 결과 "없음"은 캐시한다 — 같은 주소를 반복 조회하지 않는다', async () => {
+  let calls = 0;
+  const purifier = createPurifier({
+    matchAddress: async () => { calls += 1; return null; },   // 진짜 미매칭
+    dictStore: emptyDictStore(), kakaoRestKey: '',
+    fetchImpl: async () => { throw new TypeError('no network'); },
+    concurrency: 1,
+  });
+  const input = [{ addr: '왕산로 72', cityLabel: '서울특별시 동대문구' }];
+  await purifier.purifyRecords(input);
+  const after = calls;
+  await purifier.purifyRecords(input);
+  assert.equal(calls, after, '미매칭 결과가 캐시되지 않아 DB를 반복 조회한다');
+});
+
 test('빈 records·초과 요청은 배치 실행기가 안전하게 처리한다', async () => {
   const purifier = createPurifier({
     matchAddress: async () => null, dictStore: emptyDictStore(), kakaoRestKey: '',
