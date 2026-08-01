@@ -23,7 +23,7 @@
 - **검증(증거)**: 파리티 35/35 · 전체 유닛 **174/174** · 골든 3/3 · eslint 0 error · vite build EXIT=0 · **HTTP 실측**(ADC·DB 둘 다 없는 상태) 200/400/413 정상 + A-9·A-10 적용 확인 + 사전 로드 실패에도 **서버 생존**.
 - firebase-admin이 새로 추가한 취약점 **0건**(기존 audit 6건은 전부 `@google-cloud/storage` 경로).
 
-### ✅ 배포 완료 (2026-08-01) — 리비전 `00053-rvl` 100% 트래픽
+### ✅ 배포 완료 (2026-08-01) — 리비전 **`00054-t5m`** 100% 트래픽
 - IAM 추가 부여 **불필요**: 런타임 SA(`31783407891-compute@`)에 이미 `roles/editor` → Firestore 읽기 포함. `dict-status`에서 **typo 23건** 로드 확인.
 - 배포 URL: `https://nexus-address-api-31783407891.asia-northeast3.run.app` (= 클라 `VITE_ADDRESS_MATCH_API_URL`).
 - `/healthz`가 GFE 404인 것은 **구 리비전(canary=00021)도 동일** — 이번 배포와 무관한 기존 동작.
@@ -45,13 +45,26 @@
 
 → **정상 명단은 건당 0.01~0.2초로 무해**하다. 없는 주소가 많은 명단이 위험하다.
 
-### ⚠️ 남은 서버 약점 (미수정 · 형 판단 필요) — purify가 만든 게 아니라 **기존 문제**
-로그 실측: `buildingMatch`(건물명 트리그램)가 **60~76초** 실행되며 커넥션을 붙잡는다.
-클라는 3초에 abort하지만 **서버 쿼리는 끝까지 돈다** → 사용자가 앱에서 이상한 주소를 넣을 때마다
-커넥션이 1분씩 묶인다. purify는 이걸 대량으로 유발할 수 있을 뿐이다.
-- **제안**: `db.js query()`에 `statement_timeout`(예 10~15초) 설정. 단 **`import-job`이 같은 db.js를 쓰므로
-  대량 적재 경로가 죽지 않는지 먼저 확인**해야 한다(그래서 이번에 손대지 않음).
-- 대안: Cloud SQL 증설(현재 `db-custom-1-3840` = 1 vCPU).
+### ✅ 해결됨 — `statement_timeout` 도입 (2026-08-01 · 커밋 `48b7577`/main `27e9462` · 리비전 `00054-t5m`)
+기존 문제였다(purify가 만든 게 아님): `buildingMatch` 트리그램이 **60~76초** 실행되며 커넥션 점유.
+**클라는 3초에 abort하는데 서버 쿼리는 끝까지 돈다** → 아무도 안 기다리는 시간에 다른 요청이 500.
+- **선행 확인 통과**: `server.js`는 `query`만, `import-job`은 `withClient`만 쓴다 → `query()`에만 상한을 걸면
+  **대량 적재·CREATE INDEX·ANALYZE는 무영향**. `scripts/db-guard.test.mjs`가 이 분리를 소스 수준으로 잠근다.
+- 상한 **15초**(env `ADDRESS_STATEMENT_TIMEOUT_MS`). 근거: 정상 0.01~1초, 부하 중 관측 최대 11.4초.
+- 폴백(fuzzy·building)은 상한 초과(57014)를 **미매칭**으로 처리 — 안 그러면 폴백 실패가 500으로 둔갑한다.
+  exact 매칭은 감싸지 않는다(7~14ms짜리가 걸리면 진짜 이상 신호).
+
+**운영 로그 증거**: `buildingMatch 쿼리 상한 초과 — 미매칭 처리` 다수 · slow-query 최대치 **65,999ms → 15,179ms**.
+
+**동일 조건 전후 비교**(없는 주소 30건 배치 + match 1초 간격 병행 · 형 배치가 도는 중에 측정)
+
+| 지표 | 수정 전 | 수정 후 |
+|---|---|---|
+| purify 소요 | 133초 | **26.3초** |
+| 운영 match | **3/53 실패(500)** | **27/27 성공 · 0 실패** |
+| match 중앙 응답 | 3~10초로 열화 | **0.23초**(최대 0.75초) |
+
+→ 남은 선택지(필요 시): Cloud SQL 증설(현재 `db-custom-1-3840` = 1 vCPU).
 
 ---
 
@@ -104,20 +117,27 @@
 
 ## ▶ 새 세션에서 할 일
 
-### 1️⃣ `buildingMatch` 60~76초 쿼리 차단 — **다음 1순위**(형 판단 필요)
-위 "남은 서버 약점" 참조. `statement_timeout` 도입 전 **import-job 경로 영향 확인**이 선행이다.
-이게 해결되면 purify 배치 상한(50건)도 올릴 수 있다.
+### 1️⃣ 형 PC 배치 `batch_nexus_building.py` 정리 — **다음 1순위**(형 판단 필요)
+`watchdog.log`가 10:52·11:03·11:14·11:25·11:36 "로그 정체 62x초 — 강제종료 후 재시작"을 반복하고,
+진행 로그는 매번 `읍면동 3340개, 고유주소 조회 시작`에서 멈춘다 = **진척 0인데 API만 계속 두드린다.**
+- statement_timeout 도입으로 이 배치가 API를 망가뜨리진 못하게 됐지만(match 0.23초 유지),
+  **배치 자체는 여전히 아무 일도 못 하고 있다.** 원인 규명 or 정지 필요.
+- 정지 시 **watchdog을 먼저** 죽여야 배치가 되살아나지 않는다.
 
-### 2️⃣ 클라를 서버 정제로 전환 (Phase3 — 미착수·형 승인 필요)
+### 2️⃣ purify 배치 상한 재조정 (선택)
+statement_timeout으로 폭주가 끊기므로 `ADDRESS_PURIFY_MAX_RECORDS`(현재 50)를 올릴 여지가 생겼다.
+올리기 전 위 "동일 조건 전후 비교" 방식으로 **match 병행 측정**을 다시 할 것.
+
+### 3️⃣ 클라를 서버 정제로 전환 (Phase3 — 미착수·형 승인 필요)
 지금은 **서버 정제가 준비만 된 상태**다. 클라는 여전히 브라우저에서 정제한다.
 - 전환 시 이득: 대량 백필 서버화 · **브라우저 Kakao 키 제거**(현재 `VITE_KAKAO_REST_KEY` 번들 노출) · 클라 슬림화.
 - 전환 시 주의: 좌표는 여전히 클라(purify는 includeCoords 미지원) → 서버 정제 후 클라가 좌표만 붙이는 2단 구성이 필요.
 - **전환 전 반드시**: 배포된 서버로 파리티를 한 번 더(실DB·실Kakao 조건). 지금 파리티는 offline 조건이다.
 
-### 3️⃣ 형 실동작 확인 (지난 세션부터 대기)
+### 4️⃣ 형 실동작 확인 (지난 세션부터 대기)
 `logis-op.web.app` → Ctrl+Shift+R → 명단 정제 → ①층 위치 ②대시 동호 ③건물명 맨뒤 ④괄호 잡값 없음 + 자가학습 '학습 검토' 탭. **이번 이관은 클라 출력 불변이라 결과 동일해야 함**.
 
-### 4️⃣ 남은 표기 갈림 276건 (자동 처리 불가) — 유지
+### 5️⃣ 남은 표기 갈림 276건 (자동 처리 불가) — 유지
 동률·근소차 28그룹·괄호 층정보·도로명 부번차. 형 현장 지식 필요.
 
 ---
@@ -148,7 +168,7 @@
 | 골든 갱신/검증 | `node scripts/golden/record.mjs [--mode record]` / `node --test scripts/address-golden.test.mjs`. 전체 유닛=`node --test scripts/*.test.mjs` |
 
 ### 현재 기준선
-골든 3/3 · **서버 파리티 35/35** · 전체 유닛 **174/174** · **shared 모듈 11종**(roadTokens·textNormalize·dongHoFormat·addressFormat·normalizeVariant·applyNoteNormalize·detailNormalize·purifyHelpers·purifyCore·**dictRegex**·**kakaoQueries**) · 클라 addressEngine.js **501줄**(어댑터) · match 실존주소 200·0.1~0.16s(리비전 00049) · 인덱스 `building_core_roadbld_trgm` 운영 반영.
+골든 3/3 · **서버 파리티 35/35** · 전체 유닛 **181/181** · **shared 모듈 11종**(roadTokens·textNormalize·dongHoFormat·addressFormat·normalizeVariant·applyNoteNormalize·detailNormalize·purifyHelpers·purifyCore·**dictRegex**·**kakaoQueries**) · 클라 addressEngine.js **501줄**(어댑터) · match 실존주소 200·0.1~0.4s(리비전 00054-t5m · statement_timeout 15초) · 인덱스 `building_core_roadbld_trgm` 운영 반영.
 검증 명령: `node --test scripts/*.test.mjs`(파리티 포함) · `node --test scripts/address-golden.test.mjs` · `npx eslint .` · `npx vite build`.
 
 ---
