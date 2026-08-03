@@ -4,6 +4,10 @@ import { query } from './db.js';
 import { cleanText, formatRoadLookupQuery, normalizeSearchKey, parseRoadNumber, roadSideKey } from './normalize.js';
 import { geocodeRoad, matchDongCoord, parseDongNo } from './vworld.js';
 import { createPurifier } from './purify.js';
+import { buildDeliveryBrief, pickCoordinate } from './delivery/deliveryBrief.js';
+import {
+  collectCoordinates, findBuildingExt, findCachedCoordinate, findEntrance,
+} from './delivery/resolveDelivery.js';
 
 const ADDRESS_SCHEMA = config.dbSchema;
 let currentJusoKey = 0;
@@ -437,6 +441,54 @@ const server = createServer(async (req, res) => {
         allowJusoFallback: body.allowJusoFallback !== false,
       });
       return json(res, data ? 200 : 404, { ok: Boolean(data), data }, headers);
+    }
+    // ★적재해둔 국가 데이터를 실제로 꺼내 쓰는 자리(설계서 P4 ⓔ "조회 연결").
+    //   출입구 좌표 1,281만 건을 적재하고도 읽는 코드가 0건이었다. 여기서 해소한다.
+    //   match(주소 확정) → entrance_core(측량 좌표) → building_ext(엘베·층) → 기사용 브리프.
+    if (req.method === 'POST' && url.pathname === '/v1/delivery/resolve') {
+      const body = await readBody(req);
+      const address = await matchAddress({
+        queryText: body.query || body.address || '',
+        cityLabel: body.cityLabel || '',
+        version: body.version || config.activeVersion,
+        allowJusoFallback: body.allowJusoFallback !== false,
+      });
+      if (!address) return json(res, 404, { ok: false, data: null }, headers);
+
+      // 각 조회는 독립이고 하나가 없어도 나머지는 유효하다 → 실패를 전파하지 않고 null 로 떨어뜨린다.
+      // (설계서 §연쇄장애: 부가정보 조회 실패가 주소 확정까지 깨뜨리면 안 된다)
+      const safe = (p) => p.catch((error) => {
+        console.error('[delivery-resolve] 부가조회 실패:', error.message);
+        return null;
+      });
+      const [entrance, building, cached] = await Promise.all([
+        safe(findEntrance(query, ADDRESS_SCHEMA, {
+          addressMgtNo: address.addressMgtNo || address._addressMgtNo || '',
+          roadCode: body.roadCode || '',
+          undergroundYn: body.undergroundYn || '0',
+          mainNo: address.buildingMainNo,
+          subNo: address.buildingSubNo,
+          legalDongCode: body.legalDongCode || '',
+        })),
+        safe(findBuildingExt(query, ADDRESS_SCHEMA, address.buildingMgtNo)),
+        safe(findCachedCoordinate(query, ADDRESS_SCHEMA, {
+          buildingMgtNo: address.buildingMgtNo,
+          standardRoadAddress: address.standardRoadAddress,
+        })),
+      ]);
+
+      const coord = pickCoordinate(collectCoordinates(entrance, cached));
+      const brief = buildDeliveryBrief({ address, coord, building, entrance });
+      return json(res, 200, {
+        ok: true,
+        data: {
+          address,
+          coordinate: coord,
+          building,
+          entrance,
+          brief,
+        },
+      }, headers);
     }
     if (req.method === 'POST' && url.pathname === '/v1/address/geocode') {
       const body = await readBody(req);
