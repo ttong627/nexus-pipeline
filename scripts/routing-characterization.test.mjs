@@ -117,6 +117,58 @@ describe('★승격 갭 — 코어로 올리기 전에 반드시 해결해야 �
   });
 });
 
+describe('★갭 해결 증명 — 정규화 계층이 실제로 엔진을 동작시킨다', () => {
+  test('갭① 정규화하면 영문 키도 아파트로 인식된다', async () => {
+    const { toEngineRecord } = await import(
+      '../services/address-service/src/routing/recordSchema.js'
+    );
+    const english = { id: 99, name: '라', address: '경기 부천시 부천로 15 삼성아파트 101동 502호', qty: 1 };
+    assert.equal(engine.isApartmentLike(english), false, '정규화 전(갭 상태)');
+    assert.equal(engine.isApartmentLike(toEngineRecord(english)), true,
+      '정규화 후에도 못 알아보면 계층이 제 일을 못 하는 것이다');
+  });
+
+  test('갭② 정규화하면 qty 가 체감물량에 반영된다', async () => {
+    const { toEngineRecord } = await import(
+      '../services/address-service/src/routing/recordSchema.js'
+    );
+    const many = { address: '경기 부천시 소사로 77', qty: 4 };
+    const one = { address: '경기 부천시 중동로 108', qty: 1 };
+    assert.equal(engine.getEffectiveLoad(many), engine.getEffectiveLoad(one), '정규화 전(갭 상태)');
+    assert.ok(
+      engine.getEffectiveLoad(toEngineRecord(many)) > engine.getEffectiveLoad(toEngineRecord(one)),
+      '정규화 후에는 수량이 많은 건의 체감물량이 더 커야 한다',
+    );
+    assert.equal(engine.getEffectiveLoad(toEngineRecord(many)), 4);
+  });
+
+  test('★순수 한글 명단(운영 nexus)은 정규화를 통과해도 불변', async () => {
+    const { toEngineRecord } = await import(
+      '../services/address-service/src/routing/recordSchema.js'
+    );
+    // ⚠️처음엔 위 RECORDS 그대로 "회귀 0"을 주장했다가 실패했다. 그 픽스처는 `qty`(영문 물량키)를
+    //   갖고 있어서 정규화가 `포수`를 채우고 체감물량이 1→qty 로 **바뀐다**.
+    //   그건 회귀가 아니라 **갭② 해결의 효과**다. 내 주장이 부정확했다.
+    //   운영 nexus 명단은 `포수` 컬럼을 쓰므로, 진짜 회귀 검증은 **순수 한글 레코드**로 한다.
+    const koOnly = RECORDS.map(({ qty, ...rest }) => ({ ...rest, 포수: qty }));
+    for (const rec of koOnly) {
+      assert.equal(engine.isApartmentLike(toEngineRecord(rec)), engine.isApartmentLike(rec));
+      assert.equal(engine.getEffectiveLoad(toEngineRecord(rec)), engine.getEffectiveLoad(rec));
+      assert.equal(engine.parseAptDong(toEngineRecord(rec)['주소']), engine.parseAptDong(rec['주소']));
+    }
+  });
+
+  test('정규화는 영문 물량키를 인식시켜 **동작을 개선한다**(불변이 아니다)', async () => {
+    const { toEngineRecord } = await import(
+      '../services/address-service/src/routing/recordSchema.js'
+    );
+    // 이 테스트는 위 테스트와 짝이다 — "무엇이 바뀌고 무엇이 안 바뀌는지"를 둘 다 못박는다.
+    const withQty = RECORDS[6];                       // qty 4, 포수 없음
+    assert.equal(engine.getEffectiveLoad(withQty), 1, '정규화 전에는 물량을 못 본다');
+    assert.equal(engine.getEffectiveLoad(toEngineRecord(withQty)), 4, '정규화 후 물량이 살아난다');
+  });
+});
+
 describe('순번 생성 — 출력 형태를 고정한다', () => {
   test('buildSequenceUnits — 단위 형태와 타입', () => {
     const units = engine.buildSequenceUnits(RECORDS);
