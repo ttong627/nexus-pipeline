@@ -1,56 +1,31 @@
-const haversine = (lat1, lng1, lat2, lng2) => {
-  const R = 6371000;
-  const dLat = (lat2 - lat1) * Math.PI / 180;
-  const dLng = (lng2 - lng1) * Math.PI / 180;
-  const a = Math.sin(dLat / 2) ** 2 +
-    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-};
-
-const RENTAL_KEYWORDS = ['LH', 'SH', '임대', '행복주택', '국민임대', '영구임대', '공공임대', '보금자리', '매입임대'];
-const STAIRS_KEYWORDS = ['빌라', '연립', '다세대', '단독주택'];
-const HEAVY_NOTE_KW = ['문앞', '거동불편', '직접전달', '현관앞', '직접'];
-const MEDIUM_NOTE_KW = ['전화필수', '골목', '경비실', '게이트'];
+// ★복제 제거 (2026-08-03) — 순수 헬퍼는 엔진에서 가져온다.
+//
+//   이 워커는 `RouteMapModal.jsx:1609` 에서 **{ type: 'module' }** 로 로드된다.
+//   즉 처음부터 ESM import 가 가능했는데도 순수함수 30여 개가 여기 재정의돼 있었다.
+//   같은 로직이 원본·워커·플랫폼 vendoring 까지 **3벌**이라, 한쪽만 고치는 사고가 예약돼 있었다.
+//
+//   교체 전 `scripts/routing-worker-parity.test.mjs` 로 두 벌이 같은 답을 내는지 실측했다:
+//     · haversine·getEffectiveLoad·extractRoadAddress·isApartmentLike → **완전 일치**
+//     · 상수 4종 → 일치
+//     · ★parseAptDong 만 **계약이 달랐다**(워커=레코드, 엔진=문자열) → 아래 어댑터로 흡수
+//   그 테스트가 이 교체의 안전망이다.
+import {
+  APT_LIKE_RE,
+  HEAVY_NOTE_KW,
+  MEDIUM_NOTE_KW,
+  RENTAL_KEYWORDS,
+  STAIRS_KEYWORDS,
+  extractRoadAddress,
+  getEffectiveLoad,
+  haversine,
+  isApartmentLike,
+  parseAptDong as parseAptDongFromText,
+} from '../engine/routeSequenceEngine.js';
 
 const norm = (value) => String(value || '').normalize('NFC').replace(/\s+/g, ' ').trim();
 const getQty = (record) => parseInt(record.포수 || record['수량(포수)']) || 1;
 const getAddr = (record) => String(record.주소 || '').trim();
 const getDong = (record) => String(record.배정행정동 || record.routeDong || record.행정동 || '').trim();
-
-const getEffectiveLoad = (record) => {
-  const qty = getQty(record);
-  const addr = getAddr(record);
-  const note = String(record.특이사항 || '');
-  const full = [
-    addr,
-    note,
-    record._buildingName,
-    record.buildingName,
-    record._standardRoadAddress,
-    record.standardRoadAddress,
-    record?._routeHints?.apartmentGroupKey,
-    record?.routeHints?.apartmentGroupKey,
-  ].filter(Boolean).join(' ');
-  if (qty >= 20 && RENTAL_KEYWORDS.some(k => full.includes(k))) return qty * 0.3;
-  if (STAIRS_KEYWORDS.some(k => addr.includes(k))) {
-    const floor = parseInt(addr.match(/(\d+)\s*층/)?.[1] || '2');
-    return qty * (1 + Math.min(floor, 5) * 0.1);
-  }
-  if (HEAVY_NOTE_KW.some(k => note.includes(k))) return qty * 1.5;
-  if (MEDIUM_NOTE_KW.some(k => note.includes(k))) return qty * 1.2;
-  return qty;
-};
-
-const extractRoadAddress = (addr) => {
-  if (!addr) return '';
-  let depth = 0;
-  for (let i = 0; i < addr.length; i++) {
-    if (addr[i] === '(') depth++;
-    else if (addr[i] === ')') depth--;
-    else if (addr[i] === ',' && depth === 0) return addr.slice(0, i).trim();
-  }
-  return addr.replace(/\([^)]*\)\s*$/, '').trim();
-};
 
 const extractBuildingName = (addr) => {
   const parens = [...String(addr || '').matchAll(/\(([^()]*)\)/g)];
@@ -62,37 +37,21 @@ const extractBuildingName = (addr) => {
   return '';
 };
 
-const parseAptDong = (record) => {
-  const text = [
-    record?._detailAddress,
-    record?.detailAddress,
-    record?.주소,
-    record?.특이사항,
-  ].filter(Boolean).join(' ');
-  const match = String(text).match(/(?:^|[\s,(])(\d{1,4})\s*동(?:[\s,)]|$)/)
-    || String(text).match(/(?:^|[\s,(])(\d{3,4})\s*-\s*\d{1,4}\s*호?/);
-  return match ? parseInt(match[1], 10) : null;
-};
-
-const APT_LIKE_RE = /아파트|APT|Apartment|주공|휴먼시아|뜨란채|마을|단지|타운|빌리지|하이츠|아이파크|자이|래미안|푸르지오|힐스테이트|롯데캐슬|더샵|e편한세상|이편한세상|센트럴|리버|파크|LH|SH|임대|행복주택|국민임대|영구임대|공공임대|매입임대/i;
-
-const getRecordSearchText = (record) => [
+/**
+ * ★계약 어댑터 — 워커는 **레코드**로 동을 찾고, 엔진은 **문자열**을 받는다.
+ *
+ * 이름만 같고 시그니처가 다르다(실측 2026-08-03). 여기서 호출부 계약을 그대로 유지한 채
+ * 텍스트만 조합해 엔진 로직에 위임한다. 이 어댑터가 없으면 복제를 지우는 순간
+ * 인자가 객체로 들어가 **전부 null** 이 되고 아파트 동 그룹핑이 통째로 무너진다.
+ *
+ * 엔진에 없는 입력 경로(_detailAddress·detailAddress)는 여기서 살린다 — 워커만 상세주소를 본다.
+ */
+const parseAptDong = (record) => parseAptDongFromText([
+  record?._detailAddress,
+  record?.detailAddress,
   record?.주소,
   record?.특이사항,
-  record?._buildingName,
-  record?.buildingName,
-  record?._standardRoadAddress,
-  record?.standardRoadAddress,
-  record?._routeHints?.apartmentGroupKey,
-  record?.routeHints?.apartmentGroupKey,
-].filter(Boolean).join(' ');
-
-const isApartmentLike = (record) => {
-  if (!record) return false;
-  if (record._isApt || record.isApt) return true;
-  if (record?._routeHints?.apartmentGroupKey || record?.routeHints?.apartmentGroupKey) return true;
-  return APT_LIKE_RE.test(getRecordSearchText(record));
-};
+].filter(Boolean).join(' '));
 
 const parseRoadInfo = (record) => {
   const hintedSide = norm(record?._routeHints?.roadSideKey || record?.routeHints?.roadSideKey || '');

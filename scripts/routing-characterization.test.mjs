@@ -253,23 +253,24 @@ describe('배송일 분할 — 코어 승격 대상 ⑦', () => {
   });
 });
 
-describe('★복제 3벌 — 워커가 원본과 갈라졌는지', () => {
-  test('워커에 원본과 같은 이름의 함수가 재정의돼 있다(현 상태 고정)', async () => {
+describe('★복제 제거 완료 — 워커가 엔진을 쓴다', () => {
+  test('워커에 순수함수 복제가 없고 엔진을 import 한다', async () => {
     const { readFile } = await import('node:fs/promises');
     const { fileURLToPath } = await import('node:url');
     const path = await import('node:path');
     const root = path.resolve(fileURLToPath(new URL('../', import.meta.url)));
     const workerSrc = await readFile(path.join(root, 'src/workers/routeWorker.js'), 'utf8');
 
-    // 이 목록이 곧 "제거해야 할 복제"의 명세다. 복제를 없애면 이 테스트를 갱신하게 되고,
-    // 그 갱신 자체가 작업이 실제로 일어났다는 증거가 된다.
-    for (const fn of ['haversine', 'getEffectiveLoad', 'extractRoadAddress', 'parseAptDong']) {
-      assert.ok(
-        new RegExp(`(function\\s+${fn}\\b|const\\s+${fn}\\s*=)`).test(workerSrc),
-        `워커에 ${fn} 재정의가 없다 — 복제 현황이 바뀌었으니 이 테스트를 갱신할 것`,
-      );
+    // ⚠️이 테스트는 원래 "복제가 있다"를 고정하고 있었다(2026-08-03 오전).
+    //   복제를 제거하면서 실패했고, **그 실패가 작업이 실제로 일어났다는 증거**였다.
+    //   지금은 반대로 "복제가 없다"를 잠근다. 자세한 검증은 routing-worker-parity.test.mjs.
+    assert.ok(/from\s*['"]\.\.\/engine\/routeSequenceEngine\.js['"]/.test(workerSrc),
+      '워커가 엔진을 import 하지 않는다');
+    for (const fn of ['haversine', 'getEffectiveLoad', 'extractRoadAddress']) {
+      assert.ok(!new RegExp(`^const\\s+${fn}\\s*=`, 'm').test(workerSrc),
+        `워커에 ${fn} 복제가 부활했다`);
     }
-    assert.ok(!/^\s*import\s/m.test(workerSrc),
-      '워커가 import 를 쓰기 시작했다 — 복제 제거가 진행됐다면 이 테스트를 갱신할 것');
+    // parseAptDong 은 계약이 달라 어댑터로 남는다(레코드 → 텍스트 → 엔진).
+    assert.ok(/parseAptDongFromText/.test(workerSrc), '어댑터가 엔진 로직에 위임해야 한다');
   });
 });
