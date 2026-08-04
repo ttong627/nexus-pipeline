@@ -94,6 +94,7 @@ export const balanceParens = (value) => {
   if (!text) return '';
   const chars = [...text];
   const drop = new Set();
+  /** @type {number[]} 여는 괄호 위치 스택 */
   const stack = [];
   chars.forEach((ch, i) => {
     if (ch === '(') stack.push(i);

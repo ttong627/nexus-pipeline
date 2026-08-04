@@ -25,7 +25,8 @@ const MIN_MAJORITY_SHARE = 0.7;
 /** A-22 참고주소 블록 — 통째로 보존해야 하는 원문 */
 const REF_BLOCK_RE = /\[참고:[^\]]*\]/g;
 
-/** 중복 판정용 비교키 — 공백·괄호·기호 제거(`DH(디에이치)빌딩` ⊇ `DH디에이치`) */
+/** 중복 판정용 비교키 — 공백·괄호·기호 제거(`DH(디에이치)빌딩` ⊇ `DH디에이치`)
+ *  @param {string|null} [v] */
 const cmpKey = (v) => String(v || '').replace(/[\s()[\]·,./\\-]/g, '');
 
 // A-9 특수문자 잔재(◆★☆*|~#§※) — 이런 표기를 정답으로 삼으면 오염이 그룹 전체로 번진다.
@@ -48,6 +49,7 @@ export const isGenericUseName = (name) => GENERIC_USE_RE.test(cleanAddressPiece(
  * @param {string} legalDong
  * @returns {boolean}
  */
+/** @param {string} name @param {string|null} [legalDong] 법정동은 없을 수 있다 */
 const isCleanCandidate = (name, legalDong) => {
   const v = cleanAddressPiece(name);
   if (!v) return false;
@@ -83,7 +85,7 @@ export const pickCanonicalBuilding = ({ variants, dbName, legalDong = '', minSha
   }
 
   // 이하 DB 정본이 없는 경우 — 오염 표기를 정답으로 삼지 않도록 위생 검사를 통과한 것만 후보로 둔다.
-  const named = list.filter(v => v.name && isCleanCandidate(v.name, legalDong));
+  const named = list.filter(v => v.name && isCleanCandidate(String(v.name), legalDong));
   if (!named.length) return null;                       // 깨끗한 후보가 없다 → 보류(원본 보존)
 
   // ② 깨끗한 표기가 한 종류면 — 다른 표기(빈값·오염값)를 가진 레코드가 있을 때만 통일 가치가 있다
@@ -125,6 +127,7 @@ export const rebuildParen = (address, legalDong, canonical) => {
 
   // 괄호에서 빠지는 값 중 '의미 있는 원문'만 이관.
   //   오염 주소는 괄호 파싱이 통째로 한 토큰이 될 수 있어, 괄호 블록을 걷어낸 알맹이로 판정한다.
+  /** @param {string} v */
   const stripBlocks = (v) => cleanAddressPiece(protectParenBlocks(v).text.replace(/__P\d+__/g, ' '));
   const moved = [];
   for (const part of splitParenInner(paren)) {

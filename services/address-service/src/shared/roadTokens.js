@@ -29,6 +29,7 @@ export const ROAD_NAME_SOURCE =
 /** 도로명 뒤 건물번호(지하 접두·부번 포함) — 선행 구분자는 각자 조립한다 */
 export const ROAD_NUMBER_TAIL = '\\s*(\\uC9C0\\uD558\\s*)?(\\d{1,5})(?:\\s*-\\s*(\\d{1,5}))?';
 
-/** 공통 도로명 오타 보정 — 재기로 → 제기로 (양쪽 동일 적용) */
+/** 공통 도로명 오타 보정 — 재기로 → 제기로 (양쪽 동일 적용)
+ *  @param {string} [value] */
 export const normalizeCommonRoadTypos = (value) =>
   String(value || '').replace(/재기로(?=\d*길|\s*\d)/g, '제기로');

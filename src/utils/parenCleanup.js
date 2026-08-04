@@ -14,12 +14,15 @@
 
 import { splitParenInner, protectParenBlocks, cleanAddressPiece } from './addressFormat.js';
 
-/** 이관할 가치가 있는 값인가 — 1글자 파편(E)·빈값은 버린다 */
+/** 이관할 가치가 있는 값인가 — 1글자 파편(E)·빈값은 버린다
+ *  @param {string} v */
 const isMeaningful = (v) => cleanAddressPiece(v).length >= 2;
 
+/** @param {string|null} [v] */
 const cmpKey = (v) => String(v || '').replace(/[\s()[\]·,./\\-]/g, '');
 
-/** 괄호 블록을 걷어낸 알맹이 — `E (장안동)` → `E`, `8652 (신설동)` → `8652` */
+/** 괄호 블록을 걷어낸 알맹이 — `E (장안동)` → `E`, `8652 (신설동)` → `8652`
+ *  @param {string} v */
 const core = (v) => cleanAddressPiece(protectParenBlocks(v).text.replace(/__P\d+__/g, ' '));
 
 /**
