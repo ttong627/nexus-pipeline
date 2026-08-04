@@ -831,8 +831,13 @@ export const improvedUnitCost = (from, to, cache) => {
 export const getUnitRoad = (unit) => {
   if (!unit) return '';
   if (unit.roadInfo?.road) return unit.roadInfo.road;
+  // ★파싱 결과 메모이즈 — countRoadRevisits가 정련 루프에서 수만 번 호출된다.
+  //   캐시가 없어 매 호출마다 주소 문자열을 다시 파싱하고 있었다(점검 지적).
+  if (unit._roadNameCache !== undefined) return unit._roadNameCache;
   const rec = unit.records?.[0];
-  return rec ? parseRoadInfo(getSequenceAddress(rec)).road : '';
+  const road = rec ? parseRoadInfo(getSequenceAddress(rec)).road : '';
+  unit._roadNameCache = road;
+  return road;
 };
 
 // 경로 전체 도로재방문 횟수 (analyzeSequenceQuality와 동일 정의: 닫힌 도로 재등장).
@@ -872,6 +877,13 @@ export const improvedSequence = (points, startPoint = null, options = {}) => {
   if (!points?.length) return [];
   const cache = new Map();
   const maxPasses = options.maxPasses || 60;
+  // ★시간 예산 — 개선 루프(2-opt·Or-opt·도로재방문 정련)는 anytime 알고리즘이라
+  //   중간에 멈춰도 항상 유효한 순번이 남는다. 예산이 없으면 도로 수가 늘 때
+  //   정련 단계가 O(n⁴)로 폭발해 요청이 사실상 끝나지 않았다(점검 지적).
+  //   작은 데이터는 예산 안에서 완주하므로 기존 결과와 동일하다.
+  const timeBudgetMs = options.timeBudgetMs ?? 5000;
+  const deadline = Date.now() + Math.max(200, timeBudgetMs);
+  const outOfTime = () => Date.now() > deadline;
 
   const allUnits = buildSequenceUnits(points);
   const coordUnits = allUnits.filter(u => u.hasCoord);
@@ -906,14 +918,16 @@ export const improvedSequence = (points, startPoint = null, options = {}) => {
   const n = order.length;
   let improved = true;
   let pass = 0;
-  while (improved && pass++ < maxPasses) {
+  while (improved && pass++ < maxPasses && !outOfTime()) {
     improved = false;
 
     // 2-opt: edge(i-1→i) 와 edge(j→j+1) 사이 구간 [i..j] 반전
     for (let i = 1; i < n - 1; i++) {
+      if (outOfTime()) break;
       const a = i === 0 ? startUnit : order[i - 1];
       if (!a) continue;
       for (let j = i + 1; j < n; j++) {
+        if ((j & 127) === 0 && outOfTime()) break;
         const b = order[i];
         const c = order[j];
         const d = j + 1 < n ? order[j + 1] : null;
@@ -930,6 +944,7 @@ export const improvedSequence = (points, startPoint = null, options = {}) => {
     // Or-opt: 연속 segLen(1·2·3)개 unit을 떼어 다른 위치에 재삽입
     for (let segLen = 1; segLen <= 3; segLen++) {
       for (let i = 0; i + segLen <= n; i++) {
+        if (outOfTime()) break;
         const prev = i === 0 ? startUnit : order[i - 1];
         const next = i + segLen < n ? order[i + segLen] : null;
         const seg0 = order[i];
@@ -975,21 +990,28 @@ export const improvedSequence = (points, startPoint = null, options = {}) => {
   let curObj = penalizedObjective(order);
   let refImproved = true;
   let refPass = 0;
-  while (refImproved && refPass++ < maxPasses) {
+  while (refImproved && refPass++ < maxPasses && !outOfTime()) {
     refImproved = false;
     for (let segLen = 1; segLen <= 3; segLen++) {
       for (let i = 0; i + segLen <= n; i++) {
+        if (outOfTime()) break;
         let bestObj = curObj;
         let bestPos = -1;
+        // ★후보 위치마다 배열 3벌(slice·slice·spread)을 새로 만들던 것을 제거.
+        //   seg 를 한 번만 떼어내고 order 를 직접 옮겼다 되돌린다(순열은 동일).
+        const probe = order.splice(i, segLen);
         for (let k = 0; k <= n; k++) {
+          // 내부 루프 1회도 O(n²)라 예산을 크게 넘길 수 있다 — 주기적으로 확인.
+          // (probe 복원은 루프 밖이라 여기서 빠져나가도 순열은 온전하다)
+          if ((k & 63) === 0 && outOfTime()) break;
           if (k >= i && k <= i + segLen) continue;
-          const seg = order.slice(i, i + segLen);
-          const trial = [...order.slice(0, i), ...order.slice(i + segLen)];
           const insertAt = k > i ? k - segLen : k;
-          trial.splice(insertAt, 0, ...seg);
-          const obj = penalizedObjective(trial);
+          order.splice(insertAt, 0, ...probe);
+          const obj = penalizedObjective(order);
+          order.splice(insertAt, segLen);
           if (obj < bestObj - 1) { bestObj = obj; bestPos = k; }
         }
+        order.splice(i, 0, ...probe); // 원위치 복원
         if (bestPos !== -1) {
           const seg = order.splice(i, segLen);
           const insertAt = bestPos > i ? bestPos - segLen : bestPos;

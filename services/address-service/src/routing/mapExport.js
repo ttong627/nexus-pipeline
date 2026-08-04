@@ -1,5 +1,5 @@
 /**
- * 배송지도 내보내기 (모듈 ⑩) — 순수 함수, 의존 0.
+ * 배송지도 내보내기 (모듈 ⑩) — 순수 함수, 외부 의존 0(코어 내부 모듈만 참조).
  *
  * ★무엇을 코어로 올리는가
  *   지도 화면(RouteMapModal 6,415줄)은 React UI 라 코어에 올릴 수 없다. 올릴 것은
@@ -14,6 +14,8 @@
  *     들어가고, 그때도 응답이 `piiIncluded: true` 로 알려준다. 조용히 새지 않게 한다.
  */
 
+import { validCoord } from './navigation.js';
+
 /** XML 특수문자 이스케이프 — 주소에 &·<가 들어오면 KML 이 깨진다. */
 const esc = (value) => String(value ?? '')
   .replace(/&/g, '&amp;')
@@ -27,16 +29,17 @@ const num = (v) => {
   return Number.isFinite(n) ? n : null;
 };
 
-/** 좌표가 있는 건만 지도에 찍을 수 있다. */
+/** 좌표가 **한국 안에** 있는 건만 지도에 찍을 수 있다.
+ *  ★유한수 검사만 하면 (0,0)·미기입 좌표가 그대로 지도에 찍히고, bounds 중심이
+ *    인도양으로 끌려가 경로 전체가 못 쓰게 된다. 네비와 같은 기준(validCoord)을 쓴다. */
 const pickPoints = (records) => (Array.isArray(records) ? records : [])
   .map((r) => {
-    const lat = num(r.lat ?? r._lat ?? r['위도']);
-    const lng = num(r.lng ?? r._lng ?? r['경도']);
-    if (lat === null || lng === null) return null;
+    const c = validCoord(r.lat ?? r._lat ?? r['위도'], r.lng ?? r._lng ?? r['경도']);
+    if (!c) return null;
     const seq = num(r.seq ?? r['배송순번'] ?? r['순번']);
     return {
-      lat,
-      lng,
+      lat: c.lat,
+      lng: c.lng,
       seq,
       address: String(r.address ?? r['주소'] ?? '').trim(),
       qty: num(r.qty ?? r['포수'] ?? r['수량']) || null,

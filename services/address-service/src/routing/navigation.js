@@ -18,9 +18,11 @@
  */
 
 /** 좌표가 한국 안에 있는지 — 엉뚱한 좌표로 안내하면 기사가 엉뚱한 곳으로 간다. */
-const KR = { latMin: 32.5, latMax: 39.0, lngMin: 124.0, lngMax: 132.5 };
+export const KR = { latMin: 32.5, latMax: 39.0, lngMin: 124.0, lngMax: 132.5 };
 
-const validCoord = (lat, lng) => {
+/** ★지도 내보내기(mapExport)도 같은 기준을 써야 한다 — 한쪽만 (0,0)을 통과시키면
+ *  네비는 거부하는 좌표가 지도에는 찍힌다(적도 앞바다에 배송지가 생긴다). */
+export const validCoord = (lat, lng) => {
   const a = Number(lat);
   const b = Number(lng);
   return Number.isFinite(a) && Number.isFinite(b)

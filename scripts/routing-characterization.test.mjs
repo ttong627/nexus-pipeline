@@ -268,9 +268,14 @@ describe('★복제 제거 완료 — 배분 코어가 엔진을 쓴다', () => 
       path.join(root, 'services/address-service/src/routing/loadBalance.js'), 'utf8');
     assert.ok(/from\s*['"]\.\/routeSequenceEngine\.js['"]/.test(coreSrc),
       '배분 코어가 엔진을 import 하지 않는다');
+    // ⚠️템플릿 리터럴 안에서는 `\s` 가 JS 이스케이프로 먼저 소거돼 `s` 가 된다.
+    //   (`^consts+haversiness*=` 로 컴파일돼 무엇에도 매칭되지 않았다 —
+    //    복제가 부활해도 이 검사가 통과했다.) 정규식에 넘길 백슬래시는 `\\s` 로 쓴다.
     for (const fn of ['haversine', 'getEffectiveLoad', 'extractRoadAddress']) {
-      assert.ok(!new RegExp(`^const\s+${fn}\s*=`, 'm').test(coreSrc),
+      assert.ok(!new RegExp(`^const\\s+${fn}\\s*=`, 'm').test(coreSrc),
         `배분 코어에 ${fn} 복제가 부활했다`);
+      assert.ok(!new RegExp(`^(?:export\\s+)?function\\s+${fn}\\s*\\(`, 'm').test(coreSrc),
+        `배분 코어에 ${fn} 복제가 부활했다(function 선언)`);
     }
     assert.ok(/parseAptDongFromText/.test(coreSrc), '어댑터가 엔진 로직에 위임해야 한다');
 
@@ -278,5 +283,49 @@ describe('★복제 제거 완료 — 배분 코어가 엔진을 쓴다', () => 
     const workerSrc = await readFile(path.join(root, 'src/workers/routeWorker.js'), 'utf8');
     assert.ok(workerSrc.split(/\r?\n/).length < 40, '워커가 다시 뚱뚱해졌다');
     assert.ok(/loadBalance\.js/.test(workerSrc), '워커가 배분 코어를 import 하지 않는다');
+  });
+});
+
+describe('★전략 선택이 실제로 결과를 바꾸는가', () => {
+  // 골든 스냅샷만으로는 "전략을 바꿔도 답이 같다"를 못 잡는다 —
+  // 라우팅이 깨져 전부 pca 로 가도 스냅샷은 그대로이기 때문이다.
+  const fixture = () => {
+    let s = 11;
+    const rnd = () => { s = (s * 1103515245 + 12345) & 0x7fffffff; return s / 0x7fffffff; };
+    return Array.from({ length: 60 }, (_, i) => ({
+      id: `R${i}`, 주소: `경기 부천시 중동로 ${i + 1}`,
+      lat: 37.48 + rnd() * 0.06, lng: 126.74 + rnd() * 0.08, 포수: 1 + Math.floor(rnd() * 4),
+    }));
+  };
+  const drivers = [{ id: 'D1', name: '기사1' }, { id: 'D2', name: '기사2' }, { id: 'D3', name: '기사3' }];
+
+  test('유효 전략들이 서로 다른 배분을 만든다', async () => {
+    const { recommendLoadBalance } = await import(
+      '../services/address-service/src/routing/routingService.js');
+    const records = fixture();
+    const sigs = new Set();
+    for (const strategy of ['pca', 'hilbert', 'seedVoronoi', 'angular', 'dongGroup']) {
+      const r = recommendLoadBalance({ records, drivers, strategy });
+      sigs.add(JSON.stringify(records.map((x) => r.assignments[x.id] || '-')));
+    }
+    // 전부 같아지면 전략 분기가 죽은 것이다(실측 기준 4가지 이상 갈린다).
+    assert.ok(sigs.size >= 3, `전략을 바꿔도 결과가 ${sigs.size}가지뿐 — 분기가 죽었을 수 있다`);
+  });
+
+  test('모르는 전략 이름은 폴백을 숨기지 않는다', async () => {
+    const { recommendLoadBalance } = await import(
+      '../services/address-service/src/routing/routingService.js');
+    const r = recommendLoadBalance({ records: fixture(), drivers, strategy: 'nope_not_a_strategy' });
+    assert.equal(r.requestedStrategy, 'nope_not_a_strategy');
+    assert.equal(r.strategyFallback, true, '폴백 사실을 알리지 않는다');
+    assert.equal(r.strategy, 'pca', '실제 적용된 전략을 돌려주지 않는다');
+  });
+
+  test('유효 전략은 폴백으로 표시되지 않는다', async () => {
+    const { recommendLoadBalance } = await import(
+      '../services/address-service/src/routing/routingService.js');
+    const r = recommendLoadBalance({ records: fixture(), drivers, strategy: 'seedVoronoi' });
+    assert.equal(r.strategyFallback, false);
+    assert.equal(r.strategy, 'seedVoronoi');
   });
 });

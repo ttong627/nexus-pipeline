@@ -68,6 +68,12 @@ const toAddressResult = (record, confidence = 0.98, source = 'national_address_d
     matchedSigungu: record.sigungu || '',
     buildingMgtNo: record.building_mgt_no || '',
     addressMgtNo: record.address_mgt_no || '',
+    // ★출입구 2차 조회(도로코드+본·부번) 키 — 이걸 안 실어 보내면 findEntrance 의
+    //   2차 경로가 영원히 안 탄다. 건물 매칭 주소는 address_mgt_no 가 비어 있어
+    //   1차 경로도 못 쓰므로, 그 경우 이 키들이 유일한 출입구 조회 수단이다.
+    roadCode: record.road_code || '',
+    undergroundYn: record.underground_yn || '0',
+    legalDongCode: record.legal_dong_code || '',
     isApartment: Boolean(record.is_apartment || /(아파트|주공|임대|LH|SH)/i.test(buildingName)),
     legalDong: record.legal_emd || '',
     roadAddrPart1: record.road_address,
@@ -104,6 +110,9 @@ const exactRoadMatch = async (version, queryText, cityLabel) => {
       a.legal_emd,
       a.building_main_no,
       a.building_sub_no,
+      a.road_code,
+      a.underground_yn,
+      a.legal_dong_code,
       coalesce(nullif(a.building_name, ''), b.building_name, '') AS building_name,
       b.building_mgt_no,
       b.zip_no,
@@ -151,6 +160,9 @@ const exactBuildingRoadMatch = async (version, queryText, cityLabel) => {
       b.legal_emd,
       b.building_main_no,
       b.building_sub_no,
+      b.road_code,
+      b.underground_yn,
+      '' AS legal_dong_code,
       b.building_name,
       b.building_mgt_no,
       b.zip_no,
@@ -206,6 +218,9 @@ const fuzzyMatch = async (version, normalized, cityLabel) => nullOnQueryTimeout(
       a.legal_emd,
       a.building_main_no,
       a.building_sub_no,
+      a.road_code,
+      a.underground_yn,
+      a.legal_dong_code,
       coalesce(nullif(a.building_name, ''), b.building_name, '') AS building_name,
       b.building_mgt_no,
       b.zip_no,
@@ -239,6 +254,9 @@ const buildingMatch = async (version, normalized, cityLabel) => nullOnQueryTimeo
       b.legal_emd,
       b.building_main_no,
       b.building_sub_no,
+      b.road_code,
+      b.underground_yn,
+      '' AS legal_dong_code,
       b.building_name,
       b.building_mgt_no,
       b.zip_no,
@@ -463,21 +481,27 @@ const server = createServer(async (req, res) => {
 
       // 각 조회는 독립이고 하나가 없어도 나머지는 유효하다 → 실패를 전파하지 않고 null 로 떨어뜨린다.
       // (설계서 §연쇄장애: 부가정보 조회 실패가 주소 확정까지 깨뜨리면 안 된다)
-      const safe = (p) => p.catch((error) => {
-        console.error('[delivery-resolve] 부가조회 실패:', error.message);
+      // ★실패를 삼키되 **숨기지는 않는다** — 응답의 coverage 는 "없다"와 "못 읽었다"를
+      //   똑같이 false 로 표시한다. 그러면 DB 장애 중에도 화면은 "정보 없음"으로만 보여
+      //   원인을 영영 못 찾는다. 실패 사유를 응답에 실어 호출부가 구분하게 한다.
+      const lookupErrors = [];
+      const safe = (label, p) => p.catch((error) => {
+        console.error(`[delivery-resolve] ${label} 조회 실패:`, error.message);
+        lookupErrors.push({ source: label, message: String(error.message || error) });
         return null;
       });
       const [entrance, building, cached] = await Promise.all([
-        safe(findEntrance(query, ADDRESS_SCHEMA, {
+        safe('entrance', findEntrance(query, ADDRESS_SCHEMA, {
           addressMgtNo: address.addressMgtNo || address._addressMgtNo || '',
-          roadCode: body.roadCode || '',
-          undergroundYn: body.undergroundYn || '0',
+          // 매칭 결과가 1순위 — 호출부가 도로코드를 알 리 없다(body 는 폴백일 뿐).
+          roadCode: address.roadCode || body.roadCode || '',
+          undergroundYn: address.undergroundYn || body.undergroundYn || '0',
           mainNo: address.buildingMainNo,
           subNo: address.buildingSubNo,
-          legalDongCode: body.legalDongCode || '',
+          legalDongCode: address.legalDongCode || body.legalDongCode || '',
         })),
-        safe(findBuildingExt(query, ADDRESS_SCHEMA, address.buildingMgtNo)),
-        safe(findCachedCoordinate(query, ADDRESS_SCHEMA, {
+        safe('building_ext', findBuildingExt(query, ADDRESS_SCHEMA, address.buildingMgtNo)),
+        safe('coord_cache', findCachedCoordinate(query, ADDRESS_SCHEMA, {
           buildingMgtNo: address.buildingMgtNo,
           standardRoadAddress: address.standardRoadAddress,
         })),
@@ -503,6 +527,9 @@ const server = createServer(async (req, res) => {
           entrance,
           brief,
           navigation: { ...navigation, coordinateSource: coord ? coord.kind : null },
+          // 빈 배열이면 "부가정보가 없다", 값이 있으면 "못 읽었다" — 화면이 구분해 말할 수 있다.
+          lookupErrors,
+          degraded: lookupErrors.length > 0,
         },
       }, headers);
     }

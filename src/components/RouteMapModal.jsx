@@ -8,6 +8,7 @@ import DriverSequenceView from './DriverSequenceView.jsx';
 import DeliveryAccuracyView from './DeliveryAccuracyView.jsx';
 import { formatAddressDisplay } from '../utils/addressFormat.js';
 import { splitByDay, splitBySequence, summarizeDaySplit } from '../engine/deliveryDaySplit.js';
+import { getEffectiveLoad } from '../engine/routeSequenceEngine.js';
 import { annotateCarryover } from '../utils/prevMonthCarryover.js';
 
 const KAKAO_JS_KEY = import.meta.env.VITE_KAKAO_JS_KEY;
@@ -183,35 +184,9 @@ const assessKakaoAreaMatch = (record, raw, cityLabel = '') => {
 };
 const KAKAO_COLOR_MAP = { '#3b82f6':'blue','#f59e0b':'yellow','#ef4444':'red','#8b5cf6':'violet','#06b6d4':'blue','#f97316':'orange','#ec4899':'red','#14b8a6':'green','#a855f7':'violet','#84cc16':'green','#f43f5e':'red','#0ea5e9':'blue','#d97706':'yellow','#10b981':'green','#6366f1':'violet','#e11d48':'red','#0891b2':'blue','#65a30d':'green','#7c3aed':'violet' };
 
-// ── 유효부담 자동 감지 상수 ──────────────────────────────────────────────────
-const RENTAL_KEYWORDS = ['LH', 'SH', '임대', '행복주택', '국민임대', '영구임대', '공공임대', '보금자리', '매입임대'];
-const STAIRS_KEYWORDS = ['빌라', '연립', '다세대', '단독주택'];
-const HEAVY_NOTE_KW   = ['문앞', '거동불편', '직접전달', '현관앞', '직접'];
-const MEDIUM_NOTE_KW  = ['전화필수', '골목', '경비실', '게이트'];
-
-const getEffectiveLoad = (record) => {
-  const qty  = parseInt(record.포수 || record['수량(포수)']) || 1;
-  const addr = record.주소 || '';
-  const note = record.특이사항 || '';
-  const full = [
-    addr,
-    note,
-    record._buildingName,
-    record.buildingName,
-    record._standardRoadAddress,
-    record.standardRoadAddress,
-    record?._routeHints?.apartmentGroupKey,
-    record?.routeHints?.apartmentGroupKey,
-  ].filter(Boolean).join(' ');
-  if (qty >= 20 && RENTAL_KEYWORDS.some(k => full.includes(k))) return qty * 0.3;
-  if (STAIRS_KEYWORDS.some(k => addr.includes(k))) {
-    const fl = parseInt(addr.match(/(\d+)\s*층/)?.[1] || '2');
-    return qty * (1 + Math.min(fl, 5) * 0.1);
-  }
-  if (HEAVY_NOTE_KW.some(k => note.includes(k))) return qty * 1.5;
-  if (MEDIUM_NOTE_KW.some(k => note.includes(k))) return qty * 1.2;
-  return qty;
-};
+// 체감물량(유효부담)은 **엔진 SSOT** 를 쓴다 — 여기 있던 사본이 네 번째였다.
+//   물량배분·순번·지도가 각자 다른 계산을 하면 같은 명단인데 화면마다 부담이 달라진다.
+//   (상수 4종도 엔진에서만 정의된다: RENTAL/STAIRS/HEAVY_NOTE/MEDIUM_NOTE)
 
 const normalizeAptGroupPart = (value) =>
   String(value || '')

@@ -25,7 +25,21 @@ const esc = (s) =>
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
 
+// 공유 링크 만료 검사 — 문서에 expiresAt 이 있으면 지난 링크는 열지 않는다.
+//   ★프론트는 45일 TTL 을 저장하고 "만료 후 재생성" 이라 안내하는데
+//     여기서 검사하지 않아 만료된 링크로도 계속 내려가고 있었다(점검 지적).
+const isShareExpired = (data) => {
+  const exp = data?.expiresAt;
+  if (!exp) return false; // 만료 미설정(구 데이터)은 통과
+  const at = typeof exp.toDate === 'function' ? exp.toDate() : new Date(exp);
+  return !Number.isNaN(at.getTime()) && at.getTime() < Date.now();
+};
+
 // 기사별 배송루트 KML 생성
+//   ★기본 비식별: 이름·휴대폰·특이사항을 넣지 않는다.
+//     KML 은 파일로 떨어져 재배포가 쉬운데(단톡방 전달 등) 이 링크는 무인증이다.
+//     수령인 식별 정보는 인증된 기사앱(ShareRouteView, Firestore 직접 읽기)에서만 본다.
+//     지도 용도(배송지 위치·순번·물량)에는 아래 정보만으로 충분하다.
 const buildKml = (driver, records, city, monthId) => {
   const sorted = [...records].sort(
     (a, b) => (parseInt(a.배송순번) || 9999) - (parseInt(b.배송순번) || 9999)
@@ -35,8 +49,8 @@ const buildKml = (driver, records, city, monthId) => {
     .map(
       (r) => `
   <Placemark>
-    <name>${esc((r.배송순번 ? r.배송순번 + '. ' : '') + (r.이름 || ''))}</name>
-    <description>${esc(r.주소 || '')}${(r.포수 || 1) > 1 ? ` / ${r.포수}포` : ''}${r.특이사항 ? '\n⚠ ' + r.특이사항 : ''}${r.휴대폰 ? '\n📞 ' + r.휴대폰 : ''}</description>
+    <name>${esc(r.배송순번 ? String(r.배송순번) : '배송지')}</name>
+    <description>${esc(r.주소 || '')}${(r.포수 || 1) > 1 ? ` / ${esc(r.포수)}포` : ''}</description>
     <Point><coordinates>${r.lng},${r.lat},0</coordinates></Point>
   </Placemark>`
     )
@@ -91,6 +105,9 @@ exports.api = onRequest(
         }
 
         const data = snap.data();
+        if (isShareExpired(data)) {
+          return res.status(410).json({ error: '만료된 공유 링크입니다. 새 공유 링크를 생성하세요.' });
+        }
         const driver = data.drivers?.find((d) => d.id === driverId);
         if (!driver) {
           return res.status(404).json({ error: '기사 정보를 찾을 수 없습니다.' });
@@ -134,29 +151,34 @@ exports.api = onRequest(
         }
 
         const data = snap.data();
+        if (isShareExpired(data)) {
+          return res.status(410).json({ error: '만료된 공유 링크입니다. 새 공유 링크를 생성하세요.' });
+        }
         const driver = data.drivers?.find((d) => d.id === driverId);
+        // ★기본 비식별(KML 과 동일 기준) — 이름·휴대폰·특이사항을 내려보내지 않는다.
+        //   이 엔드포인트도 shareId·driverId 만 알면 열리는 무인증 경로다.
         const records = (data.records || [])
           .filter((r) => r.driverId === driverId)
           .sort(
             (a, b) => (parseInt(a.배송순번) || 9999) - (parseInt(b.배송순번) || 9999)
           )
-          .map((r) => ({
-            seq: r.배송순번,
-            name: r.이름,
-            address: r.주소,
-            dong: r.행정동,
-            note: r.특이사항,
-            phone: r.휴대폰,
-            qty: r.포수,
-            lat: r.lat,
-            lng: r.lng,
-            kakaoMapUrl: r.lat && r.lng
-              ? `https://map.kakao.com/link/map/${encodeURIComponent((r.이름 || '배송지') + ' ' + (r.주소 || ''))},${r.lat},${r.lng}`
-              : null,
-            kakaoNaviUrl: r.lat && r.lng
-              ? `https://map.kakao.com/link/to/${encodeURIComponent((r.이름 || '배송지') + ' ' + (r.주소 || ''))},${r.lat},${r.lng}`
-              : null,
-          }));
+          .map((r) => {
+            const label = r.배송순번 ? `${r.배송순번}번 배송지` : '배송지';
+            return {
+              seq: r.배송순번,
+              address: r.주소,
+              dong: r.행정동,
+              qty: r.포수,
+              lat: r.lat,
+              lng: r.lng,
+              kakaoMapUrl: r.lat && r.lng
+                ? `https://map.kakao.com/link/map/${encodeURIComponent(label + ' ' + (r.주소 || ''))},${r.lat},${r.lng}`
+                : null,
+              kakaoNaviUrl: r.lat && r.lng
+                ? `https://map.kakao.com/link/to/${encodeURIComponent(label + ' ' + (r.주소 || ''))},${r.lat},${r.lng}`
+                : null,
+            };
+          });
 
         return res.json({
           driver: { id: driver?.id, name: driver?.name, color: driver?.color },

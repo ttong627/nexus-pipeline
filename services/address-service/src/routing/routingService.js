@@ -161,7 +161,11 @@ export function recommendLoadBalance({
 
   return {
     mode: 'recommend',              // 확정은 담당자가 한다
-    strategy,
+    // ★실제로 적용된 전략을 돌려준다 — 요청값을 그대로 되돌려주면, 모르는 이름이
+    //   pca 로 조용히 폴백돼도 호출부는 자기 전략이 적용된 줄 안다.
+    strategy: diagnostics?.strategy || strategy,
+    requestedStrategy: strategy,
+    strategyFallback: Boolean(diagnostics?.strategyFallback),
     assignments: clusterMap,        // recordId → driverId
     perDriver,
     unassigned: normalized.filter((r) => !clusterMap[r.id]).map((r) => r.id),

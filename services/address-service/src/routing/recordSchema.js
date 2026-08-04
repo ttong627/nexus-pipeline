@@ -58,7 +58,12 @@ const firstOf = (record, keys) => {
 
 const numOrNull = (v) => {
   if (v === undefined || v === null || v === '') return null;
-  const n = Number(String(v).replace(/[^\d.-]/g, ''));
+  // ★숫자가 아닌 문자를 전부 지우면 '12포2개' 가 '122' 로 붙어버린다(10~40배 과대).
+  //   한 기사에게 물량이 몰리는 원인이 되므로 **처음 나오는 수 하나**만 취한다.
+  //   천단위 콤마는 지우고 본다('1,200' → 1200).
+  const m = String(v).replace(/,/g, '').match(/-?\d+(?:\.\d+)?/);
+  if (!m) return null;
+  const n = Number(m[0]);
   return Number.isFinite(n) ? n : null;
 };
 
@@ -111,9 +116,42 @@ export function toEngineRecord(record) {
   return out;
 }
 
+/**
+ * 배분 결과는 `clusterMap[record.id]` 로 담긴다 — id 가 비었거나 겹치면
+ * 그 배송건은 **아무 기사에게도 배정되지 않거나 남의 배정을 덮어쓴다**.
+ * 예외도 경고도 없이 사라지므로("그 집만 안 왔다") 경계에서 고유 id 를 보장한다.
+ * 원본 id 는 `_sourceId` 로 남겨 호출부가 원래 값을 되찾을 수 있다.
+ */
+export function ensureUniqueIds(list) {
+  const seen = new Set();
+  let filled = 0;
+  let deduped = 0;
+  list.forEach((rec, i) => {
+    if (!rec || typeof rec !== 'object') return;
+    const raw = rec.id;
+    const key = raw === undefined || raw === null || raw === '' ? '' : String(raw);
+    if (!key) {
+      rec._sourceId = raw ?? null;
+      rec.id = `__row${i}`;
+      filled += 1;
+    } else if (seen.has(key)) {
+      rec._sourceId = raw;
+      rec.id = `${key}__row${i}`;
+      deduped += 1;
+    } else {
+      seen.add(key);
+      return;
+    }
+    seen.add(String(rec.id));
+  });
+  return { filled, deduped };
+}
+
 /** 목록 정규화. */
 export function toEngineRecords(records) {
-  return (Array.isArray(records) ? records : []).map(toEngineRecord);
+  const list = (Array.isArray(records) ? records : []).map(toEngineRecord);
+  ensureUniqueIds(list);
+  return list;
 }
 
 /**
@@ -134,7 +172,9 @@ export function toLoadBalanceRecord(record) {
 }
 
 export function toLoadBalanceRecords(records) {
-  return (Array.isArray(records) ? records : []).map(toLoadBalanceRecord);
+  const list = (Array.isArray(records) ? records : []).map(toLoadBalanceRecord);
+  ensureUniqueIds(list);
+  return list;
 }
 
 /**
@@ -148,13 +188,21 @@ export function describeNormalization(records) {
   const list = Array.isArray(records) ? records : [];
   const report = {
     total: list.length, withAddress: 0, withLoad: 0, withCoord: 0, missingAddress: [],
+    // ★배정 키(id) 위생 — 비었거나 겹치면 배송건이 조용히 유실된다.
+    missingId: 0, duplicateId: 0,
   };
+  const seenId = new Set();
   list.forEach((raw, i) => {
     const rec = toEngineRecord(raw);
     if (rec['주소']) report.withAddress += 1;
     else if (report.missingAddress.length < 20) report.missingAddress.push(i);
     if (rec['포수'] !== undefined) report.withLoad += 1;
     if (Number.isFinite(rec.lat) && Number.isFinite(rec.lng)) report.withCoord += 1;
+    const rawId = raw && typeof raw === 'object' ? raw.id : undefined;
+    const key = rawId === undefined || rawId === null || rawId === '' ? '' : String(rawId);
+    if (!key) report.missingId += 1;
+    else if (seenId.has(key)) report.duplicateId += 1;
+    else seenId.add(key);
   });
   return report;
 }

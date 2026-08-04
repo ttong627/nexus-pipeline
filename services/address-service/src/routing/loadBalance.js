@@ -1035,6 +1035,11 @@ const computeAutoSplit = ({ target, noCoordRecs = [], allRecords, activeDrivers,
     coordFailCount,
   });
 
+  // ★모르는 전략 이름은 조용히 'pca' 로 폴백된다. 그 사실을 알리지 않으면
+  //   호출부는 자기가 고른 전략이 적용된 줄 안다(응답이 요청값을 그대로 돌려줬다).
+  diagnostics.requestedStrategy = strategy;
+  diagnostics.strategyFallback = !VALID_STRATEGIES.has(strategy);
+
   return { clusterMap, diagnostics };
 };
 
