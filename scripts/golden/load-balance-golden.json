@@ -1,0 +1,269 @@
+{
+  "generatedAt": null,
+  "cases": {
+    "pca": {
+      "clusterMap": {
+        "R12": "D1",
+        "R1": "D1",
+        "R2": "D1",
+        "R3": "D1",
+        "R11": "D1",
+        "R4": "D1",
+        "R5": "D1",
+        "R6": "D1",
+        "R10": "D1",
+        "R9": "D2",
+        "R7": "D3",
+        "R8": "D3",
+        "R90": "D3"
+      },
+      "perDriver": {
+        "D1": 9,
+        "D2": 1,
+        "D3": 3
+      },
+      "assigned": 13,
+      "diagnosticsKeys": [
+        "aptRatioStats",
+        "boundaryUnitCount",
+        "coordFailCount",
+        "dongPurity",
+        "forcedAssignCount",
+        "guide",
+        "hasPins",
+        "islandCount",
+        "issues",
+        "largeCplexOnBoundary",
+        "load",
+        "mandatoryUnitCount",
+        "mixedUnitCount",
+        "qualityScore",
+        "roadSideMixCount",
+        "roadStats",
+        "splitUnitCount",
+        "strategy",
+        "unitCount"
+      ]
+    },
+    "hilbert": {
+      "clusterMap": {
+        "R12": "D1",
+        "R2": "D1",
+        "R1": "D1",
+        "R3": "D1",
+        "R4": "D1",
+        "R5": "D1",
+        "R6": "D1",
+        "R10": "D1",
+        "R11": "D1",
+        "R9": "D2",
+        "R7": "D3",
+        "R8": "D3",
+        "R90": "D3"
+      },
+      "perDriver": {
+        "D1": 9,
+        "D2": 1,
+        "D3": 3
+      },
+      "assigned": 13,
+      "diagnosticsKeys": [
+        "aptRatioStats",
+        "boundaryUnitCount",
+        "coordFailCount",
+        "dongPurity",
+        "forcedAssignCount",
+        "guide",
+        "hasPins",
+        "islandCount",
+        "issues",
+        "largeCplexOnBoundary",
+        "load",
+        "mandatoryUnitCount",
+        "mixedUnitCount",
+        "qualityScore",
+        "roadSideMixCount",
+        "roadStats",
+        "splitUnitCount",
+        "strategy",
+        "unitCount"
+      ]
+    },
+    "bestOfPcaHilbert": {
+      "clusterMap": {
+        "R12": "D1",
+        "R1": "D1",
+        "R2": "D1",
+        "R3": "D1",
+        "R11": "D1",
+        "R4": "D1",
+        "R5": "D1",
+        "R6": "D1",
+        "R10": "D1",
+        "R9": "D2",
+        "R7": "D3",
+        "R8": "D3",
+        "R90": "D3"
+      },
+      "perDriver": {
+        "D1": 9,
+        "D2": 1,
+        "D3": 3
+      },
+      "assigned": 13,
+      "diagnosticsKeys": [
+        "aptRatioStats",
+        "boundaryUnitCount",
+        "coordFailCount",
+        "dongPurity",
+        "forcedAssignCount",
+        "guide",
+        "hasPins",
+        "islandCount",
+        "issues",
+        "largeCplexOnBoundary",
+        "load",
+        "mandatoryUnitCount",
+        "mixedUnitCount",
+        "qualityScore",
+        "roadSideMixCount",
+        "roadStats",
+        "splitUnitCount",
+        "strategy",
+        "unitCount"
+      ]
+    },
+    "seedVoronoi": {
+      "clusterMap": {
+        "R1": "D1",
+        "R2": "D1",
+        "R3": "D1",
+        "R4": "D1",
+        "R5": "D1",
+        "R6": "D1",
+        "R7": "D3",
+        "R8": "D3",
+        "R9": "D2",
+        "R10": "D1",
+        "R11": "D1",
+        "R12": "D1",
+        "R90": "D3"
+      },
+      "perDriver": {
+        "D1": 9,
+        "D3": 3,
+        "D2": 1
+      },
+      "assigned": 13,
+      "diagnosticsKeys": [
+        "aptRatioStats",
+        "boundaryUnitCount",
+        "coordFailCount",
+        "dongPurity",
+        "forcedAssignCount",
+        "guide",
+        "hasPins",
+        "islandCount",
+        "issues",
+        "largeCplexOnBoundary",
+        "load",
+        "mandatoryUnitCount",
+        "mixedUnitCount",
+        "qualityScore",
+        "roadSideMixCount",
+        "roadStats",
+        "splitUnitCount",
+        "strategy",
+        "unitCount"
+      ]
+    },
+    "angular": {
+      "clusterMap": {
+        "R9": "D1",
+        "R7": "D2",
+        "R8": "D2",
+        "R10": "D3",
+        "R11": "D3",
+        "R3": "D3",
+        "R2": "D3",
+        "R6": "D3",
+        "R1": "D3",
+        "R12": "D3",
+        "R4": "D3",
+        "R5": "D3",
+        "R90": "D2"
+      },
+      "perDriver": {
+        "D1": 1,
+        "D2": 3,
+        "D3": 9
+      },
+      "assigned": 13,
+      "diagnosticsKeys": [
+        "aptRatioStats",
+        "boundaryUnitCount",
+        "coordFailCount",
+        "dongPurity",
+        "forcedAssignCount",
+        "guide",
+        "hasPins",
+        "islandCount",
+        "issues",
+        "largeCplexOnBoundary",
+        "load",
+        "mandatoryUnitCount",
+        "mixedUnitCount",
+        "qualityScore",
+        "roadSideMixCount",
+        "roadStats",
+        "splitUnitCount",
+        "strategy",
+        "unitCount"
+      ]
+    },
+    "dongGroup": {
+      "clusterMap": {
+        "R9": "D1",
+        "R7": "D2",
+        "R8": "D2",
+        "R10": "D3",
+        "R11": "D3",
+        "R3": "D3",
+        "R2": "D3",
+        "R6": "D3",
+        "R1": "D3",
+        "R12": "D3",
+        "R4": "D3",
+        "R5": "D3",
+        "R90": "D2"
+      },
+      "perDriver": {
+        "D1": 1,
+        "D2": 3,
+        "D3": 9
+      },
+      "assigned": 13,
+      "diagnosticsKeys": [
+        "aptRatioStats",
+        "boundaryUnitCount",
+        "coordFailCount",
+        "dongPurity",
+        "forcedAssignCount",
+        "guide",
+        "hasPins",
+        "islandCount",
+        "issues",
+        "largeCplexOnBoundary",
+        "load",
+        "mandatoryUnitCount",
+        "mixedUnitCount",
+        "qualityScore",
+        "roadSideMixCount",
+        "roadStats",
+        "splitUnitCount",
+        "strategy",
+        "unitCount"
+      ]
+    }
+  }
+}

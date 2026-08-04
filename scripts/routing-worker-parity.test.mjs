@@ -40,7 +40,10 @@ let engine;
 let close;
 
 before(async () => {
-  workerSrc = await readFile(path.join(ROOT, 'src/workers/routeWorker.js'), 'utf8');
+  // ★2026-08-04: 배분 로직이 워커에서 코어(loadBalance.js)로 이관됐다.
+  //   복제 검사 대상도 그리로 옮긴다 — 워커는 이제 22줄짜리 껍데기다.
+  workerSrc = await readFile(
+    path.join(ROOT, 'services/address-service/src/routing/loadBalance.js'), 'utf8');
   const loaded = await loadClientModule('/src/engine/routeSequenceEngine.js');
   engine = loaded.mod;
   close = loaded.close;
@@ -51,16 +54,16 @@ after(async () => {
 });
 
 describe('복제가 제거된 상태를 잠근다', () => {
-  test('워커가 엔진을 import 한다', () => {
-    assert.ok(/import\s*\{[\s\S]*?\}\s*from\s*['"]\.\.\/engine\/routeSequenceEngine\.js['"]/.test(workerSrc),
-      '워커가 엔진을 import 하지 않는다 — 복제로 되돌아갔을 수 있다');
+  test('loadBalance 가 엔진을 import 한다', () => {
+    assert.ok(/import\s*\{[\s\S]*?\}\s*from\s*['"]\.\/routeSequenceEngine\.js['"]/.test(workerSrc),
+      'loadBalance 가 엔진을 import 하지 않는다 — 복제로 되돌아갔을 수 있다');
   });
 
-  test('★엔진에서 가져와야 할 것을 워커가 다시 정의하지 않는다', () => {
+  test('★엔진에서 가져와야 할 것을 다시 정의하지 않는다', () => {
     for (const name of MUST_IMPORT) {
       assert.ok(
         !new RegExp(`^const\\s+${name}\\s*=`, 'm').test(workerSrc),
-        `워커에 ${name} 재정의가 생겼다 — 복제가 부활했다. 엔진에서 import 할 것`,
+        `loadBalance 에 ${name} 재정의가 생겼다 — 복제가 부활했다. 엔진에서 import 할 것`,
       );
       assert.ok(
         new RegExp(`\\b${name}\\b`).test(workerSrc.split('\n').slice(0, 40).join('\n')),
@@ -76,7 +79,7 @@ describe('복제가 제거된 상태를 잠근다', () => {
   });
 });
 
-describe('★계약 어댑터 — 워커는 레코드로 부른다', () => {
+describe('★계약 어댑터 — 배분 엔진은 레코드로 부른다', () => {
   /** 워커 어댑터가 조합하는 것과 **같은 순서**로 텍스트를 만든다. */
   const adapterText = (record) => [
     record?._detailAddress, record?.detailAddress, record?.주소, record?.특이사항,

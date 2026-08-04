@@ -5,7 +5,7 @@ import { cleanText, formatRoadLookupQuery, normalizeSearchKey, parseRoadNumber, 
 import { geocodeRoad, matchDongCoord, parseDongNo } from './vworld.js';
 import { createPurifier } from './purify.js';
 import {
-  distanceMeters, recommendDaySplit, recommendSequence, sequenceUnits,
+  distanceMeters, recommendDaySplit, recommendLoadBalance, recommendSequence, sequenceUnits,
 } from './routing/routingService.js';
 import { buildDeliveryBrief, pickCoordinate } from './delivery/deliveryBrief.js';
 import {
@@ -520,6 +520,17 @@ const server = createServer(async (req, res) => {
             maxLoadPerDay: body.maxLoadPerDay ?? null,
             maxPerDay: body.maxPerDay ?? null,
             depot: body.depot ?? null,
+          }),
+        }, headers);
+      }
+      if (action === 'load-balance') {
+        return json(res, 200, {
+          ok: true,
+          data: recommendLoadBalance({
+            records,
+            drivers: body.drivers || [],
+            driverPins: body.driverPins || {},
+            strategy: body.strategy || 'pca',
           }),
         }, headers);
       }

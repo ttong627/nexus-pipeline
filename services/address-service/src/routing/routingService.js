@@ -16,10 +16,11 @@
  *   응답에 `mode: 'recommend'` 를 실어 소비자가 이를 UI 에 드러내게 한다.
  */
 import {
-  buildSequenceUnits, haversine, improvedSequence, measureSequence,
+  buildSequenceUnits, getEffectiveLoad, haversine, improvedSequence, measureSequence,
 } from './routeSequenceEngine.js';
 import { splitByDay, splitBySequence, summarizeDaySplit } from './deliveryDaySplit.js';
-import { describeNormalization, toEngineRecords } from './recordSchema.js';
+import { computeAutoSplit } from './loadBalance.js';
+import { describeNormalization, toEngineRecords, toLoadBalanceRecords } from './recordSchema.js';
 
 /** 좌표가 있는 건만 순번 대상이다. 없는 건은 버리지 않고 뒤에 붙여 돌려준다. */
 const partitionByCoord = (records) => {
@@ -106,6 +107,65 @@ export function recommendDaySplit({
     mode: 'recommend',
     result,
     summary: summarizeDaySplit(normalized),
+    normalization: describeNormalization(records),
+  };
+}
+
+/**
+ * 물량배분 추천 — 기사별로 체감물량을 균등하게 나눈다(모듈 ⑦ 마지막 조각).
+ *
+ * ★"체감물량"이 핵심이다. 단순 건수가 아니라 임대 20포↑ 할인·계단 층당 가중·특이사항 가중을
+ *   반영한 실제 노동량으로 나눈다. 그래서 건수는 달라도 기사 부담은 비슷해진다.
+ *
+ * 전략 6종: pca(주성분 축) · hilbert(공간채움곡선) · bestOfPcaHilbert(편차 적은 쪽 자동선택) ·
+ *          seedVoronoi(기사 핀 기준) · angular(각도) · dongGroup(행정동 보존)
+ *
+ * @param {object} input
+ *   - records: 배송건(스키마 자유 — 정규화가 흡수)
+ *   - drivers: [{id, name}] 활성 기사
+ *   - driverPins: {driverId: {lat,lng}} 기사별 기준점(seedVoronoi 용)
+ *   - strategy: 위 6종 중 하나(모르는 값이면 pca 폴백)
+ */
+export function recommendLoadBalance({
+  records = [], drivers = [], driverPins = {}, strategy = 'pca',
+} = {}) {
+  const activeDrivers = (Array.isArray(drivers) ? drivers : []).filter((d) => d && d.id);
+  if (!activeDrivers.length) {
+    return { mode: 'recommend', error: 'no_drivers', assignments: {}, perDriver: {} };
+  }
+
+  const normalized = toLoadBalanceRecords(records);
+  const { withCoord, withoutCoord } = partitionByCoord(
+    normalized.map((r) => ({ ...r, lat: r._lat, lng: r._lng })),
+  );
+
+  const { clusterMap, diagnostics } = computeAutoSplit({
+    target: withCoord,
+    noCoordRecs: withoutCoord,
+    allRecords: normalized,
+    activeDrivers,
+    driverPins: driverPins || {},
+    strategy,
+  });
+
+  // 기사별 건수·체감물량 요약 — 숫자가 있어야 사람이 배분을 검토할 수 있다.
+  const perDriver = {};
+  for (const rec of normalized) {
+    const did = clusterMap[rec.id];
+    if (!did) continue;
+    if (!perDriver[did]) perDriver[did] = { count: 0, load: 0 };
+    perDriver[did].count += 1;
+    perDriver[did].load += getEffectiveLoad(rec);
+  }
+  for (const v of Object.values(perDriver)) v.load = Number(v.load.toFixed(2));
+
+  return {
+    mode: 'recommend',              // 확정은 담당자가 한다
+    strategy,
+    assignments: clusterMap,        // recordId → driverId
+    perDriver,
+    unassigned: normalized.filter((r) => !clusterMap[r.id]).map((r) => r.id),
+    diagnostics,
     normalization: describeNormalization(records),
   };
 }

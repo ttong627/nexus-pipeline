@@ -117,6 +117,27 @@ export function toEngineRecords(records) {
 }
 
 /**
+ * 물량배분(loadBalance)용 추가 변환.
+ *
+ * ★배분 엔진은 좌표를 `_lat`·`_lng`(언더스코어 접두)로 읽는다 — nexus 명단이 정제 결과를
+ *   그 이름으로 싣기 때문이다. 일반 `lat`/`lng` 로 주면 **좌표가 없다고 판단해 전건이
+ *   배분에서 빠진다**(예외가 아니라 조용히). 그래서 경계에서 한 번 더 맞춰준다.
+ *   ⚠️원본 `_lat` 이 있으면 그걸 우선한다(정제된 좌표가 더 정확하다).
+ */
+export function toLoadBalanceRecord(record) {
+  const rec = toEngineRecord(record);
+  const lat = rec._lat ?? rec.lat;
+  const lng = rec._lng ?? rec.lng;
+  if (Number.isFinite(Number(lat))) rec._lat = Number(lat);
+  if (Number.isFinite(Number(lng))) rec._lng = Number(lng);
+  return rec;
+}
+
+export function toLoadBalanceRecords(records) {
+  return (Array.isArray(records) ? records : []).map(toLoadBalanceRecord);
+}
+
+/**
  * 정규화가 실제로 무엇을 채웠는지 보고한다.
  *
  * ★조용한 실패를 막는 장치다. 주소를 못 찾았는데 그냥 넘어가면 순번이 엉망이 되고

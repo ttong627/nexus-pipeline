@@ -13,7 +13,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
-  distanceMeters, recommendDaySplit, recommendSequence, sequenceUnits,
+  distanceMeters, recommendDaySplit, recommendLoadBalance, recommendSequence, sequenceUnits,
 } from '../src/routing/routingService.js';
 
 /** 영문 키 명단 — 스캐폴드가 생성하는 배송 프로그램이 쓰는 스키마다. */
@@ -117,4 +117,49 @@ test('원본 필드가 순번 결과에 보존된다 — 호출부가 자기 데
     assert.ok(rec.id !== undefined, 'id 가 사라졌다');
     assert.ok(rec.address !== undefined, '원본 address 가 사라졌다');
   }
+});
+
+/* ── 물량배분 (모듈 ⑦ 마지막 조각, 2026-08-04 승격) ────────────── */
+
+const DRIVERS = [{ id: 'D1', name: '기사1' }, { id: 'D2', name: '기사2' }];
+
+test('물량배분 — 영문 키로 와도 배분된다(정규화가 걸려 있다)', () => {
+  const out = recommendLoadBalance({ records: ENGLISH, drivers: DRIVERS, strategy: 'pca' });
+  assert.equal(out.mode, 'recommend');
+  assert.equal(Object.keys(out.assignments).length, ENGLISH.length, '배정에서 빠진 건이 있다');
+  for (const did of Object.values(out.assignments)) {
+    assert.ok(['D1', 'D2'].includes(did), `알 수 없는 기사에 배정: ${did}`);
+  }
+});
+
+test('★체감물량으로 나눈다 — 단순 건수가 아니다', () => {
+  // LH 임대 25포는 0.3배 할인(엘리베이터로 한 번에 올린다), 계단·특이사항은 가중.
+  const heavy = [
+    { id: 'A', address: '경기 부천시 중동로 100', qty: 2, lat: 37.5030, lng: 126.7660 },
+    { id: 'B', address: '경기 부천시 성주로 20 LH국민임대 105동', qty: 25, lat: 37.4901, lng: 126.7810 },
+  ];
+  const out = recommendLoadBalance({ records: heavy, drivers: DRIVERS, strategy: 'pca' });
+  const loads = Object.values(out.perDriver).map((v) => v.load);
+  assert.ok(loads.every((l) => l > 0), '체감물량이 계산되지 않았다');
+  // 25포가 그대로 25로 잡히면 할인 규칙이 죽은 것이다
+  assert.ok(Math.max(...loads) < 25, '임대 할인(0.3배)이 반영되지 않았다');
+});
+
+test('기사가 없으면 터지지 않고 이유를 말한다', () => {
+  const out = recommendLoadBalance({ records: ENGLISH, drivers: [] });
+  assert.equal(out.error, 'no_drivers');
+  assert.deepEqual(out.assignments, {});
+});
+
+test('전략 6종이 전부 동작한다', () => {
+  for (const strategy of ['pca', 'hilbert', 'bestOfPcaHilbert', 'seedVoronoi', 'angular', 'dongGroup']) {
+    const out = recommendLoadBalance({ records: ENGLISH, drivers: DRIVERS, strategy });
+    assert.equal(Object.keys(out.assignments).length, ENGLISH.length, `${strategy} 실패`);
+  }
+});
+
+test('진단 정보가 함께 온다 — 사람이 배분을 검토할 수 있어야 한다', () => {
+  const out = recommendLoadBalance({ records: ENGLISH, drivers: DRIVERS });
+  assert.ok(out.diagnostics !== undefined);
+  assert.ok(out.perDriver.D1 || out.perDriver.D2, '기사별 요약이 없다');
 });

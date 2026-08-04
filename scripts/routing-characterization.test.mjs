@@ -253,24 +253,30 @@ describe('배송일 분할 — 코어 승격 대상 ⑦', () => {
   });
 });
 
-describe('★복제 제거 완료 — 워커가 엔진을 쓴다', () => {
-  test('워커에 순수함수 복제가 없고 엔진을 import 한다', async () => {
+describe('★복제 제거 완료 — 배분 코어가 엔진을 쓴다', () => {
+  test('배분 코어에 순수함수 복제가 없고 엔진을 import 한다', async () => {
     const { readFile } = await import('node:fs/promises');
     const { fileURLToPath } = await import('node:url');
     const path = await import('node:path');
     const root = path.resolve(fileURLToPath(new URL('../', import.meta.url)));
-    const workerSrc = await readFile(path.join(root, 'src/workers/routeWorker.js'), 'utf8');
 
-    // ⚠️이 테스트는 원래 "복제가 있다"를 고정하고 있었다(2026-08-03 오전).
-    //   복제를 제거하면서 실패했고, **그 실패가 작업이 실제로 일어났다는 증거**였다.
-    //   지금은 반대로 "복제가 없다"를 잠근다. 자세한 검증은 routing-worker-parity.test.mjs.
-    assert.ok(/from\s*['"]\.\.\/engine\/routeSequenceEngine\.js['"]/.test(workerSrc),
-      '워커가 엔진을 import 하지 않는다');
+    // ⚠️이 테스트는 두 번 갱신됐고, 그 갱신 자체가 진척의 기록이다.
+    //   ①"워커에 복제가 있다"(2026-08-03 오전) → 복제 제거로 실패
+    //   ②"워커가 엔진을 import 한다"          → 배분 로직이 코어로 이관되며 실패
+    //   지금은 코어 모듈(loadBalance.js)이 검사 대상이다. 워커는 22줄 껍데기가 됐다.
+    const coreSrc = await readFile(
+      path.join(root, 'services/address-service/src/routing/loadBalance.js'), 'utf8');
+    assert.ok(/from\s*['"]\.\/routeSequenceEngine\.js['"]/.test(coreSrc),
+      '배분 코어가 엔진을 import 하지 않는다');
     for (const fn of ['haversine', 'getEffectiveLoad', 'extractRoadAddress']) {
-      assert.ok(!new RegExp(`^const\\s+${fn}\\s*=`, 'm').test(workerSrc),
-        `워커에 ${fn} 복제가 부활했다`);
+      assert.ok(!new RegExp(`^const\s+${fn}\s*=`, 'm').test(coreSrc),
+        `배분 코어에 ${fn} 복제가 부활했다`);
     }
-    // parseAptDong 은 계약이 달라 어댑터로 남는다(레코드 → 텍스트 → 엔진).
-    assert.ok(/parseAptDongFromText/.test(workerSrc), '어댑터가 엔진 로직에 위임해야 한다');
+    assert.ok(/parseAptDongFromText/.test(coreSrc), '어댑터가 엔진 로직에 위임해야 한다');
+
+    // 워커는 껍데기 — 로직이 남아 있으면 이관이 덜 된 것이다
+    const workerSrc = await readFile(path.join(root, 'src/workers/routeWorker.js'), 'utf8');
+    assert.ok(workerSrc.split(/\r?\n/).length < 40, '워커가 다시 뚱뚱해졌다');
+    assert.ok(/loadBalance\.js/.test(workerSrc), '워커가 배분 코어를 import 하지 않는다');
   });
 });
