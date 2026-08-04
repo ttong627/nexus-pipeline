@@ -10,6 +10,7 @@ import {
 import { buildDeliveryBrief, pickCoordinate } from './delivery/deliveryBrief.js';
 import { buildNavigationLinks } from './routing/navigation.js';
 import { summarizeDrivers, validateAssignment } from './routing/driverCore.js';
+import { buildGeoJson, buildKml, buildMapPayload } from './routing/mapExport.js';
 import {
   collectCoordinates, findBuildingExt, findCachedCoordinate, findEntrance,
 } from './delivery/resolveDelivery.js';
@@ -550,6 +551,28 @@ const server = createServer(async (req, res) => {
         return json(res, 200, { ok: true, data: distanceMeters({ from: body.from, to: body.to }) }, headers);
       }
       return json(res, 404, { ok: false, error: `알 수 없는 routing 동작: ${action}` }, headers);
+    }
+    // ★배송지도 내보내기(모듈 ⑩) — 화면이 아니라 **데이터**를 코어가 만든다.
+    //   앱마다 지도 화면은 달라도 KML/GeoJSON 규격은 하나여야 한다.
+    //   ★★기본은 비식별이다. 수령인 이름·연락처는 includeContact 를 명시해야만 들어가고,
+    //     들어가면 piiIncluded=true 로 알린다(KML 은 링크로 공유되는 파일이다).
+    if (req.method === 'POST' && url.pathname.startsWith('/v1/map/')) {
+      const body = await readBody(req);
+      const records = Array.isArray(body.records) ? body.records : [];
+      if (records.length > 5000) {
+        return json(res, 413, { ok: false, error: '한 번에 5000건까지 처리합니다.' }, headers);
+      }
+      const opts = {
+        records,
+        title: body.title || '배송경로',
+        color: body.color || '#3b82f6',
+        includeContact: body.includeContact === true,   // ★명시적 true 만 허용
+      };
+      const action = url.pathname.slice('/v1/map/'.length);
+      if (action === 'kml') return json(res, 200, { ok: true, data: buildKml(opts) }, headers);
+      if (action === 'geojson') return json(res, 200, { ok: true, data: buildGeoJson(opts) }, headers);
+      if (action === 'payload') return json(res, 200, { ok: true, data: buildMapPayload(opts) }, headers);
+      return json(res, 404, { ok: false, error: `알 수 없는 map 동작: ${action}` }, headers);
     }
     // ★기사 관리(모듈 ⑧) — 코어는 기사 명부를 저장하지 않는다(각 앱이 자기 DB에 갖고 있다).
     //   코어가 주는 건 **판단**이다: 누가 얼마나 지고 있는가, 배정이 규칙을 어겼는가.
