@@ -8,6 +8,7 @@ import {
   distanceMeters, recommendDaySplit, recommendLoadBalance, recommendSequence, sequenceUnits,
 } from './routing/routingService.js';
 import { buildDeliveryBrief, pickCoordinate } from './delivery/deliveryBrief.js';
+import { buildNavigationLinks } from './routing/navigation.js';
 import {
   collectCoordinates, findBuildingExt, findCachedCoordinate, findEntrance,
 } from './delivery/resolveDelivery.js';
@@ -482,6 +483,15 @@ const server = createServer(async (req, res) => {
 
       const coord = pickCoordinate(collectCoordinates(entrance, cached));
       const brief = buildDeliveryBrief({ address, coord, building, entrance });
+      // ★네비 링크를 함께 싣는다 — 기사앱이 한 번 호출로 "어디로·어떻게 갈지"를 다 얻는다.
+      //   코어가 고른 좌표(국가 출입구 우선)로 만들므로, 앱이 추정 좌표로 안내할 일이 없다.
+      const navigation = buildNavigationLinks({
+        lat: coord ? coord.lat : null,
+        lng: coord ? coord.lng : null,
+        // ⚠️수령인 이름을 넣지 않는다(PII) — 링크는 외부 앱·히스토리에 남는다.
+        name: (building && building.building_name) || address.buildingName || '',
+        address: address.standardRoadAddress || '',
+      });
       return json(res, 200, {
         ok: true,
         data: {
@@ -490,6 +500,7 @@ const server = createServer(async (req, res) => {
           building,
           entrance,
           brief,
+          navigation: { ...navigation, coordinateSource: coord ? coord.kind : null },
         },
       }, headers);
     }
@@ -538,6 +549,16 @@ const server = createServer(async (req, res) => {
         return json(res, 200, { ok: true, data: distanceMeters({ from: body.from, to: body.to }) }, headers);
       }
       return json(res, 404, { ok: false, error: `알 수 없는 routing 동작: ${action}` }, headers);
+    }
+    // 좌표를 이미 아는 호출부용(순번 결과를 그대로 넘기는 경우 등).
+    if (req.method === 'POST' && url.pathname === '/v1/navigation/links') {
+      const body = await readBody(req);
+      return json(res, 200, {
+        ok: true,
+        data: buildNavigationLinks({
+          lat: body.lat, lng: body.lng, name: body.name || '', address: body.address || '',
+        }),
+      }, headers);
     }
     if (req.method === 'POST' && url.pathname === '/v1/address/geocode') {
       const body = await readBody(req);
