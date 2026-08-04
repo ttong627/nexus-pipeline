@@ -11,8 +11,8 @@
     "import": "node src/import-job.js",
     "juso:scan": "node scripts/scan-juso-entrc.mjs",
     "juso:load": "node scripts/load-juso-entrc.mjs",
-    "juso:test": "node --test scripts/entrc-parser.test.mjs scripts/entrc-reader.test.mjs scripts/tm-projection.test.mjs scripts/entrance-loader.test.mjs scripts/delivery-brief.test.mjs scripts/record-schema.test.mjs",
-    "check": "node --check src/server.js && node --check src/import-job.js && node --check src/entrance/entrcParser.js && node --check src/entrance/entrcReader.js && node --check src/entrance/coordGuard.js && node --check src/entrance/entranceLoader.js && node --check src/shared/tmProjection.js && node --check src/routing/recordSchema.js"
+    "juso:test": "node --test scripts/entrc-parser.test.mjs scripts/entrc-reader.test.mjs scripts/tm-projection.test.mjs scripts/entrance-loader.test.mjs scripts/delivery-brief.test.mjs scripts/record-schema.test.mjs scripts/routing-service.test.mjs",
+    "check": "node --check src/server.js && node --check src/import-job.js && node --check src/entrance/entrcParser.js && node --check src/entrance/entrcReader.js && node --check src/entrance/coordGuard.js && node --check src/entrance/entranceLoader.js && node --check src/shared/tmProjection.js && node --check src/routing/recordSchema.js && node --check src/routing/routingService.js && node --check src/routing/routeSequenceEngine.js && node --check src/routing/deliveryDaySplit.js"
   },
   "dependencies": {
     "@google-cloud/storage": "^7.16.0",

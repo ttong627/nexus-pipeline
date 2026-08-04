@@ -4,6 +4,9 @@ import { query } from './db.js';
 import { cleanText, formatRoadLookupQuery, normalizeSearchKey, parseRoadNumber, roadSideKey } from './normalize.js';
 import { geocodeRoad, matchDongCoord, parseDongNo } from './vworld.js';
 import { createPurifier } from './purify.js';
+import {
+  distanceMeters, recommendDaySplit, recommendSequence, sequenceUnits,
+} from './routing/routingService.js';
 import { buildDeliveryBrief, pickCoordinate } from './delivery/deliveryBrief.js';
 import {
   collectCoordinates, findBuildingExt, findCachedCoordinate, findEntrance,
@@ -489,6 +492,41 @@ const server = createServer(async (req, res) => {
           brief,
         },
       }, headers);
+    }
+    // ★배송 순번·일정 코어(모듈 ⑦) — 클라 전용이던 엔진을 서버로 승격해 노출한다.
+    //   여기까지 와야 스튜디오 생성물에 순번·일자분할이 이식된다.
+    //   ⚠️DB 를 쓰지 않으므로 Cloud SQL 부하는 없지만, CPU 는 쓴다 → 건수 상한을 둔다.
+    if (req.method === 'POST' && url.pathname.startsWith('/v1/routing/')) {
+      const body = await readBody(req);
+      const records = Array.isArray(body.records) ? body.records : [];
+      // 상한 근거: 한 기사 하루 배송이 수백 건이다. 2,000건이면 여러 기사·여러 날을 한 번에
+      // 넣는 규모라 배치로 처리해야 한다(순번 알고리즘은 건수의 제곱에 가깝게 무거워진다).
+      if (records.length > 2000) {
+        return json(res, 413, { ok: false, error: '한 번에 2000건까지 처리합니다.' }, headers);
+      }
+      const action = url.pathname.slice('/v1/routing/'.length);
+      if (action === 'sequence') {
+        return json(res, 200, { ok: true, data: recommendSequence({ records, depot: body.depot }) }, headers);
+      }
+      if (action === 'units') {
+        return json(res, 200, { ok: true, data: sequenceUnits({ records }) }, headers);
+      }
+      if (action === 'day-split') {
+        return json(res, 200, {
+          ok: true,
+          data: recommendDaySplit({
+            records,
+            numDays: body.numDays ?? null,
+            maxLoadPerDay: body.maxLoadPerDay ?? null,
+            maxPerDay: body.maxPerDay ?? null,
+            depot: body.depot ?? null,
+          }),
+        }, headers);
+      }
+      if (action === 'distance') {
+        return json(res, 200, { ok: true, data: distanceMeters({ from: body.from, to: body.to }) }, headers);
+      }
+      return json(res, 404, { ok: false, error: `알 수 없는 routing 동작: ${action}` }, headers);
     }
     if (req.method === 'POST' && url.pathname === '/v1/address/geocode') {
       const body = await readBody(req);
