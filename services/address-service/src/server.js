@@ -9,6 +9,7 @@ import {
 } from './routing/routingService.js';
 import { buildDeliveryBrief, pickCoordinate } from './delivery/deliveryBrief.js';
 import { buildNavigationLinks } from './routing/navigation.js';
+import { summarizeDrivers, validateAssignment } from './routing/driverCore.js';
 import {
   collectCoordinates, findBuildingExt, findCachedCoordinate, findEntrance,
 } from './delivery/resolveDelivery.js';
@@ -549,6 +550,27 @@ const server = createServer(async (req, res) => {
         return json(res, 200, { ok: true, data: distanceMeters({ from: body.from, to: body.to }) }, headers);
       }
       return json(res, 404, { ok: false, error: `알 수 없는 routing 동작: ${action}` }, headers);
+    }
+    // ★기사 관리(모듈 ⑧) — 코어는 기사 명부를 저장하지 않는다(각 앱이 자기 DB에 갖고 있다).
+    //   코어가 주는 건 **판단**이다: 누가 얼마나 지고 있는가, 배정이 규칙을 어겼는가.
+    if (req.method === 'POST' && url.pathname.startsWith('/v1/drivers/')) {
+      const body = await readBody(req);
+      const records = Array.isArray(body.records) ? body.records : [];
+      if (records.length > 5000) {
+        return json(res, 413, { ok: false, error: '한 번에 5000건까지 처리합니다.' }, headers);
+      }
+      const action = url.pathname.slice('/v1/drivers/'.length);
+      if (action === 'summary') {
+        return json(res, 200, {
+          ok: true, data: summarizeDrivers({ records, drivers: body.drivers || [] }),
+        }, headers);
+      }
+      if (action === 'validate') {
+        return json(res, 200, {
+          ok: true, data: validateAssignment({ records, drivers: body.drivers || [] }),
+        }, headers);
+      }
+      return json(res, 404, { ok: false, error: `알 수 없는 drivers 동작: ${action}` }, headers);
     }
     // 좌표를 이미 아는 호출부용(순번 결과를 그대로 넘기는 경우 등).
     if (req.method === 'POST' && url.pathname === '/v1/navigation/links') {
