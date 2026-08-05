@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { db } from '../config/firebase.js';
 import { doc, onSnapshot, updateDoc, deleteField } from 'firebase/firestore';
 import { MapPin, List, Map as MapIcon, RefreshCw, Building2, Phone, ChevronUp, ChevronDown, Navigation, Crosshair, Star, X, AlertCircle, Share2, CheckCircle2 } from 'lucide-react';
+import { verifyDeliveryPositionApi } from '../engine/addressEngine.js';
 import { haversineKm } from '../engine/coordValidator.js';
 
 const KAKAO_JS_KEY = import.meta.env.VITE_KAKAO_JS_KEY;
@@ -509,6 +510,17 @@ export default function ShareRouteView({ shareId, driverId }) {
         const errM = (hasGps && hasDong)
           ? Math.round(haversineKm(loc.lat, loc.lng, dLat, dLng) * 1000)
           : null;
+        // 코어 판정(REQ-027) — 지금까지는 오차(errM)를 **기록만** 하고 판정이 없었다.
+        // ★★완료를 막지 않는다: 실패·미설정·좌표없음이면 null 이고 아래 저장은 그대로 진행된다.
+        //   판정 임계값은 코어에만 둔다(여기서 다시 정하면 두 곳이 곧 갈라진다).
+        let posCheck = null;
+        if (hasGps && hasDong) {
+          posCheck = await verifyDeliveryPositionApi({
+            siteLat: dLat, siteLng: dLng,
+            actualLat: loc.lat, actualLng: loc.lng,
+            accuracyM: loc.accuracy ?? null,
+          });
+        }
         await updateDoc(doc(db, 'route_shares', shareId), {
           [`completions.${r._uid}`]: {
             at: new Date().toISOString(),
@@ -520,6 +532,9 @@ export default function ShareRouteView({ shareId, driverId }) {
             dongLat: hasDong ? dLat : null,
             dongLng: hasDong ? dLng : null,
             errM,
+            // 코어 판정 결과(ok/far/unverifiable). 못 받았으면 null — 위반이 아니라 '판정 없음'이다.
+            verdict: posCheck?.verdict || null,
+            verdictDistanceM: Number.isFinite(posCheck?.distanceM) ? posCheck.distanceM : null,
           },
         });
       }
