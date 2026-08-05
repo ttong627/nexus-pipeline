@@ -8,6 +8,7 @@ import {
   distanceMeters, recommendDaySplit, recommendLoadBalance, recommendSequence, sequenceUnits,
 } from './routing/routingService.js';
 import { buildDeliveryBrief, pickCoordinate } from './delivery/deliveryBrief.js';
+import { verifyDeliveryPosition } from './delivery/positionCheck.js';
 import { buildNavigationLinks } from './routing/navigation.js';
 import { summarizeDrivers, validateAssignment } from './routing/driverCore.js';
 import { buildGeoJson, buildKml, buildMapPayload } from './routing/mapExport.js';
@@ -469,6 +470,21 @@ const server = createServer(async (req, res) => {
     // ★적재해둔 국가 데이터를 실제로 꺼내 쓰는 자리(설계서 P4 ⓔ "조회 연결").
     //   출입구 좌표 1,281만 건을 적재하고도 읽는 코드가 0건이었다. 여기서 해소한다.
     //   match(주소 확정) → entrance_core(측량 좌표) → building_ext(엘베·층) → 기사용 브리프.
+    // 배송완료 위치 검증(REQ-027) — 배송지에 가지 않고 완료를 누르는 것을 잡는다.
+    // ★코어는 판정만 한다. 완료를 막을지는 호출자가 정한다(현장을 멈추는 것이 더 큰 사고일 수 있다).
+    // ★DB 를 쓰지 않는 순수 계산이라 부하가 없다.
+    if (req.method === 'POST' && url.pathname === '/v1/delivery/verify-position') {
+      const body = await readBody(req);
+      const data = verifyDeliveryPosition({
+        siteLat: body.siteLat,
+        siteLng: body.siteLng,
+        actualLat: body.actualLat,
+        actualLng: body.actualLng,
+        accuracyM: body.accuracyM,
+        thresholdM: body.thresholdM,
+      });
+      return json(res, 200, { ok: true, data }, headers);
+    }
     if (req.method === 'POST' && url.pathname === '/v1/delivery/resolve') {
       const body = await readBody(req);
       const address = await matchAddress({
