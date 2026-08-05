@@ -27,15 +27,20 @@ export const getPool = () => {
 //   왜 필요한가: 퍼지·건물명 트리그램이 60~76초 돌며 커넥션을 붙잡는 사례를 실측했고,
 //   클라는 3초에 abort하므로 그 시간은 **아무도 기다리지 않는 순수 낭비**이면서
 //   다른 요청을 500(pool connect timeout)으로 만든다.
-export const query = async (text, values = []) => {
+// options.timeoutMs — 이 쿼리에만 다른 상한을 건다.
+//   ★폴백(퍼지·건물명)은 **클라가 3초에 abort** 하므로 15초까지 붙잡는 건 순수 낭비다.
+//     실측(2026-08-05): buildingMatch 가 상한 15초를 다 쓰고 미매칭 처리됐다
+//     (`[slow-query] query=15008ms`). 그동안 커넥션을 점유해 다른 요청을 위험하게 만든다.
+export const query = async (text, values = [], options = {}) => {
   const t0 = Date.now();
   const client = await getPool().connect();
   const tConn = Date.now();                       // 커넥션 획득 완료 시각
   let tPath = tConn;
   try {
     await client.query(`SET search_path TO ${config.dbSchema}, public`);
-    if (config.statementTimeoutMs > 0) {
-      await client.query(`SET statement_timeout = ${Number(config.statementTimeoutMs)}`);
+    const limitMs = Number(options.timeoutMs ?? config.statementTimeoutMs);
+    if (limitMs > 0) {
+      await client.query(`SET statement_timeout = ${limitMs}`);
     }
     tPath = Date.now();                           // SET search_path 완료 시각
     return await client.query(text, values);

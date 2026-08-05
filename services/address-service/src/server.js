@@ -239,7 +239,7 @@ const fuzzyMatch = async (version, normalized, cityLabel) => nullOnQueryTimeout(
       AND ($3 = '' OR concat_ws(' ', a.sido, a.sigungu) ILIKE '%' || $3 || '%')
     ORDER BY score DESC, length(a.road_address) ASC
     LIMIT 5
-  `, [version, normalized, cleanText(cityLabel)]);
+  `, [version, normalized, cleanText(cityLabel)], { timeoutMs: config.fallbackTimeoutMs });
   const winner = rows[0];
   return winner && Number(winner.score) >= 0.42 ? winner : null;
 });
@@ -272,7 +272,7 @@ const buildingMatch = async (version, normalized, cityLabel) => nullOnQueryTimeo
       AND ($3 = '' OR concat_ws(' ', b.sido, b.sigungu) ILIKE '%' || $3 || '%')
     ORDER BY score DESC, b.is_apartment DESC, length(b.road_address) ASC
     LIMIT 5
-  `, [version, normalized, cleanText(cityLabel)]);
+  `, [version, normalized, cleanText(cityLabel)], { timeoutMs: config.fallbackTimeoutMs });
   const winner = rows[0];
   return winner && Number(winner.score) >= 0.45 ? winner : null;
 });
