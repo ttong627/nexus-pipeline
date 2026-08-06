@@ -1,5 +1,5 @@
 ﻿import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { X, MapPin, Navigation2, Plus, Minus, RefreshCw, Save, AlertTriangle, Map as MapIcon, List, Building2, Clock, FileSpreadsheet, Download, HardDrive, Maximize2, Minimize2, Columns, AlertCircle, Search, Crosshair, Share2, Link, Eraser, ArrowLeftRight, ChevronLeft, User, Satellite, Grid3x3, Target } from 'lucide-react';
+import { X, MapPin, Navigation2, Plus, Minus, RefreshCw, Save, AlertTriangle, Map as MapIcon, List, Building2, Clock, FileSpreadsheet, Download, HardDrive, Maximize2, Minimize2, Columns, AlertCircle, Search, Crosshair, Share2, Link, Eraser, ArrowLeftRight, ChevronLeft, User, Satellite, Grid3x3, Target, Box } from 'lucide-react';
 import { db, auth } from '../config/firebase.js';
 import { collection, serverTimestamp, Timestamp, getDocs, getDoc, setDoc, updateDoc, doc, writeBatch, query, where, limit, increment } from 'firebase/firestore';
 import * as XLSX from 'xlsx';
@@ -8,6 +8,8 @@ import DriverSequenceView from './DriverSequenceView.jsx';
 import DeliveryAccuracyView from './DeliveryAccuracyView.jsx';
 import { formatAddressDisplay } from '../utils/addressFormat.js';
 import { splitByDay, splitBySequence, summarizeDaySplit } from '../engine/deliveryDaySplit.js';
+import { getEffectiveLoad } from '../engine/routeSequenceEngine.js';
+import Vworld3DView from './Vworld3DView.jsx';
 import { annotateCarryover } from '../utils/prevMonthCarryover.js';
 
 const KAKAO_JS_KEY = import.meta.env.VITE_KAKAO_JS_KEY;
@@ -183,35 +185,9 @@ const assessKakaoAreaMatch = (record, raw, cityLabel = '') => {
 };
 const KAKAO_COLOR_MAP = { '#3b82f6':'blue','#f59e0b':'yellow','#ef4444':'red','#8b5cf6':'violet','#06b6d4':'blue','#f97316':'orange','#ec4899':'red','#14b8a6':'green','#a855f7':'violet','#84cc16':'green','#f43f5e':'red','#0ea5e9':'blue','#d97706':'yellow','#10b981':'green','#6366f1':'violet','#e11d48':'red','#0891b2':'blue','#65a30d':'green','#7c3aed':'violet' };
 
-// ── 유효부담 자동 감지 상수 ──────────────────────────────────────────────────
-const RENTAL_KEYWORDS = ['LH', 'SH', '임대', '행복주택', '국민임대', '영구임대', '공공임대', '보금자리', '매입임대'];
-const STAIRS_KEYWORDS = ['빌라', '연립', '다세대', '단독주택'];
-const HEAVY_NOTE_KW   = ['문앞', '거동불편', '직접전달', '현관앞', '직접'];
-const MEDIUM_NOTE_KW  = ['전화필수', '골목', '경비실', '게이트'];
-
-const getEffectiveLoad = (record) => {
-  const qty  = parseInt(record.포수 || record['수량(포수)']) || 1;
-  const addr = record.주소 || '';
-  const note = record.특이사항 || '';
-  const full = [
-    addr,
-    note,
-    record._buildingName,
-    record.buildingName,
-    record._standardRoadAddress,
-    record.standardRoadAddress,
-    record?._routeHints?.apartmentGroupKey,
-    record?.routeHints?.apartmentGroupKey,
-  ].filter(Boolean).join(' ');
-  if (qty >= 20 && RENTAL_KEYWORDS.some(k => full.includes(k))) return qty * 0.3;
-  if (STAIRS_KEYWORDS.some(k => addr.includes(k))) {
-    const fl = parseInt(addr.match(/(\d+)\s*층/)?.[1] || '2');
-    return qty * (1 + Math.min(fl, 5) * 0.1);
-  }
-  if (HEAVY_NOTE_KW.some(k => note.includes(k))) return qty * 1.5;
-  if (MEDIUM_NOTE_KW.some(k => note.includes(k))) return qty * 1.2;
-  return qty;
-};
+// 체감물량(유효부담)은 **엔진 SSOT** 를 쓴다 — 여기 있던 사본이 네 번째였다.
+//   물량배분·순번·지도가 각자 다른 계산을 하면 같은 명단인데 화면마다 부담이 달라진다.
+//   (상수 4종도 엔진에서만 정의된다: RENTAL/STAIRS/HEAVY_NOTE/MEDIUM_NOTE)
 
 const normalizeAptGroupPart = (value) =>
   String(value || '')
@@ -1172,6 +1148,12 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
   const [cloudMonthId, setCloudMonthId] = useState('');
   const [carryMap, setCarryMap] = useState({}); // ⑥ 전월 승계: id → { _isNew, _prevDriver, _prevSeqNo, _carryAmbiguous }
   const [mapType, setMapType] = useState('roadmap');       // 배경지도: roadmap(일반) | hybrid(위성)
+  // ── V월드 3D 입체 지도 ──────────────────────────────────────────────────
+  //   ⭐역할 분담: **2D·위성·핀·순번 편집 = 카카오**(편집 기능이 전부 거기 붙어 있다)
+  //               **3D 조망 = V월드**(카카오맵은 지도 기울기를 지원하지 않는다)
+  //   ⛔3D 에서 순번을 편집하지 않는다 — 「어느 동인지·어디로 들어가는지」를 눈으로 보는 용도.
+  const [show3D, setShow3D] = useState(false);
+  const [view3DTarget, setView3DTarget] = useState(null);
   const [showCadastral, setShowCadastral] = useState(false); // 지적편집도 오버레이(카카오 USE_DISTRICT)
   const [isLoadingCloud, setIsLoadingCloud] = useState(false);
   const [isSavingCloud, setIsSavingCloud] = useState(false);
@@ -4367,6 +4349,29 @@ ${folders}
               <Satellite size={10} /> 위성
             </button>
             <button
+              onClick={() => {
+                // 보던 자리를 그대로 3D 로 연다 — 다시 찾아가게 만들지 않는다.
+                const c = kakaoMapRef.current?.getCenter?.();
+                const first = filteredRecords.find(r => r._lat && r._lng);
+                setView3DTarget(
+                  c ? { lat: c.getLat(), lng: c.getLng(), name: activeDong || '지도 중심' }
+                    : first ? {
+                      lat: Number(first._lat), lng: Number(first._lng),
+                      name: first.이름 || '', addr: first.주소 || '',
+                    } : null,
+                );
+                setShow3D(v => !v);
+              }}
+              title="V월드 3D 입체 지도 — 건물 높이·단지 배치를 눈으로 확인(카카오맵은 기울기 미지원)"
+              className={`px-2 py-1 rounded-lg text-[10px] font-bold flex items-center gap-1 border transition-colors ${
+                show3D
+                  ? 'bg-sky-500/15 border-sky-400/40 text-sky-300'
+                  : 'bg-[#0d1620] border-sky-500/25 text-sky-400 hover:bg-sky-900/20'
+              }`}
+            >
+              <Box size={10} /> 3D
+            </button>
+            <button
               onClick={() => setShowCadastral(v => !v)}
               title="지적편집도(필지 경계) 오버레이 표시"
               className={`px-2 py-1 rounded-lg text-[10px] font-bold flex items-center gap-1 border transition-colors ${
@@ -5159,6 +5164,16 @@ ${folders}
               onClick={() => samePointPopup && setSamePointPopup(null)}
               style={{ cursor: placingPinForDriver ? 'crosshair' : undefined }}
             >
+              {/* ── V월드 3D 조망 — 카카오 지도 위에 덮는다(끄면 그대로 2D 로 돌아온다).
+                     ⛔한 번 켠 뒤에는 DOM 을 유지한다(Vworld3DView 내부 규칙) — 재진입이 즉시다.
+                     페인트 인터셉터(z-200)보다 위에 둬야 3D 중에 지도 클릭이 새지 않는다. */}
+              <div className="absolute inset-0 z-[250]" style={{ pointerEvents: show3D ? 'auto' : 'none' }}>
+                <Vworld3DView
+                  active={show3D}
+                  target={view3DTarget}
+                  onExit={() => setShow3D(false)}
+                />
+              </div>
               {/* ── 페인트 브러시 인터셉터: 지도 위를 완전히 덮어 카카오맵 이벤트 차단 */}
               {isPaintMode && (
                 <div

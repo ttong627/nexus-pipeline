@@ -4,6 +4,17 @@ import { query } from './db.js';
 import { cleanText, formatRoadLookupQuery, normalizeSearchKey, parseRoadNumber, roadSideKey } from './normalize.js';
 import { geocodeRoad, matchDongCoord, parseDongNo } from './vworld.js';
 import { createPurifier } from './purify.js';
+import {
+  distanceMeters, recommendDaySplit, recommendLoadBalance, recommendSequence, sequenceUnits,
+} from './routing/routingService.js';
+import { buildDeliveryBrief, pickCoordinate } from './delivery/deliveryBrief.js';
+import { verifyDeliveryPosition } from './delivery/positionCheck.js';
+import { buildNavigationLinks } from './routing/navigation.js';
+import { summarizeDrivers, validateAssignment } from './routing/driverCore.js';
+import { buildGeoJson, buildKml, buildMapPayload } from './routing/mapExport.js';
+import {
+  collectCoordinates, findBuildingExt, findCachedCoordinate, findEntrance,
+} from './delivery/resolveDelivery.js';
 
 const ADDRESS_SCHEMA = config.dbSchema;
 let currentJusoKey = 0;
@@ -58,6 +69,12 @@ const toAddressResult = (record, confidence = 0.98, source = 'national_address_d
     matchedSigungu: record.sigungu || '',
     buildingMgtNo: record.building_mgt_no || '',
     addressMgtNo: record.address_mgt_no || '',
+    // ★출입구 2차 조회(도로코드+본·부번) 키 — 이걸 안 실어 보내면 findEntrance 의
+    //   2차 경로가 영원히 안 탄다. 건물 매칭 주소는 address_mgt_no 가 비어 있어
+    //   1차 경로도 못 쓰므로, 그 경우 이 키들이 유일한 출입구 조회 수단이다.
+    roadCode: record.road_code || '',
+    undergroundYn: record.underground_yn || '0',
+    legalDongCode: record.legal_dong_code || '',
     isApartment: Boolean(record.is_apartment || /(아파트|주공|임대|LH|SH)/i.test(buildingName)),
     legalDong: record.legal_emd || '',
     roadAddrPart1: record.road_address,
@@ -94,6 +111,9 @@ const exactRoadMatch = async (version, queryText, cityLabel) => {
       a.legal_emd,
       a.building_main_no,
       a.building_sub_no,
+      a.road_code,
+      a.underground_yn,
+      a.legal_dong_code,
       coalesce(nullif(a.building_name, ''), b.building_name, '') AS building_name,
       b.building_mgt_no,
       b.zip_no,
@@ -141,6 +161,9 @@ const exactBuildingRoadMatch = async (version, queryText, cityLabel) => {
       b.legal_emd,
       b.building_main_no,
       b.building_sub_no,
+      b.road_code,
+      b.underground_yn,
+      '' AS legal_dong_code,
       b.building_name,
       b.building_mgt_no,
       b.zip_no,
@@ -196,6 +219,9 @@ const fuzzyMatch = async (version, normalized, cityLabel) => nullOnQueryTimeout(
       a.legal_emd,
       a.building_main_no,
       a.building_sub_no,
+      a.road_code,
+      a.underground_yn,
+      a.legal_dong_code,
       coalesce(nullif(a.building_name, ''), b.building_name, '') AS building_name,
       b.building_mgt_no,
       b.zip_no,
@@ -213,7 +239,7 @@ const fuzzyMatch = async (version, normalized, cityLabel) => nullOnQueryTimeout(
       AND ($3 = '' OR concat_ws(' ', a.sido, a.sigungu) ILIKE '%' || $3 || '%')
     ORDER BY score DESC, length(a.road_address) ASC
     LIMIT 5
-  `, [version, normalized, cleanText(cityLabel)]);
+  `, [version, normalized, cleanText(cityLabel)], { timeoutMs: config.fallbackTimeoutMs });
   const winner = rows[0];
   return winner && Number(winner.score) >= 0.42 ? winner : null;
 });
@@ -229,6 +255,9 @@ const buildingMatch = async (version, normalized, cityLabel) => nullOnQueryTimeo
       b.legal_emd,
       b.building_main_no,
       b.building_sub_no,
+      b.road_code,
+      b.underground_yn,
+      '' AS legal_dong_code,
       b.building_name,
       b.building_mgt_no,
       b.zip_no,
@@ -243,7 +272,7 @@ const buildingMatch = async (version, normalized, cityLabel) => nullOnQueryTimeo
       AND ($3 = '' OR concat_ws(' ', b.sido, b.sigungu) ILIKE '%' || $3 || '%')
     ORDER BY score DESC, b.is_apartment DESC, length(b.road_address) ASC
     LIMIT 5
-  `, [version, normalized, cleanText(cityLabel)]);
+  `, [version, normalized, cleanText(cityLabel)], { timeoutMs: config.fallbackTimeoutMs });
   const winner = rows[0];
   return winner && Number(winner.score) >= 0.45 ? winner : null;
 });
@@ -437,6 +466,187 @@ const server = createServer(async (req, res) => {
         allowJusoFallback: body.allowJusoFallback !== false,
       });
       return json(res, data ? 200 : 404, { ok: Boolean(data), data }, headers);
+    }
+    // ★적재해둔 국가 데이터를 실제로 꺼내 쓰는 자리(설계서 P4 ⓔ "조회 연결").
+    //   출입구 좌표 1,281만 건을 적재하고도 읽는 코드가 0건이었다. 여기서 해소한다.
+    //   match(주소 확정) → entrance_core(측량 좌표) → building_ext(엘베·층) → 기사용 브리프.
+    // 배송완료 위치 검증(REQ-027) — 배송지에 가지 않고 완료를 누르는 것을 잡는다.
+    // ★코어는 판정만 한다. 완료를 막을지는 호출자가 정한다(현장을 멈추는 것이 더 큰 사고일 수 있다).
+    // ★DB 를 쓰지 않는 순수 계산이라 부하가 없다.
+    if (req.method === 'POST' && url.pathname === '/v1/delivery/verify-position') {
+      const body = await readBody(req);
+      const data = verifyDeliveryPosition({
+        siteLat: body.siteLat,
+        siteLng: body.siteLng,
+        actualLat: body.actualLat,
+        actualLng: body.actualLng,
+        accuracyM: body.accuracyM,
+        thresholdM: body.thresholdM,
+      });
+      return json(res, 200, { ok: true, data }, headers);
+    }
+    if (req.method === 'POST' && url.pathname === '/v1/delivery/resolve') {
+      const body = await readBody(req);
+      const address = await matchAddress({
+        queryText: body.query || body.address || '',
+        cityLabel: body.cityLabel || '',
+        version: body.version || config.activeVersion,
+        allowJusoFallback: body.allowJusoFallback !== false,
+      });
+      if (!address) return json(res, 404, { ok: false, data: null }, headers);
+
+      // 각 조회는 독립이고 하나가 없어도 나머지는 유효하다 → 실패를 전파하지 않고 null 로 떨어뜨린다.
+      // (설계서 §연쇄장애: 부가정보 조회 실패가 주소 확정까지 깨뜨리면 안 된다)
+      // ★실패를 삼키되 **숨기지는 않는다** — 응답의 coverage 는 "없다"와 "못 읽었다"를
+      //   똑같이 false 로 표시한다. 그러면 DB 장애 중에도 화면은 "정보 없음"으로만 보여
+      //   원인을 영영 못 찾는다. 실패 사유를 응답에 실어 호출부가 구분하게 한다.
+      const lookupErrors = [];
+      const safe = (label, p) => p.catch((error) => {
+        console.error(`[delivery-resolve] ${label} 조회 실패:`, error.message);
+        lookupErrors.push({ source: label, message: String(error.message || error) });
+        return null;
+      });
+      const [entrance, building, cached] = await Promise.all([
+        safe('entrance', findEntrance(query, ADDRESS_SCHEMA, {
+          addressMgtNo: address.addressMgtNo || address._addressMgtNo || '',
+          // 매칭 결과가 1순위 — 호출부가 도로코드를 알 리 없다(body 는 폴백일 뿐).
+          roadCode: address.roadCode || body.roadCode || '',
+          undergroundYn: address.undergroundYn || body.undergroundYn || '0',
+          mainNo: address.buildingMainNo,
+          subNo: address.buildingSubNo,
+          legalDongCode: address.legalDongCode || body.legalDongCode || '',
+        })),
+        safe('building_ext', findBuildingExt(query, ADDRESS_SCHEMA, address.buildingMgtNo)),
+        safe('coord_cache', findCachedCoordinate(query, ADDRESS_SCHEMA, {
+          buildingMgtNo: address.buildingMgtNo,
+          standardRoadAddress: address.standardRoadAddress,
+        })),
+      ]);
+
+      const coord = pickCoordinate(collectCoordinates(entrance, cached));
+      const brief = buildDeliveryBrief({ address, coord, building, entrance });
+      // ★네비 링크를 함께 싣는다 — 기사앱이 한 번 호출로 "어디로·어떻게 갈지"를 다 얻는다.
+      //   코어가 고른 좌표(국가 출입구 우선)로 만들므로, 앱이 추정 좌표로 안내할 일이 없다.
+      const navigation = buildNavigationLinks({
+        lat: coord ? coord.lat : null,
+        lng: coord ? coord.lng : null,
+        // ⚠️수령인 이름을 넣지 않는다(PII) — 링크는 외부 앱·히스토리에 남는다.
+        name: (building && building.building_name) || address.buildingName || '',
+        address: address.standardRoadAddress || '',
+      });
+      return json(res, 200, {
+        ok: true,
+        data: {
+          address,
+          coordinate: coord,
+          building,
+          entrance,
+          brief,
+          navigation: { ...navigation, coordinateSource: coord ? coord.kind : null },
+          // 빈 배열이면 "부가정보가 없다", 값이 있으면 "못 읽었다" — 화면이 구분해 말할 수 있다.
+          lookupErrors,
+          degraded: lookupErrors.length > 0,
+        },
+      }, headers);
+    }
+    // ★배송 순번·일정 코어(모듈 ⑦) — 클라 전용이던 엔진을 서버로 승격해 노출한다.
+    //   여기까지 와야 스튜디오 생성물에 순번·일자분할이 이식된다.
+    //   ⚠️DB 를 쓰지 않으므로 Cloud SQL 부하는 없지만, CPU 는 쓴다 → 건수 상한을 둔다.
+    if (req.method === 'POST' && url.pathname.startsWith('/v1/routing/')) {
+      const body = await readBody(req);
+      const records = Array.isArray(body.records) ? body.records : [];
+      // 상한 근거: 한 기사 하루 배송이 수백 건이다. 2,000건이면 여러 기사·여러 날을 한 번에
+      // 넣는 규모라 배치로 처리해야 한다(순번 알고리즘은 건수의 제곱에 가깝게 무거워진다).
+      if (records.length > 2000) {
+        return json(res, 413, { ok: false, error: '한 번에 2000건까지 처리합니다.' }, headers);
+      }
+      const action = url.pathname.slice('/v1/routing/'.length);
+      if (action === 'sequence') {
+        return json(res, 200, { ok: true, data: recommendSequence({ records, depot: body.depot }) }, headers);
+      }
+      if (action === 'units') {
+        return json(res, 200, { ok: true, data: sequenceUnits({ records }) }, headers);
+      }
+      if (action === 'day-split') {
+        return json(res, 200, {
+          ok: true,
+          data: recommendDaySplit({
+            records,
+            numDays: body.numDays ?? null,
+            maxLoadPerDay: body.maxLoadPerDay ?? null,
+            maxPerDay: body.maxPerDay ?? null,
+            depot: body.depot ?? null,
+          }),
+        }, headers);
+      }
+      if (action === 'load-balance') {
+        return json(res, 200, {
+          ok: true,
+          data: recommendLoadBalance({
+            records,
+            drivers: body.drivers || [],
+            driverPins: body.driverPins || {},
+            strategy: body.strategy || 'pca',
+          }),
+        }, headers);
+      }
+      if (action === 'distance') {
+        return json(res, 200, { ok: true, data: distanceMeters({ from: body.from, to: body.to }) }, headers);
+      }
+      return json(res, 404, { ok: false, error: `알 수 없는 routing 동작: ${action}` }, headers);
+    }
+    // ★배송지도 내보내기(모듈 ⑩) — 화면이 아니라 **데이터**를 코어가 만든다.
+    //   앱마다 지도 화면은 달라도 KML/GeoJSON 규격은 하나여야 한다.
+    //   ★★기본은 비식별이다. 수령인 이름·연락처는 includeContact 를 명시해야만 들어가고,
+    //     들어가면 piiIncluded=true 로 알린다(KML 은 링크로 공유되는 파일이다).
+    if (req.method === 'POST' && url.pathname.startsWith('/v1/map/')) {
+      const body = await readBody(req);
+      const records = Array.isArray(body.records) ? body.records : [];
+      if (records.length > 5000) {
+        return json(res, 413, { ok: false, error: '한 번에 5000건까지 처리합니다.' }, headers);
+      }
+      const opts = {
+        records,
+        title: body.title || '배송경로',
+        color: body.color || '#3b82f6',
+        includeContact: body.includeContact === true,   // ★명시적 true 만 허용
+      };
+      const action = url.pathname.slice('/v1/map/'.length);
+      if (action === 'kml') return json(res, 200, { ok: true, data: buildKml(opts) }, headers);
+      if (action === 'geojson') return json(res, 200, { ok: true, data: buildGeoJson(opts) }, headers);
+      if (action === 'payload') return json(res, 200, { ok: true, data: buildMapPayload(opts) }, headers);
+      return json(res, 404, { ok: false, error: `알 수 없는 map 동작: ${action}` }, headers);
+    }
+    // ★기사 관리(모듈 ⑧) — 코어는 기사 명부를 저장하지 않는다(각 앱이 자기 DB에 갖고 있다).
+    //   코어가 주는 건 **판단**이다: 누가 얼마나 지고 있는가, 배정이 규칙을 어겼는가.
+    if (req.method === 'POST' && url.pathname.startsWith('/v1/drivers/')) {
+      const body = await readBody(req);
+      const records = Array.isArray(body.records) ? body.records : [];
+      if (records.length > 5000) {
+        return json(res, 413, { ok: false, error: '한 번에 5000건까지 처리합니다.' }, headers);
+      }
+      const action = url.pathname.slice('/v1/drivers/'.length);
+      if (action === 'summary') {
+        return json(res, 200, {
+          ok: true, data: summarizeDrivers({ records, drivers: body.drivers || [] }),
+        }, headers);
+      }
+      if (action === 'validate') {
+        return json(res, 200, {
+          ok: true, data: validateAssignment({ records, drivers: body.drivers || [] }),
+        }, headers);
+      }
+      return json(res, 404, { ok: false, error: `알 수 없는 drivers 동작: ${action}` }, headers);
+    }
+    // 좌표를 이미 아는 호출부용(순번 결과를 그대로 넘기는 경우 등).
+    if (req.method === 'POST' && url.pathname === '/v1/navigation/links') {
+      const body = await readBody(req);
+      return json(res, 200, {
+        ok: true,
+        data: buildNavigationLinks({
+          lat: body.lat, lng: body.lng, name: body.name || '', address: body.address || '',
+        }),
+      }, headers);
     }
     if (req.method === 'POST' && url.pathname === '/v1/address/geocode') {
       const body = await readBody(req);

@@ -26,6 +26,9 @@ export const config = {
   //   ⚠️ import-job은 `withClient`만 쓰므로 대량 적재·CREATE INDEX·ANALYZE는 영향받지 않는다.
   //   값 근거: 정상 쿼리 0.01~1초, 부하 중 관측 최대 11.4초 → 15초면 정상은 살리고 폭주만 끊는다.
   statementTimeoutMs: Number.parseInt(process.env.ADDRESS_STATEMENT_TIMEOUT_MS || '15000', 10),
+  // 퍼지·건물명 **폴백 전용** 상한. 클라이언트가 3초에 abort 하므로 그보다 오래 붙잡을 이유가 없다.
+  // exact 매칭(7~14ms)에는 적용하지 않는다 — 거기서 상한에 걸리면 그건 진짜 이상 신호다.
+  fallbackTimeoutMs: Number.parseInt(process.env.ADDRESS_FALLBACK_TIMEOUT_MS || '2500', 10),
   // P7 Phase2 ⓐ: 학습사전(Firestore) 로더. ADC를 쓰므로 키파일은 없다 —
   // 프로젝트는 보통 런타임이 알려주지만(GOOGLE_CLOUD_PROJECT), 명시 지정도 허용한다.
   firebaseProjectId: process.env.FIREBASE_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || '',

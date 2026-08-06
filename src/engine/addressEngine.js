@@ -241,6 +241,28 @@ const fetchAddressServiceCoord = async (roadAddr, buildingMgtNo = '') => {
   }
 };
 
+// ── 배송완료 위치 검증 (코어 /v1/delivery/verify-position) ───────────
+// 배송지에 가지 않고 완료를 눌렀는지 **코어가 판정**한다. 여기서 임계값을 다시 정하지 않는다
+// (판정 규칙을 두 곳에 두면 곧 갈라진다).
+//
+// ★★완료를 막지 않는다 — 실패·미설정이면 조용히 null 을 돌려주고 호출부는 그대로 완료한다.
+//   기사가 현장에서 배송을 못 끝내게 만드는 쪽이 오배송보다 더 큰 사고다.
+export const verifyDeliveryPositionApi = async ({ siteLat, siteLng, actualLat, actualLng, accuracyM }) => {
+  if (!ADDRESS_MATCH_API_URL) return null;
+  try {
+    const res = await fetchWithTimeout(`${ADDRESS_MATCH_API_URL}/v1/delivery/verify-position`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ siteLat, siteLng, actualLat, actualLng, accuracyM }),
+    }, COORD_SERVICE_TIMEOUT_MS);
+    if (!res.ok) return null;
+    const json = await res.json();
+    return json?.ok ? (json.data || null) : null;
+  } catch {
+    return null;
+  }
+};
+
 const fetchKakaoCoord = async (roadAddr, cityPrefix = '', buildingMgtNo = '') => {
   if (!roadAddr) return null;
   // JUSO roadAddr은 이미 전체 주소(도시명 포함) → 접두어 중복 추가 불필요

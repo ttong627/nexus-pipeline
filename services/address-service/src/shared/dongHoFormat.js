@@ -17,10 +17,12 @@
 // 호 표기('호')가 없는 대시(101-203)는 지번과 구분 불가라 대상에서 제외한다.
 export const DONG_DASH_HO_SRC = '\\d{3,4}\\s*-\\s*(?:(?:지하|[Bb])?\\s*\\d+\\s*층\\s*)?(?:제\\s*)?\\d{3,4}\\s*호';
 
-/** 호수 4자리 우측정렬 패딩 — 정렬 시 302 < 1008 자연정렬 */
+/** 호수 4자리 우측정렬 패딩 — 정렬 시 302 < 1008 자연정렬
+ *  @param {string|number} ho */
 const padHo = (ho) => `${' '.repeat(Math.max(0, 4 - String(ho).length))}${ho}`;
 
-/** 층 표기 조립 — 없으면 빈 문자열 */
+/** 층 표기 조립 — 없으면 빈 문자열
+ *  @param {string} [prefix] @param {string|number} [floor] */
 const floorText = (prefix, floor) => (floor ? `${prefix || ''}${floor}층` : '');
 
 // 호수 앞에 동(棟) 토큰이 이미 있는지 — 있으면 '동 없는 호수' 패딩 대상이 아니다.

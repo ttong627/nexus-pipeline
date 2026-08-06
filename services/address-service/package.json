@@ -9,7 +9,10 @@
   "scripts": {
     "start": "node src/server.js",
     "import": "node src/import-job.js",
-    "check": "node --check src/server.js && node --check src/import-job.js"
+    "juso:scan": "node scripts/scan-juso-entrc.mjs",
+    "juso:load": "node scripts/load-juso-entrc.mjs",
+    "juso:test": "node --test scripts/entrc-parser.test.mjs scripts/entrc-reader.test.mjs scripts/tm-projection.test.mjs scripts/entrance-loader.test.mjs scripts/delivery-brief.test.mjs scripts/record-schema.test.mjs scripts/routing-service.test.mjs scripts/navigation.test.mjs scripts/driver-core.test.mjs scripts/map-export.test.mjs scripts/position-check.test.mjs" ,
+    "check": "node --check src/server.js && node --check src/import-job.js && node --check src/entrance/entrcParser.js && node --check src/entrance/entrcReader.js && node --check src/entrance/coordGuard.js && node --check src/entrance/entranceLoader.js && node --check src/shared/tmProjection.js && node --check src/routing/recordSchema.js && node --check src/routing/routingService.js && node --check src/routing/navigation.js && node --check src/routing/driverCore.js && node --check src/routing/mapExport.js && node --check src/routing/routeSequenceEngine.js && node --check src/routing/deliveryDaySplit.js && node --check src/delivery/positionCheck.js"
   },
   "dependencies": {
     "@google-cloud/storage": "^7.16.0",

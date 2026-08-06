@@ -1,5 +1,5 @@
 # 📋 PROJECT STATUS — nexus-pipeline
-> 자동 생성: /확인 스킬 · 갱신 2026-07-24 00:02 KST
+> 자동 생성: /확인 스킬 · 갱신 2026-08-06 21:38 KST
 
 ## ⚠️ 클론 분기 해소 기록 (2026-07-21)
 - **문제**: `D:/TTong_newproject/nexus-pipeline` 클론에 7/15 작업(특이사항 보존·본명/건물명 컬럼·PII 제거)이 **커밋되지 않은 채** 남아 있었고, 그 사이 I: 정본에서 7/16에 V6.81~V6.94(17커밋)를 올려 **버전번호 V6.81이 양쪽에서 다른 내용으로 중복**됐다. 운영 배포본은 V6.94(origin 계열)이라 **7/15 기능이 운영에서 빠진 상태**였다.
@@ -8,9 +8,9 @@
 
 ## 식별
 - GitHub: ttong627/nexus-pipeline (계정 세트: **ttong627**)
-- Firebase 프로젝트: **logis-op**
+- Firebase 프로젝트: **logis-op** · GCP 프로젝트: **logis-op** (Cloud Run asia-northeast3)
 - 로컬 경로: I:/ttong_project/nexus-pipeline-clean (★I:=정본)
-- 브랜치: main
+- 브랜치: **feat/juso-entrc-loader** (★현재 작업 브랜치 · 운영 배포본이 이 브랜치 코드) · main은 2026-08-01에 정지
 
 ## 배포 환경
 - 접속 URL: https://logis-op.web.app · https://logis-op.firebaseapp.com
@@ -19,15 +19,18 @@
 - 릴리스: `node scripts/bump-version.cjs [minor|patch|major] "항목..."` → 버전+CHANGELOG 단일 관리
 - 배포: `npm run deploy` = `firebase deploy --only hosting --account ttong627@gmail.com` (predeploy=build만)
 - ⚠️ 배포 전제: firebase CLI에 **ttong627@gmail.com** 로그인 필요. push 전 `gh auth switch --user ttong627` 확인(배포 중 ttong0627로 전환되는 사례 있었음)
-- 커밋·푸시: main 기준 / 계정 ttong627
+- 커밋·푸시: 현재 **feat/juso-entrc-loader** 기준 / 계정 ttong627
+- **주소 API(서버)**: Cloud Run `nexus-address-api` · `https://nexus-address-api-31783407891.asia-northeast3.run.app` (= `VITE_ADDRESS_MATCH_API_URL`)
+  - 배포: `cd services/address-service && gcloud run deploy nexus-address-api --source=. --region=asia-northeast3 --project=logis-op --account=ttong627@gmail.com`
+  - ⚠️ 클라 빌드 검증은 `npx vite build` 직접 사용(prebuild `tsc --noEmit` 게이트에 기존 에러가 걸릴 수 있음 — 핸드오프 기록)
 
 ## 앱 구성
 | 앱/패키지 | 경로 | 역할 | 스택 |
 |---|---|---|---|
 | nexus-pipeline | / (루트) | 메인 프론트엔드 (주소정제·명단·루트맵·동별 배송지도) | React 19.2 + Vite 8 + Tailwind 4 + Firebase 12 |
 | nexus-pipeline-functions | /functions | Firebase Cloud Functions | Node (firebase-admin, firebase-functions) |
-| nexus-address-service | /address-service | 주소 매칭 API (express) | Node |
-| nexus-address-service | /services/address-service | 주소 매칭 API (Docker+Cloud SQL, PostgreSQL 매칭) | Node |
+| ~~nexus-address-service~~ | /address-service | **레거시**(2026-06-24 최종 커밋, 배포설정에서 미참조 — 사용 안 함) | Node/express |
+| nexus-address-api | **/services/address-service** | ★운영 주소·배송 코어 API (Cloud Run + Cloud SQL PG). 주소매칭·정제(purify)·순번/물량배분(routing)·배송검증(delivery)·지도내보내기(map)·기사(drivers)·네비 | Node (node:http) |
 
 ## 규칙 문서 (SSOT — 메뉴·기능 처리 방식의 기록, 작업 전 필독)
 | 문서 | 내용 |
@@ -37,8 +40,23 @@
 | CLAUDE.md §5 CM-병합1·2·이름1 | ★2026-07-16 파싱 규칙 — 주소 서브헤더 라벨 데이터 오판 금지(컬럼밀림)·유령 후행 빈열 제거·**면/읍 이름 보호(정태면 누락 방지)** |
 | DELIVERY_SEQUENCE_RULES.md | 배송순번 독립 규칙 상세 |
 | 동명이인_주소오염_재발방지_설계.md | 2026-07-10 동대문 김옥순 사고 재발방지 — S-1~S-6 |
+| **prompt_plan.md** ★ | **세션 핸드오프 SSOT** — 서버 이관(P7) 진행상황·다음 작업 1~5순위·「이어가기 전 필수 지식(함정)」·재착수 금지 목록. 새 세션은 **이 문서부터** 읽는다 (최종 갱신 2026-08-01, 08-04~05 작업은 미기록) |
+| AGENTS.md | Codex/에이전트용 규칙 사본(CLAUDE.md와 동일 계열, 2026-07-30 갱신) |
+| HANDOFF_vworld.md · HANDOFF_배정저장_일정.md | VWorld 좌표 연동 · 배정저장/일정 기능 개별 핸드오프 |
 
-## 마지막 작업 (2026-07-25) — HANDOFF ①~⑥ 완결 + dong-coords 연동 + 백필 잔여 정리
+## 마지막 작업 (2026-08-04~08-05) — 배송 코어 서버 승격 + V월드 3D + 배송완료 위치검증
+> 브랜치 `feat/juso-entrc-loader` (origin과 동기 · behind0/ahead0). main(08-01) 대비 **26커밋 앞섬**.
+
+- **a224202 (08-05 16:36)** 폴백 쿼리 상한 15s → **2.5s** — 이상 입력이 커넥션을 붙잡지 못하게 (`services/address-service/src/{config,db,server}.js`)
+- **248eb12 (08-05 15:51)** 배송완료 위치 판정을 프론트에 연결 (`ShareRouteView.jsx`·`addressEngine.js`) — 기록만 하던 오차에 판단을 붙임
+- **622f750 (08-05 13:31)** `POST /v1/delivery/verify-position` + `delivery/positionCheck.js` — **배송지에 안 가고 완료 누르는 것 탐지**(회귀 `position-check.test.mjs`)
+- **c3f8535 (08-04)** V월드 3D 입체 지도 — `Vworld3DView.jsx`·`DriveCompass.jsx`·`driveSim.js`·`useVworldSdk.js` (RouteMapModal에 3D 조망)
+- **f14ffb8 / 41d0edc (08-04)** 프론트 빌드 복구(tsc 13건) · 적대적 점검 지적 수정(PII 실차단·순번 성능·배송건 유실·조용한 폴백)
+- **모듈 승격(08-04)** ⑩지도내보내기(KML **PII 차단**) · ⑧기사관리(부하요약+배정위반 탐지) · ⑥네비게이션 링크 · Phase2-1~6 순번/일정/물량배분 엔진 **서버 승격**(`/v1/routing/*`) + 워커 복제 제거·파리티 테스트
+- **적재기 1~4단계(07-31~08-03)** 행안부 출입구 자료 파서 · EUC-KR 리더 · TM→WGS84 변환 · `entrance_core`/`building_ext` 버전독립 적재
+- **실측(2026-08-06 21:38 KST)**: 운영 프론트 200 · 배포시각 **08-05 15:54 KST**(번들 `index-C8Dwt6IY.js`, 3D 기능 문자열 「지금 달리는 곳」 포함 확인) · Cloud Run 리비전 **00060-qm2**(08-05 16:38 KST) · `db-status` 200 0.36s · `match` 200 **0.16s**(왕산로 72 정상 매칭)
+
+## 이전 작업 (2026-07-25) — HANDOFF ①~⑥ 완결 + dong-coords 연동 + 백필 잔여 정리
 - **⑥ 전월 승계 + NEW 배지(4b87430·배포)**: 전월 delivery_history를 이번달 명단에 승계 매칭. 강키(이름+생년월일)+**양측유일**만 승계, 동명이인·약키는 보류(S-1~S-6). `src/utils/prevMonthCarryover.js`(회귀 14) + CloudListManager NEW 배지·[전월 승계] 버튼 + RouteMapModal 명단 NEW 배지. 저장 스키마 미변경(조회 시 동적 계산).
 - **⑤ 순번 구간 일자분할(556ff75·배포)**: 일자분할에 세 번째 모드 `순번 구간` 추가 — 담당자가 정한 **하루 가구수**만큼 배송순번 순서대로 끊어 배송일차 부여(`splitBySequence`, 회귀 8건 추가 → delivery-day-split 21). 동 경계 무시(순번=동선).
 - **③ 기사별순번뷰 크래시 핫픽스(4b87430)**: CloudListManager `User` 아이콘 미import → 명단 화면 "Element type is invalid" 크래시(07-25 오전 배포 V7.2 운영본에 잠복). import 추가로 해결.
@@ -148,27 +166,32 @@
 ## 직전 작업 (2026-07-11)
 - 외부 시스템(정부양곡 정산 SYSTEM) 명단 가져오기 — importUrl/import2Url · address-service 매칭 hang 근본 수정
 
-## 작업환경 (2026-07-24 00:02 KST 실측 · I: 정본 기준)
-- node v24.15.0 / npm 11.12.1 · gh OK · gcloud OK · firebase OK
-- 현재 앱 버전: **V7.2** (package.json 7.2.0) · 무손실 M-1~M-10 + 파싱 견고성 CM-0~범위1 + 법정동 정밀화(A-32) + 특이사항 정제·이식(A-33·A-34·D-6) + **좌표 오류 검증(coordValidator)** + **수량 기반 일자 분할(DS-16)**
-- 의존성: **루트 node_modules 존재 OK**. 하위앱 3곳(functions·address-service·services/address-service) **미설치** → 해당 서비스 작업 시에만 `cd <폴더> && npm install` (메인 프론트 작업엔 지장 없음)
-- 시크릿: `.env`·`.env.example` 존재 (gitignore, 값 비노출)
-- 배포 URL 헬스체크: https://logis-op.web.app → **200** · https://logis-op.firebaseapp.com → **200 ✅**
-- 검증 게이트: `prebuild`=eslint --quiet && tsc --noEmit. 별도: `npm run typecheck`, `npm run test:e2e`
+## 작업환경 (2026-08-06 21:38 KST 실측 · I: 정본 기준)
+- node **v24.15.0** / npm **11.12.1** · gh OK · gcloud OK · firebase OK
+- 앱 버전 배지: **V7.3**(`src/version.js`, 빌드일 2026.07.24) / package.json **7.2.0** — ⚠️ 08-04~05 신규 기능은 **버전 미부여**(VER-1 미이행)
+- 의존성: 루트 **OK** · functions **OK** · services/address-service **OK** · 레거시 `address-service/` **미설치**(미참조 레거시라 설치 생략)
+- 시크릿: `.env` **16키 전부 설정됨**(FIREBASE 6·JUSO 6·KAKAO 2·VWORLD 1·ADDRESS_MATCH_API_URL 1) · `services/address-service/.env.example`만 존재(운영값은 Cloud Run Secret) — 값 비노출
+- 헬스체크: https://logis-op.web.app **200** · https://logis-op.firebaseapp.com **200** · Cloud Run `db-status` **200 0.36s**(주소 98.7만·상세동 1072만·검색키 229.5만, version_id 202605 published) · `match` **200 0.16s**
+- 검증 명령: `node --test scripts/*.test.mjs`(파리티 포함) · `node --test scripts/address-golden.test.mjs` · `npx eslint .` · `npx vite build`
+- 품질 모니터 `scripts/monitor.log`: 최근 기록 **2026-08-03 09:00** — 88,463건 괄호붕괴 0·잡값 0·정본 100% **정상(악화 없음)**
 
-## 동기화 (2026-07-24 00:00 KST)
-- 상태: **FF 최신화 완료** — I: 정본이 origin/main보다 **14커밋 behind**(V6.94 정지, 7/21~7/23 작업 미반영)였음 → owner 토큰 주입 fetch → `git merge --ff-only origin/main` 실행 → **43dffc5(V7.2)**, 현재 behind 0 / ahead 0
-- 워킹트리 clean(미커밋·untracked 0) — FF 안전 실행
-- 마지막 fetch: 2026-07-24 00:00 KST
-- gh active 계정: **ttong0627**(전역) ≠ repo owner **ttong627** → 전역 전환 없이 `GH_TOKEN=$(gh auth token -u ttong627)` 주입 방식으로 fetch/merge 수행. **push·배포 시 동일 주입 또는 `gh auth switch --user ttong627` 필요**
+## 동기화 (2026-08-06 21:35 KST)
+- 상태: **이미 최신** — `feat/juso-entrc-loader` vs `origin/feat/juso-entrc-loader` **behind 0 / ahead 0**. 워킹트리 clean(미커밋·untracked **0건**) → FF 대상 없음
+- main 대비: **behind 6 / ahead 26**. behind 6건은 `git cherry` 결과 **전부 `-`(동일 패치가 feat에 이미 존재)** — 리베이스로 해시만 갈린 것이라 **내용 유실 없음**. 즉 feat가 main의 상위집합
+- 마지막 fetch: 2026-08-06 21:35 KST (owner 토큰 주입 방식)
+- gh active 계정: **ttong0627**(전역) ≠ repo owner **ttong627** → 전역 전환 없이 `GH_TOKEN=$(gh auth token -u ttong627)` 주입으로 fetch 수행. **push·배포 시 동일 주입 또는 `gh auth switch --user ttong627` 필요**
 
 ## 리스크
-- 🟢 배포·환경·시크릿: 정상 (운영 200 OK · .env 3대 키 설정 · 루트 의존성 설치 완료)
-- 🟢 데이터 무결성: 무손실 원칙(M-1~M-8) 적용 — 대상자·포수 누락 차단 + 원본 소계 포수 자동 대조
+- 🟢 배포·환경·시크릿: 정상 (프론트 200 · API 200 0.16s · .env 16키 전부 설정 · 의존성 설치 완료)
+- 🟢 데이터 무결성: 무손실 원칙(M-1~M-10) 적용 — 대상자·포수 누락 차단 + 원본 소계 포수 자동 대조. 주소품질 모니터 정상
 - 🟢 서식 견고성: 병합 헤더·유령 빈열 서식(정부양곡 차상위 등) 정상 파싱(§5 CM-병합1·2)
-- 🟡 **2클론 분기 재발 위험** — I: 정본 / D: 작업본이 동시 사용됨(7/21 사고). 오늘 FF로 해소했으나, **작업 시작 = /확인, 작업 종료 = 커밋·푸시**를 반드시 지킬 것
+- 🟡 **운영 코드가 main에 없다** — 운영 배포본(08-05 15:54 KST)은 `feat/juso-entrc-loader` 코드인데 main은 08-01에 정지. origin에 브랜치가 푸시돼 있어 유실 위험은 없으나, **main 기준으로 배포·롤백하면 08-04~05 기능이 사라진다**. 정리 필요(feat → main 병합)
+- 🟡 **버전 미부여(VER-1)** — 08-04~05 기능(V월드 3D·배송완료 위치검증 등)이 배포됐는데 `version.js`는 V7.3(07-24) 그대로 → **사용자 WhatsNew 팝업에 새 기능이 안 뜬다**. `node scripts/bump-version.cjs minor "..."` 필요
+- 🟡 **핸드오프 4일 공백** — `prompt_plan.md`가 2026-08-01에서 멈춤. 08-04~05 작업(모듈 승격·3D·위치검증)은 미기록 → 새 세션이 이 PROJECT_STATUS로만 파악 가능
 - 🟡 gh 전역 active가 `ttong0627` — 이 repo(ttong627) push 전 계정 확인 필수
-- 🟡 하위앱 3곳(functions·address-service×2) node_modules 미설치 — 해당 서비스 작업 시 npm install 필요
+- 🟡 **2클론 분기 재발 위험** — I: 정본 / D: 작업본 동시 사용 이력(7/21 사고). **작업 시작 = /확인, 작업 종료 = 커밋·푸시** 준수
+- ⚪ 레거시 `address-service/`(루트) — 2026-06-24 최종, 배포설정 미참조. 삭제 여부는 형 판단(임의 삭제 금지)
+- 🟠 **핸드오프 1순위 미해결 가능성** — 08-01 기록: 백필 배치가 `읍면동 3340개…`에서 멈춘 채 API만 두드리고 watchdog이 반복 재시작. statement_timeout으로 운영 피해는 막았으나 **배치 자체는 진척 0**. 현재 가동 여부 미확인(정지하려면 watchdog 먼저 종료)
 - 🟢 **xlsx 취약점 해소(2026-07-25)** — 사용자 업로드 엑셀 파싱 경로였던 `xlsx@0.18.5`(Prototype Pollution·ReDoS, HIGH)를 **SheetJS 공식 CDN판 `0.20.3`으로 교체**(package.json이 cdn.sheetjs.com tarball URL, import 코드 무변경·API 왕복 스모크 OK). 남은 audit 18건은 전부 dev 의존성(빌드툴) 경유라 프로덕션 번들 미포함(critical=`websocket-driver` dev)
 - 🟢 **nexus-address-api 콜드스타트 해소 확인(2026-07-25)** — 이미 `minScale=1`+startup-cpu-boost 적용 상태. 실측 매칭 응답 **145ms→23ms→22ms**(상시 웜). 과거 "20~23초"는 낡은 기록(당시 원인은 Windows curl 한글 인코딩, Node fetch는 정상이었음)
-- 🟡 하위앱 3곳(functions·address-service×2) node_modules 미설치 — 해당 서비스 작업 시 npm install 필요
+- ~~🟡 하위앱 3곳 node_modules 미설치~~ → **해소(2026-08-06 실측)**: functions·services/address-service 모두 설치 완료. 레거시 `address-service/`만 미설치(사용 안 함)
