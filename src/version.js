@@ -1,8 +1,12 @@
-export const APP_VERSION = 'V7.3';
-export const APP_BUILD = '2026.07.24';
-export const APP_BUILD_TIME = '2026.07.24';
+export const APP_VERSION = 'V7.4';
+export const APP_BUILD = '2026.08.06';
+export const APP_BUILD_TIME = '2026.08.06 21:59';
 
 export const CHANGELOG = [
+  { v: "V7.4", date: "2026.08.06", items: [
+    "V월드 3D 입체 지도 — 배송지도를 3D로 보며 동선을 눈으로 확인",
+    "배송완료 위치 검증 — 배송지에 가지 않고 완료를 누르면 오차로 잡아냄",
+  ]},
   { v: "V7.3", date: "2026.07.24", items: [
     "아파트 동별 정확 좌표 적용 — 배송 위치·순번 정밀도 향상(정부 공간정보 VWorld 연동)",
   ]},
