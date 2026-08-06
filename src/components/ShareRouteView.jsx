@@ -1,9 +1,10 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { db } from '../config/firebase.js';
 import { doc, onSnapshot, updateDoc, deleteField } from 'firebase/firestore';
-import { MapPin, List, Map as MapIcon, RefreshCw, Building2, Phone, ChevronUp, ChevronDown, Navigation, Crosshair, Star, X, AlertCircle, Share2, CheckCircle2 } from 'lucide-react';
+import { MapPin, List, Map as MapIcon, RefreshCw, Building2, Phone, ChevronUp, ChevronDown, Navigation, Crosshair, Star, X, AlertCircle, Share2, CheckCircle2, ArrowUpDown } from 'lucide-react';
 import { verifyDeliveryPositionApi } from '../engine/addressEngine.js';
 import { haversineKm } from '../engine/coordValidator.js';
+import { sortByRoadAddress } from '../utils/sortRecords.js';
 
 const KAKAO_JS_KEY = import.meta.env.VITE_KAKAO_JS_KEY;
 
@@ -161,6 +162,11 @@ export default function ShareRouteView({ shareId, driverId }) {
   const [showGpsGuide, setShowGpsGuide] = useState(false);
   const [copiedLink, setCopiedLink]   = useState(false);
   const [orderEditMode, setOrderEditMode] = useState(false);
+  // 목록 정렬 기준 — 'seq'(배송순번, 기본) | 'road'(도로명 주소순). 지도 경로·순번 배지는 항상 순번 기준을 유지한다.
+  const [sortMode, setSortMode] = useState(() => {
+    try { return localStorage.getItem(`route_sort_${shareId}_${driverId}`) === 'road' ? 'road' : 'seq'; }
+    catch { return 'seq'; }
+  });
   const [localOrderIds, setLocalOrderIds] = useState([]);
   const [isSavingOrder, setIsSavingOrder] = useState(false);
   const [isRequestingOrderApply, setIsRequestingOrderApply] = useState(false);
@@ -409,6 +415,9 @@ export default function ShareRouteView({ shareId, driverId }) {
     })
     .map((r, i) => ({ ...r, _displaySeq: hasOrder ? i + 1 : null }));
   const mapRecords = allRecords.filter(r => r.lat && r.lng);
+  // ★목록 표시 순서만 바꾼다 — 순번 배지(_displaySeq)·지도 경로선(mapRecords)·다음 배송지는
+  //   언제나 배송순번 기준을 유지한다. 보기 정렬이 동선 정보를 덮어쓰면 안 된다.
+  const listRecords = sortMode === 'road' ? sortByRoadAddress(allRecords) : allRecords;
 
   useEffect(() => {
     if (!driver?.id) return;
@@ -451,6 +460,34 @@ export default function ShareRouteView({ shareId, driverId }) {
       });
     } catch (e) {
       console.warn('Order save error:', e);
+    } finally {
+      setIsSavingOrder(false);
+    }
+  }, [allRecords, driver?.id, isSavingOrder, shareId]);
+
+  // ── 목록 정렬 기준 저장(기기별) ──────────────────────────────────────
+  useEffect(() => {
+    try { localStorage.setItem(`route_sort_${shareId}_${driverId}`, sortMode); } catch {}
+  }, [sortMode, shareId, driverId]);
+
+  // ── 지금 보이는 도로명 주소순을 배송순번으로 확정 ─────────────────────
+  //  뒤섞인 순번(지도상 왕복)을 기사가 직접 도로 순서로 되돌리는 경로.
+  //  담당자 화면의 [순번] 자동계산(좌표 최적화)이 더 짧지만, 그건 담당자만 실행할 수 있다.
+  const applyRoadOrderAsSequence = useCallback(async () => {
+    if (!driver?.id || isSavingOrder) return;
+    const ids = sortByRoadAddress(allRecords).map(r => r._uid);
+    if (!ids.length) return;
+    if (!window.confirm(`지금 보이는 도로명 주소순(${ids.length}건)으로 배송순번을 다시 매깁니다.\n지도 경로선도 이 순서로 바뀝니다. 진행할까요?`)) return;
+    setLocalOrderIds(ids);
+    try { localStorage.setItem(`route_order_${shareId}_${driver.id}`, JSON.stringify(ids)); } catch {}
+    setIsSavingOrder(true);
+    try {
+      await updateDoc(doc(db, 'route_shares', shareId), {
+        [`driverOrder.${driver.id}`]: ids,
+      });
+      setSortMode('seq'); // 순번이 곧 도로명순이 됐으므로 보기 기준을 순번으로 되돌린다(화면 순서 동일)
+    } catch (e) {
+      console.warn('Road order apply error:', e);
     } finally {
       setIsSavingOrder(false);
     }
@@ -991,13 +1028,51 @@ export default function ShareRouteView({ shareId, driverId }) {
         <div className={`bg-[#060606] overflow-y-auto transition-all ${
           layoutMode === 'list' ? 'flex-1' : layoutMode === 'split' ? 'flex-1 min-h-0' : 'h-0 overflow-hidden'
         }`}>
-          <div className="sticky top-0 bg-[#0a0a0a] border-b border-[#1a1a1a] px-4 py-1.5 flex items-center gap-2 z-10">
-            <MapPin size={10} className="text-gray-600" />
-            <span className="text-[9px] text-gray-600 font-black tracking-widest uppercase">배송 순번 목록</span>
-            <span className="ml-auto text-[9px] text-gray-700">{allRecords.length}건</span>
+          <div className="sticky top-0 bg-[#0a0a0a] border-b border-[#1a1a1a] px-3 py-1.5 flex items-center gap-2 z-10">
+            <MapPin size={10} className="text-gray-600 shrink-0" />
+            <span className="text-[9px] text-gray-600 font-black tracking-widest uppercase shrink-0">
+              {sortMode === 'road' ? '도로명 주소순' : '배송 순번순'}
+            </span>
+            <span className="text-[9px] text-gray-700 shrink-0">{listRecords.length}건</span>
+
+            {/* 정렬 기준 토글 — 표시 순서만 바꾼다(순번·지도 경로 불변) */}
+            <div className="ml-auto flex rounded-lg overflow-hidden border border-[#242424] shrink-0">
+              {[
+                ['seq', '순번순'],
+                ['road', '도로명순'],
+              ].map(([mode, label]) => (
+                <button key={mode}
+                  onClick={() => setSortMode(mode)}
+                  aria-label={`${label}으로 정렬`}
+                  aria-pressed={sortMode === mode}
+                  className={`px-2 py-1 text-[9px] font-black transition-colors ${mode === 'road' ? 'border-l border-[#242424]' : ''} ${
+                    sortMode === mode ? 'bg-blue-900/40 text-blue-300' : 'bg-[#111] text-gray-600'
+                  }`}>
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            {/* 도로명순 보기일 때만 — 이 순서를 배송순번으로 확정 */}
+            {sortMode === 'road' && (
+              <button onClick={applyRoadOrderAsSequence}
+                disabled={isSavingOrder || !listRecords.length}
+                aria-label="도로명 주소순을 배송순번으로 확정"
+                className="shrink-0 flex items-center gap-1 px-2 py-1 rounded-lg text-[9px] font-black border border-emerald-500/40 bg-emerald-500/15 text-emerald-300 disabled:opacity-40 active:scale-95 transition-all">
+                <ArrowUpDown size={9} />
+                {isSavingOrder ? '저장중…' : '이 순서로 순번'}
+              </button>
+            )}
           </div>
 
-          {allRecords.map((r, idx) => {
+          {sortMode === 'road' && (
+            <div className="px-3 py-1.5 bg-blue-950/20 border-b border-blue-900/30 text-[10px] text-blue-300/80 leading-snug">
+              도로명 주소순으로 보고 있습니다 — 번호 배지는 <b className="text-blue-200">원래 배송순번</b> 그대로이고, 지도 경로선도 바뀌지 않습니다.
+              이 순서대로 배송하려면 <b className="text-emerald-300">[이 순서로 순번]</b>을 누르세요.
+            </div>
+          )}
+
+          {listRecords.map((r, idx) => {
             const isSelected = r._uid === selectedId;
             const qty = parseInt(r.포수) || 1;
             const isMultiQty = qty > 1;
@@ -1015,7 +1090,8 @@ export default function ShareRouteView({ shareId, driverId }) {
                         : 'border-[#111] hover:bg-[#0f0f0f]'
                 }`}
               >
-                {orderEditMode && (
+                {/* 순번 ▲▼ 는 순번순 보기에서만 — 도로명순 화면에서 움직이면 순번이 뒤엉킨다 */}
+                {orderEditMode && sortMode === 'seq' && (
                   <div className="shrink-0 flex flex-col gap-1">
                     <button
                       onClick={(e) => { e.stopPropagation(); moveRecordOrder(r._uid, -1); }}
@@ -1026,7 +1102,7 @@ export default function ShareRouteView({ shareId, driverId }) {
                     </button>
                     <button
                       onClick={(e) => { e.stopPropagation(); moveRecordOrder(r._uid, 1); }}
-                      disabled={idx === allRecords.length - 1 || isSavingOrder}
+                      disabled={idx === listRecords.length - 1 || isSavingOrder}
                       className="w-7 h-6 rounded-lg border border-[#2a2a2a] bg-[#111] text-gray-400 disabled:opacity-25 active:scale-95 flex items-center justify-center"
                     >
                       <ChevronDown size={12} />
@@ -1114,7 +1190,7 @@ export default function ShareRouteView({ shareId, driverId }) {
               </div>
             );
           })}
-          {allRecords.length === 0 && (
+          {listRecords.length === 0 && (
             <div className="flex items-center justify-center h-32 text-gray-700 text-sm">배송 데이터가 없습니다</div>
           )}
         </div>
