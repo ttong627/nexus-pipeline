@@ -71,3 +71,7 @@ _tmp_*
 scripts/monitor.log
 _monitor_address.bat
 _monitor_address.vbs
+
+# 계정 백업(개인정보 포함) — 절대 커밋 금지
+_backup_accounts_*.json
+_tmp_*
