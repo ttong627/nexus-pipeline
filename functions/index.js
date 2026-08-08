@@ -13,6 +13,7 @@
 const { onRequest } = require('firebase-functions/v2/https');
 const { onSchedule } = require('firebase-functions/v2/scheduler');
 const admin = require('firebase-admin');
+const { extractClientIp, sanitizeUsageEvent, USAGE_TTL_DAYS } = require('./usageEvent');
 
 admin.initializeApp();
 const db = admin.firestore();
@@ -190,6 +191,47 @@ exports.api = onRequest(
       } catch (e) {
         console.error('locations 조회 오류:', e);
         return res.status(500).json({ error: '조회 실패: ' + e.message });
+      }
+    }
+
+    // ── POST /api/usage — 정제 이용 기록 (누가·어디서·무엇을 얼마나) ─────
+    //  ★IP는 서버가 헤더에서 직접 뽑는다. 클라가 보낸 ip는 채택하지 않는다(위조 차단).
+    //  ★기록 실패가 정제를 막으면 안 되므로 클라는 fire-and-forget 으로 호출한다.
+    if (path.includes('/usage')) {
+      if (req.method !== 'POST') return res.status(405).json({ error: 'POST만 허용' });
+      const token = (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+      if (!token) return res.status(401).json({ error: '인증 토큰이 필요합니다.' });
+      let decoded;
+      try { decoded = await admin.auth().verifyIdToken(token); }
+      catch { return res.status(401).json({ error: '유효하지 않은 토큰입니다.' }); }
+
+      try {
+        const body = sanitizeUsageEvent(req.body);
+        const ip = extractClientIp(req.headers, req.socket?.remoteAddress);
+        const ua = String(req.headers['user-agent'] || '').slice(0, 200);
+        await db.collection('usage_events').add({
+          ...body,
+          uid: decoded.uid,
+          email: decoded.email || '',
+          ip,
+          userAgent: ua,
+          at: admin.firestore.FieldValue.serverTimestamp(),
+          expireAt: admin.firestore.Timestamp.fromDate(
+            new Date(Date.now() + USAGE_TTL_DAYS * 24 * 60 * 60 * 1000)
+          ),
+        });
+        // 사용자 문서에도 최근 접속 IP만 얹어 관리자 화면 1회 조회로 보이게 한다
+        await db.doc(`users/${decoded.uid}`).set({
+          lastIp: ip,
+          lastUsageAt: admin.firestore.FieldValue.serverTimestamp(),
+          ...(body.mode === 'easy'
+            ? { easyPurifyCount: admin.firestore.FieldValue.increment(1) }
+            : { normalPurifyCount: admin.firestore.FieldValue.increment(1) }),
+        }, { merge: true });
+        return res.status(200).json({ ok: true });
+      } catch (e) {
+        console.error('usage 기록 오류:', e);
+        return res.status(500).json({ error: '기록 실패' });
       }
     }
 

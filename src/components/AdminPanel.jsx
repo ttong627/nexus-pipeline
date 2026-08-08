@@ -286,6 +286,8 @@ export default function AdminPanel({ onClose, user }) {
   const [auditLoading, setAuditLoading] = useState(false);
   const [errorLogs, setErrorLogs] = useState([]);
   const [errorLoading, setErrorLoading] = useState(false);
+  const [usageEvents, setUsageEvents] = useState([]);
+  const [usageLoading, setUsageLoading] = useState(false);
   const [tierUpgradeTarget, setTierUpgradeTarget] = useState(null); // { inq, matchedUser, newTier }
 
   const fetchAuditLogs = async () => {
@@ -296,6 +298,16 @@ export default function AdminPanel({ onClose, user }) {
       setAuditLogs(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     } catch { setAuditLogs([]); }
     finally { setAuditLoading(false); }
+  };
+
+  // 이용 기록 — 최근 300건만(계속 쌓이므로 전체 로드 금지). IP 포함이라 관리자만 조회된다.
+  const fetchUsageEvents = async () => {
+    setUsageLoading(true);
+    try {
+      const snap = await getDocs(query(collection(db, 'usage_events'), orderBy('at', 'desc'), limit(300)));
+      setUsageEvents(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    } catch { setUsageEvents([]); }
+    finally { setUsageLoading(false); }
   };
 
   const fetchErrorLogs = async () => {
@@ -1633,6 +1645,134 @@ export default function AdminPanel({ onClose, user }) {
 
         {activeTab === 'ops' && (
           <div className="flex-1 overflow-auto scrollbar-thin scrollbar-thumb-[#2d4a35] p-6 space-y-6">
+
+            {/* ── 이용 현황 (누가·어디서·쉬운/일반 정제를 얼마나) ───────────── */}
+            <div>
+              <h3 className="text-emerald-400 font-black text-base flex items-center gap-2 mb-3">
+                <Activity size={18}/> 이용 현황
+                <span className="text-[11px] text-emerald-700 font-normal ml-1">— 정제 실행 기록 · 접속 IP (180일 후 자동 삭제)</span>
+                <button onClick={fetchUsageEvents} disabled={usageLoading}
+                  className="ml-auto flex items-center gap-1 px-3 py-1 rounded-lg bg-[#111] border border-[#333] text-gray-400 text-[11px] font-bold hover:text-white disabled:opacity-40">
+                  <RefreshCw size={11} className={usageLoading ? 'animate-spin' : ''}/> {usageLoading ? '불러오는 중' : '불러오기'}
+                </button>
+              </h3>
+
+              {usageEvents.length === 0 ? (
+                <div className="bg-[#0d0d0d] border border-[#222] rounded-xl p-5 text-gray-600 text-xs">
+                  {usageLoading ? '불러오는 중…' : '[불러오기]를 누르면 최근 300건을 조회합니다. (기록은 새 버전 배포 이후 정제부터 쌓입니다)'}
+                </div>
+              ) : (
+                <>
+                  {(() => {
+                    const easy = usageEvents.filter(e => e.mode === 'easy').length;
+                    const normal = usageEvents.length - easy;
+                    const rows = usageEvents.reduce((s, e) => s + (e.rows || 0), 0);
+                    const users = new Set(usageEvents.map(e => e.email || e.uid)).size;
+                    const ips = new Set(usageEvents.map(e => e.ip).filter(Boolean)).size;
+                    const cards = [
+                      ['쉬운 정제', easy, 'text-emerald-400'],
+                      ['일반 정제', normal, 'text-blue-400'],
+                      ['처리 건수', rows.toLocaleString(), 'text-white'],
+                      ['사용자', `${users}명`, 'text-amber-400'],
+                      ['접속 IP', `${ips}개`, 'text-purple-400'],
+                    ];
+                    return (
+                      <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4">
+                        {cards.map(([label, val, cls]) => (
+                          <div key={label} className="bg-[#0d0d0d] border border-[#222] rounded-xl p-3">
+                            <p className="text-gray-600 text-[10px] font-bold mb-1">{label}</p>
+                            <p className={`${cls} font-black text-lg`}>{val}</p>
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })()}
+
+                  {/* 사용자별 집계 */}
+                  <div className="bg-[#0d0d0d] border border-[#222] rounded-xl overflow-hidden mb-4">
+                    <table className="w-full text-[11px]">
+                      <thead className="bg-[#111] text-gray-500">
+                        <tr>
+                          <th className="text-left px-3 py-2 font-black">사용자</th>
+                          <th className="text-right px-3 py-2 font-black">쉬운</th>
+                          <th className="text-right px-3 py-2 font-black">일반</th>
+                          <th className="text-right px-3 py-2 font-black">처리 건수</th>
+                          <th className="text-left px-3 py-2 font-black">접속 IP</th>
+                          <th className="text-left px-3 py-2 font-black">최근 이용</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(() => {
+                          const byUser = new Map();
+                          usageEvents.forEach(e => {
+                            const k = e.email || e.uid || '?';
+                            const cur = byUser.get(k) || { easy: 0, normal: 0, rows: 0, ips: new Set(), last: null };
+                            if (e.mode === 'easy') cur.easy++; else cur.normal++;
+                            cur.rows += e.rows || 0;
+                            if (e.ip) cur.ips.add(e.ip);
+                            const t = e.at?.seconds || 0;
+                            if (!cur.last || t > cur.last) cur.last = t;
+                            byUser.set(k, cur);
+                          });
+                          return [...byUser.entries()]
+                            .sort((a, b) => (b[1].easy + b[1].normal) - (a[1].easy + a[1].normal))
+                            .map(([email, v]) => (
+                              <tr key={email} className="border-t border-[#1a1a1a]">
+                                <td className="px-3 py-2 text-gray-300 font-mono">{email}</td>
+                                <td className="px-3 py-2 text-right text-emerald-400 font-black">{v.easy}</td>
+                                <td className="px-3 py-2 text-right text-blue-400 font-black">{v.normal}</td>
+                                <td className="px-3 py-2 text-right text-gray-400">{v.rows.toLocaleString()}</td>
+                                <td className="px-3 py-2 text-purple-300 font-mono">
+                                  {[...v.ips].slice(0, 2).join(', ')}{v.ips.size > 2 ? ` 외 ${v.ips.size - 2}` : ''}
+                                </td>
+                                <td className="px-3 py-2 text-gray-600">
+                                  {v.last ? new Date(v.last * 1000).toLocaleString('ko-KR', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '-'}
+                                </td>
+                              </tr>
+                            ));
+                        })()}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* 최근 기록 */}
+                  <div className="bg-[#0d0d0d] border border-[#222] rounded-xl overflow-hidden max-h-72 overflow-y-auto">
+                    <table className="w-full text-[11px]">
+                      <thead className="bg-[#111] text-gray-500 sticky top-0">
+                        <tr>
+                          <th className="text-left px-3 py-2 font-black">시각</th>
+                          <th className="text-left px-3 py-2 font-black">사용자</th>
+                          <th className="text-left px-3 py-2 font-black">구분</th>
+                          <th className="text-left px-3 py-2 font-black">지자체 · 월</th>
+                          <th className="text-right px-3 py-2 font-black">건수</th>
+                          <th className="text-left px-3 py-2 font-black">IP</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {usageEvents.map(e => (
+                          <tr key={e.id} className="border-t border-[#1a1a1a]">
+                            <td className="px-3 py-1.5 text-gray-600">
+                              {e.at?.seconds ? new Date(e.at.seconds * 1000).toLocaleString('ko-KR', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '-'}
+                            </td>
+                            <td className="px-3 py-1.5 text-gray-400 font-mono">{e.email || e.uid}</td>
+                            <td className="px-3 py-1.5">
+                              <span className={`px-2 py-0.5 rounded-full text-[9px] font-black ${
+                                e.mode === 'easy'
+                                  ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
+                                  : 'bg-blue-500/15 text-blue-400 border border-blue-500/30'
+                              }`}>{e.mode === 'easy' ? '쉬운' : '일반'}</span>
+                            </td>
+                            <td className="px-3 py-1.5 text-gray-400">{e.city} {e.month}</td>
+                            <td className="px-3 py-1.5 text-right text-gray-400">{(e.rows || 0).toLocaleString()}</td>
+                            <td className="px-3 py-1.5 text-purple-300 font-mono">{e.ip}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              )}
+            </div>
 
             {/* 이탈 위험 */}
             {churnRisk.length > 0 && (

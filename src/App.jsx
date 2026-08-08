@@ -6,6 +6,7 @@ import { cleanupExpiredCache } from "./engine/dbCache.js";
 import { refreshSavedCols } from "./utils/colOrder.js";
 import { splitNameBirth, sanitizeNote } from "./utils/noteSanitizer.js";
 import { evaluateAddrChange } from "./utils/prevMonthGuard.js";
+import { logUsageEvent } from "./utils/usageLog.js";
 import { HOUSEHOLD_EXCL, HOUSEHOLD_RE } from "./columnRules.js";
 import { captureCorrections } from "./learn/captureCorrection.js";
 import { analyzeQuality } from "./analysis/analyzeQuality.js";
@@ -1403,6 +1404,17 @@ export default function App() {
         lastProcessedValidRows: results.length - errList.length,
         lastProcessedErrorRows: errList.length,
       }, { merge: true }).catch(e => console.warn('[정제 누적 통계 업데이트 실패]', e));
+
+      // 이용 기록(누가·어디서·쉬운/일반) — 서버가 IP를 직접 붙여 usage_events 에 남긴다.
+      // ★fire-and-forget: 기록이 실패해도 정제 결과는 그대로 유지된다.
+      logUsageEvent({
+        mode: cleanMode === 'easy' ? 'easy' : 'normal',
+        city: fileInfo?.city || '',
+        month: fileInfo?.month || '',
+        rows: results.length,
+        validRows: results.length - errList.length,
+        errorRows: errList.length,
+      });
     }
 
     // 쉬운 정제 + 체크 없음 → 결과 화면 생략하고 정제 엑셀을 바로 다운로드(폴더 저장)

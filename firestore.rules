@@ -142,6 +142,14 @@ service cloud.firestore {
       allow read, update, delete: if isAdmin();
     }
 
+    // ── 이용 기록: 쓰기는 서버(Cloud Functions·admin SDK)만, 조회는 관리자만 ──────
+    //  ★클라이언트 create 금지 — IP·uid를 위조한 가짜 이용기록을 막는다.
+    //    서버는 admin SDK라 이 규칙을 우회한다(정상). 개인정보라 180일 TTL 자동 삭제.
+    match /usage_events/{document=**} {
+      allow read: if isAdmin() || isAdminEmail();
+      allow create, update, delete: if false;
+    }
+
     // ── 사용자: 본인 읽기/생성/수정 + 관리자 전체 제어 ──────────────────────
     match /users/{userId} {
       allow read: if isAuthenticated() &&
