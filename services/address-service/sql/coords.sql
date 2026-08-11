@@ -48,8 +48,19 @@ CREATE TABLE IF NOT EXISTS building_coord (
   quality          text NOT NULL DEFAULT 'unverified',
   quality_note     text,
   attempt_count    integer NOT NULL DEFAULT 0,
+  -- 동(棟) 목록을 마지막으로 VWorld 에 물어본 시각 = **"물어봤는데 없더라"를 적는 자리**.
+  --   ★없으면 답이 영영 안 나오는 단지에 매번 BBOX 를 태운다. 실측(2026-08-11 시흥):
+  --     **103개 단지**가 VWorld LT_C_SPBD 에 동 정보가 아예 없는데(dongCount=0),
+  --     명단을 돌릴 때마다 단지당 1~2콜씩 반복 조회됐다.
+  --   ★NULL = 아직 안 물어봄. 값이 있는데 동이 여전히 없으면 주기 전까지 다시 묻지 않는다.
+  --     영구 차단이 아니라 **주기 대기**다 — VWorld 자료는 갱신되므로 언젠가 생길 수 있다.
+  dong_probed_at   timestamptz,
   updated_at       timestamptz NOT NULL DEFAULT now()
 );
+
+-- 이미 만들어진 테이블에도 붙인다. CREATE TABLE IF NOT EXISTS 는 **컬럼을 추가하지 않는다** —
+-- 이 줄이 없으면 운영 DB 에는 영영 안 생기고, 코드만 새 컬럼을 읽다가 조용히 undefined 를 본다.
+ALTER TABLE building_coord ADD COLUMN IF NOT EXISTS dong_probed_at timestamptz;
 
 -- 동(棟) 좌표 — 건물 1 : 동 N 관계라 별도 테이블.
 --   컬럼으로 만들면 동이 늘 때마다 스키마가 바뀐다.

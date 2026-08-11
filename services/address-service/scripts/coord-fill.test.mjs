@@ -204,6 +204,55 @@ test('★retryNone 을 켜도 앵커 없는 건은 여전히 제외다 — 주�
   assert.equal(skip[0].reason, 'no_anchor');
 });
 
+// ── ②-c 동 정보가 없는 단지 재조회 억제 (2026-08-11 실측: 시흥 103개 단지) ──
+// VWorld LT_C_SPBD 에 동이 아예 없는 단지는 물을 때마다 답이 같은데 BBOX 를 1~2콜씩 태운다.
+// ★이 규칙이 과하면 **동 좌표가 영영 안 채워진다**. 아래 케이스들이 그 경계를 지킨다.
+const DAY = 86400000;
+const aptEntry = (over = {}) => ({
+  roadAddress: 'A로 1', coordKey: 'k1', quality: 'unverified',
+  center: { lat: 37, lng: 127 }, dongNo: '101', dong: null, dongCount: 0, dongProbedAt: null, ...over,
+});
+
+test('★물어본 적 없으면(dongProbedAt=null) 무조건 채운다 — 억제가 첫 조회를 막으면 안 된다', () => {
+  const { fill } = classifyFillTargets([aptEntry()]);
+  assert.equal(fill.length, 1);
+});
+
+test('★최근에 물어봤고 그 단지에 동이 하나도 없으면 건너뛴다 — 답은 매번 같다', () => {
+  const now = Date.now();
+  const { fill, skip } = classifyFillTargets([aptEntry({ dongProbedAt: now - 3 * DAY })], { now });
+  assert.equal(fill.length, 0);
+  assert.equal(skip[0].reason, 'dong_absent');
+});
+
+test('★주기가 지나면 다시 묻는다 — 영구 차단이 아니라 주기 대기다(VWorld 자료는 갱신된다)', () => {
+  const now = Date.now();
+  const { fill } = classifyFillTargets([aptEntry({ dongProbedAt: now - 400 * DAY })], { now });
+  assert.equal(fill.length, 1);
+});
+
+test('★★단지에 동이 있는데 내 동만 없으면 억제하지 않는다 — 이름매칭 개선으로 살아날 수 있다', () => {
+  const now = Date.now();
+  const { fill } = classifyFillTargets([aptEntry({ dongProbedAt: now - 1 * DAY, dongCount: 12 })], { now });
+  assert.equal(fill.length, 1, 'dongCount>0 은 코드로 고칠 여지가 있는 건이다');
+});
+
+test('★내비용 점이 없으면 억제와 무관하게 채운다 — 중심 좌표부터 얻어야 한다', () => {
+  const now = Date.now();
+  const { fill } = classifyFillTargets(
+    [aptEntry({ dongProbedAt: now - 1 * DAY, center: null, quality: 'unknown' })], { now },
+  );
+  assert.equal(fill.length, 1);
+});
+
+test('동 좌표를 이미 가진 건은 종전대로 cached 로 건너뛴다(사유가 dong_absent 로 바뀌지 않는다)', () => {
+  const now = Date.now();
+  const { skip } = classifyFillTargets(
+    [aptEntry({ dong: { no: '101', lat: 37.1, lng: 127.1 }, dongProbedAt: now - 1 * DAY })], { now },
+  );
+  assert.equal(skip[0].reason, 'cached');
+});
+
 // ★2026-08-11 운영 실측으로 드러남: 명단 기반 동 좌표 채움이 **한 건도 안 됐다**.
 //   중심 좌표가 이미 있으면 `cached` 로 건너뛰었기 때문이다(4/4 skip). 내비용 점과
 //   동 좌표는 **용도가 다른 별개의 값**이라, 하나가 있다고 다른 하나를 안 채우면

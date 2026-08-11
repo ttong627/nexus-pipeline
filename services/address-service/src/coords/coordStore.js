@@ -183,6 +183,7 @@ export const coordResolveEntry = (record = {}, row = null, dongRows = []) => {
     center: base?.center || null,
     dong: pickTrustedDong(dongRows, record.dongNo),
     dongCount: (dongRows || []).filter((d) => d.matched === 'dong').length,
+    dongProbedAt: base?.dongProbedAt ?? null,
     isApartment: base?.isApartment || false,
     buildingName: base?.buildingName || '',
     quality: base ? (base.quality || 'unverified') : 'unknown',
@@ -214,5 +215,7 @@ export const coordRowToResult = (row, dongRows = []) => {
     })),
     quality: row.quality || 'unverified',
     qualityNote: row.quality_note || '',
+    // 동 목록을 마지막으로 물어본 시각(ms). "물어봤는데 없더라"를 재조회 판정에 쓴다.
+    dongProbedAt: row.dong_probed_at ? new Date(row.dong_probed_at).getTime() : null,
   };
 };

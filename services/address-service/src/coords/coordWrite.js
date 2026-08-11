@@ -118,6 +118,21 @@ export const writeCoordRow = async (w) => {
   return rowCount || 0;
 };
 
+/**
+ * "이 단지의 동 목록을 물어봤다"를 남긴다 — **결과가 없어도 남긴다**. 그게 요점이다.
+ *
+ * ★VWorld 에 동 정보가 없는 단지(2026-08-11 시흥 실측 103개)는 물을 때마다 답이 같은데
+ *   BBOX 를 1~2콜씩 태운다. 이 시각이 있어야 `classifyFillTargets` 가 주기 동안 건너뛴다.
+ * ★좌표·품질은 건드리지 않는다.
+ */
+export const markDongProbed = async (coordKey) => {
+  if (!coordKey) return 0;
+  const { rowCount } = await query(
+    `UPDATE ${S}.building_coord SET dong_probed_at = now() WHERE coord_key = $1`, [coordKey],
+  );
+  return rowCount || 0;
+};
+
 /** 동 좌표 기록 — acceptDongCandidate 를 통과한 것만 들어온다(matched='dong'). */
 export const writeDongRows = async (coordKey, dongs = []) => {
   let n = 0;
@@ -262,6 +277,9 @@ export const fillCoords = async (records, { version = config.activeVersion, quot
     await emptyOnMissingTable('fill', async () => {
       await writeCoordRow(write);
       if (got.dongs.length) stats.dongs += await writeDongRows(target.coordKey, got.dongs);
+      // BBOX 를 실제로 태웠으면 결과와 무관하게 "물어봤다"를 남긴다 — 빈손이었다는 사실이
+      // 다음 실행의 재조회를 막는다(그게 없어서 103개 단지를 매번 다시 물었다).
+      if (got.probedDong) await markDongProbed(target.coordKey);
       return true;
     });
     // ★"내비용 점을 새로 얻은 것"과 "동 좌표만 얻은 것"과 "아무것도 못 얻은 것"을

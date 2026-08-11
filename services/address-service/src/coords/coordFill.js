@@ -33,6 +33,15 @@ export const FILL_SOURCES = ['juso_entrc', 'vworld', 'kakao'];
 export const CENTER_SOURCES = new Set(['vworld', 'kakao']);
 
 /**
+ * 동 목록을 다시 물어보기까지의 간격(일).
+ *
+ * ★VWorld 에 동 정보가 아예 없는 단지가 실제로 많다 — 2026-08-11 시흥 실측 **103개 단지**.
+ *   그런 단지는 물을 때마다 답이 같은데 BBOX 를 1~2콜씩 태운다. 한 번 확인했으면
+ *   이 기간 동안은 다시 묻지 않는다. **영구 차단이 아니라 주기 대기**다 — 자료는 갱신된다.
+ */
+export const DONG_REPROBE_DAYS = Number(process.env.COORD_DONG_REPROBE_DAYS || 30);
+
+/**
  * 키가 있는 출처만 "쓸 수 있는 출처"다.
  *
  * ★2026-08-11 첫 운영 실행에서 드러난 것: Job 에 VWORLD_KEY·KAKAO_REST_KEY 를 안 넣고
@@ -162,10 +171,13 @@ export const createQuotaCounter = (limits = {}) => {
  *   부르는 경로가 매번 'none' 을 다시 태우면 답도 안 나오는 주소에 쿼터를 계속 태운다.
  *   "언제 다시 물을지"는 대상 SQL(`loadFillTargets` 의 retryDays)이 정하고, 이 플래그는
  *   그렇게 골라온 건을 통과시키는 문 역할만 한다.
+ *
+ *   - dong_absent : 그 단지엔 VWorld 에 동 정보가 없다고 이미 확인했다(주기 대기 중).
  */
-export const classifyFillTargets = (entries = [], { retryNone = false } = {}) => {
+export const classifyFillTargets = (entries = [], { retryNone = false, now = Date.now() } = {}) => {
   const fill = [];
   const skip = [];
+  const reprobeMs = Math.max(0, DONG_REPROBE_DAYS) * 86400000;
   for (const e of entries) {
     if (!e) continue;
     if (e.quality === 'no_anchor' || !e.coordKey) { skip.push({ ...e, reason: 'no_anchor' }); continue; }
@@ -175,8 +187,20 @@ export const classifyFillTargets = (entries = [], { retryNone = false } = {}) =>
     //   단지 내부 동선이 영원히 안 살아난다(은마아파트 동간 약 280m).
     //   2026-08-11 운영 실측: 명단 4건이 전부 `cached` 로 건너뛰어 동 좌표가 0건이었다.
     const wantsDong = Boolean(toDongNo(e.dongNo || e.record?.dongNo));
-    const missingDong = wantsDong && !e.dong;
-    if (hasPoint && !missingDong && e.quality !== 'outlier') { skip.push({ ...e, reason: 'cached' }); continue; }
+    let missingDong = wantsDong && !e.dong;
+    // ★"물어봤는데 그 단지엔 동 정보가 없더라"는 것을 기억한다.
+    //   실측(2026-08-11 시흥): **103개 단지**가 VWorld LT_C_SPBD 에 동 정보가 아예 없는데
+    //   (dongCount=0) 명단을 돌릴 때마다 단지당 BBOX 를 1~2콜씩 다시 태웠다. 답은 매번 같다.
+    //   영구 차단이 아니라 주기 대기다 — 자료가 갱신되면 다음 주기에 다시 묻는다.
+    //   ★`dongCount > 0` 이면 이 규칙을 적용하지 않는다: 그 단지엔 동이 실제로 있는데
+    //     내 동만 못 찾은 것이라, 이름 매칭 개선 같은 코드 수정으로 살아날 수 있다.
+    if (missingDong && e.dongProbedAt && (e.dongCount || 0) === 0 && now - e.dongProbedAt < reprobeMs) {
+      missingDong = false;
+    }
+    if (hasPoint && !missingDong && e.quality !== 'outlier') {
+      skip.push({ ...e, reason: wantsDong && !e.dong ? 'dong_absent' : 'cached' });
+      continue;
+    }
     fill.push(e);
   }
   return { fill, skip };
@@ -236,7 +260,7 @@ export const createCoordFiller = ({
   if (findEntrance) {
     const hit = await findEntrance(target);
     if (hit?.lat != null && hit?.lng != null) {
-      return { point: { lat: hit.lat, lng: hit.lng }, source: 'juso_entrc', dongs, carried };
+      return { point: { lat: hit.lat, lng: hit.lng }, source: 'juso_entrc', dongs, carried, probedDong };
     }
   }
 
@@ -259,8 +283,10 @@ export const createCoordFiller = ({
   //   배치 경로(building_coord 기반)에는 동 번호가 없다. 동 좌표는 **명단 기반 fill**
   //   에서 채워진다(명단이 동 번호를 갖고 있다).
   const wantDong = toDongNo(target.dongNo);
+  let probedDong = false;
   if (center && target.isApartment && wantDong && getBuildingsNear) {
     if (!quota || quota.take('vworld', 1)) {
+      probedDong = true;   // BBOX 를 실제로 태웠다 — 결과가 없어도 "물어봤다"를 남긴다
       const near = await getBuildingsNear(center.lng, center.lat, BBOX_NARROW_DEG);
       let pick = acceptDongCandidate(near, { wantDong: target.dongNo, complexName: target.buildingName });
       // ★대단지 2차 확장(matchDongCoord 가 2026-07-27 에 넣은 것과 같은 이유).
@@ -283,16 +309,16 @@ export const createCoordFiller = ({
   }
   // ★재사용한 중심은 다시 쓰지 않는다. 값은 같아도 center_source 를 'vworld' 로 덮어
   //   원래 출처(kakao 등)를 지우면, 나중에 출처별로 품질을 재평가할 수 없다.
-  if (center) return { point: reusedCenter ? null : center, source: reusedCenter ? null : 'vworld', dongs, carried };
+  if (center) return { point: reusedCenter ? null : center, source: reusedCenter ? null : 'vworld', dongs, carried, probedDong };
 
   // ④ Kakao 폴백
   if (kakaoGeocode) {
     if (!quota || quota.take('kakao', 1)) {
       const k = await kakaoGeocode(target.roadAddress);
-      if (k?.lat != null && k?.lng != null) return { point: k, source: 'kakao', dongs, carried };
+      if (k?.lat != null && k?.lng != null) return { point: k, source: 'kakao', dongs, carried, probedDong };
     } else {
       carried.push('kakao');
     }
   }
-  return { point: null, source: null, dongs, carried };
+  return { point: null, source: null, dongs, carried, probedDong };
 };
