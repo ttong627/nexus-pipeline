@@ -5,12 +5,21 @@
  *   node scripts/load-juso-entrc.mjs "<자료폴더>" --apply         # 실제 적재
  *   node scripts/load-juso-entrc.mjs "<자료폴더>" --only daily    # 종류 한정
  *   node scripts/load-juso-entrc.mjs "<자료폴더>" --limit 20000   # 파일당 앞 N줄(빠른 확인)
+ *   node scripts/load-juso-entrc.mjs "gs://버킷/접두어" --apply   # GCS 에서 바로
  *
  * ★기본이 예행인 이유: 이 스크립트는 운영 DB 를 건드린다. 쓰기는 항상 형이 명시적으로
  *   `--apply` 를 붙였을 때만 일어난다. 예행에서도 격리·폐지 건수는 실제와 같게 센다
  *   (일변동 좌표 판정만 DB 대조군이 없어 '보류'로 집계된다 — 아래 출력에 명시).
+ *
+ * ★GCS 를 스트림으로 읽지 않고 파일별로 **내려받아** 쓰는 이유(C-7):
+ *   전체분 처리는 2-pass 다 — 대조군(도로·읍면동 중앙값)을 만드느라 같은 파일을 두 번 읽는다
+ *   (`buildClusters` → `processFile`). 스트림은 재사용이 안 되고, 두 번 받으면 전송량이 두 배다.
+ *   파일 하나를 받아 처리하고 **즉시 지우면** 리더·로더·파서를 하나도 안 건드리고
+ *   (= 회귀 위험 0) 상주 용량도 가장 큰 파일 하나(경기 140MB)로 묶인다.
+ *   ⚠️ Cloud Run Job 의 `/tmp` 는 tmpfs(메모리)다. 메모리를 2Gi 이상 주고 돌릴 것.
  */
-import { readFile, readdir, stat } from 'node:fs/promises';
+import { readFile, readdir, stat, unlink } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import path, { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -46,20 +55,44 @@ const ONLY = opt('only', null);
 
 const fmt = (n) => Number(n || 0).toLocaleString('ko-KR');
 
+/**
+ * 자료 목록 — 로컬 폴더와 GCS 접두어를 같은 모양으로 돌려준다.
+ * @returns {Promise<Array<{name:string, size:number, file:string, gcs?:object}>>}
+ */
+const listSourceFiles = async () => {
+  if (!dir.startsWith('gs://')) {
+    const list = [];
+    for (const name of (await readdir(dir)).sort()) {
+      const fp = path.join(dir, name);
+      const { size } = await stat(fp);
+      list.push({ name, size, file: fp });
+    }
+    return list;
+  }
+  // gs://bucket/prefix — 지연 import: 로컬 폴더로 돌릴 때는 SDK 를 아예 안 불러온다.
+  const { Storage } = await import('@google-cloud/storage');
+  const [, , bucketName, ...rest] = dir.split('/');
+  const prefix = rest.join('/');
+  const [files] = await new Storage().bucket(bucketName).getFiles({ prefix });
+  return files
+    .filter((f) => !f.name.endsWith('/'))
+    .map((f) => ({ name: path.basename(f.name), size: Number(f.metadata?.size || 0), file: f.name, gcs: f }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+};
+
 const entries = [];
 const skipped = {};
-for (const name of (await readdir(dir)).sort()) {
-  const src = classifySource(name);
+for (const item of await listSourceFiles()) {
+  // ★분류는 **파일명**으로 한다(GCS 도 basename 을 넘긴다) — 경로가 달라도 판정이 같아야 한다.
+  const src = classifySource(item.name);
   if (!src) {
-    const why = skipReason(name);
+    const why = skipReason(item.name);
     skipped[why] = (skipped[why] || 0) + 1;
     continue;
   }
   if (ONLY && src.kind !== ONLY) continue;
-  const fp = path.join(dir, name);
-  const { size } = await stat(fp);
-  if (!size) continue;
-  entries.push({ file: fp, ...src });
+  if (!item.size) continue;
+  entries.push({ file: item.file, gcs: item.gcs, ...src });
 }
 
 if (!entries.length) {
@@ -130,7 +163,21 @@ const makeDbDeps = (client) => {
 const runAll = async (deps) => {
   for (const src of ordered) {
     const t0 = Date.now();
-    const st = await processFile(src.file, src, deps, { limit: LIMIT, batchSize: BATCH });
+    // GCS 자료는 처리 직전에 받아 쓰고 **끝나면 바로 지운다**. 안 지우면 두 번째 파일에서
+    // /tmp(tmpfs=메모리)가 차서 죽는데, 그때 나오는 건 좌표와 무관한 ENOSPC 라 원인 찾기가 어렵다.
+    let localPath = src.file;
+    let tmpFile = null;
+    if (src.gcs) {
+      tmpFile = join(tmpdir(), path.basename(src.file));
+      await src.gcs.download({ destination: tmpFile });
+      localPath = tmpFile;
+    }
+    let st;
+    try {
+      st = await processFile(localPath, src, deps, { limit: LIMIT, batchSize: BATCH });
+    } finally {
+      if (tmpFile) await unlink(tmpFile).catch(() => {});
+    }
     mergeStats(total, st);
     perKind[src.kind] = mergeStats(perKind[src.kind] || emptyStats(), st);
     console.log(
