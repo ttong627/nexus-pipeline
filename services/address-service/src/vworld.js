@@ -3,13 +3,14 @@
 // - 지역검증(시군구 대조)으로 전국 동명 오매칭 차단 (CLAUDE.md A-30 취지)
 import { config } from './config.js';
 import { cleanText } from './normalize.js';
-import { acceptDongCandidate } from './coords/coordFill.js';
+import { acceptDongCandidate, BBOX_NARROW_DEG, BBOX_WIDE_DEG } from './coords/coordFill.js';
 
 const VWORLD_BASE = 'https://api.vworld.kr/req';
 const DEFAULT_TIMEOUT_MS = 7000;
 const BLD_LAYER = 'LT_C_SPBD';
-const BBOX_DEG = 0.0025;   // 약 ±250m — 소규모 단지·정밀 1차 조회
-const BBOX_LARGE = 0.0065; // 약 ±700m — 대형 단지(대표점이 단지 한쪽에 찍혀 반대편 동이 범위 밖일 때) 2차 확장 조회
+// 반경 정의는 coords/coordFill.js 가 SSOT — 동 채택 규칙과 같은 자리에 둔다.
+const BBOX_DEG = BBOX_NARROW_DEG;
+const BBOX_LARGE = BBOX_WIDE_DEG;
 
 const withTimeout = (ms = DEFAULT_TIMEOUT_MS) => {
   const ctrl = new AbortController();

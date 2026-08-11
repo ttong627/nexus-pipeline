@@ -14,6 +14,18 @@
 // ══════════════════════════════════════════════════════════════════
 import { ENTRANCE_SOURCES, normalizeDongNo } from './coordStore.js';
 
+/**
+ * 동 탐색 반경 — **여기가 유일한 정의**다(vworld.js 가 이걸 가져다 쓴다).
+ *
+ * 좁게 먼저 보고(정확), 못 찾을 때만 넓힌다. 넓힐수록 인접 단지가 딸려 들어와
+ * 오염 위험이 커지므로 순서를 뒤집으면 안 된다.
+ *   NARROW ±250m : 소규모 단지·정밀 1차
+ *   WIDE   ±700m : 대단지 2차 — 지오코딩 대표점이 단지 한쪽에 찍히면 반대편 동이
+ *                  좁은 범위 밖으로 벗어난다(실측: 여월휴먼시아2단지 후보 0개).
+ */
+export const BBOX_NARROW_DEG = 0.0025;
+export const BBOX_WIDE_DEG = 0.0065;
+
 /** 채움 폴백 순서 — 설계서 §3-2 ②출입구자료 → ③VWorld → ④Kakao */
 export const FILL_SOURCES = ['juso_entrc', 'vworld', 'kakao'];
 
@@ -127,7 +139,12 @@ export const classifyFillTargets = (entries = []) => {
     if (e.quality === 'no_anchor' || !e.coordKey) { skip.push({ ...e, reason: 'no_anchor' }); continue; }
     if (e.quality === 'none') { skip.push({ ...e, reason: 'tried_none' }); continue; }
     const hasPoint = Boolean(e.entrance || e.center);
-    if (hasPoint && e.quality !== 'outlier') { skip.push({ ...e, reason: 'cached' }); continue; }
+    // ★내비용 점과 동 좌표는 **용도가 다른 별개의 값**이다. 중심이 있다고 동을 안 채우면
+    //   단지 내부 동선이 영원히 안 살아난다(은마아파트 동간 약 280m).
+    //   2026-08-11 운영 실측: 명단 4건이 전부 `cached` 로 건너뛰어 동 좌표가 0건이었다.
+    const wantsDong = Boolean(normalizeDongNo(e.dongNo || e.record?.dongNo));
+    const missingDong = wantsDong && !e.dong;
+    if (hasPoint && !missingDong && e.quality !== 'outlier') { skip.push({ ...e, reason: 'cached' }); continue; }
     fill.push(e);
   }
   return { fill, skip };
@@ -192,8 +209,13 @@ export const createCoordFiller = ({
   }
 
   // ③ VWorld 지오코딩(+아파트면 동별 BBOX)
-  let center = null;
-  if (geocodeRoad) {
+  // ★이미 아는 중심이 있으면 다시 지오코딩하지 않는다. 동 좌표만 필요해 다시 온 건이
+  //   여기서 중심을 또 사면 호출이 두 배가 된다 — 그리고 답은 같다.
+  let center = (target.knownCenter?.lat != null && target.knownCenter?.lng != null)
+    ? { lat: Number(target.knownCenter.lat), lng: Number(target.knownCenter.lng) }
+    : null;
+  const reusedCenter = Boolean(center);
+  if (!center && geocodeRoad) {
     if (!quota || quota.take('vworld', 1)) {
       center = await geocodeRoad(target.roadAddress);
     } else {
@@ -207,8 +229,16 @@ export const createCoordFiller = ({
   const wantDong = normalizeDongNo(target.dongNo);
   if (center && target.isApartment && wantDong && getBuildingsNear) {
     if (!quota || quota.take('vworld', 1)) {
-      const near = await getBuildingsNear(center.lng, center.lat);
-      const pick = acceptDongCandidate(near, { wantDong: target.dongNo, complexName: target.buildingName });
+      const near = await getBuildingsNear(center.lng, center.lat, BBOX_NARROW_DEG);
+      let pick = acceptDongCandidate(near, { wantDong: target.dongNo, complexName: target.buildingName });
+      // ★대단지 2차 확장(matchDongCoord 가 2026-07-27 에 넣은 것과 같은 이유).
+      //   지오코딩 대표점이 단지 한쪽에 찍히면 반대편 동이 좁은 범위 밖으로 벗어난다
+      //   — 실측: 여월휴먼시아2단지(동 104~212)가 좁은 BBOX 에서 후보 0개였다.
+      //   1차에서 찾았으면 넓히지 않는다. 넓힐수록 인접 단지가 딸려 들어온다.
+      if (!pick && (!quota || quota.take('vworld', 1))) {
+        const wide = await getBuildingsNear(center.lng, center.lat, BBOX_WIDE_DEG);
+        pick = acceptDongCandidate(wide, { wantDong: target.dongNo, complexName: target.buildingName });
+      }
       if (pick) {
         dongs.push({
           dongNo: normalizeDongNo(pick.dongNo), lat: pick.lat, lng: pick.lng,
@@ -219,7 +249,9 @@ export const createCoordFiller = ({
       carried.push('vworld_dong');
     }
   }
-  if (center) return { point: center, source: 'vworld', dongs, carried };
+  // ★재사용한 중심은 다시 쓰지 않는다. 값은 같아도 center_source 를 'vworld' 로 덮어
+  //   원래 출처(kakao 등)를 지우면, 나중에 출처별로 품질을 재평가할 수 없다.
+  if (center) return { point: reusedCenter ? null : center, source: reusedCenter ? null : 'vworld', dongs, carried };
 
   // ④ Kakao 폴백
   if (kakaoGeocode) {

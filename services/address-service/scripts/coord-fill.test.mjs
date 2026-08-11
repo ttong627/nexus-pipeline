@@ -147,6 +147,46 @@ test('저장소에 행이 없는 건(unknown)과 해봤는데 없는 건(none)�
   assert.equal(fill[0].coordKey, 'k1');
 });
 
+// ★2026-08-11 운영 실측으로 드러남: 명단 기반 동 좌표 채움이 **한 건도 안 됐다**.
+//   중심 좌표가 이미 있으면 `cached` 로 건너뛰었기 때문이다(4/4 skip). 내비용 점과
+//   동 좌표는 **용도가 다른 별개의 값**이라, 하나가 있다고 다른 하나를 안 채우면
+//   단지 내부 동선(은마아파트 동간 280m)이 영원히 살아나지 않는다.
+test('★동 번호를 요청했는데 그 동 좌표가 없으면 중심이 있어도 채운다', () => {
+  const { fill } = classifyFillTargets([
+    { roadAddress: 'A로 1', coordKey: 'k1', quality: 'unverified', center: { lat: 37, lng: 127 }, dongNo: '101', dong: null },
+  ]);
+  assert.equal(fill.length, 1, '중심이 있어도 요청한 동이 비었으면 채움 대상이다');
+});
+
+test('요청한 동 좌표가 이미 있으면 건너뛴다', () => {
+  const { fill, skip } = classifyFillTargets([
+    { roadAddress: 'A로 1', coordKey: 'k1', quality: 'unverified', center: { lat: 37, lng: 127 }, dongNo: '101', dong: { no: '101', lat: 37.1, lng: 127.1 } },
+  ]);
+  assert.equal(fill.length, 0);
+  assert.equal(skip[0].reason, 'cached');
+});
+
+test('동 번호를 안 보냈으면 중심만 있으면 충분하다 — 단독·상가', () => {
+  const { fill } = classifyFillTargets([
+    { roadAddress: 'A로 1', coordKey: 'k1', quality: 'unverified', center: { lat: 37, lng: 127 }, dongNo: '' },
+  ]);
+  assert.equal(fill.length, 0);
+});
+
+test('★이미 아는 중심이 있으면 지오코딩을 다시 하지 않는다 — 동만 필요할 때 호출 절반', async () => {
+  const q = createQuotaCounter({ vworld: 10 });
+  const fill = createCoordFiller({
+    geocodeRoad: async () => { throw new Error('아는 중심이 있는데 지오코딩을 다시 했다'); },
+    getBuildingsNear: async () => [{ buildName: '은마아파트', dongNo: '101', lat: 37.5, lng: 127.5, floors: 14 }],
+  });
+  const got = await fill({
+    coordKey: 'k1', roadAddress: 'A로 1', isApartment: true, dongNo: '101',
+    buildingName: '은마아파트', knownCenter: { lat: 37, lng: 127 },
+  }, q);
+  assert.equal(q.used('vworld'), 1, 'BBOX 1회만');
+  assert.equal(got.dongs[0]?.dongNo, '101');
+});
+
 test('outlier 는 다시 채운다 — 이상 좌표를 그대로 두면 기사 구역이 부풀어 오른다(DS-15)', () => {
   const { fill } = classifyFillTargets([
     { roadAddress: 'A로 1', coordKey: 'k1', quality: 'outlier', center: { lat: 33, lng: 126 } },
@@ -280,6 +320,47 @@ test('동 번호가 있으면 아파트일 때 BBOX 를 태운다', async () => 
   assert.equal(q.used('vworld'), 2, '지오코딩 1 + BBOX 1');
   assert.equal(got.dongs[0]?.dongNo, '101');
   assert.equal(got.dongs[0]?.matched, 'dong');
+});
+
+// ★2026-08-11 프로브로 드러남: 여월휴먼시아2단지(동 104~212)는 좁은 BBOX(±250m)에서
+//   후보 0개였다. 대단지는 지오코딩 대표점이 단지 한쪽에 찍혀 반대편 동이 범위 밖으로
+//   벗어난다. matchDongCoord 는 2026-07-27 에 이걸 넓은 BBOX 2차 조회로 고쳤는데
+//   (그게 "306동이 320동 위치에" 사고의 수정이었다), 새 채움 경로에는 그 단계가 없었다.
+test('★좁은 BBOX 에서 못 찾으면 넓은 BBOX 로 한 번 더 본다 — 대단지', async () => {
+  const seen = [];
+  const q = createQuotaCounter({ vworld: 10 });
+  const fill = createCoordFiller({
+    getBuildingsNear: async (lng, lat, radius) => {
+      seen.push(radius);
+      // 넓게 볼 때만 그 동이 보인다
+      return radius && radius > 0.004
+        ? [{ buildName: '여월휴먼시아2단지아파트', dongNo: '104', lat: 37.5, lng: 127.5, floors: 15 }]
+        : [];
+    },
+  });
+  const got = await fill({
+    coordKey: 'k1', roadAddress: 'A로 1', isApartment: true, dongNo: '104',
+    buildingName: '여월휴먼시아2단지아파트', knownCenter: { lat: 37, lng: 127 },
+  }, q);
+  assert.equal(seen.length, 2, '좁게 한 번, 넓게 한 번');
+  assert.ok(seen[1] > seen[0], '2차가 더 넓어야 한다');
+  assert.equal(got.dongs[0]?.dongNo, '104', '넓힌 뒤 찾아야 한다');
+});
+
+test('좁은 BBOX 에서 찾으면 넓히지 않는다 — 인접 단지 오염을 부른다', async () => {
+  const seen = [];
+  const q = createQuotaCounter({ vworld: 10 });
+  const fill = createCoordFiller({
+    getBuildingsNear: async (lng, lat, radius) => {
+      seen.push(radius);
+      return [{ buildName: '은마아파트', dongNo: '101', lat: 37.5, lng: 127.5, floors: 14 }];
+    },
+  });
+  await fill({
+    coordKey: 'k1', roadAddress: 'A로 1', isApartment: true, dongNo: '101',
+    buildingName: '은마아파트', knownCenter: { lat: 37, lng: 127 },
+  }, q);
+  assert.equal(seen.length, 1, '1차에서 찾았으면 2차는 없다');
 });
 
 test('★쿼터가 바닥나면 호출하지 않고 이월로 남긴다(F7)', async () => {

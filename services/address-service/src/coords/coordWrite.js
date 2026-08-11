@@ -183,7 +183,7 @@ export const fillCoords = async (records, { version = config.activeVersion, quot
     kakaoGeocode: sources.includes('kakao') ? kakaoGeocode : null,
   });
 
-  const stats = { attempted: fill.length, filled: 0, none: 0, dongs: 0, carried: 0, bySource: {} };
+  const stats = { attempted: fill.length, filled: 0, dongOnly: 0, none: 0, dongs: 0, carried: 0, bySource: {} };
   await mapPool(fill, CONCURRENCY, async (entry) => {
     const rec = entry.record || {};
     const dongNo = rec.dongNo || '';
@@ -194,6 +194,9 @@ export const fillCoords = async (records, { version = config.activeVersion, quot
       dongNo,
       // 동 번호가 붙어 온다는 것 자체가 단지형이라는 뜻이다(R4). 단독·상가엔 BBOX 를 안 태운다.
       isApartment: rec.isApartment ?? (entry.isApartment || Boolean(normalizeDongNo(dongNo))),
+      // 이미 확보한 중심이 있으면 그걸 BBOX 기준점으로 재사용한다 — 동 좌표만 필요해
+      // 다시 온 건이 중심을 또 사면 호출이 두 배가 되고 답은 같다.
+      knownCenter: entry.center || entry.entrance || null,
     };
     const got = await filler(target, q);
     if (got.carried.length) stats.carried += 1;
@@ -212,10 +215,16 @@ export const fillCoords = async (records, { version = config.activeVersion, quot
       if (got.dongs.length) stats.dongs += await writeDongRows(target.coordKey, got.dongs);
       return true;
     });
-    if (write?.quality === 'none') stats.none += 1;
-    else {
+    // ★"내비용 점을 새로 얻은 것"과 "동 좌표만 얻은 것"과 "아무것도 못 얻은 것"을
+    //   나눠 센다. 동만 채운 건을 '못 구함'으로 세면 요약이 "0건 성공"이라 거짓말한다
+    //   — 오늘 이미 두 번 겪은 유형이다(키 누락 은폐·BBOX 낭비).
+    if (write?.quality !== 'none') {
       stats.filled += 1;
       stats.bySource[got.source] = (stats.bySource[got.source] || 0) + 1;
+    } else if (got.dongs.length) {
+      stats.dongOnly += 1;
+    } else {
+      stats.none += 1;
     }
   });
 
