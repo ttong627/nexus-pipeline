@@ -12,7 +12,7 @@
 //    실측: `B동` 좌표 하나가 성암빌라·진아빌라·청양맨션·청정빌라·신한그린빌에
 //    동시에 붙어 있었다(설계서 F3).
 // ══════════════════════════════════════════════════════════════════
-import { ENTRANCE_SOURCES, normalizeDongNo } from './coordStore.js';
+import { ENTRANCE_SOURCES, normalizeDongNo, toDongNo } from './coordStore.js';
 
 /**
  * 동 탐색 반경 — **여기가 유일한 정의**다(vworld.js 가 이걸 가져다 쓴다).
@@ -103,7 +103,7 @@ export const isAmbiguousDong = (dongNo) => {
  *   C-2 pickRoadCode 가 도로코드에서 쓰는 것과 같은 원칙이다.
  */
 export const acceptDongCandidate = (candidates, { wantDong, complexName = '' } = {}) => {
-  const want = normalizeDongNo(wantDong);
+  const want = toDongNo(wantDong);   // 요청 값 — 이름이 와도 받는다
   if (!want) return null;
   const byDong = (candidates || []).filter(
     (b) => b && b.lat != null && b.lng != null && normalizeDongNo(b.dongNo) === want,
@@ -169,7 +169,7 @@ export const classifyFillTargets = (entries = []) => {
     // ★내비용 점과 동 좌표는 **용도가 다른 별개의 값**이다. 중심이 있다고 동을 안 채우면
     //   단지 내부 동선이 영원히 안 살아난다(은마아파트 동간 약 280m).
     //   2026-08-11 운영 실측: 명단 4건이 전부 `cached` 로 건너뛰어 동 좌표가 0건이었다.
-    const wantsDong = Boolean(normalizeDongNo(e.dongNo || e.record?.dongNo));
+    const wantsDong = Boolean(toDongNo(e.dongNo || e.record?.dongNo));
     const missingDong = wantsDong && !e.dong;
     if (hasPoint && !missingDong && e.quality !== 'outlier') { skip.push({ ...e, reason: 'cached' }); continue; }
     fill.push(e);
@@ -253,7 +253,7 @@ export const createCoordFiller = ({
   //   기각하므로 순수 낭비다 — 첫 실전 실행에서 이렇게 100회를 헛되이 썼다.
   //   배치 경로(building_coord 기반)에는 동 번호가 없다. 동 좌표는 **명단 기반 fill**
   //   에서 채워진다(명단이 동 번호를 갖고 있다).
-  const wantDong = normalizeDongNo(target.dongNo);
+  const wantDong = toDongNo(target.dongNo);
   if (center && target.isApartment && wantDong && getBuildingsNear) {
     if (!quota || quota.take('vworld', 1)) {
       const near = await getBuildingsNear(center.lng, center.lat, BBOX_NARROW_DEG);

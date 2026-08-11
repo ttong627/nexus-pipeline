@@ -65,6 +65,41 @@ export const normalizeDongNo = (value) => {
   return /^\d+$/.test(s) ? String(Number(s)) : s;
 };
 
+/**
+ * 이름 문자열에서 동(棟)을 뽑는다 — `"은마아파트(28동)"` → `"28"`, `"가동"` → `"가"`.
+ *
+ * ★A-32: `동` 뒤에 한글이 오면 동호수가 아니다(`장안2동우체국`). 행정동 이름을
+ *   동 번호로 읽으면 엉뚱한 건물에 좌표가 붙는다.
+ * ★VWorld `buld_nm_dc` 를 읽는 것이 주 용도라 **'동' 글자가 있어야** 인식한다.
+ *   맨 숫자('201')는 여기서 못 읽는다 — 그건 이름이 아니라 값이다. toDongNo 를 쓸 것.
+ */
+export const parseDongNo = (value) => {
+  const s = String(value ?? '').normalize('NFC').replace(/\s+/g, ' ').trim();
+  if (!s) return '';
+  const num = s.match(/(\d{1,4})\s*동(?![가-힣])/);
+  if (num) return String(Number(num[1]));
+  const ko = s.match(/([가-힣A-Za-z])\s*동(?![가-힣])/);
+  return ko ? ko[1] : '';
+};
+
+/** 값 형태인가 — 맨 숫자(1~4자리)나 한글·영문 한 글자, 뒤에 '동'은 선택. */
+const DONG_VALUE_RE = /^(\d{1,4}|[가-힣A-Za-z])\s*동?$/;
+
+/**
+ * 동 표기 단일 입구 — **값이면 정규화, 이름이면 추출**.
+ *
+ * ★2026-08-11 실측으로 드러난 불일치: 같은 값을 경로마다 다르게 읽고 있었다.
+ *     `/v1/building/dong-coords` → parseDongNo   ('동' 필요 — `'201'` 은 **빈 값**)
+ *     `mode:'fill'`              → normalizeDongNo (맨 숫자 허용)
+ *   그래서 클라가 `'201'` 을 보내면 한쪽은 동 매칭을 **아예 시도조차 안 하고**
+ *   조용히 centroid 로 떨어졌다. 에러도 안 난다. 두 경로가 하나를 쓰게 한다.
+ */
+export const toDongNo = (value) => {
+  const s = String(value ?? '').normalize('NFC').trim();
+  if (!s) return '';
+  return DONG_VALUE_RE.test(s) ? normalizeDongNo(s) : parseDongNo(s);
+};
+
 const point = (lat, lng, source, kind) =>
   (lat == null || lng == null) ? null : { lat: Number(lat), lng: Number(lng), source: source || '', kind };
 
@@ -119,7 +154,7 @@ export const pickRoadCode = (candidates, sigunguTok) => {
  *   성암빌라·진아빌라·청양맨션·청정빌라·신한그린빌에 동시에 붙어 있었다(F3).
  */
 export const pickTrustedDong = (dongRows, dongNo) => {
-  const want = normalizeDongNo(dongNo);
+  const want = toDongNo(dongNo);   // 요청 값
   if (!want) return null;
   const hit = (dongRows || []).find((d) => normalizeDongNo(d.dong_no) === want && d.matched === 'dong');
   if (!hit) return null;

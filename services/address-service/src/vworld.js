@@ -4,6 +4,7 @@
 import { config } from './config.js';
 import { cleanText } from './normalize.js';
 import { acceptDongCandidate, BBOX_NARROW_DEG, BBOX_WIDE_DEG } from './coords/coordFill.js';
+import { parseDongNo, toDongNo } from './coords/coordStore.js';
 
 const VWORLD_BASE = 'https://api.vworld.kr/req';
 const DEFAULT_TIMEOUT_MS = 7000;
@@ -18,15 +19,10 @@ const withTimeout = (ms = DEFAULT_TIMEOUT_MS) => {
   return { signal: ctrl.signal, done: () => clearTimeout(timer) };
 };
 
-// 문자열에서 동(棟) 번호 추출: "은마아파트(28동)"→"28", "201동"→"201", "가동"→"가"
-export const parseDongNo = (value) => {
-  const s = cleanText(value);
-  if (!s) return '';
-  const num = s.match(/(\d{1,4})\s*동(?![가-힣])/); // A-32: 동 뒤 한글이면 동호수 아님(장안2동우체국 오탐 차단). 4자리 동(1001동 등) 허용.
-  if (num) return String(Number(num[1])); // 앞자리 0 정규화("0306"→"306")로 클라(apartmentDong)와 정합
-  const ko = s.match(/([가-힣A-Za-z])\s*동(?![가-힣])/); // 가동/나동/B동
-  return ko ? ko[1] : '';
-};
+// 동 표기 파싱은 coords/coordStore.js 가 SSOT — 두 벌이면 경로마다 다르게 읽는다
+// (2026-08-11 실측: 한쪽은 '201' 을 빈 값으로 읽어 동 매칭을 아예 안 했다).
+// 기존 import 를 깨지 않도록 여기서 재수출한다.
+export { parseDongNo, toDongNo } from './coords/coordStore.js';
 
 // 폴리곤/멀티폴리곤 지오메트리 → 대표 좌표(정점 bbox 중심). 면적가중 shoelace는 일부 단지에서 크게 발산해 폐기.
 const geometryCentroid = (geometry) => {
@@ -252,7 +248,8 @@ export const matchDongCoord = async ({ roadAddress, complexName = '', dongNo = '
   const center = await geocodeRoad(roadAddress);
   if (!center) return null;
 
-  const wantDong = parseDongNo(dongNo) || parseDongNo(complexName);
+  // dongNo 는 **값**('201'·'201동'), complexName 은 **이름** — toDongNo 가 둘 다 받는다.
+  const wantDong = toDongNo(dongNo) || toDongNo(complexName);
 
   // 1차: 좁은 BBOX(±250m) 정밀 조회
   let all = await getBuildingsNear(center.lng, center.lat, BBOX_DEG);

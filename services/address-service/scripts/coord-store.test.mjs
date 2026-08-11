@@ -11,8 +11,41 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildCoordKey, coordRowToResult, pickDeliveryCoord, normalizeDongNo, ENTRANCE_SOURCES,
-  pickRoadCode, pickTrustedDong, coordResolveEntry,
+  pickRoadCode, pickTrustedDong, coordResolveEntry, toDongNo,
 } from '../src/coords/coordStore.js';
+
+// ── ⓿ 동 표기 통일 (2026-08-11) ──────────────────────────────────
+//  경로마다 다른 함수를 써서 같은 값을 다르게 읽고 있었다:
+//    /v1/building/dong-coords → parseDongNo  ('동' 접미사 필요 — '201' 은 빈 값)
+//    mode:'fill'              → normalizeDongNo (맨 숫자 허용)
+//  그래서 클라가 '201' 을 보내면 한쪽은 동 매칭을 아예 안 하고, 다른 쪽은 정상 동작했다.
+//  toDongNo 하나로 받는다 — **값이면 정규화, 이름이면 추출**.
+test('★맨 숫자 동을 받는다 — 이게 경로별 불일치의 원인이었다', () => {
+  assert.equal(toDongNo('201'), '201');
+  assert.equal(toDongNo('0101'), '101', '앞자리 0 정규화');
+  assert.equal(toDongNo('101동'), '101');
+});
+
+test('한글·영문 단일 동도 값으로 받는다', () => {
+  for (const [input, want] of [['가', '가'], ['가동', '가'], ['B', 'B'], ['B동', 'B']]) {
+    assert.equal(toDongNo(input), want, `${input} → ${want}`);
+  }
+});
+
+test('이름이 오면 그 안에서 동을 뽑는다', () => {
+  assert.equal(toDongNo('은마아파트(28동)'), '28');
+  assert.equal(toDongNo('여월휴먼시아 204동'), '204');
+});
+
+test('★동이 없는 이름은 빈 값 — 지어내지 않는다', () => {
+  assert.equal(toDongNo('월곶2차풍림아이원아파트'), '');
+  assert.equal(toDongNo(''), '');
+  assert.equal(toDongNo(null), '');
+});
+
+test('★A-32 유지 — 동 뒤에 한글이 오면 동호수가 아니다', () => {
+  assert.equal(toDongNo('장안2동우체국'), '', '행정동 이름을 동 번호로 읽으면 안 된다');
+});
 
 // ── ① 앵커 ────────────────────────────────────────────────────────
 test('coord_key 는 도로코드+지하여부+본번-부번으로 만든다', () => {

@@ -2,7 +2,7 @@ import { createServer } from 'node:http';
 import { config, requireConfig } from './config.js';
 import { query } from './db.js';
 import { cleanText, formatRoadLookupQuery, normalizeSearchKey, parseRoadNumber, roadSideKey } from './normalize.js';
-import { geocodeRoad, matchDongCoord, parseDongNo } from './vworld.js';
+import { geocodeRoad, matchDongCoord, toDongNo } from './vworld.js';
 import { judgeCandidate } from './matchGuard.js';
 import { learnedRoadKey, learnedRowFromJuso, learnedRowToResult, sigunguToken } from './learnedStore.js';
 import { coordStatus, resolveCoords } from './coords/coordQuery.js';
@@ -741,7 +741,10 @@ const server = createServer(async (req, res) => {
     if (req.method === 'POST' && url.pathname === '/v1/building/dong-coords') {
       const body = await readBody(req);
       const road = body.roadAddress || body.standardRoadAddress || '';
-      const dongNo = parseDongNo(body.dongNo || body.complexName || '');
+      // ★body.dongNo 는 **값**('201'·'201동'), complexName 은 **이름**이다.
+      //   예전엔 값에도 이름 추출기(parseDongNo)를 써서 `'201'` 이 빈 값이 됐고,
+      //   그러면 캐시키가 비고 동 매칭도 아예 안 돌아 조용히 centroid 로 떨어졌다.
+      const dongNo = toDongNo(body.dongNo) || toDongNo(body.complexName || '');
       const complexKey = normalizeSearchKey(body.complexName || body.buildingName || '');
       // 캐시 키에 단지명 포함(2026-07-27): 같은 도로명에 걸친 인접 단지가 같은 동번호를 가질 때 좌표 오염 차단.
       const cacheKey = (dongNo && road) ? `dong:${normalizeSearchKey(road)}#${dongNo}#${complexKey}#v3` : ''; // v3: bbox중심 복구·면적중심 버그값 무효화

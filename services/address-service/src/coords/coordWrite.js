@@ -12,7 +12,7 @@ import { query } from '../db.js';
 import { findEntrance } from '../delivery/resolveDelivery.js';
 import { geocodeRoad, getBuildingsNear } from '../vworld.js';
 import { emptyOnMissingTable, resolveCoordKeys, loadCoordRows } from './coordQuery.js';
-import { coordResolveEntry, normalizeDongNo, parseCoordKey } from './coordStore.js';
+import { coordResolveEntry, normalizeDongNo, parseCoordKey, toDongNo } from './coordStore.js';
 import {
   availableSources, buildCoordWrite, classifyFillTargets, createCoordFiller, createQuotaCounter,
 } from './coordFill.js';
@@ -193,7 +193,7 @@ export const fillCoords = async (records, { version = config.activeVersion, quot
       buildingName: rec.buildingName || entry.buildingName || '',
       dongNo,
       // 동 번호가 붙어 온다는 것 자체가 단지형이라는 뜻이다(R4). 단독·상가엔 BBOX 를 안 태운다.
-      isApartment: rec.isApartment ?? (entry.isApartment || Boolean(normalizeDongNo(dongNo))),
+      isApartment: rec.isApartment ?? (entry.isApartment || Boolean(toDongNo(dongNo))),
       // 이미 확보한 중심이 있으면 그걸 BBOX 기준점으로 재사용한다 — 동 좌표만 필요해
       // 다시 온 건이 중심을 또 사면 호출이 두 배가 되고 답은 같다.
       knownCenter: entry.center || entry.entrance || null,
