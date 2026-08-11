@@ -751,7 +751,11 @@ const server = createServer(async (req, res) => {
           UPDATE ${ADDRESS_SCHEMA}.address_geocode_cache SET last_used_at = now()
           WHERE cache_key = $1 RETURNING lat, lng, floors, match_type, dong_no
         `, [cacheKey]);
-        if (rows[0]?.lat && rows[0]?.lng) {
+        // ★C-4-b: 격리된 캐시(match_type='suspect')는 **미스로 취급**한다.
+        //   이 행들은 오염을 만든 옛 pickDong(`|| byDong[0]` 폴백)이 남긴 것이라
+        //   그대로 돌려주면 고친 규칙이 무의미해진다. 미스로 떨어뜨려 다시 계산하면
+        //   지금 규칙으로 판정되고, 여전히 못 고르면 정직하게 complex/centroid 가 된다.
+        if (rows[0]?.lat && rows[0]?.lng && rows[0].match_type !== 'suspect') {
           return json(res, 200, { ok: true, data: {
             lat: rows[0].lat, lng: rows[0].lng, floors: rows[0].floors,
             buildName: body.complexName || '', matched: rows[0].match_type || 'dong',

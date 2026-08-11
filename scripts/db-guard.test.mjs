@@ -134,6 +134,21 @@ test('★채움은 판정을 복제하지 않는다 — 동 채택 규칙은 coo
     '⚠️ `|| byDong[0]` 폴백이 되살아났다 — 단지명 검증 실패해도 주변 아무 건물이나 집는다');
 });
 
+test('★격리된 동 좌표 캐시는 서빙하지 않는다 (C-4-b)', () => {
+  // 오염을 만든 옛 pickDong 이 남긴 캐시가 `/v1/building/dong-coords` 로 계속 나갔다.
+  // address_geocode_cache 는 월 재적재 삭제 목록에도 없어 영구 잔존한다.
+  assert.match(server, /match_type !== 'suspect'/,
+    "⚠️ suspect 캐시를 다시 서빙한다 — pickDong 을 고쳐도 캐시 히트가 오염을 계속 내보낸다");
+});
+
+test('★VWorld 지오코딩은 속도제한과 재시도를 거친다 (2026-08-11 실측)', () => {
+  const v = read('../services/address-service/src/vworld.js');
+  assert.match(v, /geocodeLimiter\.acquire\(\)/,
+    '⚠️ 속도제한이 빠졌다 — 초당 20 이면 346회째에 502 로 무너진다(실측 성공률 49.5%)');
+  assert.match(v, /shouldRetryGeocode\(/,
+    '⚠️ 재시도가 빠졌다 — 502 는 과부하 응답이라 기다렸다 다시 하면 성공한다');
+});
+
 test('★채움 동시성은 3을 넘지 않는다 — 배치가 운영 API 를 두 번 죽였다', () => {
   const w = read('../services/address-service/src/coords/coordWrite.js');
   assert.match(w, /Math\.min\(3,/,
