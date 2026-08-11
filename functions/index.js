@@ -331,6 +331,60 @@ const apiPost = async (path, body) => {
   } catch { return null; }
 };
 
+/**
+ * 좌표 저장소(C-2~C-5) 일괄 조회 — **이미 확보해 둔 좌표를 외부 호출 없이 가져온다.**
+ *
+ * ★2026-08-11 점검에서 드러난 끊긴 배관을 여기서 잇는다. 저장소에는 VWorld 기반
+ *   입구/중심/동 좌표가 쌓여 있는데(building_coord), 이 스케줄 함수는 그걸 보지 않고
+ *   매번 새로 지오코딩을 사고 있었다. 화면 명단의 lat/lng 를 채우는 것은 이 함수뿐이므로,
+ *   저장소를 안 보면 **쌓아둔 좌표가 화면에 영영 반영되지 않는다.**
+ *
+ * ★건별이 아니라 batch 통째로 한 번 묻는다(100건 = HTTP 1회). resolve 는 배열을 받는다.
+ * ★`mode:'cache'` 고정 — 조회 전용이라 외부 API 를 태우지 않는다(설계서 F10).
+ *   채움은 배치(nexus-address-listfill)와 정기배치(C-6)가 맡는다.
+ *
+ * ★고르는 순서 = 동 → 입구 → 중심. **SSOT 는 `src/utils/coordStoreApi.js` 의
+ *   `pickStoreCoord(entry,'sequence')`** 다. 명단 lat/lng 는 지도 표시·순번에 쓰이므로
+ *   단지 안에서는 동 좌표가 맞다(내비 링크만 입구→중심을 쓴다 — 설계서 F2).
+ *   functions 는 CommonJS 라 그 모듈을 못 불러온다. **규칙이 갈리면 화면과 배치가
+ *   서로 다른 좌표를 쓰면서 아무 에러도 안 난다** — 바꿀 때 반드시 양쪽을 같이 고칠 것.
+ */
+const STORE_BAD_QUALITY = new Set(['outlier', 'none', 'no_anchor', 'unknown']);
+
+const storeCoordsFor = async (docs, sigungu) => {
+  const found = new Map();
+  const records = docs.map((d) => {
+    const r = d.data();
+    return {
+      roadAddress: r.standardRoadAddress || extractRoadAddress(r.주소) || '',
+      sigungu: r.matchedSigungu || sigungu || '',
+      legalEmd: r.legalDong || r.법정동 || '',
+      buildingName: r.buildingName || r.건물명 || '',
+      dongNo: parseDongNo(r.detailAddress),
+      isApartment: r.isApt === true,
+    };
+  });
+  if (!records.some((x) => x.roadAddress)) return found;
+  try {
+    const res = await fetch(`${ADDRESS_API_URL}/v1/coords/resolve`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ mode: 'cache', records }),
+    });
+    if (!res.ok) return found;
+    const j = await res.json();
+    const coords = Array.isArray(j?.coords) ? j.coords : [];
+    // ★길이가 다르면 통째로 버린다 — 인덱스가 밀리면 **다른 사람의 좌표**가 붙는다.
+    if (coords.length !== docs.length) return found;
+    coords.forEach((c, i) => {
+      if (!c || STORE_BAD_QUALITY.has(c.quality)) return;
+      const p = c.dong || c.entrance || c.center;
+      if (p && p.lat != null && p.lng != null) found.set(docs[i].id, { lat: Number(p.lat), lng: Number(p.lng) });
+    });
+  } catch { /* 저장소가 없어도 아래 기존 경로가 받는다 */ }
+  return found;
+};
+
 const apiGeocode = async (r, sido, sigungu) => {
   const road = r.standardRoadAddress || extractRoadAddress(r.주소);
   if (!road) return null;
@@ -464,15 +518,21 @@ exports.geocodeAuto = onSchedule(
       const sigungu = parts.slice(1).join(' ');
       const cacheCol = db.collection('coordinate_cache').doc(job.city).collection('addresses');
       const batch = missing.slice(0, 100);
-      let idx = 0, success = 0, failed = 0;
+      let idx = 0, success = 0, failed = 0, fromStore = 0;
+
+      // ① 좌표 저장소를 **먼저 통째로** 묻는다(HTTP 1회·외부 API 0). 여기서 나온 건은
+      //    아래 캐시·지오코딩을 아예 타지 않는다 — 이미 확보한 좌표를 다시 살 이유가 없다.
+      const storeMap = await storeCoordsFor(batch, sigungu);
 
       const worker = async () => {
         while (idx < batch.length) {
           const docSnap = batch[idx++];
           const r = docSnap.data();
           const key = coordCacheKey(r);
-          let coord = null;
-          if (key) {
+          let coord = storeMap.get(docSnap.id) || null;
+          const viaStore = Boolean(coord);
+          if (viaStore) fromStore++;
+          if (!coord && key) {
             try { const c = await cacheCol.doc(key).get(); if (c.exists) { const cd = c.data(); if (cd.lat && cd.lng) coord = { lat: cd.lat, lng: cd.lng }; } } catch { /* ignore */ }
           }
           if (!coord) {
@@ -481,7 +541,9 @@ exports.geocodeAuto = onSchedule(
           }
           if (coord) {
             success++;
-            await docSnap.ref.update({ lat: coord.lat, lng: coord.lng, 좌표상태: '좌표확인', 좌표출처: 'cloud-auto', 좌표수정일시: admin.firestore.FieldValue.serverTimestamp() });
+            // 출처를 나눠 적는다 — 나중에 "저장소가 실제로 몇 %를 대주는가"를 셀 수 있어야
+            // 배관이 다시 끊겼을 때 알아챈다(이번 사고가 정확히 그 종류였다).
+            await docSnap.ref.update({ lat: coord.lat, lng: coord.lng, 좌표상태: '좌표확인', 좌표출처: viaStore ? 'coord-store' : 'cloud-auto', 좌표수정일시: admin.firestore.FieldValue.serverTimestamp() });
           } else {
             failed++;
             await docSnap.ref.update({ coordFailed: true, 확인필요: true, 좌표상태: '좌표없음' });
@@ -489,7 +551,8 @@ exports.geocodeAuto = onSchedule(
         }
       };
       await Promise.all([worker(), worker(), worker(), worker()]);
-      console.log(`[geocodeAuto] ${job.city} ${job.monthId} 진행 — 성공 ${success} 실패 ${failed} (남은 월 ${candidates.length})`);
+      console.log(`[geocodeAuto] ${job.city} ${job.monthId} 진행 — 성공 ${success}`
+        + ` (저장소 ${fromStore} · 지오코딩 ${success - fromStore}) 실패 ${failed} (남은 월 ${candidates.length})`);
       // coordsDone는 아직 false → 다음 실행에서 이 월의 나머지를 계속 처리
     } catch (e) {
       console.error('[geocodeAuto] 오류:', e);
