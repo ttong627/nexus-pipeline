@@ -119,9 +119,24 @@ const refreshLearned = async () => {
 };
 
 // ── ④ 편입 표시 ──────────────────────────────────────────────────
+// ★기준 버전은 env(ADDRESS_DB_VERSION)가 아니라 **DB의 published 버전**을 읽는다.
+//   env 는 서비스·Job 이 따로 관리돼 월 적재 때 한쪽만 갱신되면 조용히 어긋난다
+//   (2026-08-11 실측: Job 이 기본값 202604 로 돌아 편입 표시가 영원히 0건이 될 뻔했다).
+const resolveActiveVersion = async (client) => {
+  const { rows } = await client.query(`
+    SELECT version_id FROM ${SCHEMA}.address_db_versions
+    WHERE status = 'published'
+    ORDER BY published_at DESC NULLS LAST, version_id DESC
+    LIMIT 1
+  `);
+  return rows[0]?.version_id || config.activeVersion;
+};
+
 const promoteLearned = async () => {
   let count = 0;
   await withClient(async (client) => {
+    const activeVersion = await resolveActiveVersion(client);
+    summary.activeVersion = activeVersion;
     const sql = `
       SELECT count(*)::int AS n
       FROM ${SCHEMA}.address_learned l
@@ -132,7 +147,7 @@ const promoteLearned = async () => {
             AND a.building_main_no = l.building_main_no
             AND a.building_sub_no = l.building_sub_no
         )`;
-    const { rows } = await client.query(sql, [config.activeVersion]);
+    const { rows } = await client.query(sql, [activeVersion]);
     count = rows[0]?.n || 0;
     if (APPLY && count) {
       await client.query(`
@@ -145,7 +160,7 @@ const promoteLearned = async () => {
               AND a.building_main_no = l.building_main_no
               AND a.building_sub_no = l.building_sub_no
           )
-      `, [config.activeVersion]);
+      `, [activeVersion]);
     }
   });
   return { promoted: count };
@@ -153,7 +168,7 @@ const promoteLearned = async () => {
 
 // ── 실행 ─────────────────────────────────────────────────────────
 try {
-  console.log(`[sync] 시작 — ${APPLY ? '실제 적용' : '예행(dry-run)'} · version ${config.activeVersion}`);
+  console.log(`[sync] 시작 — ${APPLY ? '실제 적용' : '예행(dry-run)'}`);
   summary.steps.schema = await ensureSchema();
   summary.steps.entrc = SKIP_ENTRC ? { skipped: '자료폴더 미지정' } : await loadEntrc();
   summary.steps.refresh = await refreshLearned();
@@ -164,7 +179,7 @@ try {
   console.log(`  출입구 연계적재 : ${summary.steps.entrc.skipped || `exit ${summary.steps.entrc.exitCode}`}`);
   console.log(`  학습주소 재확인 : 확인 ${fmt(summary.steps.refresh.checked)} · 갱신 ${fmt(summary.steps.refresh.updated)}`
     + ` · 변화없음 ${fmt(summary.steps.refresh.unchanged)} · 미확인 ${fmt(summary.steps.refresh.unresolved)}`);
-  console.log(`  정식DB 편입     : ${fmt(summary.steps.promote.promoted)}건`);
+  console.log(`  정식DB 편입     : ${fmt(summary.steps.promote.promoted)}건 (기준 version ${summary.activeVersion || '?'})`);
   if (!APPLY) console.log('\n  ※ 예행이라 DB는 바뀌지 않았습니다. 실제 적용은 --apply');
   console.log(JSON.stringify(summary));
 } finally {
