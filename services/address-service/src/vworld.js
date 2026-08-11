@@ -3,6 +3,7 @@
 // - 지역검증(시군구 대조)으로 전국 동명 오매칭 차단 (CLAUDE.md A-30 취지)
 import { config } from './config.js';
 import { cleanText } from './normalize.js';
+import { acceptDongCandidate } from './coords/coordFill.js';
 
 const VWORLD_BASE = 'https://api.vworld.kr/req';
 const DEFAULT_TIMEOUT_MS = 7000;
@@ -108,17 +109,14 @@ const sigunguMatches = (bldSigungu, wantSigungu) => {
   return a.includes(b) || b.includes(a) || b.split(/\s+/).some((tok) => tok && a.includes(tok));
 };
 
-// BBOX 조회 건물 목록에서 원하는 동(棟)을 고른다 — 동번호 일치 + (단지명 있으면) 단지명 포함 우선.
-//   단지명으로 좁혀 인접 단지의 같은 동번호 오채택을 차단(대형 BBOX 확장 시 특히 중요).
+// BBOX 조회 건물 목록에서 원하는 동(棟)을 고른다 — 지역검증(A-30) 후 채택 판정은 coordFill 로 위임.
+//   ★2026-08-11 근본수정: 예전엔 `단지명 일치 || byDong[0]` 이라 **단지명 검증에 실패해도
+//   주변 아무 건물이나 집었다**. 그게 C-4 이관에서 375건을 격리해야 했던 오염의 원인이다
+//   (실측: `B동` 좌표 하나가 성암빌라·진아빌라·청양맨션·청정빌라·신한그린빌에 동시에 붙음).
+//   판정 규칙은 acceptDongCandidate 하나만 쓴다 — 여기에 복제하면 둘이 갈라진다.
 const pickDong = (buildings, { wantDong, complexName, sigungu }) => {
-  if (!wantDong) return null;
   const regional = buildings.filter((b) => b.lat != null && sigunguMatches(b.sigungu, sigungu));
-  const byDong = regional.filter((b) => b.dongNo === wantDong);
-  if (!byDong.length) return null;
-  const pick = complexName
-    ? byDong.find((b) => cleanText(b.buildName).includes(cleanText(complexName))) || byDong[0]
-    : byDong[0];
-  return pick || null;
+  return acceptDongCandidate(regional, { wantDong, complexName });
 };
 
 // 도로명 + 단지명 + 동번호 → 특정 동의 좌표·층수

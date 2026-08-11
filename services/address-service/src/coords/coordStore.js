@@ -37,6 +37,27 @@ export const buildCoordKey = ({ roadCode = '', undergroundYn = '0', buildingMain
   return `${code}#${under}#${main}-${sub}`;
 };
 
+/**
+ * coord_key → 앵커 구성요소 (buildCoordKey 의 역함수).
+ *
+ * ★C-3 채움이 쓴다: 조회는 키만 돌려주는데, 채움은 출입구 자료를 찾을 때
+ *   road_code·본번·부번이 각각 필요하다. 키를 직접 쪼개 쓰면 형식이 바뀔 때
+ *   조용히 어긋나므로 **역함수를 만들고 왕복을 회귀로 못 박는다**.
+ *   형식이 아니면 null — 잘못 푼 앵커로 쓰면 남의 건물에 좌표가 붙는다.
+ */
+export const parseCoordKey = (key) => {
+  const m = /^(\d+)#([01])#(\d+)-(\d+)$/.exec(String(key ?? '').trim());
+  if (!m) return null;
+  const buildingMainNo = Number(m[3]);
+  if (!buildingMainNo) return null;
+  return {
+    roadCode: m[1],
+    undergroundYn: m[2],
+    buildingMainNo,
+    buildingSubNo: Number(m[4]),
+  };
+};
+
 /** 동 표기 정규화 — '0101'·'101동' → '101', '가동' → '가' (클라 apartmentDong 과 정합) */
 export const normalizeDongNo = (value) => {
   const s = String(value ?? '').trim().replace(/동$/, '').trim();

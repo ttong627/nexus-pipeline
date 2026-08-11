@@ -6,6 +6,7 @@ import { geocodeRoad, matchDongCoord, parseDongNo } from './vworld.js';
 import { judgeCandidate } from './matchGuard.js';
 import { learnedRoadKey, learnedRowFromJuso, learnedRowToResult, sigunguToken } from './learnedStore.js';
 import { coordStatus, resolveCoords } from './coords/coordQuery.js';
+import { fillCoords, MAX_FILL_PER_CALL } from './coords/coordWrite.js';
 import { createPurifier } from './purify.js';
 import {
   distanceMeters, recommendDaySplit, recommendLoadBalance, recommendSequence, sequenceUnits,
@@ -805,11 +806,19 @@ const server = createServer(async (req, res) => {
       if (records.length > 5000) {
         return json(res, 413, { ok: false, error: '한 번에 5000건까지 조회합니다.' }, headers);
       }
-      // ★fill 을 조용히 cache 로 처리하면 호출부는 채워진 줄 안다(F9). 명시적으로 거절한다.
+      // ★fill 을 조용히 cache 로 처리하면 호출부는 채워진 줄 안다(F9). 두 갈래를 끝까지 분리한다.
       const mode = body.mode === 'fill' ? 'fill' : 'cache';
       if (mode === 'fill') {
-        return json(res, 501, {
-          ok: false, error: "mode:'fill' 은 아직 없습니다(C-3). 지금은 조회(mode:'cache')만 가능합니다.",
+        // 채움은 외부 API 를 태운다 — 정제 화면은 절대 이 갈래를 쓰지 않는다(F10).
+        // 큰 명단을 한 번에 받으면 Cloud SQL 1 vCPU 가 못 버틴다(2026-08-01 실측 504).
+        if (records.length > MAX_FILL_PER_CALL) {
+          return json(res, 413, {
+            ok: false, error: `채움은 한 번에 ${MAX_FILL_PER_CALL}건까지입니다. 나눠서 보내세요.`,
+          }, headers);
+        }
+        const filled = await fillCoords(records, { version: config.activeVersion });
+        return json(res, 200, {
+          ok: true, mode, count: filled.coords.length, coords: filled.coords, summary: filled.summary,
         }, headers);
       }
       const coords = await resolveCoords(records, config.activeVersion);

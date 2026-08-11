@@ -115,6 +115,27 @@ test('★정제 화면이 쓰는 조회 경로는 외부 API를 태우지 않는
   const q = read('../services/address-service/src/coords/coordQuery.js');
   assert.doesNotMatch(q, /fetch\(|geocodeRoad|matchDongCoord/,
     '⚠️ 좌표 조회 경로에 외부 API 호출이 들어왔다 — 정제 중 화면이 멈춘다(무지연 원칙)');
-  assert.match(server, /mode:'fill'\] 은 아직 없습니다|mode:'fill' 은 아직 없습니다/,
-    "⚠️ fill 을 조용히 cache 로 처리하면 호출부는 좌표가 채워진 줄 안다");
+  // C-3 이후: fill 이 구현됐으므로 "아직 없습니다" 대신 **두 갈래가 섞이지 않음**을 잠근다.
+  // 조회(cache)가 채움(fillCoords)을 타면 정제 화면이 외부 API 를 태우게 된다.
+  assert.match(server, /mode === 'fill'[\s\S]{0,600}?fillCoords\(/,
+    '⚠️ fill 갈래가 fillCoords 를 부르지 않는다 — 조용히 cache 로 처리되면 채워진 줄 안다(F9)');
+  const cacheBranch = server.slice(server.indexOf("const coords = await resolveCoords"));
+  assert.doesNotMatch(cacheBranch.slice(0, 300), /fillCoords/,
+    '⚠️ 조회 갈래에 채움이 섞였다 — 정제 중 외부 API 가 돈다(F10)');
+});
+
+test('★채움은 판정을 복제하지 않는다 — 동 채택 규칙은 coordFill 하나뿐이다 (F3)', () => {
+  const vworld = read('../services/address-service/src/vworld.js');
+  assert.match(vworld, /acceptDongCandidate/,
+    '⚠️ vworld 가 자체 동 채택 로직으로 되돌아갔다 — 오염 격리 375건의 원인이 그것이다');
+  // 주석에는 "예전엔 `|| byDong[0]` 이었다"는 경위가 적혀 있다 — 코드만 본다.
+  const code = vworld.replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
+  assert.doesNotMatch(code, /\|\|\s*byDong\[0\]/,
+    '⚠️ `|| byDong[0]` 폴백이 되살아났다 — 단지명 검증 실패해도 주변 아무 건물이나 집는다');
+});
+
+test('★채움 동시성은 3을 넘지 않는다 — 배치가 운영 API 를 두 번 죽였다', () => {
+  const w = read('../services/address-service/src/coords/coordWrite.js');
+  assert.match(w, /Math\.min\(3,/,
+    '⚠️ 좌표 채움 동시성 상한이 풀렸다 — 커넥션 풀 잠식으로 /v1/address/match 가 500 을 낸다');
 });
