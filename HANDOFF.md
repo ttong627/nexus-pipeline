@@ -22,8 +22,16 @@
 | **동 표기 파싱 통일** | `toDongNo` — 값이면 정규화, 이름이면 추출 |
 
 **운영 반영**: Cloud Run 서비스 `nexus-address-api` 리비전 **`00071-qr2`** (롤백 지점 `00066-znm`).
-Job **`nexus-address-sync`**(매일 04:23·--apply·타임아웃 3600초) **C-6 코드로 재배포 완료**.
-Job **`nexus-address-fill`**(진단·예행용 — `--args` 를 갈아 끼워 쓴다).
+
+| Job | 하는 일 | 스케줄 | 메모리/타임아웃 |
+|---|---|---|---|
+| `nexus-address-sync` | ①~⑥ 정기 동기화(C-6 포함) | 매일 **04:23** | 1Gi / 3600s |
+| `nexus-address-listfill` | **명단 → 좌표저장소 행 만들기**(C-6 이 못 메우는 구멍) | 매주 **월 05:00** | 1Gi / 7200s |
+| `nexus-address-entrc` | C-7 출입구 자료 적재(기본 **예행**) | 수동 | 2Gi / 7200s |
+| `nexus-address-fill` | 진단·격리(=`--args` 갈아 끼우는 자리) | 수동 | 1Gi / 1800s |
+
+⚠️ **Job 4개가 같은 소스를 쓴다.** 코드를 고치고 하나만 재배포하면 나머지는 옛 이미지로
+**에러 없이 다른 동작**을 한다 → 배포는 `bash scripts/deploy-jobs.sh` 로 한 번에.
 
 ### C-6 에서 새로 막은 것 (에러 없이 조용히 망가지는 것들)
 1. **무한루프** — 앵커 못 만든 건은 `updated_at` 이 안 밀려 배치가 같은 200건을 하루 종일 다시 꺼낸다. 에러도 쿼터 소모도 없어 로그상 정상으로 보인다 → `touchCoordRows` 로 "봤다"를 찍는다.
@@ -35,16 +43,22 @@ Job **`nexus-address-fill`**(진단·예행용 — `--args` 를 갈아 끼워 �
 
 ## 다음 단계 (이어서 할 일)
 
-1. **전 명단 좌표 채우기** — 🔄 **2026-08-11 밤 실행 중**(`--all --apply`).
+1. **전 명단 좌표 채우기** — 🔄 **2026-08-11 밤 실행 중**(로컬 `--all --apply`).
    16개 명단 98,020건 순차. 명단당 **약 15분**(부천 오정구 4,356건=897초 실측) → 총 4~5시간.
-   중단돼도 채운 건 저장소에 남아 **재실행하면 캐시로 빨리 지나간다**. 한 명단이 실패해도
-   나머지는 계속 돌고 끝에 명단별 표로 요약된다.
+   중단돼도 채운 건 저장소에 남아 **재실행하면 캐시로 빨리 지나간다**.
+
+   ✅ **이제 무인으로 돈다** — Job `nexus-address-listfill` + Cloud Scheduler **매주 월 05:00**.
+   스크립트는 서버로 옮겨졌다(`services/address-service/scripts/fill-list-coords.mjs`).
+   루트 `scripts/` 에는 **없다**(이관·복제 금지).
    ```
-   node scripts/fill-list-coords.mjs --all --apply     # 전체
-   node scripts/fill-list-coords.mjs --list            # 목록
-   node scripts/fill-list-coords.mjs --city "<지자체>" --month <YYYY-MM>   # 하나만 실측
+   # 수동 실행(서버 디렉토리에서)
+   GOOGLE_APPLICATION_CREDENTIALS=../../serviceAccountKey.json node scripts/fill-list-coords.mjs --list
+   node scripts/fill-list-coords.mjs --city "경기도 시흥시" --month 2026-07          # 실측
+   node scripts/fill-list-coords.mjs --all --apply                                   # 전체 채움
+   # Job 으로
+   gcloud run jobs execute nexus-address-listfill --region asia-northeast3 --project logis-op --account ttong627@gmail.com
    ```
-   ⚠️ **끝났는지 먼저 확인할 것** — 안 끝났으면 겹쳐 돌리지 말 것(같은 주소를 두 번 산다).
+   ⚠️ **끝났는지 먼저 확인할 것** — 겹쳐 돌리면 같은 주소를 두 번 산다.
 
 2. **`parseAptDong` 오탐 24건** — 도로명 부번을 동으로 읽는다(`동서로 895-24 → 895동`).
    **순번이 단독주택 24채를 한 동으로 묶는다.** 순번 엔진 핵심이라 손대지 않았다 — §5-3-A 참조.
