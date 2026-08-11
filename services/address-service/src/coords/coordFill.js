@@ -157,14 +157,19 @@ export const createQuotaCounter = (limits = {}) => {
  *   - no_anchor : 주소를 특정 못 한 것. **좌표 문제가 아니라 주소 문제다**(A-36).
  *   - none      : 해봤는데 없었다. 재시도는 정기배치(C-6)가 주기를 두고 한다.
  *   - outlier   : 이상 좌표는 다시 채운다(DS-15 — 그대로 두면 기사 구역이 부풀어 오른다).
+ *
+ * ★`retryNone` 은 **정기배치 전용**이다(C-6 ⑤). 기본이 false 인 이유: 명단 정제·루트맵에서
+ *   부르는 경로가 매번 'none' 을 다시 태우면 답도 안 나오는 주소에 쿼터를 계속 태운다.
+ *   "언제 다시 물을지"는 대상 SQL(`loadFillTargets` 의 retryDays)이 정하고, 이 플래그는
+ *   그렇게 골라온 건을 통과시키는 문 역할만 한다.
  */
-export const classifyFillTargets = (entries = []) => {
+export const classifyFillTargets = (entries = [], { retryNone = false } = {}) => {
   const fill = [];
   const skip = [];
   for (const e of entries) {
     if (!e) continue;
     if (e.quality === 'no_anchor' || !e.coordKey) { skip.push({ ...e, reason: 'no_anchor' }); continue; }
-    if (e.quality === 'none') { skip.push({ ...e, reason: 'tried_none' }); continue; }
+    if (e.quality === 'none' && !retryNone) { skip.push({ ...e, reason: 'tried_none' }); continue; }
     const hasPoint = Boolean(e.entrance || e.center);
     // ★내비용 점과 동 좌표는 **용도가 다른 별개의 값**이다. 중심이 있다고 동을 안 채우면
     //   단지 내부 동선이 영원히 안 살아난다(은마아파트 동간 약 280m).

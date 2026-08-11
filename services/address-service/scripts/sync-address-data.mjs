@@ -11,7 +11,9 @@
 //    ③ 학습주소 재확인: 아직 전체분 DB에 없는 건(promoted NULL)을 JUSO로 다시 물어
 //       주소가 바뀌었거나 정식 등재됐는지 갱신한다
 //    ④ 편입 표시: 이번 전체분에 들어온 학습주소를 promoted_version_id 로 마킹
-//    ⑤ 실행 요약 출력(운영 로그·알림용)
+//    ⑤ 좌표 미보유 건물 채우기 — 일일 쿼터·시간 예산 안에서(C-6·설계서 §3-5)
+//    ⑥ 좌표 이상치 검증 — quality='outlier' 로 **표시만** 한다(좌표는 지우지 않는다)
+//    ⑦ 실행 요약 출력(운영 로그·알림용)
 //
 //  ★기본이 예행(dry-run)이다. 운영 DB 쓰기는 --apply 를 붙였을 때만 일어난다.
 //  ★자료 수신 경로는 계정 인증이 걸린 영역이라 이 스크립트가 임의로 내려받지 않는다.
@@ -23,6 +25,7 @@
 //    node scripts/sync-address-data.mjs --entrc "<연계자료폴더>"            # 예행
 //    node scripts/sync-address-data.mjs --entrc "<연계자료폴더>" --apply    # 실제 적용
 //    node scripts/sync-address-data.mjs --apply --skip-entrc                # 학습분만 갱신
+//    node scripts/sync-address-data.mjs --apply --skip-coords               # 좌표 단계 제외
 // ══════════════════════════════════════════════════════════════════
 import { spawn } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
@@ -32,6 +35,10 @@ import { fileURLToPath } from 'node:url';
 import { config } from '../src/config.js';
 import { closePool, withClient } from '../src/db.js';
 import { learnedRowFromJuso } from '../src/learnedStore.js';
+import { availableSources, createQuotaCounter } from '../src/coords/coordFill.js';
+import { countFillTargets, loadCoordRowsForCheck, loadFillTargets } from '../src/coords/coordQuery.js';
+import { planOutlierMarks, OUTLIER_MIN_SAMPLE, OUTLIER_RADIUS_KM } from '../src/coords/coordOutlier.js';
+import { DAILY_LIMITS, MAX_FILL_PER_CALL, fillCoords, markOutlierRows, touchCoordRows } from '../src/coords/coordWrite.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const argv = process.argv.slice(2);
@@ -43,6 +50,23 @@ const ENTRC_DIR = opt('entrc', null);
 const SKIP_ENTRC = flag('skip-entrc') || !ENTRC_DIR;
 const REFRESH_LIMIT = Number(opt('refresh-limit', 200)) || 200;
 const SCHEMA = config.dbSchema;
+
+// ── 좌표 단계(⑤⑥) 설정 ──────────────────────────────────────────
+const SKIP_COORDS = flag('skip-coords');
+const COORD_SIGUNGU = opt('coord-sigungu', '') || '';
+/** 이 배치 한 번이 좌표 채움에 쓸 수 있는 최대 건수. 쿼터(§3-3)와 별개의 2차 상한. */
+const COORD_LIMIT = Number(opt('coord-limit', process.env.COORD_FILL_DAILY_MAX || 20000)) || 20000;
+/** 'none'·'outlier' 를 다시 태우기까지의 간격(일). 주소DB 갱신 주기(월)에 맞춘다. */
+const COORD_RETRY_DAYS = Number(opt('coord-retry-days', process.env.COORD_FILL_RETRY_DAYS || 30)) || 30;
+/**
+ * ⑤에 허용할 시간(초).
+ *
+ * ★쿼터만으로는 부족하다. VWorld 는 **초당 2건**이 상한이라(vworld.js 실측: 초당 3.9 에서
+ *   붕괴) 20,000건은 산술적으로 2.8시간이다. Job task-timeout 이 3600초이므로
+ *   시간 상한이 없으면 배치는 ⑥에 닿지도 못한 채 **중간에 잘린다** — 그리고 잘린 실행은
+ *   요약 로그를 남기지 않아 무엇이 됐는지 알 수 없다. 예산 안에서 끝내고 나머지는 이월한다.
+ */
+const COORD_BUDGET_SEC = Number(opt('coord-budget-sec', process.env.COORD_FILL_BUDGET_SEC || 1200)) || 1200;
 
 const fmt = (n) => Number(n || 0).toLocaleString('ko-KR');
 const summary = { startedAt: new Date().toISOString(), apply: APPLY, steps: {} };
@@ -166,6 +190,95 @@ const promoteLearned = async () => {
   return { promoted: count };
 };
 
+// ── ⑤ 좌표 미보유 건물 채우기 (C-6 · 설계서 §3-5) ────────────────
+// ★예행에서는 외부 API 를 부르지 않는다 — 대상 건수만 센다(fill-coords.mjs 와 같은 규칙).
+const fillMissingCoords = async () => {
+  if (SKIP_COORDS) return { skipped: '--skip-coords' };
+
+  // ★키가 없으면 시작하지 않는다. 2026-08-11 실측: 키 없이 돌렸더니 채움률 0% 가 나왔고
+  //   그 0% 가 "이 주소들은 좌표가 원래 없다"처럼 보였다(설계서 F9).
+  const sources = availableSources(config);
+  const pending = await countFillTargets({ retryDays: COORD_RETRY_DAYS, sigungu: COORD_SIGUNGU });
+  if (!sources.length) return { skipped: '출처 키 없음(VWORLD_KEY·KAKAO_REST_KEY)', pending };
+  if (!pending) return { sources, pending: 0, attempted: 0, filled: 0, remaining: 0 };
+  if (!APPLY) return { sources, pending, note: '예행 — 외부 API·쓰기 없음' };
+
+  const quota = createQuotaCounter(DAILY_LIMITS);
+  const deadline = Date.now() + COORD_BUDGET_SEC * 1000;
+  // ★한 바퀴만 돈다. 처리한 행은 touchCoordRows 로 목록 뒤로 가므로, 시작 시점의
+  //   남은 건수만큼 처리하면 전부 한 번씩 본 것이다. 이 상한이 없으면 앵커를 못 만드는
+  //   건들 사이를 계속 순환한다.
+  const budget = Math.min(pending, COORD_LIMIT);
+  const stat = {
+    sources, pending, attempted: 0, filled: 0, none: 0, dongs: 0,
+    skipped: 0, skipReasons: {}, bySource: {}, rounds: 0, carried: 0, stopped: null,
+  };
+
+  while (stat.attempted + stat.skipped < budget) {
+    if (Date.now() >= deadline) { stat.stopped = 'time'; break; }
+    if (quota.exhausted('vworld') && quota.exhausted('kakao')) { stat.stopped = 'quota'; break; }
+
+    const take = Math.min(MAX_FILL_PER_CALL, budget - (stat.attempted + stat.skipped));
+    const targets = await loadFillTargets({ limit: take, retryDays: COORD_RETRY_DAYS, sigungu: COORD_SIGUNGU });
+    if (!targets.length) { stat.stopped = 'drained'; break; }
+
+    const records = targets.map((t) => ({
+      roadAddress: t.road_address,
+      sigungu: t.sigungu || '',
+      legalEmd: t.legal_emd || '',
+      buildingName: t.building_name || '',
+      isApartment: t.is_apartment === true,
+    }));
+    const { summary } = await fillCoords(records, { version: config.activeVersion, quota, retryNone: true });
+    // ★성공·실패·건너뜀 무관하게 "봤다"를 찍는다. 안 찍으면 다음 라운드가 같은 행을 다시 꺼낸다.
+    await touchCoordRows(targets.map((t) => t.coord_key));
+
+    stat.rounds += 1;
+    stat.attempted += summary.attempted;
+    stat.filled += summary.filled;
+    stat.none += summary.none;
+    stat.dongs += summary.dongs;
+    stat.skipped += summary.skipped;
+    for (const [k, v] of Object.entries(summary.skipReasons || {})) stat.skipReasons[k] = (stat.skipReasons[k] || 0) + v;
+    for (const [k, v] of Object.entries(summary.bySource || {})) stat.bySource[k] = (stat.bySource[k] || 0) + v;
+    // ★쿼터 때문에 못 부른 건수는 **종료 사유와 따로** 센다. 여기에 stopped='quota' 를
+    //   찍으면 실제로는 대상이 바닥나서(drained) 끝났는데도 로그가 "쿼터 소진"이라
+    //   거짓 보고한다 — 그러면 한도부터 의심하느라 진짜 원인을 못 본다.
+    stat.carried += summary.carried || 0;
+  }
+  if (!stat.stopped) stat.stopped = 'budget';   // 한 바퀴 다 돌았다
+
+  stat.quota = quota.summary();
+  stat.elapsedSec = Math.round((COORD_BUDGET_SEC * 1000 - (deadline - Date.now())) / 1000);
+  // ★"가져온 것"이 아니라 **남은 것**을 다시 센다. 이월 건수를 눈으로 보지 못하면
+  //   좌표가 안 늘어나는 걸 아무도 모른다(F7).
+  stat.remaining = await countFillTargets({ retryDays: COORD_RETRY_DAYS, sigungu: COORD_SIGUNGU });
+  return stat;
+};
+
+// ── ⑥ 좌표 이상치 검증 (C-6 · 설계서 F5) ────────────────────────
+// 표시만 하고 좌표는 지우지 않는다. 판정 기준은 화면과 같은 detectCoordOutliers.
+const verifyCoordOutliers = async () => {
+  if (SKIP_COORDS) return { skipped: '--skip-coords' };
+  const rows = await loadCoordRowsForCheck({ sigungu: COORD_SIGUNGU });
+  if (!rows.length) return { checked: 0, marked: 0, note: '검증할 좌표 없음' };
+
+  const { marks, stale, groups, checked } = planOutlierMarks(rows, {
+    radiusKm: OUTLIER_RADIUS_KM, minSample: OUTLIER_MIN_SAMPLE,
+  });
+  const marked = APPLY ? await markOutlierRows(marks) : 0;
+  return {
+    scanned: rows.length,
+    checked,
+    groups: groups.length,
+    groupsSkipped: groups.filter((g) => g.skipped).length,
+    candidates: marks.length,
+    marked,
+    stale: stale.length,
+    sample: marks.slice(0, 5).map((m) => `${m.sigungu} ${m.roadAddress} — ${m.distanceKm}km`),
+  };
+};
+
 // ── 실행 ─────────────────────────────────────────────────────────
 try {
   console.log(`[sync] 시작 — ${APPLY ? '실제 적용' : '예행(dry-run)'}`);
@@ -173,13 +286,39 @@ try {
   summary.steps.entrc = SKIP_ENTRC ? { skipped: '자료폴더 미지정' } : await loadEntrc();
   summary.steps.refresh = await refreshLearned();
   summary.steps.promote = await promoteLearned();
+  summary.steps.coordFill = await fillMissingCoords();
+  summary.steps.coordCheck = await verifyCoordOutliers();
   summary.finishedAt = new Date().toISOString();
+
+  const cf = summary.steps.coordFill;
+  const cc = summary.steps.coordCheck;
 
   console.log('\n══ 동기화 요약 ══');
   console.log(`  출입구 연계적재 : ${summary.steps.entrc.skipped || `exit ${summary.steps.entrc.exitCode}`}`);
   console.log(`  학습주소 재확인 : 확인 ${fmt(summary.steps.refresh.checked)} · 갱신 ${fmt(summary.steps.refresh.updated)}`
     + ` · 변화없음 ${fmt(summary.steps.refresh.unchanged)} · 미확인 ${fmt(summary.steps.refresh.unresolved)}`);
   console.log(`  정식DB 편입     : ${fmt(summary.steps.promote.promoted)}건 (기준 version ${summary.activeVersion || '?'})`);
+  if (cf.skipped) {
+    console.log(`  좌표 채움       : 건너뜀 — ${cf.skipped}${cf.pending != null ? ` (대상 ${fmt(cf.pending)}건 남음)` : ''}`);
+  } else if (cf.note) {
+    console.log(`  좌표 채움       : 대상 ${fmt(cf.pending)}건 · ${cf.note} (출처 ${cf.sources.join('·')})`);
+  } else {
+    console.log(`  좌표 채움       : 시도 ${fmt(cf.attempted)} · 확보 ${fmt(cf.filled)} · 못구함 ${fmt(cf.none)}`
+      + ` · 동 ${fmt(cf.dongs)} · 건너뜀 ${fmt(cf.skipped)}${Object.keys(cf.skipReasons || {}).length ? ` ${JSON.stringify(cf.skipReasons)}` : ''}`);
+    // ★남은 건수를 매번 찍는다. 0건 진행이 이틀 연속이면 무언가 막힌 것이다(F7).
+    console.log(`                    출처 ${JSON.stringify(cf.bySource)} · 쿼터 ${JSON.stringify(cf.quota)}`
+      + ` · 쿼터로 못부른 건 ${fmt(cf.carried)}`
+      + ` · ${cf.rounds}회전 ${cf.elapsedSec}초${cf.stopped ? ` · 종료 ${cf.stopped}` : ''}`);
+    console.log(`                    ★다음으로 이월 ${fmt(cf.remaining)}건`);
+  }
+  if (cc.skipped) {
+    console.log(`  좌표 이상치     : 건너뜀 — ${cc.skipped}`);
+  } else {
+    console.log(`  좌표 이상치     : 검사 ${fmt(cc.checked)} / 조회 ${fmt(cc.scanned || 0)}`
+      + ` · 지자체 ${fmt(cc.groups || 0)}(표본부족 ${fmt(cc.groupsSkipped || 0)})`
+      + ` · 후보 ${fmt(cc.candidates || 0)} → 표시 ${fmt(cc.marked || 0)} · 해제후보 ${fmt(cc.stale || 0)}`);
+    for (const s of cc.sample || []) console.log(`                    ${s}`);
+  }
   if (!APPLY) console.log('\n  ※ 예행이라 DB는 바뀌지 않았습니다. 실제 적용은 --apply');
   console.log(JSON.stringify(summary));
 } finally {

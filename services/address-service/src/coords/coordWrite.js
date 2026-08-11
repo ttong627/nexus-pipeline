@@ -138,6 +138,55 @@ export const writeDongRows = async (coordKey, dongs = []) => {
   return n;
 };
 
+/** 이상치 표시를 한 번에 몇 건씩 쓸지 — `db.js` 의 15초 상한 안에 확실히 들어가는 크기. */
+const MARK_CHUNK = 1000;
+
+/**
+ * "이번 배치가 이 행을 봤다"를 기록한다 — 시도 횟수 +1, updated_at 갱신. **좌표·품질 무변경.**
+ *
+ * ★없으면 정기배치가 무한루프에 빠진다. 채움 대상은 `updated_at` 오래된 순으로 200건씩
+ *   꺼내는데, 앵커를 못 만든 건(no_anchor)은 `writeCoordRow` 를 타지 않아 updated_at 이
+ *   그대로다. 그런 건이 200개 고이면 배치는 **같은 200건을 하루 종일 다시 꺼낸다** —
+ *   에러도 안 나고 쿼터도 안 줄어서(호출 자체를 안 하므로) 로그만 보면 정상처럼 보인다.
+ *   봤다는 사실을 찍어 뒤로 보내야 목록이 앞으로 나아간다.
+ */
+export const touchCoordRows = async (coordKeys = []) => {
+  const list = [...new Set(coordKeys.filter(Boolean))];
+  let n = 0;
+  for (let i = 0; i < list.length; i += MARK_CHUNK) {
+    const { rowCount } = await query(`
+      UPDATE ${S}.building_coord
+      SET attempt_count = attempt_count + 1, updated_at = now()
+      WHERE coord_key = ANY($1::text[])`, [list.slice(i, i + MARK_CHUNK)]);
+    n += rowCount || 0;
+  }
+  return n;
+};
+
+/**
+ * C-6 ⑥ 이상치 표시 — **좌표는 절대 건드리지 않는다**(형 지시·DS-15).
+ *
+ * ★SET 절에 lat/lng 가 없는 것이 이 함수의 핵심이다. 지운 좌표는 되돌릴 방법이 없고,
+ *   중앙값 판정은 표본이 바뀌면 결과도 바뀐다 — 판정이 틀렸을 때 원본이 남아 있어야 한다.
+ * ★이미 'outlier' 인 행은 갱신하지 않는다. 매일 같은 행의 updated_at 을 밀면
+ *   채움 배치의 '오래된 순' 정렬이 무너져 새 건물이 영영 뒤로 밀린다.
+ */
+export const markOutlierRows = async (marks = []) => {
+  const list = marks.filter((m) => m?.coordKey);
+  let n = 0;
+  for (let i = 0; i < list.length; i += MARK_CHUNK) {
+    const chunk = list.slice(i, i + MARK_CHUNK);
+    const { rowCount } = await query(`
+      UPDATE ${S}.building_coord b
+      SET quality = 'outlier', quality_note = m.note, updated_at = now()
+      FROM unnest($1::text[], $2::text[]) AS m(coord_key, note)
+      WHERE b.coord_key = m.coord_key AND b.quality <> 'outlier'`,
+    [chunk.map((m) => m.coordKey), chunk.map((m) => String(m.note || '').slice(0, 300))]);
+    n += rowCount || 0;
+  }
+  return n;
+};
+
 /** 동시성 제한 실행 — 순서 보존. */
 const mapPool = async (items, limit, fn) => {
   const out = new Array(items.length);
@@ -159,7 +208,7 @@ const mapPool = async (items, limit, fn) => {
  *   메모리의 기대값을 돌려주면 "썼다고 했는데 실제로는 안 들어간" 경우를 못 잡는다.
  *   이번 사고(적재했다는 주장만 남고 테이블이 없던 것)가 정확히 그 종류다(F9).
  */
-export const fillCoords = async (records, { version = config.activeVersion, quota = null } = {}) => {
+export const fillCoords = async (records, { version = config.activeVersion, quota = null, retryNone = false } = {}) => {
   const q = quota || createQuotaCounter(DAILY_LIMITS);
   const keys = await resolveCoordKeys(records, version);
   const { byKey, dongsByKey } = await loadCoordRows(keys);
@@ -171,7 +220,7 @@ export const fillCoords = async (records, { version = config.activeVersion, quot
       : { ...entry, quality: 'no_anchor', record };
   });
 
-  const { fill, skip } = classifyFillTargets(entries);
+  const { fill, skip } = classifyFillTargets(entries, { retryNone });
   // ★키가 없는 출처는 주입하지 않는다 — 주입하면 호출도 못 하면서 쿼터만 차감하고,
   //   요약이 "100건 썼다"고 거짓 보고한다(2026-08-11 첫 실행에서 실제로 그랬다).
   const sources = availableSources(config);

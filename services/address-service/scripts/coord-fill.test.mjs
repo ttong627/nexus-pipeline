@@ -176,6 +176,34 @@ test('저장소에 행이 없는 건(unknown)과 해봤는데 없는 건(none)�
   assert.equal(fill[0].coordKey, 'k1');
 });
 
+// ── ②-b 정기배치의 재시도 문 (C-6 ⑤) ─────────────────────────────
+// 'none' 을 영영 다시 안 물으면 신축이 주소DB 에 등재된 뒤에도 좌표가 비어 있는 채로
+// 남는다. 반대로 아무 경로나 다시 물으면 답 없는 주소에 매번 쿼터를 태운다.
+// → **주기는 대상 SQL(loadFillTargets 의 retryDays)이 정하고, 이 플래그는 문만 연다.**
+test('★retryNone 은 기본 꺼져 있다 — 정제·루트맵 경로가 none 을 다시 태우면 안 된다', () => {
+  const { fill, skip } = classifyFillTargets([{ roadAddress: 'B로 2', coordKey: 'k2', quality: 'none' }]);
+  assert.equal(fill.length, 0);
+  assert.equal(skip[0].reason, 'tried_none');
+});
+
+test('정기배치가 retryNone 을 켜면 none 도 다시 채운다 — 주소DB는 월 단위로 갱신된다', () => {
+  const { fill, skip } = classifyFillTargets(
+    [{ roadAddress: 'B로 2', coordKey: 'k2', quality: 'none' }],
+    { retryNone: true },
+  );
+  assert.equal(fill.length, 1);
+  assert.equal(skip.length, 0);
+});
+
+test('★retryNone 을 켜도 앵커 없는 건은 여전히 제외다 — 주소를 못 찾는 건 좌표로 풀 수 없다', () => {
+  const { fill, skip } = classifyFillTargets(
+    [{ roadAddress: '없는로 999', coordKey: '', quality: 'no_anchor' }],
+    { retryNone: true },
+  );
+  assert.equal(fill.length, 0);
+  assert.equal(skip[0].reason, 'no_anchor');
+});
+
 // ★2026-08-11 운영 실측으로 드러남: 명단 기반 동 좌표 채움이 **한 건도 안 됐다**.
 //   중심 좌표가 이미 있으면 `cached` 로 건너뛰었기 때문이다(4/4 skip). 내비용 점과
 //   동 좌표는 **용도가 다른 별개의 값**이라, 하나가 있다고 다른 하나를 안 채우면

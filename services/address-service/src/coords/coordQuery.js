@@ -103,6 +103,69 @@ export const resolveCoords = async (records, version = config.activeVersion) => 
   });
 };
 
+/**
+ * C-6 ⑤ 정기 채움 대상 — 좌표가 없거나, 예전에 실패했거나, 이상치로 표시된 건물.
+ *
+ * ★`none`(해봤는데 없다)과 `outlier`(있는데 틀렸다)를 **주기를 두고** 다시 태운다.
+ *   매일 다시 물으면 답은 같고 쿼터만 탄다 — 주소DB는 월 단위로 갱신되므로
+ *   재시도 간격도 그 주기에 맞춘다(기본 30일). 반대로 영영 안 물으면
+ *   신축이 정식 등재된 뒤에도 좌표가 비어 있는 채로 남는다.
+ * ★`updated_at` 오래된 순 — 한도에 걸려 이월돼도 다음 날 그 뒤부터 이어진다.
+ */
+export const loadFillTargets = async ({ limit = 200, retryDays = 30, sigungu = '' } = {}) => {
+  const rows = await emptyOnMissingTable('fill-targets', async () => {
+    const res = await query(`
+      SELECT coord_key, road_address, sigungu, legal_emd, building_name, is_apartment, quality
+      FROM ${S}.building_coord
+      WHERE ($1 = '' OR sigungu ILIKE '%' || $1 || '%')
+        AND (
+          (center_lat IS NULL AND entrance_lat IS NULL AND quality <> 'none')
+          OR (quality IN ('none','outlier') AND updated_at < now() - ($2::int * interval '1 day'))
+        )
+      ORDER BY updated_at ASC
+      LIMIT $3`, [cleanText(sigungu), Math.max(0, Number(retryDays) || 0), Math.max(1, Number(limit) || 1)]);
+    return res.rows;
+  });
+  return rows || [];
+};
+
+/** C-6 ⑤ 남은 대상 건수 — 이월을 세려면 "가져온 것"이 아니라 "남은 것"을 알아야 한다(F7). */
+export const countFillTargets = async ({ retryDays = 30, sigungu = '' } = {}) => {
+  const rows = await emptyOnMissingTable('fill-targets-count', async () => {
+    const res = await query(`
+      SELECT count(*)::int AS n
+      FROM ${S}.building_coord
+      WHERE ($1 = '' OR sigungu ILIKE '%' || $1 || '%')
+        AND (
+          (center_lat IS NULL AND entrance_lat IS NULL AND quality <> 'none')
+          OR (quality IN ('none','outlier') AND updated_at < now() - ($2::int * interval '1 day'))
+        )`, [cleanText(sigungu), Math.max(0, Number(retryDays) || 0)]);
+    return res.rows;
+  });
+  return rows?.[0]?.n ?? 0;
+};
+
+/**
+ * C-6 ⑥ 이상치 검증 대상 — 좌표를 가진 행만.
+ *
+ * ★상한을 두는 이유: 전국으로 넓어지면 수십만 행이 된다. 한 번에 다 올리면 Job 메모리가
+ *   터지는데, 그때 나오는 건 "좌표 이상"과 무관한 OOM 이라 원인을 찾는 데 시간이 든다.
+ */
+export const loadCoordRowsForCheck = async ({ sigungu = '', limit = 200000 } = {}) => {
+  const rows = await emptyOnMissingTable('outlier-scan', async () => {
+    const res = await query(`
+      SELECT coord_key, road_address, sigungu, quality,
+             entrance_lat, entrance_lng, center_lat, center_lng
+      FROM ${S}.building_coord
+      WHERE (center_lat IS NOT NULL OR entrance_lat IS NOT NULL)
+        AND ($1 = '' OR sigungu ILIKE '%' || $1 || '%')
+      ORDER BY sigungu, coord_key
+      LIMIT $2`, [cleanText(sigungu), Math.max(1, Number(limit) || 1)]);
+    return res.rows;
+  });
+  return rows || [];
+};
+
 /** 좌표 미보유가 남은 채로 순번을 돌리면 기사 구역이 찢어진다(F4·R-B) → 실행 전 확인용. */
 export const coordStatus = async (sigungu = '') => {
   const tok = cleanText(sigungu);
