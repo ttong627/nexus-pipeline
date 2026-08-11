@@ -200,7 +200,10 @@ const fillMissingCoords = async () => {
   const sources = availableSources(config);
   const pending = await countFillTargets({ retryDays: COORD_RETRY_DAYS, sigungu: COORD_SIGUNGU });
   if (!sources.length) return { skipped: '출처 키 없음(VWORLD_KEY·KAKAO_REST_KEY)', pending };
-  if (!pending) return { sources, pending: 0, attempted: 0, filled: 0, remaining: 0 };
+  // ★대상 0건도 note 경로로 보낸다. 요약 분기가 통계 필드를 기대하는데 여기서 빈 객체를
+  //   돌려주면 로그에 `undefined 회전 undefined 초`가 찍힌다(2026-08-11 첫 예행 실측).
+  //   숫자가 깨진 로그는 "0건이라 안 돈 것"인지 "고장 나서 안 돈 것"인지 구분을 지운다.
+  if (!pending) return { sources, pending: 0, note: '채울 대상 없음 — 전부 확보됨' };
   if (!APPLY) return { sources, pending, note: '예행 — 외부 API·쓰기 없음' };
 
   const quota = createQuotaCounter(DAILY_LIMITS);
