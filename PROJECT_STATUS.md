@@ -1,5 +1,18 @@
 # 📋 PROJECT STATUS — nexus-pipeline
-> 자동 생성: /확인 스킬 · 갱신 2026-08-09 15:37 KST
+> 자동 생성: /확인 스킬 · 갱신 **2026-08-11 10:53 KST (D: 작업본 기준)** · 직전 갱신 2026-08-09 15:37 KST (I: 정본 기준)
+
+## 🔄 D: 클론 최신화 (2026-08-11) — 이 문서는 여기서 갱신됨
+> 대상: `D:/TTong_newproject/nexus-pipeline` (작업본). I: 정본 기준 기록은 아래 「동기화 (2026-08-09)」 이후 섹션 참조.
+
+- **시작 상태**: 로컬 main = `1f176a3`(07-24, **V7.3**) · **behind 108 / ahead 5** · 워킹트리 clean (18일 정체)
+- **로컬 5커밋 검증 후 안전 정렬**: 7/24 VWorld 동별좌표 작업(Phase 0~3)이 **origin에 전부 반영·개선**돼 있음을 파일 단위로 확인 — `dong-coords` 엔드포인트·`dong_no/floors/match_type` 컬럼 동일, origin `vworld.js`는 **대단지 BBOX 확장 버그픽스**(±250m→±700m, `pickDong` 단지명 필터)까지 추가, 프론트 연동은 `RouteMapModal`→**`addressEngine.js`로 이관**(정제 전체 적용). 로컬 유일본은 `prompt_plan.prev.md`(임시메모) 뿐
+  → `git branch backup/d-clone-20260811 HEAD` **보존 후** `git reset --hard origin/main` → 현재 `7382740` · behind 0 / ahead 0
+- **의존성 재설치**: 루트(+`jquery`·`xlsx` CDN 0.20.3 반영) · `functions` · `services/address-service` **3곳 모두 설치 완료**
+- **🔴 origin HEAD의 병합 충돌 마커 수정 (미커밋)**: `7382740`(08-09 "road_name 인덱스 누락" 커밋)이 **`git stash pop` 충돌을 그대로 커밋**했다 — `services/address-service/src/db.js` 23·56·67행에 `<<<<<<< Updated upstream`/`=======`/`>>>>>>> Stashed changes`. 이 상태로는 **eslint 파싱 실패 → `npm run build` 게이트 통과 불가**이고, 그대로 Cloud Run에 올리면 **주소 API가 구문오류로 기동 실패**한다. 최신 쪽(Updated upstream) 채택·구버전 폐기로 해소 — 구버전에는 08-01 `48b7577`·08-05 `a224202`의 `statement_timeout`이 없어 되돌리면 **60~76초 커넥션 점유 버그가 되살아난다**
+  - ⚠️ **그 커밋의 원래 목적(`address_core`·`building_core`에 `road_name` 인덱스 추가)은 어디에도 없다** — diff가 +13줄 전부 충돌 찌꺼기였다. SQL도 미반영(`sql/` 안에 해당 인덱스 없음). **인덱스 작업 재수행 필요**(DB에 수동 적용됐는지 별도 확인)
+- **🔴 클라이언트 키 2종 누락 복구**: 코드가 요구하는 `VITE_*` 10종 중 **`VITE_VWORLD_KEY`·`VITE_KAKAO_JS_KEY`가 D: `.env`에 없었다**. 이대로 배포했으면 **3D 지도 인증 실패 + 루트맵 Kakao 지도 미로드**(`mt=void 0`). 운영 번들에서 해시 대조로 동일 키 확인 후 `.env` 복구(백업 `.env.bak-20260811`, gitignore 확인)
+- **✅ 최종 검증(증거)**: `npm run build` **EXIT=0**(eslint 0 · tsc 0 · vite 성공) · 회귀 **38건 전부 PASS**(루트 27 + address-service 11) · 번들 키 해시 운영과 일치(VWorld `5f620b4f16bb` · Kakao `df70ebf83d80`) · **진입 번들 해시 `index-DiQWHsUt.js`가 운영과 동일 = D: 빌드가 운영 배포본을 그대로 재현**
+- 헬스체크(08-11 10:53 KST): `logis-op.web.app` **200** · `POST /v1/building/dong-coords` **200**
 
 ## ⚠️ 클론 분기 해소 기록 (2026-07-21)
 - **문제**: `D:/TTong_newproject/nexus-pipeline` 클론에 7/15 작업(특이사항 보존·본명/건물명 컬럼·PII 제거)이 **커밋되지 않은 채** 남아 있었고, 그 사이 I: 정본에서 7/16에 V6.81~V6.94(17커밋)를 올려 **버전번호 V6.81이 양쪽에서 다른 내용으로 중복**됐다. 운영 배포본은 V6.94(origin 계열)이라 **7/15 기능이 운영에서 빠진 상태**였다.
@@ -193,6 +206,14 @@
 - gh active 계정: **ttong627** = repo owner **일치** ✅ (08-06 기록의 ttong0627 불일치는 해소)
 
 ## 리스크
+### 2026-08-11 신규 (D: 작업본 실측)
+- 🔴 **origin HEAD 빌드 불가 — 미푸시 수정 대기**: `7382740`에 충돌 마커가 커밋돼 **origin을 받는 모든 클론이 빌드 실패**한다(I: 정본도 동일). D:에서 고쳤으나 **아직 커밋·푸시 안 함** → 형 승인 후 푸시해야 I:도 살아난다
+- 🔴 **`road_name` 인덱스 작업 실종**: `7382740`의 커밋 메시지가 말하는 인덱스 추가가 **코드·SQL 어디에도 없다**(diff 전부 충돌 찌꺼기). 08-09에 잡았다던 "단건 조회 25초" 원인이 **DB에 수동 적용됐는지 미확인** → 재확인·재작업 필요
+- 🟡 **gh active 계정 = `ttong0627` ≠ repo owner `ttong627`**: 전역 전환 없이 owner 토큰 주입으로 처리함(`GH_TOKEN=$(gh auth token --user ttong627) git -c credential.helper='!gh auth git-credential' ...`). **푸시·배포 직전 계정 재확인 필수**
+- 🟢 **D: `.env` 키 완비**: `VITE_*` 10종 전부 채움(08-11 `VITE_VWORLD_KEY`·`VITE_KAKAO_JS_KEY` 복구). 빌드 산출물이 운영 번들과 해시 일치로 검증됨
+- 🟢 **D: 정체 해소**: behind 108 → 0. 로컬 5커밋은 `backup/d-clone-20260811`에 보존(내용은 origin에 이미 반영됨)
+
+### 기존
 - 🟢 동기화·계정: **해소** — 08-09 FF로 최신(54355d9) · gh active `ttong627` 일치 · 워킹트리 clean
 - 🟢 **운영 코드 main 미반영**: **해소** — 08-06 `d216186` 병합으로 main 단일 라인 복귀
 - 🟢 **버전 미부여(VER-1)**: **해소** — 08-06 `7a3a09f`로 **V7.4** 부여, `version.js`·`package.json` 일치
