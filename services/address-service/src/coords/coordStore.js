@@ -1,0 +1,99 @@
+// ══════════════════════════════════════════════════════════════════
+//  좌표 저장소 — 입구 좌표 / 동(棟) 좌표 2종 구분 관리 (형 지시 2026-08-11)
+//  설계서: 좌표관리_설계.md · 회귀: scripts/coord-store.test.mjs
+//
+//  ★DB를 쓰지 않는 순수 판정·변환만 여기 둔다. 쿼리는 server.js·배치가 담당한다.
+//    그래야 규칙을 DB 없이 회귀로 고정할 수 있다.
+// ══════════════════════════════════════════════════════════════════
+
+/**
+ * ★입구 좌표를 채울 수 있는 출처는 이 둘뿐이다 (설계서 F1).
+ *
+ * 지오코딩 결과(vworld·kakao)는 **건물·단지 대표점**이지 진입 지점이 아니다.
+ * 그걸 입구 칸에 넣으면 "차가 못 들어가는 지점"이 목적지가 된다. 출입구 자료가
+ * 끝내 안 들어오더라도 입구 칸은 비워 두는 것이 맞다 — 비어 있으면 중심 좌표로
+ * 폴백하지만, 거짓으로 채워 두면 그게 정답인 줄 알고 쓴다.
+ */
+export const ENTRANCE_SOURCES = new Set(['juso_entrc', 'manual']);
+
+const intOrNull = (v) => {
+  const n = Number.parseInt(String(v ?? '').trim(), 10);
+  return Number.isFinite(n) ? n : null;
+};
+
+/**
+ * 좌표 앵커 — {road_code}#{지하여부}#{본번}-{부번}
+ *
+ * ★address_mgt_no 를 쓰지 않는 이유(2026-08-11 실측): address_core 986,737 vs
+ *   building_core 10,722,592 — 831만 건(77.5%)이 address_core 에 없다.
+ *   address_mgt_no 는 address_core 에만 있어 그 키로는 대부분의 건물이 좌표를 못 갖는다.
+ */
+export const buildCoordKey = ({ roadCode = '', undergroundYn = '0', buildingMainNo = null, buildingSubNo = 0 } = {}) => {
+  const code = String(roadCode ?? '').trim();
+  const main = intOrNull(buildingMainNo);
+  if (!code || main == null || main <= 0) return '';
+  const under = String(undergroundYn ?? '0').trim() === '1' ? '1' : '0';
+  const sub = intOrNull(buildingSubNo) || 0;
+  return `${code}#${under}#${main}-${sub}`;
+};
+
+/** 동 표기 정규화 — '0101'·'101동' → '101', '가동' → '가' (클라 apartmentDong 과 정합) */
+export const normalizeDongNo = (value) => {
+  const s = String(value ?? '').trim().replace(/동$/, '').trim();
+  if (!s) return '';
+  return /^\d+$/.test(s) ? String(Number(s)) : s;
+};
+
+const point = (lat, lng, source, kind) =>
+  (lat == null || lng == null) ? null : { lat: Number(lat), lng: Number(lng), source: source || '', kind };
+
+/**
+ * 용도에 맞는 좌표를 고른다.
+ *
+ *  purpose='navigation' : 입구 → 중심.  **동 좌표는 쓰지 않는다**(설계서 F2).
+ *      동 앞은 차가 못 들어가는 경우가 많다. 내비 목적지는 진입 지점이어야 한다.
+ *  purpose='sequence'   : 동 → 입구 → 중심.
+ *      단지를 한 점으로 보면 단지 내부 동선이 통째로 사라진다
+ *      (실측 2026-07-24: 은마아파트 동간 약 280m).
+ *
+ * ★quality='outlier' 는 좌표 없음으로 취급한다(DS-15). 이상 좌표 하나가
+ *   기사 구역을 430km 로 부풀린 실측이 있다.
+ */
+export const pickDeliveryCoord = (row, { purpose = 'navigation', dong = null } = {}) => {
+  if (!row) return null;
+  if (row.quality === 'outlier' || row.quality === 'none') return null;
+
+  if (purpose === 'sequence' && dong && dong.matched === 'dong' && dong.lat != null && dong.lng != null) {
+    return point(dong.lat, dong.lng, dong.source || row.center_source || 'vworld', 'dong');
+  }
+  return point(row.entrance_lat, row.entrance_lng, row.entrance_source, 'entrance')
+    || point(row.center_lat, row.center_lng, row.center_source, 'center');
+};
+
+/** DB 행 + 동 목록 → API 응답. 세 좌표가 **각자 자리에** 담긴다(섞지 않는다). */
+export const coordRowToResult = (row, dongRows = []) => {
+  if (!row || !row.coord_key) return null;
+  const entrance = row.entrance_lat == null ? null
+    : { lat: Number(row.entrance_lat), lng: Number(row.entrance_lng), source: row.entrance_source || '' };
+  const center = row.center_lat == null ? null
+    : { lat: Number(row.center_lat), lng: Number(row.center_lng), source: row.center_source || '' };
+  return {
+    coordKey: row.coord_key,
+    roadAddress: row.road_address || '',
+    sigungu: row.sigungu || '',
+    buildingName: row.building_name || '',
+    isApartment: Boolean(row.is_apartment),
+    entrance,
+    center,
+    dongs: (dongRows || []).map((d) => ({
+      dongNo: normalizeDongNo(d.dong_no),
+      lat: Number(d.lat),
+      lng: Number(d.lng),
+      floors: intOrNull(d.floors),
+      matched: d.matched || '',
+      source: d.source || 'vworld',
+    })),
+    quality: row.quality || 'unverified',
+    qualityNote: row.quality_note || '',
+  };
+};

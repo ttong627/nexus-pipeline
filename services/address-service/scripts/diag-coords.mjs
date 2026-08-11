@@ -83,7 +83,68 @@ await withClient(async (c) => {
     for (const r of s) out('  예시(dong)', `${r.standard_road_address} | 동${r.dong_no} | ${r.floors}층 | ${r.provider}`);
   }
 
-  console.log('\n══════ ⑥ 적재 이력 ══════');
+  console.log('\n══════ ⑥ 신규 좌표 저장소 실태 (적대적 검증) ══════');
+  if (!await exists('building_coord')) { out('  building_coord', '❌ 없음'); } else {
+    const { rows: b } = await c.query(`
+      SELECT count(*)::bigint AS total,
+             count(*) FILTER (WHERE entrance_lat IS NOT NULL)::bigint AS ent,
+             count(*) FILTER (WHERE center_lat IS NOT NULL)::bigint AS cen,
+             count(*) FILTER (WHERE is_apartment)::bigint AS apt
+      FROM ${S}.building_coord`);
+    out('  building_coord 총', num(b[0].total));
+    out('   ├ 입구좌표 보유', num(b[0].ent));
+    out('   ├ 중심좌표 보유', num(b[0].cen));
+    out('   └ 아파트 표시', num(b[0].apt));
+    const { rows: d } = await c.query(`
+      SELECT count(*)::bigint AS n, count(DISTINCT coord_key)::bigint AS k FROM ${S}.building_dong_coord`);
+    out('  building_dong_coord 행 / 건물수', `${num(d[0].n)} / ${num(d[0].k)}`);
+    // ★적대적 검증: 같은 좌표가 여러 건물에 붙었으면 조인 중복으로 오염된 것이다
+    const { rows: dup } = await c.query(`
+      SELECT count(*)::bigint AS n FROM (
+        SELECT lat, lng FROM ${S}.building_dong_coord
+        GROUP BY lat, lng HAVING count(DISTINCT coord_key) > 1) t`);
+    out('  ⚠ 같은 좌표가 2개 이상 건물에 붙음', num(dup[0].n));
+    const { rows: orph } = await c.query(`
+      SELECT count(*)::bigint AS n FROM ${S}.building_dong_coord d
+      WHERE NOT EXISTS (SELECT 1 FROM ${S}.building_coord b WHERE b.coord_key = d.coord_key)`);
+    out('  ⚠ 부모 건물 없는 동 좌표(고아)', num(orph[0].n));
+    const { rows: samp } = await c.query(`
+      SELECT b.road_address, coalesce(b.building_name,'') AS bn, count(*)::int AS dongs
+      FROM ${S}.building_coord b JOIN ${S}.building_dong_coord d USING (coord_key)
+      GROUP BY 1,2 ORDER BY dongs DESC LIMIT 5`);
+    for (const r of samp) out('  동 많은 단지', `${r.road_address} | ${r.bn} | ${r.dongs}개동`);
+    // ★중복 좌표가 '한 단지가 여러 도로명주소를 갖는 정상'인지 '조인 오염'인지 가른다.
+    //   같은 좌표인데 건물명이 다르면 오염이다(다른 단지에 같은 점을 찍은 것).
+    const { rows: dsamp } = await c.query(`
+      SELECT d.lat, d.lng, d.dong_no,
+             array_agg(DISTINCT coalesce(b.building_name,'(무명)')) AS names,
+             array_agg(DISTINCT b.road_address) AS addrs
+      FROM ${S}.building_dong_coord d JOIN ${S}.building_coord b USING (coord_key)
+      GROUP BY d.lat, d.lng, d.dong_no HAVING count(DISTINCT d.coord_key) > 1
+      LIMIT 5`);
+    console.log('  중복 좌표 표본:');
+    for (const r of dsamp) console.log(`    ${r.dong_no}동 → 건물명 ${JSON.stringify(r.names)} / 주소 ${JSON.stringify(r.addrs)}`);
+    const { rows: bad } = await c.query(`
+      SELECT count(*)::bigint AS n FROM (
+        SELECT d.lat, d.lng FROM ${S}.building_dong_coord d JOIN ${S}.building_coord b USING (coord_key)
+        GROUP BY d.lat, d.lng
+        HAVING count(DISTINCT regexp_replace(coalesce(b.building_name,''), '\\s', '', 'g')) > 1) t`);
+    out('  ⚠⚠ 같은 좌표인데 건물명이 다름(진짜 오염)', num(bad[0].n));
+    const { rows: ms } = await c.query(`
+      SELECT coalesce(matched,'(null)') AS m, count(*)::bigint AS n
+      FROM ${S}.building_dong_coord GROUP BY 1 ORDER BY n DESC`);
+    for (const r of ms) out(`  matched=${r.m}`, `${num(r.n)}건${r.m === 'dong' ? '  ← 배송에 실제로 쓰이는 것' : ''}`);
+    // ★격리 후: 실제로 쓰이는 것(matched='dong')만 놓고 오염이 남았는지 다시 본다
+    const { rows: left } = await c.query(`
+      SELECT count(*)::bigint AS n FROM (
+        SELECT d.lat, d.lng FROM ${S}.building_dong_coord d JOIN ${S}.building_coord b USING (coord_key)
+        WHERE d.matched = 'dong'
+        GROUP BY d.lat, d.lng
+        HAVING count(DISTINCT regexp_replace(coalesce(b.building_name,''), '\\s', '', 'g')) > 1) t`);
+    out('  ✅ 격리 후 남은 오염(matched=dong 기준)', num(left[0].n));
+  }
+
+  console.log('\n══════ ⑦ 적재 이력 ══════');
   for (const t of ['entrance_load_runs', 'building_ext_runs']) {
     if (!present[t]) { out(`  ${t}`, '❌ 테이블 없음 = 한 번도 적재 안 됨'); continue; }
     const { rows } = await c.query(`SELECT * FROM ${S}.${t} LIMIT 3`);
