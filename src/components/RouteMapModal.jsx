@@ -8,7 +8,9 @@ import DriverSequenceView from './DriverSequenceView.jsx';
 import DeliveryAccuracyView from './DeliveryAccuracyView.jsx';
 import { formatAddressDisplay } from '../utils/addressFormat.js';
 import { splitByDay, splitBySequence, summarizeDaySplit } from '../engine/deliveryDaySplit.js';
-import { getEffectiveLoad } from '../engine/routeSequenceEngine.js';
+// ★parseAptDong 은 **SSOT 에서 가져온다** — 여기 복제본이 있었고(문자 단위 동일),
+//   `호` optional 오탐 수정이 한쪽에만 적용될 뻔했다(2026-08-11). 다시 정의하지 말 것.
+import { getEffectiveLoad, parseAptDong } from '../engine/routeSequenceEngine.js';
 import Vworld3DView from './Vworld3DView.jsx';
 import { annotateCarryover } from '../utils/prevMonthCarryover.js';
 
@@ -47,11 +49,6 @@ const strongMatchKey = (r) => {
   return (name && ph) ? `${name}|${ph}` : '';
 };
 
-const parseAptDong = (addr) => {
-  const text = String(addr || '');
-  const m = text.match(/(?:^|[\s,(])(\d{1,4})\s*동(?:[\s,)]|$)/) || text.match(/(?:^|[\s,(])(\d{3,4})\s*[-]\s*\d{1,4}\s*호?/);
-  return m ? parseInt(m[1], 10) : null;
-};
 const parseFloorHo = (addr) => {
   const floor = addr?.match(/(\d+)\s*층/)?.[1] || '0';
   const ho = addr?.match(/(\d+)\s*호/)?.[1] || '0';
