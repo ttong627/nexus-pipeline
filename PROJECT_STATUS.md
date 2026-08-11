@@ -1,5 +1,56 @@
 # 📋 PROJECT STATUS — nexus-pipeline
-> 자동 생성: /확인 스킬 · 갱신 **2026-08-11 10:53 KST (D: 작업본 기준)** · 직전 갱신 2026-08-09 15:37 KST (I: 정본 기준)
+> 자동 생성: /확인 스킬 · 갱신 **2026-08-11 18:20 KST (D: 작업본 기준)** · 직전 갱신 2026-08-09 15:37 KST (I: 정본 기준)
+
+## 🔁 다른 PC에서 이어받기 (2026-08-11 18:20 KST 마감)
+
+> 형 지시로 다른 PC 인계용 마감. **아래 순서대로만 하면 그대로 이어진다.**
+
+**1) 받기**
+```bash
+git pull --ff-only        # 최신 커밋까지 받는다 (미커밋 0건 상태로 마감했다)
+npm install               # 루트
+cd services/address-service && npm install && cd ../..
+```
+
+**2) `.env` 확인 (gitignore 대상이라 안 따라온다 — 없으면 조용히 기능이 죽는다)**
+`VITE_*` **10종**이 모두 있어야 한다: FIREBASE 6 · `VITE_KAKAO_REST_KEY` · `VITE_KAKAO_JS_KEY` · `VITE_ADDRESS_MATCH_API_URL` · `VITE_VWORLD_KEY`.
+빠지면 지도가 안 뜨거나(3D·루트맵) 주소매칭이 저하 모드로 돈다. 값은 운영 번들에서 복구할 수 있다(2026-08-11에 실제로 그렇게 복구함).
+
+**3) 지금 어디까지 왔나 — 좌표 작업(설계서 `좌표관리_설계.md`)**
+
+| 단계 | 상태 | 비고 |
+|---|---|---|
+| C-1 스키마 | ✅ 운영 반영 | `building_coord`·`building_dong_coord` 생성 완료 |
+| C-2 조회 API | ✅ 운영 검증 | 키 일치 **300/300(100%)** · 동 좌표 회수 5/5 |
+| C-4 이관·격리 | ✅ 운영 반영 | 동 좌표 2,373건 이관 · 오염 375건 `suspect` 격리 · 남은 오염 0 |
+| **C-3 채움 파이프라인** | ⬜ **다음 작업** | 아래 참조 |
+| C-5 클라 연동 | ⬜ | 루트맵이 새 저장소를 쓰게 |
+| C-6 정기배치 편입 | ⬜ | `sync-address-data.mjs` ⑤⑥ 추가 |
+| C-7 출입구 자료 적재 | 🚫 **형 확인 대기** | 행안부 자료 파일 위치를 알아야 진행 |
+
+**4) 다음 작업(C-3) 착수 전 반드시 알 것**
+
+- **현재 중심 좌표 보유 0건**이다. 동 좌표만 있다(건물 1,543 중 1,261). 내비용 점이 없어 `pickDeliveryCoord(purpose:'navigation')`는 아직 전부 null 이다.
+- ★**`가동`·`B동` 오염의 근본 원인을 아직 안 고쳤다.** 이관분 375건은 격리했지만
+  `src/vworld.js`의 동 매칭이 그대로라 **C-3로 새로 채우면 같은 오염이 재발한다.**
+  → C-3 첫 작업은 **한글·영문 단일 동(가·나·A·B)은 단지명 검증 없이 채택 금지** 규칙이다.
+  실측 근거: `B동` 좌표 하나가 성암빌라·진아빌라·청양맨션·청정빌라·신한그린빌에 동시에 붙어 있었다.
+- 정제 화면 경로는 **절대 외부 API를 태우지 않는다**(F10). 채움은 배치·루트맵 전용.
+
+**5) 운영 리소스 (전부 `logis-op` / `asia-northeast3` / 계정 `ttong627@gmail.com`)**
+
+| 리소스 | 용도 |
+|---|---|
+| Cloud Run `nexus-address-api` | 주소 API (현재 `00065-g8s`) |
+| Job `nexus-address-diag` | 좌표 실태 진단(읽기 전용) — 언제든 재측정 |
+| Job `nexus-address-coords` | 좌표 스키마 적용 + 이관 + 오염 격리 |
+| Job `nexus-address-verify` | C-2 키 일치 검증 |
+| Job `nexus-address-schema` | 학습주소 스키마 적용 |
+| Job `nexus-address-sync` + Scheduler | 정기 동기화 매일 04:23 KST |
+
+⚠️ **gh 활성 계정은 `ttong0627`이다.** 전역 전환하지 말고 명령마다 주입한다:
+`GH_TOKEN=$(gh auth token --user ttong627) git -c credential.helper='!gh auth git-credential' push origin main`
+gcloud도 `--account ttong627@gmail.com`을 매 명령에 붙인다.
 
 ## 🔄 D: 클론 최신화 (2026-08-11) — 이 문서는 여기서 갱신됨
 > 대상: `D:/TTong_newproject/nexus-pipeline` (작업본). I: 정본 기준 기록은 아래 「동기화 (2026-08-09)」 이후 섹션 참조.
