@@ -77,6 +77,35 @@ test('단일 문자 동이라도 단지명이 일치하면 채택한다', () => 
   assert.equal(hit?.lat, 37.2);
 });
 
+// ★2026-08-11 실측으로 드러남: VWorld 건물명이 **우리 단지명보다 짧게** 온다.
+//   VWorld='여월휴먼시아'  vs  저장='여월휴먼시아2단지아파트'
+//   포함 검사를 한 방향으로만 하면 `'여월휴먼시아'.includes('여월휴먼시아2단지아파트')`
+//   = false 라 **BBOX 에 22건이나 있는데도 전부 기각**됐다.
+//   보성·월곶이 성공한 건 이름이 우연히 정확히 같았기 때문이다.
+test('★VWorld 이름이 더 짧아도 서로 포함하면 채택한다 — 여월휴먼시아 실측', () => {
+  const cands = [{ buildName: '여월휴먼시아', dongNo: '104', lat: 37.51, lng: 126.806, floors: 15 }];
+  const hit = acceptDongCandidate(cands, { wantDong: '104', complexName: '여월휴먼시아2단지아파트' });
+  assert.equal(hit?.lat, 37.51);
+});
+
+test('공백·표기 차이는 무시한다', () => {
+  const cands = [{ buildName: '월곶2차 풍림아이원', dongNo: '202', lat: 37.4, lng: 126.7 }];
+  assert.ok(acceptDongCandidate(cands, { wantDong: '202', complexName: '월곶2차풍림아이원아파트' }));
+});
+
+test('★너무 짧은 이름으로는 역방향 매칭하지 않는다 — 삼성·대우·현대가 아무 데나 붙는다', () => {
+  const cands = [{ buildName: '삼성', dongNo: '101', lat: 37.5, lng: 127.0 }];
+  assert.equal(acceptDongCandidate(cands, { wantDong: '101', complexName: '삼성래미안아파트' }), null);
+});
+
+test('★역방향 매칭으로 후보가 둘이 되면 기각한다 — 1단지·2단지가 같이 잡힌다', () => {
+  const cands = [
+    { buildName: '여월휴먼시아', dongNo: '104', lat: 37.51, lng: 126.806 },
+    { buildName: '여월휴먼시아', dongNo: '104', lat: 37.52, lng: 126.808 },
+  ];
+  assert.equal(acceptDongCandidate(cands, { wantDong: '104', complexName: '여월휴먼시아2단지아파트' }), null);
+});
+
 test('★단지명이 일치하는 후보가 둘 이상이면 채택 금지 — 찍는 것보다 비운다', () => {
   const cands = [villa('진아빌라', 'B', 37.1), villa('진아빌라', 'B', 37.9)];
   assert.equal(acceptDongCandidate(cands, { wantDong: 'B', complexName: '진아빌라' }), null);

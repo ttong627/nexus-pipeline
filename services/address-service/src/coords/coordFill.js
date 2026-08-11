@@ -53,6 +53,33 @@ export const availableSources = ({ vworldKey = '', kakaoRestKey = '' } = {}) => 
 const nameKey = (v) => String(v ?? '').replace(/\s+/g, '');
 
 /**
+ * 역방향(짧은 이름 → 긴 이름) 매칭을 허용할 최소 길이.
+ *
+ * ★`삼성`·`대우`·`현대` 같은 2글자 이름으로 역방향을 열면 `삼성래미안`·`삼성쉐르빌`
+ *   아무 데나 붙는다. 4글자면 단지 고유명으로 볼 만하다(여월휴먼시아=6).
+ */
+const MIN_REVERSE_NAME = 4;
+
+/**
+ * 단지명이 같은 건물인가 — **양방향**으로 본다.
+ *
+ * ★2026-08-11 실측: VWorld 는 건물명을 **줄여서** 준다.
+ *     VWorld `여월휴먼시아`  vs  저장 `여월휴먼시아2단지아파트`
+ *   한 방향(`vworld.includes(ours)`)만 보면 false 라, BBOX 에 22건이나 있는데도
+ *   전부 기각됐다. 보성·월곶이 통과한 건 이름이 우연히 정확히 같아서였다.
+ *   → 어느 쪽이 더 길든 서로 포함하면 같은 단지로 본다. 단, 짧은 쪽이 너무 짧으면
+ *     역방향은 열지 않는다(위 MIN_REVERSE_NAME). 그래도 남는 위험은
+ *     "후보가 둘 이상이면 기각" 규칙이 받는다.
+ */
+const sameComplex = (buildName, complexName) => {
+  const a = nameKey(buildName);
+  const b = nameKey(complexName);
+  if (!a || !b) return false;
+  if (a.includes(b)) return true;
+  return a.length >= MIN_REVERSE_NAME && b.includes(a);
+};
+
+/**
  * 한 글자짜리 동 표기는 모호하다 — `가`·`나`·`A`·`B`.
  *
  * ★빌라 밀집지에서 이 표기는 BBOX 안에 수십 개가 함께 잡힌다. 동번호만으로는
@@ -85,7 +112,7 @@ export const acceptDongCandidate = (candidates, { wantDong, complexName = '' } =
 
   const complex = nameKey(complexName);
   if (complex) {
-    const named = byDong.filter((b) => nameKey(b.buildName).includes(complex));
+    const named = byDong.filter((b) => sameComplex(b.buildName, complexName));
     // ★폴백 금지. 단지명이 있는데 일치하는 게 없다는 건 "여긴 그 단지가 아니다"라는 뜻이다.
     return named.length === 1 ? named[0] : null;
   }
