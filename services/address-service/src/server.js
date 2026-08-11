@@ -5,6 +5,7 @@ import { cleanText, formatRoadLookupQuery, normalizeSearchKey, parseRoadNumber, 
 import { geocodeRoad, matchDongCoord, parseDongNo } from './vworld.js';
 import { judgeCandidate } from './matchGuard.js';
 import { learnedRoadKey, learnedRowFromJuso, learnedRowToResult, sigunguToken } from './learnedStore.js';
+import { coordStatus, resolveCoords } from './coords/coordQuery.js';
 import { createPurifier } from './purify.js';
 import {
   distanceMeters, recommendDaySplit, recommendLoadBalance, recommendSequence, sequenceUnits,
@@ -793,6 +794,35 @@ const server = createServer(async (req, res) => {
       }
       const data = await purifier.purifyRecords(records);
       return json(res, 200, { ok: true, count: data.length, data }, headers);
+    }
+    // ── 좌표 저장소 (C-2) — 입구/중심/동 3종을 각자 자리에 담아 돌려준다 ──
+    if (req.method === 'POST' && url.pathname === '/v1/coords/resolve') {
+      const body = await readBody(req);
+      const records = Array.isArray(body.records) ? body.records : [];
+      if (!records.length) {
+        return json(res, 400, { ok: false, error: 'records 배열이 필요합니다.' }, headers);
+      }
+      if (records.length > 5000) {
+        return json(res, 413, { ok: false, error: '한 번에 5000건까지 조회합니다.' }, headers);
+      }
+      // ★fill 을 조용히 cache 로 처리하면 호출부는 채워진 줄 안다(F9). 명시적으로 거절한다.
+      const mode = body.mode === 'fill' ? 'fill' : 'cache';
+      if (mode === 'fill') {
+        return json(res, 501, {
+          ok: false, error: "mode:'fill' 은 아직 없습니다(C-3). 지금은 조회(mode:'cache')만 가능합니다.",
+        }, headers);
+      }
+      const coords = await resolveCoords(records, config.activeVersion);
+      return json(res, 200, { ok: true, mode, count: coords.length, coords }, headers);
+    }
+    // 좌표 미보유가 남은 채로 순번을 돌리면 기사 구역이 찢어진다(F4·R-B) → 실행 전 확인용.
+    if (req.method === 'GET' && url.pathname === '/v1/coords/status') {
+      const sigungu = cleanText(url.searchParams.get('sigungu') || '');
+      const data = await coordStatus(sigungu);
+      return json(res, 200, {
+        ok: true,
+        data: data || { sigungu, total: 0, schemaMissing: true, pendingSample: [] },
+      }, headers);
     }
     if (req.method === 'GET' && url.pathname === '/v1/address/dict-status') {
       // 학습사전이 실제로 로드됐는지 확인용(권한 미부여 시 전부 0으로 보인다).

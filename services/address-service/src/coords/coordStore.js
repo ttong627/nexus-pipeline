@@ -70,6 +70,69 @@ export const pickDeliveryCoord = (row, { purpose = 'navigation', dong = null } =
     || point(row.center_lat, row.center_lng, row.center_source, 'center');
 };
 
+/**
+ * road_codes 후보 중 이 지자체의 도로를 고른다.
+ *
+ * ★도로명은 전국에서 겹친다 — 동대문구 황물로7길 ↔ 수원 황물로7길(A-35 실측).
+ *   시군구로 좁히지 못하면 **키를 만들지 않는다**. 애매한 앵커로 좌표를 매달면
+ *   다른 동네 건물의 좌표를 이 건물 것으로 쓰게 된다(A-30이 막아온 오매칭의 뒷문).
+ *   후보가 2개 이상 남아도 마찬가지다 — 찍는 것보다 비우는 편이 되돌릴 수 있다.
+ */
+export const pickRoadCode = (candidates, sigunguTok) => {
+  const want = String(sigunguTok ?? '').trim();
+  if (!want) return '';
+  const codes = new Set(
+    (candidates || [])
+      .filter((r) => String(r.sigungu ?? '').replace(/\s+/g, '').includes(want.replace(/\s+/g, '')))
+      .map((r) => String(r.road_code ?? '').trim())
+      .filter(Boolean),
+  );
+  return codes.size === 1 ? [...codes][0] : '';
+};
+
+/**
+ * 요청한 동의 좌표를 고른다 — **matched='dong' 만** 돌려준다.
+ *
+ * ★`suspect`(이관 시 375건 격리)·`complex`·`centroid` 를 동 좌표라고 내주면
+ *   호출부는 그것이 그 동의 위치인 줄 알고 쓴다. 실측 오염 사례: B동 좌표 하나가
+ *   성암빌라·진아빌라·청양맨션·청정빌라·신한그린빌에 동시에 붙어 있었다(F3).
+ */
+export const pickTrustedDong = (dongRows, dongNo) => {
+  const want = normalizeDongNo(dongNo);
+  if (!want) return null;
+  const hit = (dongRows || []).find((d) => normalizeDongNo(d.dong_no) === want && d.matched === 'dong');
+  if (!hit) return null;
+  return {
+    no: normalizeDongNo(hit.dong_no),
+    lat: Number(hit.lat),
+    lng: Number(hit.lng),
+    floors: intOrNull(hit.floors),
+    source: hit.source || 'vworld',
+  };
+};
+
+/**
+ * 레코드 1건의 조회 결과.
+ *
+ * ★저장소에 행이 없는 것(`unknown` = 아직 안 해봤다)과 행은 있는데 좌표를 못 구한 것
+ *   (`none` = 해봤는데 없다)을 구분한다. 뭉뚱그리면 채움 배치가 무엇을 다시 시도해야
+ *   하는지 알 수 없고, "좌표가 원래 없는 주소"를 영원히 재시도하게 된다.
+ */
+export const coordResolveEntry = (record = {}, row = null, dongRows = []) => {
+  const base = coordRowToResult(row, []);
+  return {
+    roadAddress: record.roadAddress || '',
+    coordKey: base?.coordKey || '',
+    entrance: base?.entrance || null,
+    center: base?.center || null,
+    dong: pickTrustedDong(dongRows, record.dongNo),
+    dongCount: (dongRows || []).filter((d) => d.matched === 'dong').length,
+    isApartment: base?.isApartment || false,
+    buildingName: base?.buildingName || '',
+    quality: base ? (base.quality || 'unverified') : 'unknown',
+  };
+};
+
 /** DB 행 + 동 목록 → API 응답. 세 좌표가 **각자 자리에** 담긴다(섞지 않는다). */
 export const coordRowToResult = (row, dongRows = []) => {
   if (!row || !row.coord_key) return null;

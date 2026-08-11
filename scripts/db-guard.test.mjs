@@ -75,3 +75,46 @@ test('★외부(JUSO)·학습 결과가 물어본 그 주소인지 검증한다'
   assert.match(server, /sameAddressAsQuery\(cached, queryRoad\)/,
     '⚠️ 폴백 캐시를 검증 없이 재사용한다 — 과거에 치환된 값이 그대로 나간다');
 });
+
+// ══════════════════════════════════════════════════════════════════
+//  ★좌표가 월 재적재로 증발하지 않게 못을 박는다 (설계서 좌표관리_설계.md F6)
+//  좌표는 몇 달에 걸쳐 쌓인다(동 좌표 실측 2,373건 · VWorld 호출 비용).
+//  버전 테이블에 섞이면 매달 통째로 지워지는데, 지워진 줄도 모른다 —
+//  조회는 조용히 "좌표 없음"을 돌려주고 순번은 그대로 돌아가기 때문이다.
+// ══════════════════════════════════════════════════════════════════
+const coordsSql = read('../services/address-service/sql/coords.sql');
+const schemaSql = read('../services/address-service/sql/schema.sql');
+
+test('★좌표 테이블은 버전독립이다 — version_id 를 갖지 않는다', () => {
+  assert.doesNotMatch(coordsSql, /version_id/,
+    '⚠️ 좌표 테이블에 version_id 가 생겼다 — 월 재적재 대상이 되어 매달 증발한다');
+  assert.match(coordsSql, /CREATE TABLE IF NOT EXISTS building_coord/, 'building_coord 정의가 없다');
+  assert.match(coordsSql, /CREATE TABLE IF NOT EXISTS building_dong_coord/, 'building_dong_coord 정의가 없다');
+});
+
+test('★좌표 테이블이 schema.sql·재적재 삭제 목록에 들어가지 않았다', () => {
+  for (const t of ['building_coord', 'building_dong_coord']) {
+    assert.doesNotMatch(schemaSql, new RegExp(`CREATE TABLE[^;]*\b${t}\b`),
+      `⚠️ ${t} 가 schema.sql 로 옮겨졌다 — resetVersionData 사정권에 들어간다`);
+  }
+  const resetBody = importJob.slice(
+    importJob.indexOf('const resetVersionData'),
+    importJob.indexOf('const listFiles'),
+  );
+  assert.doesNotMatch(resetBody, /building_coord|building_dong_coord/,
+    '⚠️ 좌표 테이블이 월 재적재 삭제 목록에 올랐다 — 쌓인 좌표가 매달 사라진다');
+});
+
+test('★지오코딩 결과가 입구 좌표 칸을 채우지 못한다 (F1)', () => {
+  const store = read('../services/address-service/src/coords/coordStore.js');
+  assert.match(store, /export const ENTRANCE_SOURCES = new Set\(\['juso_entrc', 'manual'\]\)/,
+    '⚠️ 입구 좌표 허용 출처가 바뀌었다 — vworld·kakao 가 들어오면 건물 중심이 입구로 둔갑한다');
+});
+
+test('★정제 화면이 쓰는 조회 경로는 외부 API를 태우지 않는다 (F10)', () => {
+  const q = read('../services/address-service/src/coords/coordQuery.js');
+  assert.doesNotMatch(q, /fetch\(|geocodeRoad|matchDongCoord/,
+    '⚠️ 좌표 조회 경로에 외부 API 호출이 들어왔다 — 정제 중 화면이 멈춘다(무지연 원칙)');
+  assert.match(server, /mode:'fill'\] 은 아직 없습니다|mode:'fill' 은 아직 없습니다/,
+    "⚠️ fill 을 조용히 cache 로 처리하면 호출부는 좌표가 채워진 줄 안다");
+});

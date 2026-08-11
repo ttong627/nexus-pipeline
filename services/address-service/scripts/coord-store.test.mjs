@@ -11,6 +11,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildCoordKey, coordRowToResult, pickDeliveryCoord, normalizeDongNo, ENTRANCE_SOURCES,
+  pickRoadCode, pickTrustedDong, coordResolveEntry,
 } from '../src/coords/coordStore.js';
 
 // ── ① 앵커 ────────────────────────────────────────────────────────
@@ -127,4 +128,72 @@ test('좌표가 없는 칸은 null 로 — 빈 객체로 만들면 있는 척이
 test('입력 방어 — 빈 행이면 null', () => {
   assert.equal(coordRowToResult(null), null);
   assert.equal(coordRowToResult({}), null);
+});
+
+// ── ⑥ 앵커 해석 — 도로명은 전국에서 겹친다 (A-30·A-35) ─────────────
+const rc = (sigungu, road_code) => ({ sigungu, road_code });
+
+test('시군구가 일치하는 도로코드 하나면 그것을 쓴다', () => {
+  assert.equal(pickRoadCode([rc('시흥시', '411730123456')], '시흥시'), '411730123456');
+  // 표기 공백 차이를 흡수한다 ('부천시 오정구' ↔ '부천시오정구')
+  assert.equal(pickRoadCode([rc('부천시 오정구', '41192999')], '오정구'), '41192999');
+});
+
+test('★시군구를 모르면 앵커를 만들지 않는다 — 찍는 것보다 비우는 편이 되돌릴 수 있다', () => {
+  assert.equal(pickRoadCode([rc('시흥시', '411730123456')], ''), '');
+  assert.equal(pickRoadCode([rc('시흥시', '411730123456')], null), '');
+});
+
+test('★같은 도로명이 여러 지자체에 있으면 남의 동네 좌표가 붙는다 — 후보가 갈리면 스킵', () => {
+  const cands = [rc('동대문구', '11230111'), rc('수원시 팔달구', '41111222')];
+  assert.equal(pickRoadCode(cands, '동대문구'), '11230111');
+  assert.equal(pickRoadCode(cands, '성동구'), '');           // 아무것도 안 맞음
+  // 같은 시군구에 도로코드가 둘이면 특정 실패 → 스킵
+  assert.equal(pickRoadCode([rc('시흥시', 'A'), rc('시흥시', 'B')], '시흥시'), '');
+  assert.equal(pickRoadCode([], '시흥시'), '');
+});
+
+// ── ⑦ 동 좌표 신뢰 게이트 ──────────────────────────────────────────
+const dongRow = (o = {}) => ({ dong_no: '101', lat: 37.25, lng: 126.25, floors: 15, matched: 'dong', source: 'vworld', ...o });
+
+test('요청한 동의 좌표를 돌려준다 (표기 정규화 포함)', () => {
+  const rows = [dongRow(), dongRow({ dong_no: '0102', lat: 37.26, lng: 126.26 })];
+  assert.deepEqual(pickTrustedDong(rows, '101동'), { no: '101', lat: 37.25, lng: 126.25, floors: 15, source: 'vworld' });
+  assert.equal(pickTrustedDong(rows, '102').lat, 37.26);
+  assert.equal(pickTrustedDong(rows, '999'), null);
+  assert.equal(pickTrustedDong(rows, ''), null);
+});
+
+test('★격리된(suspect) 동 좌표는 내주지 않는다 — 실측: B동 좌표 하나가 빌라 5곳에 붙어 있었다', () => {
+  for (const m of ['suspect', 'complex', 'centroid', null]) {
+    assert.equal(pickTrustedDong([dongRow({ matched: m })], '101'), null, `matched=${m} 를 동 좌표로 내줬다`);
+  }
+});
+
+// ── ⑧ 조회 응답 — '아직 안 해봤다'와 '해봤는데 없다'는 다르다 ──────
+test('★저장소에 행이 없으면 quality=unknown (none 과 구분해야 재시도 대상을 안다)', () => {
+  const e = coordResolveEntry({ roadAddress: '경기도 시흥시 장곡로53번길 10', dongNo: '207' }, null, []);
+  assert.equal(e.quality, 'unknown');
+  assert.equal(e.coordKey, '');
+  assert.equal(e.entrance, null);
+  assert.equal(e.center, null);
+  assert.equal(e.dong, null);
+  assert.equal(e.roadAddress, '경기도 시흥시 장곡로53번길 10');
+});
+
+test('행은 있는데 좌표를 못 구한 건은 quality=none 그대로 (재시도 낭비 차단)', () => {
+  assert.equal(coordResolveEntry({}, row({ quality: 'none' }), []).quality, 'none');
+});
+
+test('아파트 조회 — 중심·동이 각자 자리에 담기고 신뢰 가능한 동만 센다', () => {
+  const e = coordResolveEntry(
+    { roadAddress: '경기도 시흥시 장곡로53번길 10', dongNo: '101' },
+    row({ center_lat: 37.2, center_lng: 126.2, center_source: 'vworld', is_apartment: true, building_name: '보성아파트' }),
+    [dongRow(), dongRow({ dong_no: '102', matched: 'suspect' })],
+  );
+  assert.deepEqual(e.center, { lat: 37.2, lng: 126.2, source: 'vworld' });
+  assert.equal(e.dong.no, '101');
+  assert.equal(e.dongCount, 1, 'suspect 를 신뢰 가능한 동으로 셌다');
+  assert.equal(e.isApartment, true);
+  assert.equal(e.buildingName, '보성아파트');
 });
