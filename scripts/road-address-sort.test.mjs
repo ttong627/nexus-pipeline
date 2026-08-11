@@ -7,17 +7,89 @@
 // ══════════════════════════════════════════════════════════════════
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseRoadAddress, roadAddressCompare, sortByRoadAddress } from '../src/utils/sortRecords.js';
+import { parseRoadAddress, roadAddressCompare, sortByRoadAddress, deliveryCompare } from '../src/utils/sortRecords.js';
 
 const rec = (주소, extra = {}) => ({ 주소, 이름: extra.이름 || '홍길동', 행정동: extra.행정동 || '', ...extra });
 const names = (arr) => arr.map(r => r.주소);
+const pick = (o, keys) => Object.fromEntries(keys.map(k => [k, o[k]]));
 
 test('parseRoadAddress: 도로명·본번·부번 분해', () => {
-  assert.deepEqual(parseRoadAddress('금곡로 137, 405- 402호 (금곡동, 삼익아파트)'), { road: '금곡로', num: 137, sub: 0 });
-  assert.deepEqual(parseRoadAddress('금호로23번길 26, 303호'), { road: '금호로23번길', num: 26, sub: 0 });
-  assert.deepEqual(parseRoadAddress('답십리로30길 28-5, 1층'), { road: '답십리로30길', num: 28, sub: 5 });
-  assert.deepEqual(parseRoadAddress('전농로3가길 9, 1층'), { road: '전농로3가길', num: 9, sub: 0 });
-  assert.deepEqual(parseRoadAddress('매산로2가 12'), { road: '매산로2가', num: 12, sub: 0 });
+  const base = ['road', 'num', 'sub'];
+  assert.deepEqual(pick(parseRoadAddress('금곡로 137, 405- 402호 (금곡동, 삼익아파트)'), base), { road: '금곡로', num: 137, sub: 0 });
+  assert.deepEqual(pick(parseRoadAddress('금호로23번길 26, 303호'), base), { road: '금호로23번길', num: 26, sub: 0 });
+  assert.deepEqual(pick(parseRoadAddress('답십리로30길 28-5, 1층'), base), { road: '답십리로30길', num: 28, sub: 5 });
+  assert.deepEqual(pick(parseRoadAddress('전농로3가길 9, 1층'), base), { road: '전농로3가길', num: 9, sub: 0 });
+  assert.deepEqual(pick(parseRoadAddress('매산로2가 12'), base), { road: '매산로2가', num: 12, sub: 0 });
+});
+
+// ══════════════════════════════════════════════════════════════════
+//  ★가지도로 분기 정렬 (형 현장 지시 2026-08-11)
+//  "실제로 삼작로를 주행하면 삼작로 258 보다 삼작로256번길이 먼저 나온다."
+//  N번길은 모도로의 건물번호 N 지점에서 갈라지므로, 모도로 번호 N 자리에 끼워 넣어야
+//  주행 순서와 같아진다. 도로명을 문자열로 묶으면 "삼작로" 전체 → "삼작로256번길" 전체가 되어
+//  256 지점을 지나친 뒤 되돌아오는 역주행이 된다.
+// ══════════════════════════════════════════════════════════════════
+test('parseRoadAddress: N번길은 기초번호 — 모도로 + 분기번호로 분해', () => {
+  const b = ['parentRoad', 'branchNo', 'isBranch'];
+  assert.deepEqual(pick(parseRoadAddress('삼작로256번길 16'), b), { parentRoad: '삼작로', branchNo: 256, isBranch: 1 });
+  assert.deepEqual(pick(parseRoadAddress('금호로23번길 26'), b), { parentRoad: '금호로', branchNo: 23, isBranch: 1 });
+  assert.deepEqual(pick(parseRoadAddress('강남대로12번길 5'), b), { parentRoad: '강남대로', branchNo: 12, isBranch: 1 });
+  // 모도로 본번은 자기 번호가 곧 분기위치 — 같은 축에서 비교된다
+  assert.deepEqual(pick(parseRoadAddress('삼작로 258'), b), { parentRoad: '삼작로', branchNo: 258, isBranch: 0 });
+});
+
+// ★서울식 'N길'은 일련번호(1길·2길·3길…)일 수 있어 N을 모도로 건물번호로 쓰면 엉뚱한 곳에 꽂힌다.
+//   분기 건물번호를 확인하기 전까지는 현행(모도로 뒤에 별도 그룹)을 그대로 유지한다 — 함부로 끼워넣지 않는다.
+test('parseRoadAddress: N길은 분기점 미확인 → 현행 유지(자기 자신이 모도로)', () => {
+  const b = ['parentRoad', 'branchNo', 'isBranch'];
+  assert.deepEqual(pick(parseRoadAddress('사가정로2길 92'), b), { parentRoad: '사가정로2길', branchNo: 92, isBranch: 0 });
+  assert.deepEqual(pick(parseRoadAddress('전농로3가길 9'), b), { parentRoad: '전농로3가길', branchNo: 9, isBranch: 0 });
+  // '매산로2가'는 법정동 표기지 가지도로가 아니다 — 분기로 오인하면 안 된다
+  assert.deepEqual(pick(parseRoadAddress('매산로2가 12'), b), { parentRoad: '매산로2가', branchNo: 12, isBranch: 0 });
+});
+
+// ★형 지시 2단계: 'N길'의 실제 분기 건물번호를 조회해 넘겨주면 그 자리에 끼워 넣는다.
+test('분기점 표를 주면 N길도 그 건물번호 자리에 들어간다 (2단계 연동 지점)', () => {
+  const branchIndex = { '사가정로2길': 40 };   // 사가정로 40번 건물 앞에서 갈라짐
+  const r = parseRoadAddress('사가정로2길 92', branchIndex);
+  assert.deepEqual(pick(r, ['parentRoad', 'branchNo', 'isBranch']), { parentRoad: '사가정로', branchNo: 40, isBranch: 1 });
+
+  const sorted = sortByRoadAddress(
+    [rec('사가정로 55'), rec('사가정로2길 92'), rec('사가정로 21')],
+    { branchIndex },
+  );
+  assert.deepEqual(names(sorted), ['사가정로 21', '사가정로2길 92', '사가정로 55']);
+});
+
+test('★형 지시: 삼작로256번길이 삼작로 258보다 먼저 (주행 순서)', () => {
+  const sorted = sortByRoadAddress([
+    rec('삼작로 258, 601호'), rec('삼작로256번길 16, 가동 205호'),
+    rec('삼작로 267, 1- 113호'), rec('삼작로256번길 11-10, 4동 4- 501호'),
+    rec('삼작로 250'),
+  ]);
+  assert.deepEqual(names(sorted), [
+    '삼작로 250',                       // 250 지점
+    '삼작로256번길 11-10, 4동 4- 501호',  // 256 지점에서 갈라지는 가지도로(부번 11-10)
+    '삼작로256번길 16, 가동 205호',       // 같은 가지도로 안에서는 번호순
+    '삼작로 258, 601호',                // 다시 모도로 258
+    '삼작로 267, 1- 113호',
+  ]);
+});
+
+test('가지도로와 모도로 본번이 같은 번호면 모도로 먼저 (골목에 들어가기 전에 큰길 건물)', () => {
+  const sorted = sortByRoadAddress([rec('삼작로256번길 3'), rec('삼작로 256'), rec('삼작로 257')]);
+  assert.deepEqual(names(sorted), ['삼작로 256', '삼작로256번길 3', '삼작로 257']);
+});
+
+test('★정제화면·엑셀(deliveryCompare)에도 같은 법칙이 걸린다 — 화면과 배송표 순서가 갈라지면 안 된다', () => {
+  const rows = [
+    rec('삼작로 258, 601호', { 행정동: '도당동' }),
+    rec('삼작로256번길 16, 가동 205호', { 행정동: '도당동' }),
+    rec('삼작로 267, 1- 113호', { 행정동: '도당동' }),
+  ];
+  assert.deepEqual(names([...rows].sort(deliveryCompare)), [
+    '삼작로256번길 16, 가동 205호', '삼작로 258, 601호', '삼작로 267, 1- 113호',
+  ]);
 });
 
 test('parseRoadAddress: 도로명이 없으면 road 빈값 + 번호는 최대값(뒤로 밀림)', () => {
@@ -96,5 +168,6 @@ test('실데이터 형태 — 박진성 기사 앞 구간이 도로·번호 순�
     rec('금곡로 229, 334호 (금곡동, 코오롱3차)', { 이름: '이은희', 행정동: '금곡동' }),
     rec('금호로 45, 102- 104호 (금곡동, 삼익1차)', { 이름: '최미나', 행정동: '금곡동' }),
   ]);
-  assert.deepEqual(sorted.map(r => r.이름), ['이은희', '하다연', '최미나', '김관중', '박덕신']);
+  // 번길은 모도로 분기번호 자리로 들어간다: 금곡로196번길(196) < 금곡로 229, 금호로23번길(23) < 금호로 45
+  assert.deepEqual(sorted.map(r => r.이름), ['하다연', '이은희', '김관중', '최미나', '박덕신']);
 });
