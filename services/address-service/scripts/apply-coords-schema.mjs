@@ -21,6 +21,14 @@ import { buildCoordKey, normalizeDongNo } from '../src/coords/coordStore.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const APPLY = process.argv.includes('--apply');
+/**
+ * 스키마만 적용하고 **이관은 하지 않는다**.
+ *
+ * ★C-4 이관은 이미 끝났다. 컬럼 하나 추가하려고 이 스크립트를 다시 돌리면 이관까지
+ *   따라 도는데, 그건 필요 없는 쓰기를 운영 DB 에 흘리는 일이다. 스키마 변경은 앞으로도
+ *   생기므로(오늘 dong_probed_at) 두 일을 분리해 둔다.
+ */
+const SCHEMA_ONLY = process.argv.includes('--schema-only');
 const S = config.dbSchema;
 const V = config.activeVersion;
 const num = (n) => Number(n || 0).toLocaleString('ko-KR');
@@ -29,7 +37,7 @@ const out = (l, v) => console.log(`${String(l).padEnd(44)} ${v}`);
 await withClient(async (c) => {
   await c.query(`SET search_path TO ${S}, public`);
 
-  console.log(`══ ① 스키마 적용 (${APPLY ? '실제' : '예행'}) ══`);
+  console.log(`══ ① 스키마 적용 (${APPLY ? '실제' : '예행'})${SCHEMA_ONLY ? ' · --schema-only' : ''} ══`);
   if (APPLY) {
     await c.query(await readFile(join(here, '..', 'sql', 'coords.sql'), 'utf8'));
     out('sql/coords.sql', '적용 완료');
@@ -42,6 +50,10 @@ await withClient(async (c) => {
   }
   if (!await exists('building_dong_coord')) {
     console.log('\n테이블이 아직 없어 이관을 건너뜁니다. --apply 로 다시 실행하세요.');
+    return;
+  }
+  if (SCHEMA_ONLY) {
+    console.log('\n--schema-only — 이관은 건너뜁니다(C-4 는 이미 끝났습니다).');
     return;
   }
 
@@ -71,7 +83,13 @@ await withClient(async (c) => {
     FROM ${S}.address_geocode_cache g
     LEFT JOIN ${S}.address_core  a ON a.version_id = $1 AND a.road_address = g.standard_road_address
     LEFT JOIN ${S}.building_core b ON b.version_id = $1 AND b.road_address = g.standard_road_address
-    WHERE g.cache_key LIKE 'dong:%' AND g.lat IS NOT NULL AND g.dong_no IS NOT NULL`, [V]);
+    WHERE g.cache_key LIKE 'dong:%' AND g.lat IS NOT NULL AND g.dong_no IS NOT NULL
+      -- ★격리된 캐시 행은 이관하지 않는다(2026-08-11 발견).
+      --   C-4-b·C-4-c 는 오염 좌표를 **지우지 않고** match_type='suspect' 로 낮춰 뒀다
+      --   (구 캐시 356행 + 18행). 이 조건이 없으면 이 스크립트를 다시 돌리는 순간
+      --   그것들이 matched='dong' 으로 **되살아나** 격리가 통째로 무효가 된다.
+      --   같은 좌표 하나가 성암빌라·진아빌라·청양맨션에 동시에 붙던 그 오염이다(F3).
+      AND g.match_type IS DISTINCT FROM 'suspect'`, [V]);
 
   let mapped = 0; let unmapped = 0; let wroteBld = 0; let wroteDong = 0;
   for (const r of cand) {
