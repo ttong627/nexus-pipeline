@@ -1,12 +1,12 @@
-# 🔁 HANDOFF — nexus-pipeline (2026-08-11 21:48)
+# 🔁 HANDOFF — nexus-pipeline (2026-08-11 23:20)
 
 > 새 세션에서 **"이어서"** 라고 하면 이 문서 → `좌표관리_설계.md` → `PROJECT_STATUS.md` 순으로 읽고 재개.
-> 상세 근거·실측 수치는 전부 **`좌표관리_설계.md` §5-2 ~ §5-4** 에 박제돼 있다. 여기는 요약과 다음 단계만.
+> 상세 근거·실측 수치는 전부 **`좌표관리_설계.md` §5-2 ~ §5-5** 에 박제돼 있다. 여기는 요약과 다음 단계만.
 
 ## 지금 하는 일
 - **좌표 관리(C 시리즈)** — 입구/중심/동 좌표 3종 구분 관리.
-- 진행: **C-1·C-2·C-3·C-4·C-4-b·C-4-c 완료 · C-5 대부분 완료 · C-6·C-7 미착수.**
-- 오늘 main `4ffff61 → 9160d18` (커밋 12개, 전부 push 완료).
+- 진행: **C-1·C-2·C-3·C-4·C-4-b·C-4-c·C-6 완료 · C-5 대부분 완료 · C-7 형 확인 대기.**
+- 오늘 main `4ffff61 → f36f37a`.
 
 ## 완료 (2026-08-11)
 
@@ -16,64 +16,67 @@
 | **C-4-b 구 캐시 오염 격리** | `address_geocode_cache` dong:* **356행** suspect · 잔여 0 |
 | **C-4-c 같은 좌표 공유 동 격리** | 두 테이블 **각 18행** suspect · 잔여 0 |
 | **C-5 클라 연동** | 배치 조회(`mode:'cache'`) 전환 · 미보유 경고 노출 · 동 좌표 채움 개통 |
+| **C-6 정기 배치 편입** ✅ | `sync-address-data.mjs` 에 ⑤좌표 채움 · ⑥이상치 검증. 예행 실측 = 채움 대상 0(이미 100%) · 이상치 **조회 1,543 / 검사 1,536 / 후보 0** |
 | **VWorld 실패율 70% → 0%** | 초당 2건 제한 + 502 재시도. 실측 800/800 |
-| **단방향 이름매칭 수정** | VWorld 가 단지명을 줄여 줌(`여월휴먼시아` vs `여월휴먼시아2단지아파트`) — **모든 단지에 영향** |
-| **동 표기 파싱 통일** | `toDongNo` — 값이면 정규화, 이름이면 추출. `'201'` 이 살아났다 |
+| **단방향 이름매칭 수정** | VWorld 가 단지명을 줄여 줌(`여월휴먼시아` vs `여월휴먼시아2단지아파트`) |
+| **동 표기 파싱 통일** | `toDongNo` — 값이면 정규화, 이름이면 추출 |
 
 **운영 반영**: Cloud Run 서비스 `nexus-address-api` 리비전 **`00071-qr2`** (롤백 지점 `00066-znm`).
-신규 Job **`nexus-address-fill`**(진단·채움·격리 스크립트를 `--args` 로 갈아 끼워 쓴다).
+Job **`nexus-address-sync`**(매일 04:23·--apply·타임아웃 3600초) **C-6 코드로 재배포 완료**.
+Job **`nexus-address-fill`**(진단·예행용 — `--args` 를 갈아 끼워 쓴다).
 
-### 오늘 잡은 "조용한 결함" 목록 (전부 에러 없이 틀렸던 것들)
-1. `pickDong` 의 `|| byDong[0]` 폴백 — 단지명 검증 실패해도 아무 건물이나 채택(오염 원인)
-2. 키 없는 출처가 쿼터를 차감 — 호출 0회인데 "100건 사용" 보고
-3. 맞출 동이 없는데 BBOX 호출 — 100회 낭비
-4. 속도제한기 동시성 경합 — 설정 0.7/초가 실효 2.1/초(정확히 3배)
-5. 중심이 있으면 동 좌표를 영영 안 채움 — 명단 4건 전부 skip
-6. 대단지 2차 BBOX 확장 누락 — `matchDongCoord` 에만 있고 새 경로엔 없었다
-7. 단방향 이름 매칭 — BBOX 에 22건 있는데 전부 기각
-8. 동 파싱이 경로마다 다름 — `'201'` 이 한쪽에선 빈 값
+### C-6 에서 새로 막은 것 (에러 없이 조용히 망가지는 것들)
+1. **무한루프** — 앵커 못 만든 건은 `updated_at` 이 안 밀려 배치가 같은 200건을 하루 종일 다시 꺼낸다. 에러도 쿼터 소모도 없어 로그상 정상으로 보인다 → `touchCoordRows` 로 "봤다"를 찍는다.
+2. **시간 예산 부재** — VWorld 초당 2건 × 20,000건 = 2.8시간 > Job 3600초. 잘린 실행은 요약 로그를 안 남긴다 → ⑤에 1,200초 상한.
+3. **최소 표본 3** — 3건짜리 지자체는 그 3건 위치가 중심이 돼 정상 좌표를 무더기로 outlier 로 만든다(순번 엔진은 좌표 없음 취급) → 기본 20.
+4. **시군구 없는 행** — 전국을 한 덩어리로 묶으면 서울과 부산이 서로를 이상치로 만든다 → 판정 제외.
+5. **요약이 `undefined`** — 대상 0건 경로가 통계 없는 객체를 반환. "0건이라 안 돈 것"과 "고장 나서 안 돈 것"의 구분이 사라진다 → 첫 예행이 잡아 `f36f37a` 로 수리.
+6. **Docker 컨텍스트** — `coordValidator.js` 가 루트 `src/` 에 있어 서버 이미지에 안 들어간다. 그냥 import 했으면 Job 에서 죽는다 → shared 이관(`git mv` + 재수출 스텁).
 
 ## 다음 단계 (이어서 할 일)
 
-1. **C-6 정기 배치 편입** ← 다음 1순위
-   `scripts/sync-address-data.mjs`(매일 04:23 Job `nexus-address-sync`)에 두 단계 추가:
-   - ⑤ 좌표 미보유 건물 채우기 — 일일 상한 내(`COORD_FILL_VWORLD_LIMIT` 기본 20,000)
-   - ⑥ 좌표 이상치 검증 — `src/engine/coordValidator.js` 의 `detectCoordOutliers`(중앙값 25km) 재사용,
-     `quality='outlier'` 로 **표시만** 하고 좌표는 지우지 않는다(DS-15)
-   ⚠️ VWorld 는 **초당 2건**이 상한이다. 대량이면 시간이 걸리니 Job 타임아웃(현재 1800초) 확인할 것.
-
-2. **C-5 잔여 — 명단 전체로 동 좌표 채우기**
+1. **C-5 잔여 — 명단 전체로 동 좌표 채우기** ← 다음 1순위
    지금은 개통만 확인했다(단건 실측). 실제 명단 1건을 `mode:'fill'` 로 돌려
    **미보유 0 달성**을 확인해야 §5 검증 기준을 채운다.
 
-3. **C-7 출입구 자료 적재** — 🚫 **형 확인 대기**(아래 열린 결정)
+2. **C-7 출입구 자료 적재** — 🚫 **형 확인 대기**(아래 열린 결정)
 
-4. (선택) `matched='complex'` 캐시 정책 재검토 — 시화5차평안마을건영처럼 VWorld 에
+3. (선택) `matched='complex'` 캐시 정책 재검토 — 시화5차평안마을건영처럼 VWorld 에
    동이 없는 단지는 매번 complex 를 캐시한다. 지금은 무해(클라가 `'dong'` 만 채택)하나,
    "동이 원래 없는 단지"를 표시해 두면 재조회를 줄일 수 있다.
+
+4. (관찰) C-6 이 매일 04:23 에 돈다. **요약 로그의 `★다음으로 이월` 이 이틀 연속 안 줄면**
+   무언가 막힌 것이다(F7). 확인: 아래 로그 명령.
 
 ## 열린 결정 (형 답 대기)
 - **C-7 행안부 출입구 자료(`RNENTDATA`·`AlterD.JUSUEC`) 파일이 어디 있는가?**
   계정 인증으로 내려받는 파일이라 위치를 알려주셔야 `load-juso-entrc.mjs` 를 돌린다.
   이게 있어야 **입구 좌표**(현재 0건)가 채워진다. C-1~C-6 은 없어도 전부 진행 가능.
 - 시흥·부천 외 **다른 지자체 명단도 지금 좌표를 채울지** — 하루 한도(VWorld 20,000)는 여유가 크다.
+  ⑥ 실측에서 지자체 5곳 중 **3곳이 표본부족(합 7건)** 으로 판정 보류였다. 명단이 들어오면 판정이 켜진다.
 
 ## 검증 상태
-- address-service **250/250 pass** · 루트 **281/281 pass** · eslint **0 error** · `npx vite build` **EXIT=0**
-- **미커밋 변경 없음** (`git status -s` 비어 있음) · origin/main 과 동기 (`9160d18`)
-- 운영 스모크: `/v1/address/match` 0.1~0.28초 · `/v1/coords/status` total 1,543 / center 1,543 / 전무 0 · dict typo 23건
+- address-service **269/269 pass**(C-6 신규 19) · 루트 **281/281 pass** · eslint **0 error** · `npx vite build` **EXIT=0**
+- Red-Green 실측: 최소표본 20→3 으로 낮추면 2건 실패 · 중복표시 가드 제거 시 1건 실패 → 원복 후 16/16
+- Job 예행 실측(`nexus-address-fill-l4j9k`): 요약 4줄 정상 · DB 무변경
 
 ## 참고
-- **설계·실측 SSOT**: `좌표관리_설계.md` (§5-2 C-3 / §5-3 C-5 / §5-4 C-4-c / §6 완료판정)
-- 진단 도구(전부 읽기 전용, `nexus-address-fill` Job 으로 실행):
+- **설계·실측 SSOT**: `좌표관리_설계.md` (§5-2 C-3 / §5-3 C-5 / §5-4 C-4-c / **§5-5 C-6** / §6 완료판정)
+- C-6 핵심 코드: `src/coords/coordOutlier.js`(순수 판정) · `coordQuery.js`(`loadFillTargets`·`countFillTargets`·`loadCoordRowsForCheck`) ·
+  `coordWrite.js`(`markOutlierRows`·`touchCoordRows`) · `shared/coordValidator.js`(화면과 공용)
+- C-6 손잡이(전부 env 또는 `--플래그`): `--skip-coords` · `--coord-limit` · `--coord-retry-days`(기본 30) ·
+  `--coord-budget-sec`(기본 1200) · `--coord-sigungu`
+- 진단 도구(읽기 전용, `nexus-address-fill` Job 으로 실행):
   `scripts/diag-coords.mjs` · `diag-vworld.mjs` · `probe-dong.mjs` · `probe-address.mjs`
 - 격리·채움(기본 dry-run, 쓰기는 `--apply`):
   `scripts/fill-coords.mjs` · `quarantine-dong-cache.mjs` · `quarantine-dong-samecoord.mjs`
-- 핵심 코드: `src/coords/{coordStore,coordFill,coordQuery,coordWrite}.js` · `src/vworld.js` ·
-  클라 `src/utils/coordStoreApi.js`
-- 회귀 잠금: `services/address-service/scripts/{coord-fill,coord-store,vworld-retry}.test.mjs` ·
+- 회귀 잠금: `services/address-service/scripts/{coord-fill,coord-store,coord-outlier,vworld-retry}.test.mjs` ·
   루트 `scripts/{db-guard,coord-store-api}.test.mjs`
 - **운영 명령 규칙**: gcloud 는 매 호출 `--account ttong627@gmail.com`.
   git push 는 전역 계정 전환 없이 토큰 주입:
   `GH_TOKEN=$(gh auth token --user ttong627) git -c credential.helper='!gh auth git-credential' push origin main`
-  Job `--args` 에 쉼표가 들어가면 `--args="^|^a|b|c"` 구분자를 쓸 것(gcloud 가 쉼표를 인자 구분자로 먹는다).
+  Job `--args` 에 쉼표가 들어가면 `--args="^:^a:b:c"` 구분자를 쓸 것(gcloud 가 쉼표를 인자 구분자로 먹는다).
+- **정기배치 로그 확인**:
+  `gcloud run jobs executions list --job nexus-address-sync --region asia-northeast3 --project logis-op --account ttong627@gmail.com --limit 3`
+  → 실행 이름을 잡아
+  `gcloud logging read 'resource.type="cloud_run_job" AND labels."run.googleapis.com/execution_name"="<이름>"' --project logis-op --account ttong627@gmail.com --format="value(textPayload)" --order asc`
