@@ -213,98 +213,41 @@ const nullOnQueryTimeout = async (label, run) => {
   }
 };
 
-// 후보 5건을 위에서부터 게이트에 통과시켜 **처음 통과한 것**을 채택한다.
-// 최고점만 보면, 신축이라 DB에 없을 때 점수만 높은 옆 단지가 그대로 뽑힌다.
-// (게이트 규칙·근거는 matchGuard.js — 회귀 scripts/match-guard.test.mjs)
-const pickGuarded = (rows, { rawQuery, kind, queryRoad = null }) => {
-  for (const row of rows) {
-    const verdict = judgeCandidate({ rawQuery, kind, candidate: row, queryRoad });
-    if (verdict.accept) return { ...row, _needsReview: verdict.needsReview, _matchKind: kind };
+// ══════════════════════════════════════════════════════════════════
+//  ★외부(JUSO)·학습 결과가 **물어본 그 주소**인지 검증한다 (형 지시 2026-08-11)
+//  "해당주소로 찾고 그 주소를 규칙화 하고 정제 하는거야."
+//  JUSO 는 키워드 검색이라 후보가 여럿이면 하나를 조용히 골라 돌려준다. 그게
+//  물어본 도로명·건물번호와 다르면 그건 정제가 아니라 **주소 치환**이다 → 버린다.
+// ══════════════════════════════════════════════════════════════════
+const sameAddressAsQuery = (record, queryRoad) => {
+  if (!queryRoad) return true;               // 번호 없는 질의는 애초에 여기까지 오지 않는다
+  if (!record) return false;
+  const verdict = judgeCandidate({
+    rawQuery: '',
+    kind: 'fuzzy',
+    queryRoad,
+    candidate: {
+      score: 1,
+      building_main_no: record.buldMnnm ?? record.building_main_no,
+      building_sub_no: record.buldSlno ?? record.building_sub_no ?? 0,
+      building_name: record.bdNm || record.building_name || '',
+    },
+  });
+  if (!verdict.accept) {
+    console.log(`[match] 외부 결과가 질의와 다른 주소 — 폐기(${verdict.reason}) :: ${record.roadAddr || ''}`);
   }
-  if (rows.length) {
-    // 왜 전부 버렸는지 남긴다 — "그냥 미매칭"과 "오매칭을 막았다"는 다른 사건이다.
-    const first = judgeCandidate({ rawQuery, kind, candidate: rows[0], queryRoad });
-    console.log(`[match-guard] ${kind} 후보 ${rows.length}건 전부 반려(최상위 사유: ${first.reason}) :: ${String(rawQuery).slice(0, 40)}`);
-  }
-  return null;
+  return verdict.accept;
 };
-
-const fuzzyMatch = async (version, normalized, cityLabel, rawQuery = '') => nullOnQueryTimeout('fuzzyMatch', async () => {
-  const { rows } = await query(`
-    SELECT
-      a.address_mgt_no,
-      a.road_address,
-      a.sido,
-      a.sigungu,
-      a.road_name,
-      a.legal_emd,
-      a.building_main_no,
-      a.building_sub_no,
-      a.road_code,
-      a.underground_yn,
-      a.legal_dong_code,
-      coalesce(nullif(a.building_name, ''), b.building_name, '') AS building_name,
-      b.building_mgt_no,
-      b.zip_no,
-      coalesce(b.is_apartment, false) AS is_apartment,
-      greatest(similarity(a.road_key, $2), similarity(a.full_key, $2)) AS score
-    FROM ${ADDRESS_SCHEMA}.address_core a
-    LEFT JOIN ${ADDRESS_SCHEMA}.building_core b
-      ON b.version_id = a.version_id
-     AND b.road_code = a.road_code
-     AND b.underground_yn = a.underground_yn
-     AND b.building_main_no = a.building_main_no
-     AND b.building_sub_no = a.building_sub_no
-    WHERE a.version_id = $1
-      AND (a.road_key % $2 OR a.full_key % $2)
-      AND ($3 = '' OR concat_ws(' ', a.sido, a.sigungu) ILIKE '%' || $3 || '%')
-    ORDER BY score DESC, length(a.road_address) ASC
-    LIMIT 5
-  `, [version, normalized, cleanText(cityLabel)], { timeoutMs: config.fallbackTimeoutMs });
-  return pickGuarded(rows, { rawQuery, kind: 'fuzzy' });
-});
-
-const buildingMatch = async (version, normalized, cityLabel, rawQuery = '') => nullOnQueryTimeout('buildingMatch', async () => {
-  const { rows } = await query(`
-    SELECT
-      '' AS address_mgt_no,
-      b.road_address,
-      b.sido,
-      b.sigungu,
-      b.road_name,
-      b.legal_emd,
-      b.building_main_no,
-      b.building_sub_no,
-      b.road_code,
-      b.underground_yn,
-      '' AS legal_dong_code,
-      b.building_name,
-      b.building_mgt_no,
-      b.zip_no,
-      b.is_apartment,
-      greatest(similarity(b.building_name_key, $2), similarity((coalesce(b.road_key, '') || coalesce(b.building_name_key, '')), $2)) AS score
-    FROM ${ADDRESS_SCHEMA}.building_core b
-    WHERE b.version_id = $1
-      AND b.building_name_key <> ''
-      -- concat_ws는 STABLE이라 인덱스 불가 → 동등한 불변식(coalesce||coalesce)으로 교체.
-      --   이 식에 GIN 트리그램 인덱스(building_core_roadbld_trgm)를 태워 28s seq scan → ~0.4s.
-      AND (b.building_name_key % $2 OR (coalesce(b.road_key, '') || coalesce(b.building_name_key, '')) % $2)
-      AND ($3 = '' OR concat_ws(' ', b.sido, b.sigungu) ILIKE '%' || $3 || '%')
-    ORDER BY score DESC, b.is_apartment DESC, length(b.road_address) ASC
-    LIMIT 5
-  `, [version, normalized, cleanText(cityLabel)], { timeoutMs: config.fallbackTimeoutMs });
-  return pickGuarded(rows, { rawQuery, kind: 'building' });
-});
 
 // ── 학습 주소(address_learned) ─────────────────────────────────────
 // 형 지시 2026-08-11: 명단에 있는데 DB에 없으면 API로 찾아 **DB에 반영**한다.
 // 버전독립 테이블이라 월 재적재에도 살아남는다(sql/learned.sql).
+// ★키는 표기가 아니라 뜻이다 — 시군구+도로명+본번-부번(learnedStore.js 주석 참조).
 // ★테이블이 아직 없어도(마이그레이션 전 배포) 매칭 전체가 죽으면 안 된다.
-//   42P01(undefined_table)은 "학습분 없음"으로 조용히 넘긴다 — 배포 순서에 의존하지 않는다.
+//   42P01(undefined_table)은 "학습분 없음"으로 조용히 넘긴다.
 let learnedTableMissing = false;
 const learnedMatch = async (rawQuery, cityLabel) => {
   if (learnedTableMissing) return null;
-  // ★키는 표기가 아니라 뜻이다 — 시군구+도로명+본번-부번.
   //   시군구가 없으면 조회하지 않는다: 도로명은 전국에서 겹쳐(동대문구 황물로7길 ↔ 수원 황물로7길)
   //   지역 없이 묶으면 A-30이 막아온 타지역 오매칭이 학습분 뒷문으로 되살아난다.
   const parsed = parseRoadNumber(rawQuery);
@@ -444,8 +387,9 @@ const matchAddress = async ({ queryText, cityLabel = '', version = config.active
   }
   // ★학습 주소를 정확매칭 바로 뒤에 본다 — 퍼지(옆 건물)보다, 외부 API보다 앞이다.
   //   신축이라 전체분 DB엔 없지만 지난번에 API로 확인해 둔 주소는 여기서 즉시 잡힌다.
+  const queryRoad = parseRoadNumber(rawQuery);
   const learned = await learnedMatch(rawQuery, cityLabel);
-  if (learned) return learned;
+  if (learned && sameAddressAsQuery(learned, queryRoad)) return learned;
 
   if (hasRoadNumber) {
     if (!allowJusoFallback) return null;
@@ -456,12 +400,15 @@ const matchAddress = async ({ queryText, cityLabel = '', version = config.active
     //   여기 도달했다는 건 위 learnedMatch 가 이미 빗나갔다는 뜻 → 지금 채워 넣는다.
     //   한 번 학습되면 다음부터는 learnedMatch 가 먼저 잡아 이 경로로 오지 않는다.
     if (cached) {
+      if (!sameAddressAsQuery(cached, queryRoad)) return null;   // 치환된 캐시는 쓰지 않는다
       if (sigunguToken(cityLabel)) await learnAddress(cached);
       return cached;
     }
     for (const jusoQuery of getJusoQueries(lookupQuery, cityLabel)) {
       const fallback = await fetchJuso(jusoQuery);
       if (fallback) {
+        // 물어본 주소와 다르면 정제가 아니라 치환이다 — 저장도 학습도 하지 않는다
+        if (!sameAddressAsQuery(fallback, queryRoad)) continue;
         await setFallbackCache(rawQuery, normalized, fallback);
         await learnAddress(fallback);   // 캐시에만 두지 않고 DB(학습분)에 반영한다
         return fallback;
@@ -469,24 +416,24 @@ const matchAddress = async ({ queryText, cityLabel = '', version = config.active
     }
     return null;
   }
-  const fuzzy = await fuzzyMatch(version, normalized, cityLabel, rawQuery);
-  if (fuzzy) return toAddressResult(fuzzy, Math.min(0.94, Number(fuzzy.score) || 0.82));
-  const building = await buildingMatch(version, normalized, cityLabel, rawQuery);
-  if (building) return toAddressResult(building, Math.min(0.9, Number(building.score) || 0.78));
-  if (!allowJusoFallback) return null;
-  const cached = await getFallbackCache(normalized);
-  if (cached) {
-    if (sigunguToken(cityLabel)) await learnAddress(cached);   // 캐시가 학습을 가로막지 않게(위 주석 참조)
-    return cached;
-  }
-  for (const jusoQuery of getJusoQueries(lookupQuery, cityLabel)) {
-    const fallback = await fetchJuso(jusoQuery);
-    if (fallback) {
-      await setFallbackCache(rawQuery, normalized, fallback);
-      await learnAddress(fallback);   // 캐시에만 두지 않고 DB(학습분)에 반영한다
-      return fallback;
-    }
-  }
+  // ══════════════════════════════════════════════════════════════
+  //  ★건물명으로 주소를 찾는 것은 금지다 (형 지시 2026-08-11 · 절대 되돌리지 말 것)
+  //
+  //  "명단정제자나 해당주소를 바꾸거나 하면 안돼. 없는 건물이나 오타일경우만 기록을
+  //   남기고 변경해야해. 건물명으로 주소 매칭한다던지하는 것은 절대 금지야.
+  //   해당주소로 찾고 그 주소를 규칙화 하고 정제 하는거야."
+  //
+  //  여기까지 왔다는 건 **건물번호가 없다**는 뜻이다(hasRoadNumber=false).
+  //  그 상태에서 fuzzy/building/JUSO 키워드로 찾으면 남의 주소를 가져다 붙이게 된다.
+  //  실측(2026-08-11): "우남아파트"로 조회하니 도당동의 **다른** 우남아파트
+  //  (부천로366번길 93)가 나왔다. 명단의 실제 주소는 삼작로256번길 16이다.
+  //  이름이 같은 단지가 한 동네에 둘 있으면 무엇을 해도 구분할 수 없다.
+  //
+  //  → 주소를 지어내지 않고 **미매칭**으로 돌려준다. 호출부가 확인필요로 올리고
+  //    담당자가 원본을 보고 판단한다(A-12). 미매칭은 되돌릴 수 있지만
+  //    잘못 바뀐 주소는 그대로 배송으로 나간다.
+  // ══════════════════════════════════════════════════════════════
+  console.log(`[match] 건물번호 없음 — 주소 치환 금지로 미매칭 처리 :: ${rawQuery.slice(0, 40)}`);
   return null;
 };
 
