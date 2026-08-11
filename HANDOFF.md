@@ -74,10 +74,21 @@ Job **`nexus-address-fill`**(진단·예행용 — `--args` 를 갈아 끼워 �
    하나(경기 140MB)로 묶인다. 검증: 로컬 예행 16파일 80,000행 파싱 100%·폐기 0·격리 0.
    ⚠️ Job 메모리 **2Gi 이상** 필요(`/tmp` 가 tmpfs=메모리).
 
-   **이제 남은 것은 두 가지뿐**: ①형의 범위 결정 ②GCS 업로드 →
-   `gcloud storage cp "D:/Gemma4/govt_delivery_analysis/data/juso_db/entrc_gyunggi.txt" gs://logis-op-address-source/entrc/ --project logis-op --account ttong627@gmail.com`
-   그다음 Job 하나 만들어 `--args="^:^scripts/load-juso-entrc.mjs:gs://logis-op-address-source/entrc:--apply"`.
-   버킷·`ADDRESS_SOURCE_BUCKET`(config.storageBucket)·`sql/entrance.sql` 은 이미 있다.
+   **✅ 업로드·Job·전수 예행까지 끝났다**(2026-08-11).
+   - GCS: `gs://logis-op-address-source/entrc/` — 16개 파일 876MB 업로드 완료
+   - Job: **`nexus-address-entrc`**(메모리 2Gi · task-timeout 7200s · cloudsql · DATABASE_URL)
+   - **전수 예행 실측**(`nexus-address-entrc-fgsws`, DB 무접촉):
+     **6,420,581행 전량 파싱 · 폐기 0** · 무좌표 13,471(0.21%) · 격리 36(0.0006%) · 판정보류 34 ·
+     변환실패 0. 경기 103만행 24.9초 · 16파일 약 180초.
+
+   **남은 것은 `--apply` 하나뿐** — 형이 범위를 정하면 args 를 바꿔 실행한다:
+   ```
+   gcloud run jobs update nexus-address-entrc --args='^|^scripts/load-juso-entrc.mjs|gs://logis-op-address-source/entrc|--apply' --region asia-northeast3 --project logis-op --account ttong627@gmail.com
+   gcloud run jobs execute nexus-address-entrc --region asia-northeast3 --project logis-op --account ttong627@gmail.com --wait
+   ```
+   범위를 좁히려면 GCS 접두어를 나누거나(`entrc/gyunggi/`) `--only` 를 쓴다.
+   ⚠️ **좌표 채움(`--all`)이 도는 동안은 실행하지 말 것** — 같은 Cloud SQL(1 vCPU)에
+   642만 행 INSERT 를 겹치면 채움이 500 으로 죽는다(2026-07-30·08-01 같은 패턴).
 
    **적재 범위 = 형 답 대기**. 명단이 있는 지자체는 경기·서울·인천·충남 4곳뿐이다.
    | 안 | 행수 | 비고 |
@@ -120,7 +131,12 @@ Job **`nexus-address-fill`**(진단·예행용 — `--args` 를 갈아 끼워 �
 - **운영 명령 규칙**: gcloud 는 매 호출 `--account ttong627@gmail.com`.
   git push 는 전역 계정 전환 없이 토큰 주입:
   `GH_TOKEN=$(gh auth token --user ttong627) git -c credential.helper='!gh auth git-credential' push origin main`
-  Job `--args` 에 쉼표가 들어가면 `--args="^:^a:b:c"` 구분자를 쓸 것(gcloud 가 쉼표를 인자 구분자로 먹는다).
+  Job `--args` 에 쉼표가 들어가면 커스텀 구분자를 쓸 것(gcloud 가 쉼표를 인자 구분자로 먹는다).
+  ⚠️ **구분자는 값에 없는 문자로 고를 것** — `^:^` 를 쓰다가 `gs://버킷/…` 의 `://` 가 쪼개져
+  Job 이 `scandir 'gs'` 로 죽었다(2026-08-11 실측). GCS 경로가 인자면 `^|^` 를 쓴다:
+  `--args='^|^scripts/load-juso-entrc.mjs|gs://logis-op-address-source/entrc'`
+  args 는 재배포 없이 `gcloud run jobs update --args=…` 로 바꿀 수 있고, 바꾼 뒤
+  `describe --format="value(...containers[0].args.list())"` 로 **눈으로 확인**할 것.
 - **정기배치 로그 확인**:
   `gcloud run jobs executions list --job nexus-address-sync --region asia-northeast3 --project logis-op --account ttong627@gmail.com --limit 3`
   → 실행 이름을 잡아
