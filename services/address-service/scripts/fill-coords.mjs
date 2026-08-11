@@ -15,7 +15,7 @@
 import { config } from '../src/config.js';
 import { closePool, query, withClient } from '../src/db.js';
 import { fillCoords, DAILY_LIMITS } from '../src/coords/coordWrite.js';
-import { classifyFillTargets, createQuotaCounter } from '../src/coords/coordFill.js';
+import { availableSources, classifyFillTargets, createQuotaCounter } from '../src/coords/coordFill.js';
 import { resolveCoordKeys } from '../src/coords/coordQuery.js';
 import { coordResolveEntry } from '../src/coords/coordStore.js';
 
@@ -34,6 +34,17 @@ await withClient(async (c) => {
   await c.query(`SET search_path TO ${S}, public`);
 
   console.log(`══ C-3 좌표 채움 (${APPLY ? '실제' : '예행'}) · 최대 ${num(LIMIT)}건${SIGUNGU ? ` · ${SIGUNGU}` : ''} ══`);
+
+  // ★선행 차단(2026-08-11 실측): 키 없이 돌렸더니 채움률 0% 가 나왔고, 그 0% 가
+  //   "이 주소들은 좌표가 원래 없다"처럼 보였다. 출처가 없으면 시작조차 하지 않는다(F9).
+  const sources = availableSources(config);
+  out('쓸 수 있는 출처', sources.length ? sources.join(', ') : '(없음)');
+  if (!sources.length) {
+    console.log('\n⛔ VWORLD_KEY·KAKAO_REST_KEY 가 하나도 없습니다. 채움을 시작하지 않습니다.');
+    console.log('   Job 이라면 --set-secrets 로 ADDRESS_VWORLD_KEY·ADDRESS_KAKAO_REST_KEY 를 주입하세요.');
+    process.exitCode = 2;
+    return;
+  }
 
   // ① 대상 — 입구·중심 둘 다 없는 건물. 동 좌표만 있는 건(C-4 이관분)도 여기 포함된다:
   //    동 좌표는 순번용이고 내비용 점이 아직 없기 때문이다.

@@ -14,7 +14,7 @@ import { geocodeRoad, getBuildingsNear } from '../vworld.js';
 import { emptyOnMissingTable, resolveCoordKeys, loadCoordRows } from './coordQuery.js';
 import { coordResolveEntry, normalizeDongNo, parseCoordKey } from './coordStore.js';
 import {
-  buildCoordWrite, classifyFillTargets, createCoordFiller, createQuotaCounter,
+  availableSources, buildCoordWrite, classifyFillTargets, createCoordFiller, createQuotaCounter,
 } from './coordFill.js';
 
 const S = config.dbSchema;
@@ -172,8 +172,15 @@ export const fillCoords = async (records, { version = config.activeVersion, quot
   });
 
   const { fill, skip } = classifyFillTargets(entries);
+  // ★키가 없는 출처는 주입하지 않는다 — 주입하면 호출도 못 하면서 쿼터만 차감하고,
+  //   요약이 "100건 썼다"고 거짓 보고한다(2026-08-11 첫 실행에서 실제로 그랬다).
+  const sources = availableSources(config);
+  const useVworld = sources.includes('vworld');
   const filler = createCoordFiller({
-    findEntrance: lookupEntrance, geocodeRoad, getBuildingsNear, kakaoGeocode,
+    findEntrance: lookupEntrance,
+    geocodeRoad: useVworld ? geocodeRoad : null,
+    getBuildingsNear: useVworld ? getBuildingsNear : null,
+    kakaoGeocode: sources.includes('kakao') ? kakaoGeocode : null,
   });
 
   const stats = { attempted: fill.length, filled: 0, none: 0, dongs: 0, carried: 0, bySource: {} };
@@ -224,6 +231,9 @@ export const fillCoords = async (records, { version = config.activeVersion, quot
     coords,
     summary: {
       ...stats,
+      // ★0% 가 나왔을 때 "채울 게 없었다"인지 "키가 없어 시도조차 못 했다"인지
+      //   로그만 보고 갈리게 한다(F9).
+      sources,
       skipped: skip.length,
       skipReasons: skip.reduce((acc, s) => ({ ...acc, [s.reason]: (acc[s.reason] || 0) + 1 }), {}),
       quota: q.summary(),

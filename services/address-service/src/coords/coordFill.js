@@ -20,6 +20,23 @@ export const FILL_SOURCES = ['juso_entrc', 'vworld', 'kakao'];
 /** 지오코딩 출처는 **중심 좌표**만 채울 수 있다(F1). 입구 칸은 ENTRANCE_SOURCES 전용. */
 export const CENTER_SOURCES = new Set(['vworld', 'kakao']);
 
+/**
+ * 키가 있는 출처만 "쓸 수 있는 출처"다.
+ *
+ * ★2026-08-11 첫 운영 실행에서 드러난 것: Job 에 VWORLD_KEY·KAKAO_REST_KEY 를 안 넣고
+ *   돌렸더니 **채움률 0% 인데 요약엔 `vworld 100 · kakao 100 사용`** 이 찍혔다.
+ *   호출은 한 번도 없었다(1.1초에 200콜은 불가능). 키가 없으면 geocodeRoad 가 즉시
+ *   null 을 돌려주는데, 쿼터는 호출 **전에** 차감하고 있었기 때문이다.
+ *   계측이 거짓말을 하면 "한도를 다 썼나?"를 먼저 의심하게 되고 진짜 원인이 가려진다.
+ *   → 키 없는 출처는 **아예 주입하지 않는다**. 그러면 쿼터도 안 줄고 요약에도 안 뜬다.
+ */
+export const availableSources = ({ vworldKey = '', kakaoRestKey = '' } = {}) => {
+  const list = [];
+  if (String(vworldKey).trim()) list.push('vworld');
+  if (String(kakaoRestKey).trim()) list.push('kakao');
+  return list;
+};
+
 /** 이름 비교용 정규화 — 공백 제거. C-4 오염 격리 SQL(regexp_replace '\s')과 같은 기준. */
 const nameKey = (v) => String(v ?? '').replace(/\s+/g, '');
 
@@ -183,7 +200,12 @@ export const createCoordFiller = ({
       carried.push('vworld');
     }
   }
-  if (center && target.isApartment && getBuildingsNear) {
+  // ★맞출 동 번호가 없으면 BBOX 를 부르지 않는다. acceptDongCandidate 가 어차피 전부
+  //   기각하므로 순수 낭비다 — 첫 실전 실행에서 이렇게 100회를 헛되이 썼다.
+  //   배치 경로(building_coord 기반)에는 동 번호가 없다. 동 좌표는 **명단 기반 fill**
+  //   에서 채워진다(명단이 동 번호를 갖고 있다).
+  const wantDong = normalizeDongNo(target.dongNo);
+  if (center && target.isApartment && wantDong && getBuildingsNear) {
     if (!quota || quota.take('vworld', 1)) {
       const near = await getBuildingsNear(center.lng, center.lat);
       const pick = acceptDongCandidate(near, { wantDong: target.dongNo, complexName: target.buildingName });

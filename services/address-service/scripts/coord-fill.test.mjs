@@ -18,6 +18,8 @@ import {
   createQuotaCounter,
   classifyFillTargets,
   buildCoordWrite,
+  createCoordFiller,
+  availableSources,
   FILL_SOURCES,
 } from '../src/coords/coordFill.js';
 import { buildCoordKey, parseCoordKey } from '../src/coords/coordStore.js';
@@ -204,4 +206,89 @@ test('앵커가 없으면 쓰기 자체를 만들지 않는다', () => {
 
 test('채움 출처 목록은 폴백 순서 그대로다 — 출입구 → vworld → kakao(설계서 §3-2)', () => {
   assert.deepEqual(FILL_SOURCES, ['juso_entrc', 'vworld', 'kakao']);
+});
+
+// ── ⑥ ★키가 없는 출처는 아예 없는 것으로 친다 (2026-08-11 실측으로 드러난 결함) ──
+//  Job 에 VWORLD_KEY·KAKAO_REST_KEY 를 안 넣고 돌렸더니 채움률 0% 인데 요약엔
+//  `vworld 100 · kakao 100 사용`이 찍혔다. 호출은 한 번도 없었다(1.1초에 200콜 불가).
+//  키가 없으면 **출처가 없는 것**이고, 그 사실이 요약에 드러나야 한다.
+test('★키가 없으면 그 출처는 목록에서 빠진다', () => {
+  assert.deepEqual(availableSources({ vworldKey: '', kakaoRestKey: '' }), []);
+  assert.deepEqual(availableSources({ vworldKey: 'v', kakaoRestKey: '' }), ['vworld']);
+  assert.deepEqual(availableSources({ vworldKey: '', kakaoRestKey: 'k' }), ['kakao']);
+  assert.deepEqual(availableSources({ vworldKey: 'v', kakaoRestKey: 'k' }), ['vworld', 'kakao']);
+});
+
+test('★출처가 하나도 없으면 채움을 시작하면 안 된다 — 0% 를 "채울 게 없다"로 오해한다(F9)', () => {
+  assert.equal(availableSources({}).length, 0);
+});
+
+// ── ⑦ ★쓰지도 않은 쿼터를 썼다고 하지 않는다 ──
+//  첫 운영 실행에서 채움률 0% 가 나왔는데 요약에는 `vworld 100 · kakao 100 사용`이
+//  찍혀 있었다. 실제로는 Job 에 API 키가 없어 **호출 자체가 없었다**. 계측이 거짓말을
+//  하면 "한도를 다 썼나?"를 먼저 의심하게 되고 진짜 원인(키 누락)이 가려진다.
+//  설계서 §1-2 의 "적재했다는 주장" 과 같은 종류의 함정이다.
+test('★출처가 없으면(키 미설정) 쿼터를 차감하지 않는다', async () => {
+  const fill = createCoordFiller({});           // geocodeRoad·kakaoGeocode 미주입 = 키 없음
+  const q = createQuotaCounter({ vworld: 10, kakao: 10 });
+  const got = await fill({ coordKey: 'k1', roadAddress: 'A로 1' }, q);
+  assert.equal(got.point, null);
+  assert.equal(q.used('vworld'), 0, '호출하지 않았는데 쿼터를 차감하면 계측이 거짓말을 한다');
+  assert.equal(q.used('kakao'), 0);
+});
+
+test('실제로 호출할 때만 쿼터를 차감한다', async () => {
+  const fill = createCoordFiller({ geocodeRoad: async () => ({ lat: 37, lng: 127 }) });
+  const q = createQuotaCounter({ vworld: 10, kakao: 10 });
+  const got = await fill({ coordKey: 'k1', roadAddress: 'A로 1', isApartment: false }, q);
+  assert.equal(got.source, 'vworld');
+  assert.equal(q.used('vworld'), 1, '지오코딩 1회');
+  assert.equal(q.used('kakao'), 0, 'vworld 로 끝났으면 kakao 는 안 부른다');
+});
+
+test('아파트가 아니면 동 BBOX 를 태우지 않는다 — 쿼터 낭비(R4)', async () => {
+  const q = createQuotaCounter({ vworld: 10 });
+  const fill = createCoordFiller({
+    geocodeRoad: async () => ({ lat: 37, lng: 127 }),
+    getBuildingsNear: async () => { throw new Error('단독·상가에 BBOX 를 태웠다'); },
+  });
+  await fill({ coordKey: 'k1', roadAddress: 'A로 1', isApartment: false }, q);
+  assert.equal(q.used('vworld'), 1);
+});
+
+// ★2026-08-11 첫 실전 실행에서 드러남: 동 좌표 0건인데 VWorld 를 200회 썼다.
+//   배치 경로(building_coord 기반)에는 **동 번호가 없다** — 동 번호는 명단에서 온다.
+//   맞출 동이 없으면 BBOX 결과는 어차피 전부 기각되므로 호출 자체가 낭비다.
+test('★아파트라도 동 번호가 없으면 BBOX 를 태우지 않는다 — 맞출 대상이 없다', async () => {
+  const q = createQuotaCounter({ vworld: 10 });
+  const fill = createCoordFiller({
+    geocodeRoad: async () => ({ lat: 37, lng: 127 }),
+    getBuildingsNear: async () => { throw new Error('동 번호가 없는데 BBOX 를 태웠다'); },
+  });
+  const got = await fill({ coordKey: 'k1', roadAddress: 'A로 1', isApartment: true, dongNo: '' }, q);
+  assert.equal(got.source, 'vworld');
+  assert.equal(q.used('vworld'), 1, '지오코딩 1회만 — BBOX 는 안 부른다');
+});
+
+test('동 번호가 있으면 아파트일 때 BBOX 를 태운다', async () => {
+  const q = createQuotaCounter({ vworld: 10 });
+  const fill = createCoordFiller({
+    geocodeRoad: async () => ({ lat: 37, lng: 127 }),
+    getBuildingsNear: async () => [{ buildName: '은마아파트', dongNo: '101', lat: 37.5, lng: 127.5, floors: 14 }],
+  });
+  const got = await fill({ coordKey: 'k1', roadAddress: 'A로 1', isApartment: true, dongNo: '101' }, q);
+  assert.equal(q.used('vworld'), 2, '지오코딩 1 + BBOX 1');
+  assert.equal(got.dongs[0]?.dongNo, '101');
+  assert.equal(got.dongs[0]?.matched, 'dong');
+});
+
+test('★쿼터가 바닥나면 호출하지 않고 이월로 남긴다(F7)', async () => {
+  const q = createQuotaCounter({ vworld: 0, kakao: 0 });
+  const fill = createCoordFiller({
+    geocodeRoad: async () => { throw new Error('쿼터 0 인데 호출했다'); },
+    kakaoGeocode: async () => { throw new Error('쿼터 0 인데 호출했다'); },
+  });
+  const got = await fill({ coordKey: 'k1', roadAddress: 'A로 1' }, q);
+  assert.equal(got.point, null);
+  assert.deepEqual(got.carried, ['vworld', 'kakao']);
 });
