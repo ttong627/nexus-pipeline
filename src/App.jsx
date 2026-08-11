@@ -198,6 +198,7 @@ import { processAddress, asyncPool, addTypoRecord, loadTypoDict } from "./engine
 import { parsePhoneNumbers, parseSMS, parseBirthDate, normalizeBirth, extractPhoneNote, formatPhone } from "./utils/parsers.js";
 import { canUseRouteMap, canUseDbOverview, getMonthlyLimit } from "./utils/tierUtils.js";
 import { getCachedCoord, saveCoordCache } from "./utils/coordCache.js";
+import { resolveCoordsBatch, pickStoreCoord } from "./utils/coordStoreApi.js";
 import { guardAddressDetail, cleanAddressPiece, parseDisplayedAddress } from "./utils/addressFormat.js";
 import { buildStepStatus, getVisibleWorkflowSteps, getWorkflowMeta, getWorkflowMode, WORKFLOW_STEP_LABELS } from "./utils/workflow.js";
 import { LogOut, ShieldCheck, Database, Crown, Layers, UserCircle, Undo2, BarChart3, MapPin, Map as MapIcon, Truck, CalendarDays, FileSpreadsheet, Home, ChevronLeft, ChevronRight, BookOpen, HardDrive, HelpCircle } from "lucide-react";
@@ -1868,6 +1869,20 @@ export default function App() {
     bgSaveCoordCancelRef.current = false;
     setBgSaveCoordState({ city, monthId, done: 0, total: targets.length, success: 0, isDone: false });
 
+    // ── C-5: 좌표 저장소를 **먼저 배치로** 묻는다 (설계서 좌표관리_설계.md §3-4) ──
+    // 아래 루프는 건당 650ms 를 쉬며 외부 지오코딩을 태운다. 이미 확보해 둔 좌표
+    // (building_coord, 2026-08-11 기준 1,543건 전량)를 다시 사는 셈이라 순수 낭비다.
+    // 조회 전용(mode:'cache')이라 외부 API 를 태우지 않는다(F10).
+    const storeCoords = await resolveCoordsBatch(
+      targets.map(r => ({ roadAddress: r.주소 || '', sigungu: city, buildingName: '', dongNo: '' })),
+    );
+    const storeByRecordId = new Map();
+    targets.forEach((r, i) => {
+      // 내비 목적지 기준으로 고른다 — 동 좌표는 순번용이라 여기 쓰지 않는다(F2).
+      const picked = pickStoreCoord(storeCoords[i], 'navigation');
+      if (picked) storeByRecordId.set(r.id, picked);
+    });
+
     const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
     const patches = [];
     const gridPatches = {};
@@ -1904,9 +1919,12 @@ export default function App() {
       for (const record of targets) {
         if (bgSaveCoordCancelRef.current) break;
 
-        // 영구 캐시(coordinate_cache) 우선 — 같은 주소면 카카오 호출 없이 즉시 적용(API 최소화).
-        let coord = await getCachedCoord(db, city, record.주소);
-        let source = 'cache';
+        // 좌표 저장소(building_coord) 우선 — 이미 확보한 좌표는 다시 사지 않는다(C-5).
+        const fromStore = storeByRecordId.get(record.id);
+        // 그다음 영구 캐시(coordinate_cache) — 같은 주소면 카카오 호출 없이 즉시 적용(API 최소화).
+        let coord = fromStore ? { lat: fromStore.lat, lng: fromStore.lng } : await getCachedCoord(db, city, record.주소);
+        // 출처를 뭉뚱그리면 나중에 출처별로 품질을 재평가할 수 없다 — 저장소 출처를 그대로 싣는다.
+        let source = fromStore ? `store:${fromStore.source || fromStore.kind}` : 'cache';
         if (!coord) {
           await sleep(650);
           const result = await processAddress(

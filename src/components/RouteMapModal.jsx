@@ -431,6 +431,12 @@ const buildMapInsights = ({ records, drivers, largeAptComplexes = [] }) => {
   };
 
   const actions = [];
+  // ★좌표 미보유를 맨 앞에 세운다(C-5·설계서 F4). 좌표 없는 건은 순번에서 뒤로 밀려
+  //   **기사 구역을 찢는다**. 지금까지 noCoord 는 계산만 하고 화면에 안 나와서,
+  //   미보유가 남은 줄 모르고 자동 순번을 돌릴 수 있었다.
+  if (coordIssues.noCoord) {
+    actions.push(`좌표 미보유 ${coordIssues.noCoord.toLocaleString()}건 — 순번 전에 먼저 채우세요. 좌표 없는 건은 구역을 찢습니다.`);
+  }
   if (mixedRecords.length) actions.push(`혼재 의심 ${mixedRecords.length}건은 묶음 보정으로 먼저 정리하세요.`);
   if (mixedRoads.length) actions.push(`주요 도로 ${mixedRoads.length}개가 여러 기사에게 나뉘었습니다. 홀짝 좌우 기준 경계를 확인하세요.`);
   if (isolatedUnits.length) actions.push(`외곽 고립 묶음 ${isolatedUnits.length}개는 같은 방향 권역 기사에게 붙이는 편이 좋습니다.`);
@@ -2344,6 +2350,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
     const issueCount = mapInsights.mixedCount
       + mapInsights.mixedRoads.length
       + mapInsights.isolatedUnits.length
+      + mapInsights.coordIssues.noCoord      // 미보유를 안 세면 "큰 신호 없음"으로 뜬다(F4)
       + mapInsights.coordIssues.outCity
       + mapInsights.coordIssues.outDong;
     showToast(issueCount > 0 ? 'info' : 'success', issueCount > 0
