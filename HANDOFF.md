@@ -125,6 +125,17 @@
 - 시흥·부천 외 **다른 지자체 명단도 지금 좌표를 채울지** — 하루 한도(VWorld 20,000)는 여유가 크다.
   ⑥ 실측에서 지자체 5곳 중 **3곳이 표본부족(합 7건)** 으로 판정 보류였다. 명단이 들어오면 판정이 켜진다.
 
+## ⚠️ 다음 명단 업로드 때 반드시 볼 것 (2026-08-11 배관 연결)
+`geocodeAuto`(Cloud Function·3분마다)가 이제 좌표 저장소를 먼저 본다. 지금은 16개 월이
+전부 `coordsDone=true` 라 **일감이 없어 조용히 return** 한다 — 실동작은 새 명단이 올라올 때
+드러난다. 그때 로그를 확인:
+```
+gcloud logging read 'resource.labels.service_name="geocodeauto" AND textPayload:"[geocodeAuto]"' --project logis-op --account ttong627@gmail.com --limit 5 --format="value(textPayload)"
+```
+`성공 N (저장소 X · 지오코딩 Y)` 에서 **X 가 대부분이어야 정상**이다. Y 가 대부분이면
+배관이 또 끊긴 것이다(주소 API 장애·규칙 불일치·저장소 미채움).
+사전 실측(명단 100건 같은 규칙 적용): 저장소가 **100% 대줌**(동 29·중심 71), 외부 호출 0.
+
 ## 검증 상태
 - address-service **269/269 pass**(C-6 신규 19) · 루트 **281/281 pass** · eslint **0 error** · `npx vite build` **EXIT=0**
 - Red-Green 실측: 최소표본 20→3 으로 낮추면 2건 실패 · 중복표시 가드 제거 시 1건 실패 → 원복 후 16/16
