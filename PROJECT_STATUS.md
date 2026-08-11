@@ -208,7 +208,7 @@
 ## 리스크
 ### 2026-08-11 신규 (D: 작업본 실측)
 - 🔴 **origin HEAD 빌드 불가 — 미푸시 수정 대기**: `7382740`에 충돌 마커가 커밋돼 **origin을 받는 모든 클론이 빌드 실패**한다(I: 정본도 동일). D:에서 고쳤으나 **아직 커밋·푸시 안 함** → 형 승인 후 푸시해야 I:도 살아난다
-- 🔴 **`road_name` 인덱스 작업 실종**: `7382740`의 커밋 메시지가 말하는 인덱스 추가가 **코드·SQL 어디에도 없다**(diff 전부 충돌 찌꺼기). 08-09에 잡았다던 "단건 조회 25초" 원인이 **DB에 수동 적용됐는지 미확인** → 재확인·재작업 필요
+- 🟢 **`road_name` 인덱스 — 정상 존재(08-11 정정)**: `7382740`의 diff는 충돌 찌꺼기뿐이라 그 커밋은 아무것도 추가하지 않았으나, **인덱스 자체는 이미 `7a76284`에서 반영돼 있다** — `schema.sql:153` `address_core_roadname_exact`, `:169` `building_core_roadname_exact` 모두 `(version_id, road_name, building_main_no, building_sub_no)`. 08-11 최초 보고의 "인덱스 실종"은 **grep 범위 오류로 인한 오탐**이며 재작업 불필요
 - 🟡 **gh active 계정 = `ttong0627` ≠ repo owner `ttong627`**: 전역 전환 없이 owner 토큰 주입으로 처리함(`GH_TOKEN=$(gh auth token --user ttong627) git -c credential.helper='!gh auth git-credential' ...`). **푸시·배포 직전 계정 재확인 필수**
 - 🟢 **D: `.env` 키 완비**: `VITE_*` 10종 전부 채움(08-11 `VITE_VWORLD_KEY`·`VITE_KAKAO_JS_KEY` 복구). 빌드 산출물이 운영 번들과 해시 일치로 검증됨
 - 🟢 **D: 정체 해소**: behind 108 → 0. 로컬 5커밋은 `backup/d-clone-20260811`에 보존(내용은 origin에 이미 반영됨)
