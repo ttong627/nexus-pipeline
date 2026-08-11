@@ -35,11 +35,16 @@ Job **`nexus-address-fill`**(진단·예행용 — `--args` 를 갈아 끼워 �
 
 ## 다음 단계 (이어서 할 일)
 
-1. **나머지 15개 명단 좌표 채우기** ← 다음 1순위 (형 확인 후)
-   시흥 2026-07 만 채웠다. 나머지 15개 명단 88,463건이 그대로다.
-   `node scripts/fill-list-coords.mjs --city "<지자체>" --month <YYYY-MM>` 로 먼저 실측(조회만),
-   `--apply` 로 채움. 명단 하나에 **약 20분**·VWorld 초당 2건. 하루 한도(20,000)는 여유가 크다.
-   목록: `node scripts/fill-list-coords.mjs --list`
+1. **전 명단 좌표 채우기** — 🔄 **2026-08-11 밤 실행 중**(`--all --apply`).
+   16개 명단 98,020건 순차. 명단당 **약 15분**(부천 오정구 4,356건=897초 실측) → 총 4~5시간.
+   중단돼도 채운 건 저장소에 남아 **재실행하면 캐시로 빨리 지나간다**. 한 명단이 실패해도
+   나머지는 계속 돌고 끝에 명단별 표로 요약된다.
+   ```
+   node scripts/fill-list-coords.mjs --all --apply     # 전체
+   node scripts/fill-list-coords.mjs --list            # 목록
+   node scripts/fill-list-coords.mjs --city "<지자체>" --month <YYYY-MM>   # 하나만 실측
+   ```
+   ⚠️ **끝났는지 먼저 확인할 것** — 안 끝났으면 겹쳐 돌리지 말 것(같은 주소를 두 번 산다).
 
 2. **`parseAptDong` 오탐 24건** — 도로명 부번을 동으로 읽는다(`동서로 895-24 → 895동`).
    **순번이 단독주택 24채를 한 동으로 묶는다.** 순번 엔진 핵심이라 손대지 않았다 — §5-3-A 참조.
@@ -62,12 +67,17 @@ Job **`nexus-address-fill`**(진단·예행용 — `--args` 를 갈아 끼워 �
    **⚠️ VWorld·카카오는 대안이 아니다** — 둘 다 주는 건 건물 **중심점**이고, 지오코딩 결과를
    입구 칸에 넣는 것은 F1 이 금지한다(차가 못 들어가는 곳을 목적지로 준다).
 
-   **막힌 곳 하나**: `entrcReader` 가 `createReadStream(filePath)` 로 **로컬 파일만** 읽는다.
-   DB 가 Cloud SQL 이라 적재는 Cloud Run Job 이 해야 하는데, Job `/tmp` 는 메모리(tmpfs)라
-   876MB 를 통째로 못 내린다. → reader 가 **스트림을 주입받게** 확장하면
-   GCS(`gs://logis-op-address-source/`) `file.createReadStream()` 을 그대로 꽂을 수 있다.
-   iconv 디코딩 경로는 그대로 쓴다. 버킷·`ADDRESS_SOURCE_BUCKET`(config.storageBucket)·
-   `sql/entrance.sql` 은 **이미 준비돼 있다**.
+   **✅ 막혀 있던 곳 해결**(`2192ee4`): 적재기가 `gs://버킷/접두어` 를 받는다.
+   파일별로 `/tmp` 에 받아 처리하고 **즉시 지운다** — 전체분은 2-pass(`buildClusters` →
+   `processFile`)라 같은 파일을 두 번 읽으므로 스트림은 못 쓴다(재사용 불가·전송량 2배).
+   이 방식은 **리더·로더·파서 무변경**이라 회귀 위험이 0이고, 상주 용량도 가장 큰 파일
+   하나(경기 140MB)로 묶인다. 검증: 로컬 예행 16파일 80,000행 파싱 100%·폐기 0·격리 0.
+   ⚠️ Job 메모리 **2Gi 이상** 필요(`/tmp` 가 tmpfs=메모리).
+
+   **이제 남은 것은 두 가지뿐**: ①형의 범위 결정 ②GCS 업로드 →
+   `gcloud storage cp "D:/Gemma4/govt_delivery_analysis/data/juso_db/entrc_gyunggi.txt" gs://logis-op-address-source/entrc/ --project logis-op --account ttong627@gmail.com`
+   그다음 Job 하나 만들어 `--args="^:^scripts/load-juso-entrc.mjs:gs://logis-op-address-source/entrc:--apply"`.
+   버킷·`ADDRESS_SOURCE_BUCKET`(config.storageBucket)·`sql/entrance.sql` 은 이미 있다.
 
    **적재 범위 = 형 답 대기**. 명단이 있는 지자체는 경기·서울·인천·충남 4곳뿐이다.
    | 안 | 행수 | 비고 |
