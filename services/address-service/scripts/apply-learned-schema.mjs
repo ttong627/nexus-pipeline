@@ -36,6 +36,13 @@ const pool = new pg.Pool({ connectionString: url, max: 2, connectionTimeoutMilli
 const client = await pool.connect();
 try {
   await client.query(sql);
+  // 초기 배포(2026-08-11) 때 키를 주소 문자열로 만든 행이 남아 있으면 정리한다.
+  //   의미 키는 `시군구#도로명#본번-부번` 형태라 '#'을 반드시 포함한다. 없는 행은
+  //   조회 키와 절대 맞물리지 않는 죽은 행이므로 남겨둘 이유가 없다(재학습되면 다시 들어온다).
+  const { rowCount: purged } = await client.query(`
+    DELETE FROM nexus_address.address_learned WHERE road_key NOT LIKE '%#%'
+  `);
+  if (purged) console.log(`구버전 문자열 키 행 ${purged}건 정리(재조회 시 새 키로 다시 학습됨)`);
   const { rows } = await client.query(`
     SELECT count(*)::int AS total,
            count(*) FILTER (WHERE promoted_version_id IS NULL)::int AS pending

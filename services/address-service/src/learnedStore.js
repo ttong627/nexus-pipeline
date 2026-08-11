@@ -22,8 +22,32 @@ const intOrNull = (v) => {
   return Number.isFinite(n) ? n : null;
 };
 
-/** 도로명주소 문자열 → 학습 키(표기 흔들림 흡수) */
-export const learnedKey = (roadAddress) => normalizeSearchKey(cleanText(roadAddress));
+/**
+ * 학습 키 — **의미 기반**(시군구 + 도로명 + 본번-부번)이다.
+ *
+ * ★주소 문자열을 그대로 키로 쓰면 안 된다(2026-08-11 배포 검증에서 실제로 걸린 함정):
+ *   적재는 JUSO 결과(`부산광역시 해운대구 센텀중앙로 97 (재송동)`)로 하고 조회는 명단 원문
+ *   (`부산 해운대구 센텀중앙로 97`)으로 하기 때문에, 시도 축약·법정동 괄호 하나로 키가
+ *   어긋나 **학습분이 영원히 안 걸린다**. 표기가 아니라 뜻으로 묶는다.
+ *
+ * ★시군구를 키에 넣는 이유: 도로명은 전국에서 겹친다(동대문구 황물로7길 ↔ 수원 황물로7길).
+ *   지역 없이 묶으면 A-30이 막아온 타지역 오매칭을 학습분이 뒷문으로 되살린다.
+ */
+export const learnedRoadKey = ({ sigungu = '', roadName = '', buildingMainNo = null, buildingSubNo = 0 } = {}) => {
+  const road = normalizeSearchKey(cleanText(roadName));
+  const main = Number.parseInt(String(buildingMainNo ?? ''), 10);
+  if (!road || !Number.isFinite(main) || main <= 0) return '';
+  const region = normalizeSearchKey(cleanText(sigungu));
+  const sub = Number.parseInt(String(buildingSubNo ?? 0), 10) || 0;
+  return `${region}#${road}#${main}-${sub}`;
+};
+
+/** 시군구 라벨(`경기도 부천시`·`부천시`)에서 비교용 시군구 토큰만 뽑는다 */
+export const sigunguToken = (cityLabel) => {
+  const parts = cleanText(cityLabel).split(/\s+/).filter(Boolean);
+  const tail = parts.filter((t) => /(시|군|구)$/.test(t)).pop();
+  return tail || parts[parts.length - 1] || '';
+};
 
 /**
  * JUSO addrLinkApi 응답 1건 → address_learned 행.
@@ -38,12 +62,18 @@ export const learnedRowFromJuso = (record, { source = 'juso', confidence = 0.72 
   if (mainNo == null || mainNo <= 0) return null;
 
   const buildingName = cleanText(record.bdNm || record.buildingName || '');
+  const roadName = cleanText(record.rn || record.roadName || '');
+  const subNo = intOrNull(record.buldSlno ?? record.buildingSubNo) || 0;
+  const sigungu = cleanText(record.sggNm || record.matchedSigungu || '');
+  const roadKey = learnedRoadKey({ sigungu, roadName, buildingMainNo: mainNo, buildingSubNo: subNo });
+  // 도로명이 없으면 의미 키를 만들 수 없다 → 학습하지 않는다(문자열 키로 대충 넣으면 안 걸린다)
+  if (!roadKey) return null;
   return {
-    road_key: learnedKey(roadAddress),
+    road_key: roadKey,
     road_address: roadAddress,
-    road_name: cleanText(record.rn || record.roadName || ''),
+    road_name: roadName,
     building_main_no: mainNo,
-    building_sub_no: intOrNull(record.buldSlno ?? record.buildingSubNo) || 0,
+    building_sub_no: subNo,
     underground_yn: String(record.udrtYn ?? record.undergroundYn ?? '0') === '1' ? '1' : '0',
     road_code: cleanText(record.rnMgtSn || record.roadCode || ''),
     sido: cleanText(record.siNm || record.matchedSido || ''),

@@ -6,7 +6,7 @@
 // ══════════════════════════════════════════════════════════════════
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { learnedRowFromJuso, learnedRowToResult, learnedKey } from '../src/learnedStore.js';
+import { learnedRowFromJuso, learnedRowToResult, learnedRoadKey, sigunguToken } from '../src/learnedStore.js';
 
 // 실제 JUSO addrLinkApi 응답 1건의 형태
 const JUSO = {
@@ -27,11 +27,36 @@ const JUSO = {
   zipNo: '14544',
 };
 
-test('학습 키 — 도로명+본번-부번을 정규화한다(표기 흔들림 흡수)', () => {
-  const a = learnedKey('경기도 부천시 삼작로256번길 16');
-  assert.equal(a, learnedKey('경기도 부천시 삼작로256번길 16 '));
-  assert.equal(a, learnedKey('경기도 부천시  삼작로256번길, 16'));
-  assert.ok(a.length > 0);
+// ★2026-08-11 배포 검증에서 실제로 걸린 함정을 회귀로 고정한다.
+//   처음엔 키를 주소 문자열로 만들었는데, 적재는 JUSO 결과
+//   (`부산광역시 해운대구 센텀중앙로 97 (재송동)`)로 하고 조회는 명단 원문
+//   (`부산 해운대구 센텀중앙로 97`)으로 해서 시도 축약·법정동 괄호 하나에 키가 어긋났다.
+//   → 학습분이 영원히 안 걸린다. 표기가 아니라 **뜻**으로 묶어야 한다.
+test('★학습 키는 표기가 아니라 뜻이다 — 시도 축약·법정동 괄호가 달라도 같은 키', () => {
+  const stored = learnedRoadKey({ sigungu: '해운대구', roadName: '센텀중앙로', buildingMainNo: 97, buildingSubNo: 0 });
+  const looked = learnedRoadKey({ sigungu: '해운대구', roadName: '센텀중앙로', buildingMainNo: '97' });
+  assert.equal(stored, looked);
+  assert.ok(stored.length > 0);
+});
+
+test('★시군구가 키에 들어간다 — 전국에 겹치는 도로명이 섞이면 안 된다(A-30)', () => {
+  const seoul = learnedRoadKey({ sigungu: '동대문구', roadName: '황물로7길', buildingMainNo: 17 });
+  const suwon = learnedRoadKey({ sigungu: '팔달구', roadName: '황물로7길', buildingMainNo: 17 });
+  assert.notEqual(seoul, suwon);
+});
+
+test('★도로명이나 본번이 없으면 키를 만들지 않는다 — 애매한 키로 잘못 걸리면 오매칭', () => {
+  assert.equal(learnedRoadKey({ sigungu: '해운대구', roadName: '', buildingMainNo: 97 }), '');
+  assert.equal(learnedRoadKey({ sigungu: '해운대구', roadName: '센텀중앙로' }), '');
+  assert.equal(learnedRoadKey({ sigungu: '해운대구', roadName: '센텀중앙로', buildingMainNo: 0 }), '');
+  assert.equal(learnedRoadKey(), '');
+});
+
+test('시군구 토큰 추출 — 라벨 형태가 달라도 같은 값', () => {
+  assert.equal(sigunguToken('경기도 부천시'), '부천시');
+  assert.equal(sigunguToken('부천시'), '부천시');
+  assert.equal(sigunguToken('서울특별시 동대문구'), '동대문구');
+  assert.equal(sigunguToken(''), '');
 });
 
 test('JUSO 응답 → 학습행 변환', () => {
@@ -48,7 +73,19 @@ test('JUSO 응답 → 학습행 변환', () => {
   assert.equal(row.zip_no, '14544');
   assert.equal(row.is_apartment, true);
   assert.equal(row.source, 'juso');
-  assert.equal(row.road_key, learnedKey('경기도 부천시 삼작로256번길 16'));
+  assert.equal(row.road_key, learnedRoadKey({ sigungu: '부천시', roadName: '삼작로256번길', buildingMainNo: 16 }));
+});
+
+test('★적재 키와 조회 키가 실제로 맞물린다 — 명단 원문으로도 학습분이 걸려야 한다', () => {
+  // 적재: JUSO 결과(정식 시도명 + 법정동 괄호)
+  const row = learnedRowFromJuso({ ...JUSO, roadAddr: '부산광역시 해운대구 센텀중앙로 97 (재송동)', rn: '센텀중앙로', buldMnnm: '97', buldSlno: '0', siNm: '부산광역시', sggNm: '해운대구' });
+  // 조회: 명단 원문(시도 축약, 괄호 없음) — 서버가 parseRoadNumber + cityLabel 로 만드는 키
+  const lookup = learnedRoadKey({ sigungu: sigunguToken('부산광역시 해운대구'), roadName: '센텀중앙로', buildingMainNo: 97, buildingSubNo: 0 });
+  assert.equal(row.road_key, lookup);
+});
+
+test('도로명이 없는 JUSO 응답은 학습하지 않는다 — 의미 키를 만들 수 없다', () => {
+  assert.equal(learnedRowFromJuso({ ...JUSO, rn: '' }), null);
 });
 
 test('부번이 있는 주소 — 261-8', () => {

@@ -4,7 +4,7 @@ import { query } from './db.js';
 import { cleanText, formatRoadLookupQuery, normalizeSearchKey, parseRoadNumber, roadSideKey } from './normalize.js';
 import { geocodeRoad, matchDongCoord, parseDongNo } from './vworld.js';
 import { judgeCandidate } from './matchGuard.js';
-import { learnedKey, learnedRowFromJuso, learnedRowToResult } from './learnedStore.js';
+import { learnedRoadKey, learnedRowFromJuso, learnedRowToResult, sigunguToken } from './learnedStore.js';
 import { createPurifier } from './purify.js';
 import {
   distanceMeters, recommendDaySplit, recommendLoadBalance, recommendSequence, sequenceUnits,
@@ -302,12 +302,23 @@ const buildingMatch = async (version, normalized, cityLabel, rawQuery = '') => n
 // ★테이블이 아직 없어도(마이그레이션 전 배포) 매칭 전체가 죽으면 안 된다.
 //   42P01(undefined_table)은 "학습분 없음"으로 조용히 넘긴다 — 배포 순서에 의존하지 않는다.
 let learnedTableMissing = false;
-const learnedMatch = async (roadAddress) => {
+const learnedMatch = async (rawQuery, cityLabel) => {
   if (learnedTableMissing) return null;
+  // ★키는 표기가 아니라 뜻이다 — 시군구+도로명+본번-부번.
+  //   시군구가 없으면 조회하지 않는다: 도로명은 전국에서 겹쳐(동대문구 황물로7길 ↔ 수원 황물로7길)
+  //   지역 없이 묶으면 A-30이 막아온 타지역 오매칭이 학습분 뒷문으로 되살아난다.
+  const parsed = parseRoadNumber(rawQuery);
+  const sigungu = sigunguToken(cityLabel);
+  if (!parsed || !sigungu) return null;
+  const key = learnedRoadKey({
+    sigungu,
+    roadName: parsed.roadName,
+    buildingMainNo: parsed.buildingMainNo,
+    buildingSubNo: parsed.buildingSubNo,
+  });
+  if (!key) return null;
   try {
     return await nullOnQueryTimeout('learnedMatch', async () => {
-      const key = learnedKey(roadAddress);
-      if (!key) return null;
       const { rows } = await query(`
         UPDATE ${ADDRESS_SCHEMA}.address_learned
         SET hit_count = hit_count + 1, last_used_at = now()
@@ -433,13 +444,21 @@ const matchAddress = async ({ queryText, cityLabel = '', version = config.active
   }
   // ★학습 주소를 정확매칭 바로 뒤에 본다 — 퍼지(옆 건물)보다, 외부 API보다 앞이다.
   //   신축이라 전체분 DB엔 없지만 지난번에 API로 확인해 둔 주소는 여기서 즉시 잡힌다.
-  const learned = await learnedMatch(rawQuery);
+  const learned = await learnedMatch(rawQuery, cityLabel);
   if (learned) return learned;
 
   if (hasRoadNumber) {
     if (!allowJusoFallback) return null;
     const cached = await getFallbackCache(normalized);
-    if (cached) return cached;
+    // ★캐시가 학습을 가로막지 않게 한다(2026-08-11 배포 검증에서 실제로 걸림).
+    //   캐시에 있으면 JUSO를 안 타므로 learnAddress 가 영영 호출되지 않아,
+    //   이미 캐시된 주소는 **영원히 학습분에 못 들어갔다**.
+    //   여기 도달했다는 건 위 learnedMatch 가 이미 빗나갔다는 뜻 → 지금 채워 넣는다.
+    //   한 번 학습되면 다음부터는 learnedMatch 가 먼저 잡아 이 경로로 오지 않는다.
+    if (cached) {
+      if (sigunguToken(cityLabel)) await learnAddress(cached);
+      return cached;
+    }
     for (const jusoQuery of getJusoQueries(lookupQuery, cityLabel)) {
       const fallback = await fetchJuso(jusoQuery);
       if (fallback) {
@@ -456,7 +475,10 @@ const matchAddress = async ({ queryText, cityLabel = '', version = config.active
   if (building) return toAddressResult(building, Math.min(0.9, Number(building.score) || 0.78));
   if (!allowJusoFallback) return null;
   const cached = await getFallbackCache(normalized);
-  if (cached) return cached;
+  if (cached) {
+    if (sigunguToken(cityLabel)) await learnAddress(cached);   // 캐시가 학습을 가로막지 않게(위 주석 참조)
+    return cached;
+  }
   for (const jusoQuery of getJusoQueries(lookupQuery, cityLabel)) {
     const fallback = await fetchJuso(jusoQuery);
     if (fallback) {
