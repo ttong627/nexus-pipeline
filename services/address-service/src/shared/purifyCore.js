@@ -844,6 +844,11 @@ export const createProcessAddress = (deps) => async (inputAddr, inputName = '', 
   result.routeHints = apiResult?._routeHints || null;
   appendCheckReason(result, getAreaIssue(cityLabel, adminDong, result.matchedSido, result.matchedSigungu, result.legalDong));
   if (crossRegionRejected) appendCheckReason(result, '타지역 오매칭 폐기: 도로명이 타 시군구와 충돌 — 지자체 확인 필요');
+  // 유사매칭으로 채택했으나 확신이 안 서는 건(신축이 인접 단지로 둔갑하는 구간) — 담당자 눈에 올린다.
+  // 조용히 통과시키면 엉뚱한 집으로 배송된다(형 지시 2026-08-11).
+  if (apiResult?._needsReview) {
+    appendCheckReason(result, `유사매칭 확인필요: 건물명으로 찾은 결과라 신축·동명 단지일 수 있음 (${result.standardRoadAddress || ''})`);
+  }
   if (apiResult?.jibunAddr && !result.standardRoadAddress) {
     appendCheckReason(result, `지번주소만 확인됨: ${apiResult.jibunAddr}`);
   } else if (!apiResult && text && !result.확인필요) {

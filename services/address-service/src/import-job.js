@@ -288,7 +288,31 @@ const specs = {
 const applySchema = async (client) => {
   const schema = await readFile(join(here, '..', 'sql', 'schema.sql'), 'utf8');
   await client.query(schema);
+  // 버전독립 테이블(월 재적재에도 살아남아야 하는 것)은 별도 파일이다.
+  //   learned.sql — 명단에 있는데 DB에 없어 API로 확인한 주소(형 지시 2026-08-11)
+  const learned = await readFile(join(here, '..', 'sql', 'learned.sql'), 'utf8');
+  await client.query(learned);
   await client.query('SET search_path TO nexus_address, public');
+};
+
+// 월 전체분에 편입된 학습 주소를 표시한다. 지우지는 않는다 —
+// 어느 버전에서 편입됐는지 남아야 "그때 학습이 옳았나"를 사후에 따질 수 있다.
+// 편입분은 정확매칭이 먼저 잡으므로 학습분 조회가 오래된 값을 내놓을 일은 없다.
+const promoteLearnedAddresses = async (client, versionId) => {
+  const { rowCount } = await client.query(`
+    UPDATE nexus_address.address_learned l
+    SET promoted_version_id = $1
+    WHERE l.promoted_version_id IS DISTINCT FROM $1
+      AND EXISTS (
+        SELECT 1 FROM nexus_address.address_core a
+        WHERE a.version_id = $1
+          AND a.road_name = l.road_name
+          AND a.building_main_no = l.building_main_no
+          AND a.building_sub_no = l.building_sub_no
+      )
+  `, [versionId]);
+  console.log(`[address-learned] 정식 DB 편입 확인 ${rowCount}건 (version ${versionId})`);
+  return rowCount;
 };
 
 // ⚠️ 여기에 새 테이블을 추가하기 전에 생각할 것: 이 목록은 월 재적재 때 통째로 지워진다.
@@ -500,6 +524,8 @@ const run = async () => {
     await rebuildSearchKeys(client);
     await analyzeAll(client);   // 적재 직후 통계 갱신(영구 개선)
     await publishVersion(client, errors.length ? 'staging' : 'published');
+    // 학습해 뒀던 주소 중 이번 전체분에 들어온 것을 표시한다(삭제 아님).
+    await promoteLearnedAddresses(client, config.activeVersion);
   });
   console.log(JSON.stringify({ version: config.activeVersion, counts, errors: errors.slice(0, 20) }, null, 2));
 };

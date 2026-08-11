@@ -3,6 +3,8 @@ import { config, requireConfig } from './config.js';
 import { query } from './db.js';
 import { cleanText, formatRoadLookupQuery, normalizeSearchKey, parseRoadNumber, roadSideKey } from './normalize.js';
 import { geocodeRoad, matchDongCoord, parseDongNo } from './vworld.js';
+import { judgeCandidate } from './matchGuard.js';
+import { learnedKey, learnedRowFromJuso, learnedRowToResult } from './learnedStore.js';
 import { createPurifier } from './purify.js';
 import {
   distanceMeters, recommendDaySplit, recommendLoadBalance, recommendSequence, sequenceUnits,
@@ -88,8 +90,11 @@ const toAddressResult = (record, confidence = 0.98, source = 'national_address_d
     zipNo: record.zip_no || '',
     bdMgtSn: record.building_mgt_no || '',
     _addressMgtNo: record.address_mgt_no || '',
-    _matchSource: source,
+    _matchSource: record._matchKind ? `${source}:${record._matchKind}` : source,
     _matchConfidence: confidence,
+    // 유사매칭으로 채택했으나 확신이 안 서는 건 — 호출부가 확인필요로 올린다(A-12).
+    // 조용히 통과시키면 신축 오매칭이 그대로 배송으로 간다.
+    _needsReview: Boolean(record._needsReview),
     _routeHints: {
       apartmentGroupKey: normalizeSearchKey(groupBase),
       buildingGroupKey: record.building_mgt_no || '',
@@ -208,7 +213,23 @@ const nullOnQueryTimeout = async (label, run) => {
   }
 };
 
-const fuzzyMatch = async (version, normalized, cityLabel) => nullOnQueryTimeout('fuzzyMatch', async () => {
+// 후보 5건을 위에서부터 게이트에 통과시켜 **처음 통과한 것**을 채택한다.
+// 최고점만 보면, 신축이라 DB에 없을 때 점수만 높은 옆 단지가 그대로 뽑힌다.
+// (게이트 규칙·근거는 matchGuard.js — 회귀 scripts/match-guard.test.mjs)
+const pickGuarded = (rows, { rawQuery, kind, queryRoad = null }) => {
+  for (const row of rows) {
+    const verdict = judgeCandidate({ rawQuery, kind, candidate: row, queryRoad });
+    if (verdict.accept) return { ...row, _needsReview: verdict.needsReview, _matchKind: kind };
+  }
+  if (rows.length) {
+    // 왜 전부 버렸는지 남긴다 — "그냥 미매칭"과 "오매칭을 막았다"는 다른 사건이다.
+    const first = judgeCandidate({ rawQuery, kind, candidate: rows[0], queryRoad });
+    console.log(`[match-guard] ${kind} 후보 ${rows.length}건 전부 반려(최상위 사유: ${first.reason}) :: ${String(rawQuery).slice(0, 40)}`);
+  }
+  return null;
+};
+
+const fuzzyMatch = async (version, normalized, cityLabel, rawQuery = '') => nullOnQueryTimeout('fuzzyMatch', async () => {
   const { rows } = await query(`
     SELECT
       a.address_mgt_no,
@@ -240,11 +261,10 @@ const fuzzyMatch = async (version, normalized, cityLabel) => nullOnQueryTimeout(
     ORDER BY score DESC, length(a.road_address) ASC
     LIMIT 5
   `, [version, normalized, cleanText(cityLabel)], { timeoutMs: config.fallbackTimeoutMs });
-  const winner = rows[0];
-  return winner && Number(winner.score) >= 0.42 ? winner : null;
+  return pickGuarded(rows, { rawQuery, kind: 'fuzzy' });
 });
 
-const buildingMatch = async (version, normalized, cityLabel) => nullOnQueryTimeout('buildingMatch', async () => {
+const buildingMatch = async (version, normalized, cityLabel, rawQuery = '') => nullOnQueryTimeout('buildingMatch', async () => {
   const { rows } = await query(`
     SELECT
       '' AS address_mgt_no,
@@ -273,9 +293,67 @@ const buildingMatch = async (version, normalized, cityLabel) => nullOnQueryTimeo
     ORDER BY score DESC, b.is_apartment DESC, length(b.road_address) ASC
     LIMIT 5
   `, [version, normalized, cleanText(cityLabel)], { timeoutMs: config.fallbackTimeoutMs });
-  const winner = rows[0];
-  return winner && Number(winner.score) >= 0.45 ? winner : null;
+  return pickGuarded(rows, { rawQuery, kind: 'building' });
 });
+
+// ── 학습 주소(address_learned) ─────────────────────────────────────
+// 형 지시 2026-08-11: 명단에 있는데 DB에 없으면 API로 찾아 **DB에 반영**한다.
+// 버전독립 테이블이라 월 재적재에도 살아남는다(sql/learned.sql).
+// ★테이블이 아직 없어도(마이그레이션 전 배포) 매칭 전체가 죽으면 안 된다.
+//   42P01(undefined_table)은 "학습분 없음"으로 조용히 넘긴다 — 배포 순서에 의존하지 않는다.
+let learnedTableMissing = false;
+const learnedMatch = async (roadAddress) => {
+  if (learnedTableMissing) return null;
+  try {
+    return await nullOnQueryTimeout('learnedMatch', async () => {
+      const key = learnedKey(roadAddress);
+      if (!key) return null;
+      const { rows } = await query(`
+        UPDATE ${ADDRESS_SCHEMA}.address_learned
+        SET hit_count = hit_count + 1, last_used_at = now()
+        WHERE road_key = $1
+        RETURNING *
+      `, [key], { timeoutMs: config.fallbackTimeoutMs });
+      return learnedRowToResult(rows[0] || null);
+    });
+  } catch (error) {
+    if (error?.code === '42P01') {
+      learnedTableMissing = true;   // 매 요청마다 실패 로그를 쌓지 않는다
+      console.warn('[address-learned] 테이블 없음 — 학습 조회를 건너뛴다(sql/learned.sql 적용 필요)');
+      return null;
+    }
+    throw error;
+  }
+};
+
+// 외부 API로 확인된 주소를 학습분에 적재한다. 실패해도 매칭 자체는 성공시켜야 하므로
+// 예외를 삼킨다 — 학습은 부가기능이고, 여기서 던지면 정상 폴백이 500으로 둔갑한다.
+const learnAddress = async (record, { source = 'juso', confidence = 0.72 } = {}) => {
+  try {
+    const row = learnedRowFromJuso(record, { source, confidence });
+    if (!row) return;
+    await query(`
+      INSERT INTO ${ADDRESS_SCHEMA}.address_learned (
+        road_key, road_address, road_name, building_main_no, building_sub_no,
+        underground_yn, road_code, sido, sigungu, legal_emd, legal_dong_code,
+        building_name, building_mgt_no, address_mgt_no, zip_no, is_apartment, source, confidence
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+      ON CONFLICT (road_key) DO UPDATE SET
+        road_address = EXCLUDED.road_address,
+        building_name = CASE WHEN EXCLUDED.building_name <> '' THEN EXCLUDED.building_name
+                             ELSE ${ADDRESS_SCHEMA}.address_learned.building_name END,
+        hit_count = ${ADDRESS_SCHEMA}.address_learned.hit_count + 1,
+        last_used_at = now()
+    `, [
+      row.road_key, row.road_address, row.road_name, row.building_main_no, row.building_sub_no,
+      row.underground_yn, row.road_code, row.sido, row.sigungu, row.legal_emd, row.legal_dong_code,
+      row.building_name, row.building_mgt_no, row.address_mgt_no, row.zip_no, row.is_apartment,
+      row.source, row.confidence,
+    ]);
+  } catch (error) {
+    console.warn('[address-learned] 적재 실패(무시하고 진행):', error.message);
+  }
+};
 
 const getFallbackCache = async (normalized) => {
   const { rows } = await query(`
@@ -353,6 +431,11 @@ const matchAddress = async ({ queryText, cityLabel = '', version = config.active
       return toAddressResult(outOfAreaExact, 0.96);
     }
   }
+  // ★학습 주소를 정확매칭 바로 뒤에 본다 — 퍼지(옆 건물)보다, 외부 API보다 앞이다.
+  //   신축이라 전체분 DB엔 없지만 지난번에 API로 확인해 둔 주소는 여기서 즉시 잡힌다.
+  const learned = await learnedMatch(rawQuery);
+  if (learned) return learned;
+
   if (hasRoadNumber) {
     if (!allowJusoFallback) return null;
     const cached = await getFallbackCache(normalized);
@@ -361,14 +444,15 @@ const matchAddress = async ({ queryText, cityLabel = '', version = config.active
       const fallback = await fetchJuso(jusoQuery);
       if (fallback) {
         await setFallbackCache(rawQuery, normalized, fallback);
+        await learnAddress(fallback);   // 캐시에만 두지 않고 DB(학습분)에 반영한다
         return fallback;
       }
     }
     return null;
   }
-  const fuzzy = await fuzzyMatch(version, normalized, cityLabel);
+  const fuzzy = await fuzzyMatch(version, normalized, cityLabel, rawQuery);
   if (fuzzy) return toAddressResult(fuzzy, Math.min(0.94, Number(fuzzy.score) || 0.82));
-  const building = await buildingMatch(version, normalized, cityLabel);
+  const building = await buildingMatch(version, normalized, cityLabel, rawQuery);
   if (building) return toAddressResult(building, Math.min(0.9, Number(building.score) || 0.78));
   if (!allowJusoFallback) return null;
   const cached = await getFallbackCache(normalized);
@@ -377,6 +461,7 @@ const matchAddress = async ({ queryText, cityLabel = '', version = config.active
     const fallback = await fetchJuso(jusoQuery);
     if (fallback) {
       await setFallbackCache(rawQuery, normalized, fallback);
+      await learnAddress(fallback);   // 캐시에만 두지 않고 DB(학습분)에 반영한다
       return fallback;
     }
   }
@@ -456,6 +541,32 @@ const server = createServer(async (req, res) => {
     }
     if (req.method === 'GET' && url.pathname === '/v1/address/db-status') {
       return json(res, 200, { ok: true, data: await status() }, headers);
+    }
+    // 학습 주소 현황 — "명단엔 있는데 전체분 DB엔 아직 없는 주소"(신축 유력) 목록.
+    // 담당자가 이 목록으로 실제 신축인지, 오타인지 판단한다(형 지시 2026-08-11).
+    if (req.method === 'GET' && url.pathname === '/v1/address/learned-status') {
+      try {
+        const limit = Math.min(Number(url.searchParams.get('limit')) || 50, 500);
+        const { rows: sum } = await query(`
+          SELECT count(*)::int AS total,
+                 count(*) FILTER (WHERE promoted_version_id IS NULL)::int AS pending,
+                 coalesce(sum(hit_count), 0)::int AS hits
+          FROM ${ADDRESS_SCHEMA}.address_learned
+        `);
+        const { rows: pending } = await query(`
+          SELECT road_address, building_name, sigungu, source, hit_count, learned_at
+          FROM ${ADDRESS_SCHEMA}.address_learned
+          WHERE promoted_version_id IS NULL
+          ORDER BY hit_count DESC, learned_at DESC
+          LIMIT $1
+        `, [limit]);
+        return json(res, 200, { ok: true, data: { ...sum[0], pending } }, headers);
+      } catch (error) {
+        if (error?.code === '42P01') {
+          return json(res, 200, { ok: true, data: { total: 0, pending: 0, hits: 0, pending_list: [], note: 'address_learned 미생성(sql/learned.sql 적용 필요)' } }, headers);
+        }
+        throw error;
+      }
     }
     if (req.method === 'POST' && url.pathname === '/v1/address/match') {
       const body = await readBody(req);
