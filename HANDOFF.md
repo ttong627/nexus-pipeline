@@ -113,9 +113,16 @@
    | 명단 4개 시도 | 2,237,815 | 현재 16개 명단 전부 커버 |
    | 전국 16개 시도 | 6,420,581 | 신규 지자체 즉시 대응. Cloud SQL 1 vCPU 적재 시간이 가장 김 |
 
-5. (선택) `matched='complex'` 캐시 정책 재검토 — 시화5차평안마을건영처럼 VWorld 에
-   동이 없는 단지는 매번 complex 를 캐시한다. 지금은 무해(클라가 `'dong'` 만 채택)하나,
-   "동이 원래 없는 단지"를 표시해 두면 재조회를 줄일 수 있다. 위 3번과 함께 하면 좋다.
+5. ~~`matched='complex'` 캐시 정책~~ ✅ **해결(2026-08-11, `7fdec89`)** —
+   `building_coord.dong_probed_at` 으로 "물어봤는데 없더라"를 기억해 주기(기본 30일) 동안
+   재조회하지 않는다. 103개 단지의 헛된 BBOX 를 막는다.
+   ⚠️ **스키마 적용이 아직 안 됐다** — 전 명단 채움이 끝난 뒤 아래를 실행할 것:
+   ```
+   gcloud run jobs update nexus-address-fill --args='scripts/apply-coords-schema.mjs' --region asia-northeast3 --project logis-op --account ttong627@gmail.com
+   gcloud run jobs execute nexus-address-fill --region asia-northeast3 --project logis-op --account ttong627@gmail.com --wait
+   gcloud run jobs update nexus-address-fill --args='scripts/quarantine-dong-samecoord.mjs' --region asia-northeast3 --project logis-op --account ttong627@gmail.com
+   ```
+   적용 전까지는 컬럼이 없어 `dongProbedAt` 이 늘 null → **종전과 같이 동작**한다(무해).
 
 6. (관찰) C-6 이 매일 04:23 에 돈다. **요약 로그의 `★다음으로 이월` 이 이틀 연속 안 줄면**
    무언가 막힌 것이다(F7). 확인: 아래 로그 명령.
