@@ -33,3 +33,32 @@ export const ROAD_NUMBER_TAIL = '\\s*(\\uC9C0\\uD558\\s*)?(\\d{1,5})(?:\\s*-\\s*
  *  @param {string} [value] */
 export const normalizeCommonRoadTypos = (value) =>
   String(value || '').replace(/재기로(?=\d*길|\s*\d)/g, '제기로');
+
+/**
+ * A-23 보강(2026-08-12) — **숫자와 가지접미사 사이 공백**을 붙인다: `봉우재로 36 번길` → `봉우재로36번길`.
+ *
+ * ★왜 여기(SSOT)에 두는가: 이 규칙이 필요한 곳이 **두 군데**다.
+ *   ① `shared/detailNormalize.js` `normalizeRoadAddressSpacing` — 정제(purify) 경로
+ *   ② `normalize.js` `normalizeBranchRoadSpacing` — 서버 주소매칭 경로
+ *   두 파일엔 이미 비슷한 정규식이 **각자** 있었고 미묘하게 달랐다(②는 base 에 `길` 이 없다).
+ *   새 규칙까지 복제하면 또 갈라진다 — 그래서 여기 한 벌만 둔다.
+ *
+ * ★실측 근거: 명단에 `봉우재로 36, (정왕동, 번길)` 처럼 저장돼 있었다. 붙이지 못하면 파서가
+ *   `봉우재로 36` 까지만 도로로 보고 **`번길` 을 건물명 슬롯에 떨어뜨린다.** 실제 도로는
+ *   `봉우재로36번길`(행안부 원본DB 7행)로 실재한다. 그 뒤 지오코딩이 도로명 조각으로 나가
+ *   전국에서 아무 데나 맞았다(최대 201km 실측).
+ *
+ * ⚠️`(?![HANGUL])` 가드를 빼지 말 것 — 없으면 `중앙로 12 길동아파트` 가 `중앙로12길동아파트` 로,
+ *   `시청로 20 길가온마을` 이 `시청로20길가온마을` 로 붙는다(가드 없는 안에서 실측된 퇴행 2건).
+ *   **가지도로 토큰은 그 자리에서 끝나야 도로명이다.**
+ *
+ * 회귀: `scripts/road-branch-space.test.mjs`
+ */
+const BRANCH_SPACED_NUM_RE = new RegExp(
+  `([${HANGUL}A-Za-z]+(?:\\uB300\\uB85C|\\uB85C|\\uAE38))\\s+(\\d+)\\s+([${HANGUL}0-9]*${BRANCH_SUFFIX})(?![${HANGUL}])`,
+  'gu',
+);
+
+/** 위 규칙 적용 — `봉우재로 36 번길` → `봉우재로36번길`
+ *  @param {string} [value] */
+export const joinSpacedBranchRoad = (value) => String(value || '').replace(BRANCH_SPACED_NUM_RE, '$1$2$3');

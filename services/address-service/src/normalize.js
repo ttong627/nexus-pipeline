@@ -1,4 +1,7 @@
-import { HANGUL, BRANCH_SUFFIX, ROAD_NAME_SOURCE, ROAD_NUMBER_TAIL, normalizeCommonRoadTypos } from './shared/roadTokens.js';
+import {
+  HANGUL, BRANCH_SUFFIX, ROAD_NAME_SOURCE, ROAD_NUMBER_TAIL,
+  normalizeCommonRoadTypos, joinSpacedBranchRoad,
+} from './shared/roadTokens.js';
 
 const EMPTY_PARENS_RE = /\([^)]*\)/g;
 const QUOTE_RE = /["'`“”‘’]/g;
@@ -25,8 +28,12 @@ export const normalizeSearchKey = (value) =>
 const ROAD_ADDRESS_RE = new RegExp(`(${ROAD_NAME_SOURCE})${ROAD_NUMBER_TAIL}`, 'u');
 const ROAD_BRANCH_SPACE_RE = new RegExp(`([${HANGUL}A-Za-z]+(?:\\uB300\\uB85C|\\uB85C))\\s+(\\d+[${HANGUL}0-9]*${BRANCH_SUFFIX})`, 'gu');
 
+// ★A-23 보강(2026-08-12): 숫자–가지접미사 사이 공백(`봉우재로 36 번길`)도 붙인다.
+//   여기(서버 매칭)와 `shared/detailNormalize.js`(정제)가 **같은 규칙**을 써야 한다 —
+//   안 그러면 정제는 `봉우재로36번길` 로 보는데 매칭은 `봉우재로 36` 으로 봐서 조용히 어긋난다.
+//   규칙 본체·퇴행 경고는 `shared/roadTokens.js` `joinSpacedBranchRoad` 주석 참조.
 const normalizeBranchRoadSpacing = (value) =>
-  normalizeCommonRoadTypos(cleanText(value)).replace(ROAD_BRANCH_SPACE_RE, '$1$2');
+  joinSpacedBranchRoad(normalizeCommonRoadTypos(cleanText(value)).replace(ROAD_BRANCH_SPACE_RE, '$1$2'));
 
 export const intOrNull = (value) => {
   const text = String(value ?? '').trim();
