@@ -40,25 +40,37 @@ Cloud Function **`geocodeAuto`**(3분마다) — 명단 `lat/lng` 를 채운다.
 
 ## 다음 할 일
 
-1. **⚠️ 서울 동대문구 `no_anchor` 268건(2개월)** ← 다음 1순위 · 미조사
-   전 명단 채움에서 동대문만 98.3%(다른 곳 99.8~100%). 미보유가 **전부 `no_anchor`** 이고
-   주소가 **`한천로58길`** 에 몰려 있다. `/v1/address/match` 는 200 을 주는데
-   `/v1/coords/resolve` 만 `no_anchor` → 앵커(`road_codes` 조회·`pickRoadCode`) 쪽으로
-   **보이지만 단정하지 말 것**. `scripts/probe-address.mjs` 로 후보를 실제로 확인하고 판단하라.
-   같은 도로에 몰려 있어 원인 하나로 268건이 풀릴 가능성이 있다.
+1. **✅규명·수정 완료 / ⏳배포 대기 — 동대문구 `no_anchor`**(설계서 **§5-8**)
+   원인은 **같은 시군구에 같은 도로명 코드가 둘**(`한천로58길` → `112304115640`·`112304121702`).
+   `pickRoadCode` 가 A-30대로 비웠고 앵커가 없으니 저장소에 **행 자체가 안 생겨** C-6 이
+   영영 못 보는 상태였다. 두 코드는 **번지 구간이 갈리므로**(22~209 / 240) 본번·부번으로
+   유일하게 결정된다 → `pickRoadCodeByBuilding` 신설(`address_building_links` 근거).
+   덤: **세종시는 원본 시군구 칸이 빈 값**(2,647행)이라 세종 명단이 오면 전량 `no_anchor` 였다.
+   - 코드: `src/coords/coordStore.js` · `coordQuery.js` / 회귀 `scripts/coord-store.test.mjs` +3
+   - 검증: address-service 278/278 · 루트 281/281 · eslint 0 · Red-Green 확인
+   - **남은 것**: 배포 → `/v1/coords/resolve` 로 6개 주소 재확인 → 동대문 채움 실행
+     ```
+     gcloud run deploy nexus-address-api --source services/address-service --region asia-northeast3 --project logis-op --account ttong627@gmail.com
+     node services/address-service/scripts/fill-list-coords.mjs --city "서울특별시 동대문구" --month 2026-07 --apply
+     ```
+     ⚠️ Job 4개가 같은 소스다 → `bash scripts/deploy-jobs.sh` 도 함께 (롤백 지점 `00071-qr2`)
 
-2. **`parseAptDong` 오탐 24건** — 도로명 부번을 동으로 읽는다(`동서로 895-24 → 895동`).
-   좌표만의 문제가 아니다: 같은 함수를 순번 엔진이 쓰므로 **단독주택 24채가 한 동으로 묶인다**.
-   순번 핵심이라 손대지 않았다. 고치려면 **전 명단에서 `호` 없는 정상 동호 표기가 쓰이는지
-   먼저 실측**할 것(있으면 `호` 필수화는 퇴행이다). 설계서 §5-3-A.
-   ※ 별도 세션에서 진행 중일 수 있음 — 중복 작업 주의.
+2. **`parseAptDong` 오탐 — ✅다른 세션에서 완료됐으나 main 에 미머지**
+   커밋 `d81786b`(브랜치 `claude/blissful-lichterman-57b571`, 08-11 23:36). 실측까지 끝냈다:
+   전 명단 98,020건 전수 → `호` 없는 정상 동호 표기 **0건**(퇴행 없음), 오탐 4,357 제거,
+   가려져 있던 진짜 동 578건 회복. RouteMapModal 복제본도 SSOT import 로 교체.
+   - **남은 것**: main 으로 머지(`git merge claude/blissful-lichterman-57b571`).
+     충돌은 **`HANDOFF.md`·`좌표관리_설계.md` 두 문서뿐**(코드는 자동 병합 확인 · merge-tree).
 
-3. (선택) **입구 좌표를 기사 화면·순번에 실제로 쓰기**
-   저장소에는 채워졌고 `pickStoreCoord('navigation')` 이 입구를 우선하지만,
-   명단 `lat/lng` 를 채우는 `geocodeAuto` 는 **동 → 입구 → 중심** 순이라 단지형은 동 좌표를 쓴다
-   (지도·순번용으로는 그게 맞다). 내비 링크가 입구를 쓰는지는 `buildNavigationLinks` 확인 필요.
+3. **내비 링크는 이미 입구를 쓴다 — 확인 완료.** `/v1/delivery/resolve` → `deliveryBrief.pickCoordinate`
+   가 `juso_entrance`(측량) 를 1순위로 고르고 `navigationFromBrief` 가 그 좌표로 링크를 만든다.
+   ⚠️ 다만 **좌표 선택 규칙이 두 벌**이다 — `coordStore.pickDeliveryCoord`(building_coord 기반)는
+   **호출부 0건**(정의·테스트뿐). 죽은 규칙이 살아 있는 규칙과 갈리면 C-5 사고가 반복된다.
+   → 통합하거나 지울 것(§6 "호출부를 세라").
 
-4. (관찰) C-6 이 매일 04:23 에 돈다. **요약의 `★다음으로 이월` 이 이틀 연속 안 줄면** 막힌 것이다(F7).
+4. (관찰) C-6 **2026-08-12 04:23 실행 정상**(`nexus-address-sync-qw887`, exit 0).
+   채움 대상 0건 · 이상치 4건 표시 유지. **단 이 "0건"은 저장소에 행이 있는 건만 센 값이다**
+   — 1번의 `no_anchor` 는 여기 안 잡힌다(§5-3-A 모집단 함정). 배포 후 다시 볼 것.
 
 ---
 

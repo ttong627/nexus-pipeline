@@ -11,7 +11,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildCoordKey, coordRowToResult, pickDeliveryCoord, normalizeDongNo, ENTRANCE_SOURCES,
-  pickRoadCode, pickTrustedDong, coordResolveEntry, toDongNo,
+  pickRoadCode, pickRoadCodeByBuilding, roadCodeCandidates, pickTrustedDong, coordResolveEntry, toDongNo,
 } from '../src/coords/coordStore.js';
 
 // ── ⓿ 동 표기 통일 (2026-08-11) ──────────────────────────────────
@@ -184,6 +184,55 @@ test('★같은 도로명이 여러 지자체에 있으면 남의 동네 좌표�
   // 같은 시군구에 도로코드가 둘이면 특정 실패 → 스킵
   assert.equal(pickRoadCode([rc('시흥시', 'A'), rc('시흥시', 'B')], '시흥시'), '');
   assert.equal(pickRoadCode([], '시흥시'), '');
+});
+
+// ── ⑥-A 세종특별자치시 — 원본에 시군구가 없다 (2026-08-12 원본 실측) ──
+//  개선_도로명코드_전체분.txt 370,024행 중 **2,647행의 시군구 칸이 빈 값**이고
+//  전부 세종시다. 시군구만 대조하면 세종 주소는 후보가 영영 0개 → 좌표를 못 붙인다.
+test('★세종은 시군구 칸이 비어 있다 — 그때만 시도로 대조한다', () => {
+  const sejong = [{ sigungu: '', sido: '세종특별자치시', road_code: '361100123456' }];
+  assert.equal(pickRoadCode(sejong, '세종특별자치시'), '361100123456');
+  // 시군구 값이 있는 행에는 이 폴백이 적용되지 않는다(다른 동네를 끌어오지 않는다)
+  assert.deepEqual(roadCodeCandidates([{ sigungu: '시흥시', sido: '경기도', road_code: 'A' }], '경기도'), []);
+});
+
+// ── ⑥-B 같은 시군구·같은 도로명인데 코드가 둘 (2026-08-12 실측) ──────
+//  동대문구 한천로58길이 그 경우였다. pickRoadCode 가 비우는 바람에 명단 266건이
+//  두 달 내내 no_anchor 였다. 두 코드는 **번지 구간이 갈린다**(22~209 / 240 하나).
+const link = (road_code, main, sub = 0, ug = '0') =>
+  ({ road_code, building_main_no: main, building_sub_no: sub, underground_yn: ug });
+const HANCHEON = ['112304115640', '112304121702'];
+// 원본 주소_서울특별시.txt 실측분(세 코드에 걸린 23행 중 발췌)
+const HANCHEON_LINKS = [
+  link('112304115640', 47), link('112304115640', 75, 11), link('112304115640', 75, 45),
+  link('112304115640', 107), link('112304115640', 135), link('112304115640', 139),
+  link('112304121702', 240),
+];
+
+test('★번지가 실재하는 코드로 좁힌다 — 동대문구 한천로58길 266건이 여기서 막혀 있었다', () => {
+  assert.equal(pickRoadCode(HANCHEON.map((c) => rc('동대문구', c)), '동대문구'), '', '시군구만으로는 못 고른다');
+  for (const [main, sub] of [[47, 0], [75, 11], [75, 45], [107, 0], [135, 0], [139, 0]]) {
+    assert.equal(
+      pickRoadCodeByBuilding(HANCHEON, HANCHEON_LINKS, { buildingMainNo: main, buildingSubNo: sub }),
+      '112304115640', `${main}-${sub}`,
+    );
+  }
+  // 240번지는 다른 코드다 — 번지로 갈리는 것이 이 방법의 근거다
+  assert.equal(pickRoadCodeByBuilding(HANCHEON, HANCHEON_LINKS, { buildingMainNo: 240 }), '112304121702');
+});
+
+test('★근거가 없으면 여전히 비운다 — 좁히는 것이지 찍는 것이 아니다(A-30 불변)', () => {
+  // 실재하지 않는 번지
+  assert.equal(pickRoadCodeByBuilding(HANCHEON, HANCHEON_LINKS, { buildingMainNo: 999 }), '');
+  // 두 코드 모두에 그 번지가 있으면 못 고른다
+  assert.equal(pickRoadCodeByBuilding(HANCHEON, [link(HANCHEON[0], 50), link(HANCHEON[1], 50)], { buildingMainNo: 50 }), '');
+  // 부번·지하 여부가 다르면 다른 건물이다
+  assert.equal(pickRoadCodeByBuilding(HANCHEON, HANCHEON_LINKS, { buildingMainNo: 75, buildingSubNo: 46 }), '');
+  assert.equal(pickRoadCodeByBuilding(HANCHEON, HANCHEON_LINKS, { buildingMainNo: 135, undergroundYn: '1' }), '');
+  // 입력 방어
+  assert.equal(pickRoadCodeByBuilding([], HANCHEON_LINKS, { buildingMainNo: 135 }), '');
+  assert.equal(pickRoadCodeByBuilding(HANCHEON, HANCHEON_LINKS, { buildingMainNo: null }), '');
+  assert.equal(pickRoadCodeByBuilding(HANCHEON, [], { buildingMainNo: 135 }), '');
 });
 
 // ── ⑦ 동 좌표 신뢰 게이트 ──────────────────────────────────────────

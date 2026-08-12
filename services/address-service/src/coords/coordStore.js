@@ -126,24 +126,72 @@ export const pickDeliveryCoord = (row, { purpose = 'navigation', dong = null } =
     || point(row.center_lat, row.center_lng, row.center_source, 'center');
 };
 
+const compact = (v) => String(v ?? '').replace(/\s+/g, '').trim();
+
+/**
+ * road_codes 후보 중 이 지자체의 도로만 남긴다 — 코드 목록(중복 제거).
+ *
+ * ★도로명은 전국에서 겹친다 — 동대문구 황물로7길 ↔ 수원 황물로7길(A-35 실측).
+ *   시군구로 좁히지 못하면 키를 만들지 않는다.
+ * ★세종특별자치시는 시군구가 없다 — 원본 도로명코드 2,647행의 시군구 칸이 **빈 값**이다
+ *   (2026-08-12 원본 실측). 시군구만 대조하면 세종 주소는 후보가 영영 0개다.
+ *   빈 칸일 때만 시도로 대조한다(값이 있는 행에는 이 폴백이 적용되지 않는다).
+ */
+export const roadCodeCandidates = (candidates, sigunguTok) => {
+  const want = compact(sigunguTok);
+  if (!want) return [];
+  return [...new Set(
+    (candidates || [])
+      .filter((r) => {
+        const sgg = compact(r.sigungu);
+        return sgg ? sgg.includes(want) : compact(r.sido) === want;
+      })
+      .map((r) => String(r.road_code ?? '').trim())
+      .filter(Boolean),
+  )];
+};
+
 /**
  * road_codes 후보 중 이 지자체의 도로를 고른다.
  *
- * ★도로명은 전국에서 겹친다 — 동대문구 황물로7길 ↔ 수원 황물로7길(A-35 실측).
- *   시군구로 좁히지 못하면 **키를 만들지 않는다**. 애매한 앵커로 좌표를 매달면
- *   다른 동네 건물의 좌표를 이 건물 것으로 쓰게 된다(A-30이 막아온 오매칭의 뒷문).
- *   후보가 2개 이상 남아도 마찬가지다 — 찍는 것보다 비우는 편이 되돌릴 수 있다.
+ * ★애매한 앵커로 좌표를 매달면 다른 동네 건물의 좌표를 이 건물 것으로 쓰게 된다
+ *   (A-30이 막아온 오매칭의 뒷문). 후보가 2개 이상 남으면 비운다 —
+ *   찍는 것보다 비우는 편이 되돌릴 수 있다. 번지로 좁히려면 pickRoadCodeByBuilding.
  */
 export const pickRoadCode = (candidates, sigunguTok) => {
-  const want = String(sigunguTok ?? '').trim();
-  if (!want) return '';
-  const codes = new Set(
-    (candidates || [])
-      .filter((r) => String(r.sigungu ?? '').replace(/\s+/g, '').includes(want.replace(/\s+/g, '')))
-      .map((r) => String(r.road_code ?? '').trim())
-      .filter(Boolean),
+  const codes = roadCodeCandidates(candidates, sigunguTok);
+  return codes.length === 1 ? codes[0] : '';
+};
+
+/**
+ * 후보 도로코드가 둘 이상일 때 **그 번지가 실재하는 코드**로 좁힌다.
+ *
+ * ★2026-08-12 실측 — 동대문구 `한천로58길`이 그 경우였다. 같은 시군구·같은 도로명인데
+ *   도로명코드가 둘(`112304115640`·`112304121702`)이라 pickRoadCode 가 비웠고,
+ *   명단 **266건이 두 달 내내 `no_anchor`** 였다(전 명단 채움에서 동대문만 98.3%).
+ *   두 코드는 **번지 구간이 갈린다**(본번 22~209 / 240 하나) — 본번·부번까지 보면
+ *   유일하게 결정된다. 실제로 명단 6개 주소 전부 115640 에만 실재했다.
+ * ★근거는 '실재하는 주소'(address_building_links)라 찍는 것이 아니다. 그래도 둘 이상
+ *   남으면 그때는 비운다(A-30 불변).
+ * ★전국 규모: (시군구, 도로명) 174,005종 중 코드가 갈리는 것 **52종**(0.03%).
+ */
+export const pickRoadCodeByBuilding = (codes, links, {
+  undergroundYn = '0', buildingMainNo = null, buildingSubNo = 0,
+} = {}) => {
+  const main = intOrNull(buildingMainNo);
+  const allow = new Set(codes || []);
+  if (main == null || main <= 0 || !allow.size) return '';
+  const under = String(undergroundYn ?? '0').trim() === '1' ? '1' : '0';
+  const sub = intOrNull(buildingSubNo) || 0;
+  const hit = new Set(
+    (links || [])
+      .filter((l) => allow.has(String(l.road_code ?? '').trim())
+        && intOrNull(l.building_main_no) === main
+        && (intOrNull(l.building_sub_no) || 0) === sub
+        && (String(l.underground_yn ?? '0').trim() === '1' ? '1' : '0') === under)
+      .map((l) => String(l.road_code).trim()),
   );
-  return codes.size === 1 ? [...codes][0] : '';
+  return hit.size === 1 ? [...hit][0] : '';
 };
 
 /**

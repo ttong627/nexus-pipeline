@@ -13,7 +13,9 @@ import { config } from '../config.js';
 import { query } from '../db.js';
 import { cleanText, normalizeSearchKey, parseRoadNumber } from '../normalize.js';
 import { sigunguToken } from '../learnedStore.js';
-import { buildCoordKey, coordResolveEntry, pickRoadCode } from './coordStore.js';
+import {
+  buildCoordKey, coordResolveEntry, pickRoadCodeByBuilding, roadCodeCandidates,
+} from './coordStore.js';
 
 const S = config.dbSchema;
 
@@ -51,7 +53,7 @@ export const resolveCoordKeys = async (records, version = config.activeVersion) 
   if (!names.length) return parsed.map(() => '');
 
   const { rows } = await query(`
-    SELECT road_name_key, sigungu, road_code
+    SELECT road_name_key, sigungu, sido, road_code
     FROM ${S}.road_codes
     WHERE version_id = $1 AND road_name_key = ANY($2::text[])
   `, [version, names]);
@@ -61,11 +63,47 @@ export const resolveCoordKeys = async (records, version = config.activeVersion) 
     list.push(row);
     byRoad.set(row.road_name_key, list);
   }
-  return parsed.map((p) => {
+
+  // 같은 시군구에 같은 도로명이 코드 2개 이상인 경우가 있다(전국 52종). 그때만
+  // 번지가 실재하는 코드로 좁힌다 — 그 한 건이 동대문구 명단 266건을 막고 있었다.
+  const codesFor = parsed.map((p) => (p ? roadCodeCandidates(byRoad.get(normalizeSearchKey(p.roadName)) || [], p.sigunguTok) : []));
+  const links = await loadAnchorLinks(version, parsed, codesFor);
+
+  return parsed.map((p, i) => {
     if (!p) return '';
-    const roadCode = pickRoadCode(byRoad.get(normalizeSearchKey(p.roadName)) || [], p.sigunguTok);
+    const codes = codesFor[i];
+    const roadCode = codes.length === 1 ? codes[0] : pickRoadCodeByBuilding(codes, links, p);
     return roadCode ? buildCoordKey({ ...p, roadCode }) : '';
   });
+};
+
+/**
+ * 후보가 갈린 건들의 (도로코드, 본번) 조합을 **한 번의 쿼리**로 가져온다.
+ *
+ * ★인덱스 `address_links_road_exact(version_id, road_code, underground_yn,
+ *   building_main_no, building_sub_no)` 를 그대로 탄다.
+ * ★갈린 건이 없으면 쿼리를 아예 안 한다 — 정상 경로(99.97%)에 왕복을 더하지 않는다.
+ * ★테이블이 없으면 빈 배열이다 = 오늘과 같은 동작(키 미생성). 좌표와 무관한 화면까지
+ *   같이 멈추지 않게 한다(A-35와 같은 함정).
+ */
+const loadAnchorLinks = async (version, parsed, codesFor) => {
+  const codes = new Set();
+  const mains = new Set();
+  parsed.forEach((p, i) => {
+    if (!p || codesFor[i].length < 2) return;
+    codesFor[i].forEach((c) => codes.add(c));
+    if (Number.isFinite(p.buildingMainNo)) mains.add(p.buildingMainNo);
+  });
+  if (!codes.size || !mains.size) return [];
+  const rows = await emptyOnMissingTable('anchor-links', async () => {
+    const res = await query(`
+      SELECT DISTINCT road_code, underground_yn, building_main_no, building_sub_no
+      FROM ${S}.address_building_links
+      WHERE version_id = $1 AND road_code = ANY($2::text[]) AND building_main_no = ANY($3::int[])
+    `, [version, [...codes], [...mains]]);
+    return res.rows;
+  });
+  return rows || [];
 };
 
 /** coord_key 목록 → 건물 행·동 행. 두 번의 쿼리로 끝낸다(레코드마다 왕복하지 않는다). */
