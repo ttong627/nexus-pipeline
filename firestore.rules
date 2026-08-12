@@ -235,6 +235,26 @@ service cloud.firestore {
          resource.data.createdAt + duration.value(45, 'd') > request.time);
     }
 
+    // ── 기사 명부 (Phase 0 · 2026-08-13) ────────────────────────────────────
+    //  배송지도 접근통제(계획 prompt_plan.md)의 토대. 여기 등록된 **활성** 기사만
+    //  나중에 휴대폰 인증으로 지도에 들어올 수 있다.
+    //
+    //  ★번호는 반드시 E.164(`+8210…`)로 저장한다(`src/utils/phone.js` `toE164Mobile`).
+    //    Phone Auth 토큰의 `phone_number` 와 **문자 그대로** 비교하므로, 표기가 흔들리면
+    //    에러도 없이 그 기사만 조용히 막힌다.
+    //  ★기사 본인은 **자기 문서만** 읽는다(명부 전체를 보면 다른 기사 연락처가 새어나간다).
+    match /drivers/{driverId} {
+      // 담당자·관리자: 명부 관리(목록 포함).
+      //  ⚠️명부는 지자체별로 나뉘지 않는다(기사는 여러 지자체를 돈다) → 인증 사용자면 읽고,
+      //    쓰기는 관리자만. 명부를 아무나 고치면 남의 번호를 넣어 지도를 열 수 있다.
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated() && (isAdmin() || isAdminEmail());
+      // 기사 본인: 휴대폰 인증으로 들어와 자기 등록 상태만 확인
+      allow get: if isAuthenticated()
+                 && request.auth.token.phone_number != null
+                 && resource.data.phone == request.auth.token.phone_number;
+    }
+
     match /route_shares/{shareId} {
       allow read: if isShareWithinTTL();
 

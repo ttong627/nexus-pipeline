@@ -1,0 +1,120 @@
+// ══════════════════════════════════════════════════════════════════
+//  기사 명부 판정 회귀 — src/utils/driverRoster.js (2026-08-13 · Phase 0)
+//
+//  ★여기서 "이 번호로 들어온 사람을 통과시킬 것인가"가 갈린다.
+//    느슨하면 남이 배송 명단(이름·주소·전화)을 보고, 빡빡하면 기사가 현장에서 막힌다.
+//    둘 다 사고라서 경계를 테스트로 못 박는다.
+// ══════════════════════════════════════════════════════════════════
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import {
+  normalizeDriver, validateDriver, resolveDriverByPhone, activePhones, DENY_MESSAGE,
+} from '../src/utils/driverRoster.js';
+
+const 홍 = { id: 'd1', name: '홍길동', phone: '+821012345678', active: true };
+const 김 = { id: 'd2', name: '김철수', phone: '+821023456789', active: true };
+
+// ── ① 저장 전 다듬기 ──────────────────────────────────────────────
+test('저장 형태로 다듬는다 — 번호는 항상 E.164', () => {
+  const d = normalizeDriver({ name: ' 홍길동 ', phone: '010-1234-5678' });
+  assert.equal(d.name, '홍길동');
+  assert.equal(d.phone, '+821012345678');
+  assert.equal(d.active, true, '기본은 활성이어야 한다');
+});
+
+test('★담당자가 입력한 원문을 보존한다 — 고칠 때 근거가 된다', () => {
+  const d = normalizeDriver({ name: '홍', phone: '02-123-4567' });
+  assert.equal(d.phone, '', '휴대폰이 아니면 정규화는 비운다');
+  assert.equal(d.phoneRaw, '02-123-4567', '원문까지 지우면 뭐가 틀렸는지 못 본다');
+});
+
+// ── ② 저장 검증 ───────────────────────────────────────────────────
+test('이름·번호가 없으면 저장하지 않는다', () => {
+  assert.equal(validateDriver({}).ok, false);
+  assert.equal(validateDriver({ name: '홍길동' }).ok, false, '번호 없이 저장되면 인증을 영영 못 한다');
+  assert.equal(validateDriver({ phone: '010-1234-5678' }).ok, false);
+});
+
+test('★읽을 수 없는 번호는 저장을 막고 무엇이 문제인지 말한다', () => {
+  const r = validateDriver({ name: '홍길동', phone: '02-123-4567' });
+  assert.equal(r.ok, false);
+  assert.ok(r.errors.some((e) => e.includes('02-123-4567')), '입력값을 그대로 보여줘야 고칠 수 있다');
+});
+
+test('★같은 번호를 두 번 등록하지 않는다 — 누구인지 정할 수 없게 된다', () => {
+  const r = validateDriver({ name: '홍길동2', phone: '010-1234-5678' }, [홍, 김]);
+  assert.equal(r.ok, false);
+  assert.ok(r.errors.some((e) => e.includes('홍길동')), '누구와 겹치는지 알려줘야 한다');
+});
+
+test('표기가 달라도 같은 번호면 중복이다', () => {
+  const r = validateDriver({ name: '다른이름', phone: '+82 10-1234-5678' }, [홍]);
+  assert.equal(r.ok, false, '하이픈·국가코드 표기 차이로 중복을 놓치면 안 된다');
+});
+
+test('자기 자신은 중복이 아니다 — 수정이 막히면 안 된다', () => {
+  const r = validateDriver({ name: '홍길동(수정)', phone: '010-1234-5678' }, [홍, 김], 'd1');
+  assert.equal(r.ok, true, r.errors.join(' / '));
+});
+
+test('문제를 한 번에 모아 알려준다 — 하나씩 알려주면 담당자가 여러 번 헛돈다', () => {
+  const r = validateDriver({ name: '', phone: '아무거나' });
+  assert.ok(r.errors.length >= 2);
+});
+
+// ── ③ 인증 판정 (핵심) ────────────────────────────────────────────
+test('★등록·활성 기사는 통과한다', () => {
+  const r = resolveDriverByPhone('+821012345678', [홍, 김]);
+  assert.equal(r.allowed, true);
+  assert.equal(r.driver.id, 'd1');
+});
+
+test('표기가 달라도 통과한다 — 저장은 E.164, 토큰도 E.164지만 방어적으로', () => {
+  assert.equal(resolveDriverByPhone('010-1234-5678', [홍]).allowed, true);
+});
+
+test('★미등록 번호는 막는다', () => {
+  const r = resolveDriverByPhone('+821099999999', [홍, 김]);
+  assert.equal(r.allowed, false);
+  assert.equal(r.reason, 'not_registered');
+});
+
+test('★비활성 기사는 막는다 — 그만둔 기사가 명단을 계속 보면 안 된다', () => {
+  const r = resolveDriverByPhone('+821012345678', [{ ...홍, active: false }]);
+  assert.equal(r.allowed, false);
+  assert.equal(r.reason, 'inactive');
+});
+
+test('★같은 번호가 둘이면 통과시키지 않는다 — 아무나 고르면 남의 배송을 준다', () => {
+  const r = resolveDriverByPhone('+821012345678', [홍, { ...홍, id: 'd9', name: '중복' }]);
+  assert.equal(r.allowed, false);
+  assert.equal(r.reason, 'duplicate_registration');
+});
+
+test('★번호를 못 읽으면 통과시키지 않는다 — 모르면 거절이 기본', () => {
+  for (const v of ['', null, undefined, '없음', '02-123-4567']) {
+    assert.equal(resolveDriverByPhone(v, [홍]).allowed, false, `"${v}" 가 통과했다`);
+  }
+});
+
+test('명부가 비어 있으면 아무도 통과하지 못한다', () => {
+  assert.equal(resolveDriverByPhone('+821012345678', []).allowed, false);
+  assert.equal(resolveDriverByPhone('+821012345678', null).allowed, false);
+});
+
+// ── ④ 거절 사유 안내 ──────────────────────────────────────────────
+test('거절에는 사람이 읽을 안내가 붙는다 — 막연한 접근불가는 전화만 늘린다', () => {
+  for (const key of ['invalid_phone', 'not_registered', 'duplicate_registration', 'inactive']) {
+    assert.ok(DENY_MESSAGE[key] && DENY_MESSAGE[key].length > 5, `${key} 안내 문구가 없다`);
+  }
+});
+
+// ── ⑤ 공유문서에 심을 번호 목록 ───────────────────────────────────
+test('활성 기사 번호만, 중복 없이 뽑는다', () => {
+  const list = activePhones([홍, 김, { ...홍, id: 'dup' }, { id: 'x', name: '퇴사', phone: '010-5555-6666', active: false }]);
+  assert.deepEqual(list, ['+821012345678', '+821023456789']);
+});
+
+test('읽을 수 없는 번호는 목록에 넣지 않는다 — 규칙 비교가 헛돈다', () => {
+  assert.deepEqual(activePhones([{ id: 'z', name: '오류', phone: '없음', active: true }]), []);
+});
