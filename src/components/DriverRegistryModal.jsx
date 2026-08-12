@@ -6,6 +6,8 @@ import { getDocs, getDoc, setDoc, addDoc, collection, doc, serverTimestamp, writ
 import * as XLSX from 'xlsx';
 import { formatPhoneInput } from '../utils/parsers.js';
 import { getDriversCollection, getDriverDoc } from '../utils/company.js';
+// 배송지도 접근 인증 비교키 — 저장·비교 양쪽 모두 통과시킨다(계획 Phase 0).
+import { toE164Mobile } from '../utils/phone.js';
 
 const DRIVER_COLORS = [
   '#3b82f6','#10b981','#f59e0b','#ef4444',
@@ -315,8 +317,20 @@ export default function DriverRegistryModal({ user, onClose }) {
     if (!isPersonalMode && !selectedOrg && !selectedCompany) { alert('소속사 또는 기업을 선택하세요.'); return; }
     setIsSaving(true);
     try {
+      // ★배송지도 접근 인증용 정규화 키(2026-08-13 · 계획 Phase 0).
+      //   Phone Auth 는 `token.phone_number` 를 **항상 E.164**(`+8210…`)로 준다.
+      //   저장된 `010-1234-5678` 과는 **문자 그대로는 안 맞는다** — 표기가 흔들리면
+      //   에러도 없이 그 기사만 지도에서 막힌다. 그래서 비교 전용 키를 따로 둔다.
+      //   ⚠️`phone`(담당자가 입력한 원문)은 **건드리지 않는다** — 화면 표시·기존 로직이 쓴다.
+      const phoneRaw = form.phone.trim();
+      const phoneE164 = toE164Mobile(phoneRaw);
+      if (phoneRaw && !phoneE164
+          && !window.confirm(`휴대폰 번호를 읽을 수 없습니다: "${phoneRaw}"\n\n`
+            + '이대로 저장하면 이 기사는 배송지도에 접근할 수 없습니다.\n그래도 저장할까요?')) {
+        setIsSaving(false); return;
+      }
       const payload = {
-        name: form.name.trim(), phone: form.phone.trim(),
+        name: form.name.trim(), phone: phoneRaw, phoneE164,
         capacity: parseInt(form.capacity)||100, color: form.color,
         memo: form.memo.trim(), status: 'active',
         assignedZones: form.assignedZones||[],

@@ -2,6 +2,8 @@
 import { X, MapPin, Play, ChevronRight, Truck, Building2, ChevronLeft, Plus, Trash2, Users, LayoutGrid, Navigation2, Crosshair, Loader2, CheckCircle, RefreshCw, CloudDownload } from 'lucide-react';
 import { db, writeBatch } from '../config/firebase.js';
 import { getDocs, collection, getDoc, doc, setDoc, serverTimestamp } from 'firebase/firestore';
+// 배송지도 접근 인증의 열쇠 — 저장·비교 양쪽 모두 이 함수를 통과시킨다(계획 Phase 0).
+import { toE164Mobile } from '../utils/phone.js';
 
 const KAKAO_REST_KEY = import.meta.env.VITE_KAKAO_REST_KEY;
 
@@ -949,6 +951,33 @@ export default function RouteSetupModal({
                         <button onClick={e => { e.stopPropagation(); removeDriver(driver.id); }}
                           className="p-0.5 text-gray-700 hover:text-red-400 transition-colors shrink-0"><Trash2 size={9} /></button>
                       </div>
+                      {/* 행 1-b: 휴대폰 — 배송지도 접근 인증의 열쇠 (2026-08-13 · 계획 Phase 0)
+                          ★번호가 없으면 그 기사는 지도에 못 들어간다. 조용히 비어 있으면
+                            배포 당일 현장에서야 드러난다 → 여기서 눈에 띄게 표시한다.
+                          ★실측(2026-08-13): 등록 기사 30명 중 23명이 번호 없음. */}
+                      {(() => {
+                        const raw = driver.phone || '';
+                        const state = !raw ? 'empty' : (toE164Mobile(raw) ? 'ok' : 'bad');
+                        const tone = state === 'ok' ? '#2a2a2a' : (state === 'bad' ? '#ef4444' : '#f59e0b');
+                        return (
+                          <div className="flex items-center gap-1 mb-1.5" onClick={e => e.stopPropagation()}>
+                            <input value={raw}
+                              onChange={e => updateDriver(driver.id, 'phone', e.target.value)}
+                              placeholder="휴대폰 (지도 접근용)"
+                              inputMode="numeric"
+                              className="flex-1 min-w-0 bg-black/30 border rounded px-1.5 py-0.5 text-[10px] text-white placeholder-gray-700 outline-none font-bold transition-colors"
+                              style={{ borderColor: tone }} />
+                            {state !== 'ok' && (
+                              <span className="text-[7px] font-black shrink-0" style={{ color: tone }}
+                                title={state === 'bad'
+                                  ? '휴대폰 번호로 읽을 수 없습니다. 010으로 시작하는 번호를 넣으세요.'
+                                  : '번호가 없으면 이 기사는 배송지도에 접근할 수 없습니다.'}>
+                                {state === 'bad' ? '형식오류' : '미입력'}
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })()}
                       {/* 행 2: 슬라이더 + % + 최대포수 */}
                       <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
                         <input type="range" min={10} max={200} step={5} value={driver.capacity}
