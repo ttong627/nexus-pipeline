@@ -1,4 +1,4 @@
-# 🔁 HANDOFF — nexus-pipeline (2026-08-12 21:10 KST)
+# 🔁 HANDOFF — nexus-pipeline (2026-08-12 21:50 KST)
 
 > 새 세션에서 **"이어서"** 라고 하면 이 문서 → `좌표관리_설계.md` → `PROJECT_STATUS.md` 순으로 읽고 재개.
 > 상세 근거·실측은 전부 **`좌표관리_설계.md` §5-2 ~ §5-7** 에 박제돼 있다. 여기는 현재 상태와 다음 할 일만.
@@ -78,18 +78,21 @@ Cloud Function **`geocodeAuto`**(3분마다) — 명단 `lat/lng` 를 채운다.
    - **남은 것**: 미보유 **56건**은 좌표 문제가 아니라 **주소 문제**다(A-36 — 주소를 지어내지
      않는다). `no_anchor` 잔여는 `장곡길319번길 285`·`천태리 131`(지번) 같은 형태.
      정제 화면에서 주소를 고쳐야 풀린다.
-   - ✅ **목록 뽑아둠**(2026-08-12 21:00 KST) — `바탕화면\nexus_좌표미보유_56건_2026-08-12.txt`.
-     출처는 Job `nexus-address-listfill-kgfft` 로그(추가 실행·배포 없이 재구성).
+   - ✅ **56건 전량 목록 확보**(2026-08-12 21:40 KST) — `바탕화면\nexus_좌표미보유_56건_2026-08-12.txt`.
      사유 분포 = `no_anchor` **21** · `none` **28** · `outlier` **7**(합 56, 검산 완료).
      ⚠️**PII 인접이라 리포에 커밋하지 않는다.**
-     ⚠️ **56건 중 46건만 개별 식별된다** — 스크립트가 명단당 샘플을 5건까지만 찍는다
-     (`fill-list-coords.mjs` 의 `missSample.length < 5`). 시흥 2026-07·2026-06 이 각 10건이라
-     각각 5건씩 잘렸다. 나머지 10건을 보려면 그 상한을 옵션화(`--miss-limit`)하고 Job 을
-     재배포해야 하는데, **내일 04:23 관찰이 끝난 뒤에 한다**(아래 4번 — 지금 이미지를 갈면
-     관찰 대상이 바뀐다).
-   - `outlier` 7건은 성격이 다르다 — 좌표가 있는데 **명단 주소가 딴 지역**이다
-     (`인천 남동구 명단에 경남 밀양`·`충북 아산`). 정제 화면에서 주소를 고쳐야 하는 건
-     같지만, 이건 좌표 결손이 아니라 **입력 오류 검출**이라 C-6 ⑥이 이미 표시해 둔 것들이다.
+     - 14개 명단 36건 = Job `nexus-address-listfill-kgfft` **로그에서 재구성**(재실행 없이).
+     - 시흥 2개 명단 20건 = **운영 API `/v1/coords/resolve`(`mode:'cache'`) 직접 조회**.
+       ★**배포가 필요 없었다** — 서비스는 이미 떠 있고 명단은 서비스 계정 키로 읽힌다.
+       Job 을 고쳐 다시 돌리는 것만 길이 아니다.
+     - 상한 문제 자체는 `--miss-limit` 로 해결(기본 5 불변, `0`=전량, 잘리면 **잘렸다고 로그에 남긴다**).
+   - ★**`outlier` 7건의 진짜 원인이 드러났다(2026-08-12)** — 좌표 문제도, 단순 오입력도 아니다.
+     **정제된 주소(`standardRoadAddress`)가 다른 지자체로 찍혀 있다**:
+     `봉우재로 36/37` → 서울 중랑구 면목동 · `매화로 53` → 성남 분당구 야탑동 ·
+     `주산로 12` → 전북 부안군 주산면. 전부 **시흥 명단**이다.
+     건물명 칸에 `번길`·`번안길` 이 들어간 것(`봉우재로 36, (정왕동, 번길)`)도 같은 계열로 보인다 —
+     도로명 `○○번길` 의 꼬리가 건물명으로 떨어진 흔적.
+     → **좌표 작업으로는 안 풀린다. 정제 규칙(A-36 계열) 쪽 문제다.** 미조치.
 
 2. ~~`parseAptDong` 오탐~~ ✅ **완료·머지됨**(2026-08-12, 별도 워크트리 → main).
    전 명단 **98,020건 전수 실측** 후 `호` 필수화(규칙 **DS-18** · 근거 §5-3-B).
@@ -103,11 +106,23 @@ Cloud Function **`geocodeAuto`**(3분마다) — 명단 `lat/lng` 를 채운다.
      `(\d{3,4})\s*[-]\s*\d{1,4}\s*호/` 가 있고 구버전의 `호?`(optional)는 **번들 전체에 0건**이다.
      ★"배포했다"는 릴리스 시각이 아니라 **번들 내용**으로 확인한다(시각만으로는 무엇이 담겼는지 모른다).
 
-3. **내비 링크는 이미 입구를 쓴다 — 확인 완료.** `/v1/delivery/resolve` → `deliveryBrief.pickCoordinate`
-   가 `juso_entrance`(측량) 를 1순위로 고르고 `navigationFromBrief` 가 그 좌표로 링크를 만든다.
-   ⚠️ 다만 **좌표 선택 규칙이 두 벌**이다 — `coordStore.pickDeliveryCoord`(building_coord 기반)는
-   **호출부 0건**(정의·테스트뿐). 죽은 규칙이 살아 있는 규칙과 갈리면 C-5 사고가 반복된다.
-   → 통합하거나 지울 것(§6 "호출부를 세라").
+3. ~~좌표 선택 규칙이 두 벌~~ ✅ **완료**(2026-08-12 · 설계서 **§6-1** 에 위치표).
+   호출부를 세어 보니 **두 벌이 아니라 네 벌이었고, 그중 두 벌이 죽어 있었다.**
+   - 살아있음: `deliveryBrief.pickCoordinate`(내비, `server.js` `/v1/delivery/resolve`) ·
+     `functions/index.js` `storeCoordsFor`(명단 lat/lng, `geocodeAuto` 3분마다)
+   - 죽어있음: `coordStore.pickDeliveryCoord`(호출부 0) ·
+     `src/utils/coordStoreApi.js` **모듈 전체**(유일 호출부 `App.jsx` `runSavedListBackgroundCoords`
+     도 호출부 0 → 딸린 진행 패널 `bgSaveCoordState` 도 영영 안 뜬다)
+   - ★그리고 `functions/index.js` 주석이 **죽은 `pickStoreCoord` 를 SSOT 로 지목**하고 있었다.
+     고쳐도 운영이 안 바뀌는데 고친 사람은 고쳤다고 믿는다 — C-5 의 원형.
+   - **조치**: `pickDeliveryCoord` 삭제 / 운영 규칙을 `functions/storeCoordPick.js` 로 승격
+     (회귀 `scripts/store-coord-pick.test.mjs` 8건) / `coordStoreApi.js` 에 **휴면 배너** /
+     죽은 함수를 근거로 삼던 주석 3곳 정정. **두 살아있는 규칙이 다른 것은 설계다**(F2) —
+     합치지 말 것, 회귀가 그 분리를 잠근다.
+   - ★**DS-15(outlier 차단)가 이 이관으로 처음 운영 경로에 잠겼다.** 기존 잠금은 죽은 함수에만
+     붙어 있어서, 회귀는 초록인데 운영은 그 규칙을 안 지켜도 아무도 몰랐다.
+   - Red-Green 실측: outlier 가드 제거 → 2건 FAIL, 복원 → 8/8 PASS.
+   - ⚠️ **아직 배포 안 됨**(아래 "배포 대기" 참조). 동작은 불변이라 급하진 않다.
 
 4. (관찰) C-6 **2026-08-12 04:23 실행 정상**(`nexus-address-sync-qw887`, exit 0).
    채움 대상 0건 · 이상치 4건 표시 유지. **단 이 "0건"은 저장소에 행이 있는 건만 센 값이다**
@@ -121,6 +136,21 @@ Cloud Function **`geocodeAuto`**(3분마다) — 명단 `lat/lng` 를 채운다.
      바뀐다. 1번의 `--miss-limit` 옵션화도 그래서 미뤘다.
 
 ---
+
+## ⚠️ 배포 대기 (2026-08-12 작업분 — 코드는 main, 운영은 아직 옛 이미지)
+
+동작이 바뀌는 변경은 **하나도 없다**(죽은 코드 삭제 + 규칙 파일 분리 + 옵션 추가 + 주석).
+그래서 급하지 않지만, **리포와 운영이 갈라져 있다는 사실 자체는 기록해 둔다** — 이 문서가
+"배포됐다"고 잘못 적어 두는 바람에 헛짚은 적이 있다.
+
+| 대상 | 무엇이 바뀌었나 | 명령 |
+|---|---|---|
+| Cloud Function `geocodeAuto` | 인라인 규칙 → `functions/storeCoordPick.js` `require` | `firebase deploy --only functions --account ttong627@gmail.com` |
+| Cloud Run 서비스·Job 4개 | `coordStore.pickDeliveryCoord` 삭제 · `fill-list-coords --miss-limit` | `bash scripts/deploy-jobs.sh` (+ 서비스 재배포) |
+| Hosting(클라) | 주석뿐 — **기능 변화 0**, 배포 불필요 | — |
+
+⚠️ **`nexus-address-sync` 는 2026-08-13 04:23 관찰 대상이다.** 그 전에 이미지를 갈면
+무엇을 관찰 중인지가 바뀐다 → **관찰 뒤에 배포할 것.** (형 확인 후 실행)
 
 ## ⚠️ 다음 명단 업로드 때 반드시 볼 것
 
@@ -150,7 +180,8 @@ gcloud logging read 'resource.labels.service_name="geocodeauto" AND textPayload:
 ---
 
 ## 검증 상태
-- address-service **275/275** · 루트 **281/281** · eslint **0 error** · `npx vite build` **EXIT=0**
+- address-service **275/275** · 루트 **308/308** · eslint **0** · `tsc --noEmit` **0** · `npx vite build` **EXIT=0**
+  (루트가 281→308 인 것은 `store-coord-pick.test.mjs` 8건 신설 + 그간 증설분)
 - Red-Green 실측: 이상치 최소표본·중복표시 가드·동 재조회 억제(dongCount 가드·주기) 전부 양방향 확인
 - 미커밋 없음 · origin/main 동기
 - ✅ **브랜치 정리 완료**(2026-08-12 21:0x KST) — `feat/coord-fill-c3`·`feat/juso-entrc-loader`
