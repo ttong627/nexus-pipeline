@@ -100,31 +100,22 @@ export const toDongNo = (value) => {
   return DONG_VALUE_RE.test(s) ? normalizeDongNo(s) : parseDongNo(s);
 };
 
-const point = (lat, lng, source, kind) =>
-  (lat == null || lng == null) ? null : { lat: Number(lat), lng: Number(lng), source: source || '', kind };
-
-/**
- * 용도에 맞는 좌표를 고른다.
+/*
+ * ★여기 있던 `pickDeliveryCoord` 를 지웠다(2026-08-12) — **호출부가 0건이었다.**
  *
- *  purpose='navigation' : 입구 → 중심.  **동 좌표는 쓰지 않는다**(설계서 F2).
- *      동 앞은 차가 못 들어가는 경우가 많다. 내비 목적지는 진입 지점이어야 한다.
- *  purpose='sequence'   : 동 → 입구 → 중심.
- *      단지를 한 점으로 보면 단지 내부 동선이 통째로 사라진다
- *      (실측 2026-07-24: 은마아파트 동간 약 280m).
+ *   이 파일은 좌표를 **저장·조회**하는 자리다. "어느 좌표를 쓸 것인가"를 여기서도
+ *   한 벌 더 정의해두니, 살아 있는 규칙과 갈라져도 아무 에러가 안 났다. C-5 사고
+ *   (죽은 경로에 코드를 넣고 완료로 기록)가 다시 일어날 자리라 제거한다.
  *
- * ★quality='outlier' 는 좌표 없음으로 취급한다(DS-15). 이상 좌표 하나가
- *   기사 구역을 430km 로 부풀린 실측이 있다.
+ *   좌표 선택 규칙은 **목적별로 한 벌씩만** 있다. 고치려면 아래를 고쳐라:
+ *     · 내비 목적지(입구 → 중심, 동 좌표 금지 = F2)
+ *         → `src/delivery/deliveryBrief.js` `pickCoordinate` (`server.js` `/v1/delivery/resolve`)
+ *     · 명단 lat/lng = 지도·순번(동 → 입구 → 중심)
+ *         → `functions/index.js` `storeCoordsFor` (Cloud Function `geocodeAuto`, 3분마다)
+ *
+ *   `/v1/coords/resolve` 는 **고르지 않는다** — `entrance`·`center`·`dong`(신뢰분만)을
+ *   그대로 내주고 고르는 일은 호출부가 한다(`coordResolveEntry`).
  */
-export const pickDeliveryCoord = (row, { purpose = 'navigation', dong = null } = {}) => {
-  if (!row) return null;
-  if (row.quality === 'outlier' || row.quality === 'none') return null;
-
-  if (purpose === 'sequence' && dong && dong.matched === 'dong' && dong.lat != null && dong.lng != null) {
-    return point(dong.lat, dong.lng, dong.source || row.center_source || 'vworld', 'dong');
-  }
-  return point(row.entrance_lat, row.entrance_lng, row.entrance_source, 'entrance')
-    || point(row.center_lat, row.center_lng, row.center_source, 'center');
-};
 
 const compact = (v) => String(v ?? '').replace(/\s+/g, '').trim();
 

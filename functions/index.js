@@ -343,13 +343,14 @@ const apiPost = async (path, body) => {
  * ★`mode:'cache'` 고정 — 조회 전용이라 외부 API 를 태우지 않는다(설계서 F10).
  *   채움은 배치(nexus-address-listfill)와 정기배치(C-6)가 맡는다.
  *
- * ★고르는 순서 = 동 → 입구 → 중심. **SSOT 는 `src/utils/coordStoreApi.js` 의
- *   `pickStoreCoord(entry,'sequence')`** 다. 명단 lat/lng 는 지도 표시·순번에 쓰이므로
- *   단지 안에서는 동 좌표가 맞다(내비 링크만 입구→중심을 쓴다 — 설계서 F2).
- *   functions 는 CommonJS 라 그 모듈을 못 불러온다. **규칙이 갈리면 화면과 배치가
- *   서로 다른 좌표를 쓰면서 아무 에러도 안 난다** — 바꿀 때 반드시 양쪽을 같이 고칠 것.
+ * ★고르는 순서(동 → 입구 → 중심)는 **`./storeCoordPick.js` 한 곳**에만 있다.
+ *   예전 주석은 SSOT 를 `src/utils/coordStoreApi.js` 로 지목했는데 **그 모듈은 죽은 코드였다**
+ *   — 유일한 호출부(`App.jsx` `runSavedListBackgroundCoords`)마저 아무도 안 부른다.
+ *   그래서 "SSOT 를 고쳤다"고 믿으며 고쳐도 운영은 그대로였다(C-5 사고와 같은 형태).
+ *   2026-08-12 에 죽은 두 벌을 지우고 규칙을 회귀 테스트가 있는 모듈로 승격했다.
+ *   내비 링크는 목적이 달라 규칙도 다르다(입구→중심, 동 좌표 금지 — 설계서 F2).
  */
-const STORE_BAD_QUALITY = new Set(['outlier', 'none', 'no_anchor', 'unknown']);
+const { pickStoreCoord } = require('./storeCoordPick');
 
 const storeCoordsFor = async (docs, sigungu) => {
   const found = new Map();
@@ -377,9 +378,8 @@ const storeCoordsFor = async (docs, sigungu) => {
     // ★길이가 다르면 통째로 버린다 — 인덱스가 밀리면 **다른 사람의 좌표**가 붙는다.
     if (coords.length !== docs.length) return found;
     coords.forEach((c, i) => {
-      if (!c || STORE_BAD_QUALITY.has(c.quality)) return;
-      const p = c.dong || c.entrance || c.center;
-      if (p && p.lat != null && p.lng != null) found.set(docs[i].id, { lat: Number(p.lat), lng: Number(p.lng) });
+      const p = pickStoreCoord(c);
+      if (p) found.set(docs[i].id, p);
     });
   } catch { /* 저장소가 없어도 아래 기존 경로가 받는다 */ }
   return found;

@@ -10,7 +10,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  buildCoordKey, coordRowToResult, pickDeliveryCoord, normalizeDongNo, ENTRANCE_SOURCES,
+  buildCoordKey, coordRowToResult, normalizeDongNo, ENTRANCE_SOURCES,
   pickRoadCode, pickRoadCodeByBuilding, roadCodeCandidates, pickTrustedDong, coordResolveEntry, toDongNo,
 } from '../src/coords/coordStore.js';
 
@@ -81,7 +81,7 @@ test('★지오코딩(vworld·kakao) 결과는 입구 좌표가 될 수 없다',
   }
 });
 
-// ── ③ 배송에 쓸 좌표 고르기 ────────────────────────────────────────
+// ── ③ 저장소 행 공용 픽스처 (아래 조회 테스트들이 함께 쓴다) ──────────
 const row = (o = {}) => ({
   coord_key: 'RC#0#16-0', road_address: '경기도 부천시 삼작로256번길 16',
   entrance_lat: null, entrance_lng: null, entrance_source: null,
@@ -89,42 +89,18 @@ const row = (o = {}) => ({
   is_apartment: false, quality: 'ok', ...o,
 });
 
-test('내비 목적지는 입구 → 중심 순으로 고른다 (동 좌표는 쓰지 않는다 · F2)', () => {
-  const both = row({ entrance_lat: 37.1, entrance_lng: 126.1, entrance_source: 'juso_entrc',
-    center_lat: 37.2, center_lng: 126.2, center_source: 'vworld' });
-  assert.deepEqual(pickDeliveryCoord(both, { purpose: 'navigation' }),
-    { lat: 37.1, lng: 126.1, source: 'juso_entrc', kind: 'entrance' });
-
-  const centerOnly = row({ center_lat: 37.2, center_lng: 126.2, center_source: 'kakao' });
-  assert.deepEqual(pickDeliveryCoord(centerOnly, { purpose: 'navigation' }),
-    { lat: 37.2, lng: 126.2, source: 'kakao', kind: 'center' });
-});
-
-test('★순번 계산에는 동 좌표를 우선한다 — 단지를 한 점으로 보면 내부 동선이 사라진다', () => {
-  const apt = row({ is_apartment: true, center_lat: 37.2, center_lng: 126.2, center_source: 'vworld' });
-  const dong = { dong_no: '101', lat: 37.25, lng: 126.25, matched: 'dong' };
-  assert.deepEqual(pickDeliveryCoord(apt, { purpose: 'sequence', dong }),
-    { lat: 37.25, lng: 126.25, source: 'vworld', kind: 'dong' });
-});
-
-test('★matched 가 dong 이 아니면 동 좌표로 신뢰하지 않는다 — 엉뚱한 동을 찍는다', () => {
-  const apt = row({ is_apartment: true, center_lat: 37.2, center_lng: 126.2, center_source: 'vworld' });
-  for (const m of ['complex', 'centroid', null]) {
-    const r = pickDeliveryCoord(apt, { purpose: 'sequence', dong: { dong_no: '101', lat: 37.9, lng: 126.9, matched: m } });
-    assert.equal(r.kind, 'center', `matched=${m} 인 동 좌표를 채택했다`);
-  }
-});
-
-test('★이상치(outlier)는 좌표 없음으로 취급한다 — DS-15', () => {
-  const bad = row({ center_lat: 37.2, center_lng: 126.2, center_source: 'kakao', quality: 'outlier' });
-  assert.equal(pickDeliveryCoord(bad, { purpose: 'navigation' }), null);
-});
-
-test('좌표가 하나도 없으면 null (M-1: 예외로 죽지 않는다)', () => {
-  assert.equal(pickDeliveryCoord(row(), { purpose: 'navigation' }), null);
-  assert.equal(pickDeliveryCoord(null, { purpose: 'navigation' }), null);
-  assert.equal(pickDeliveryCoord(undefined), null);
-});
+// ── 배송에 쓸 좌표 고르기 → **여기 없다**(2026-08-12 이관) ───────────
+//
+//  이 자리에 `pickDeliveryCoord` 회귀 5건이 있었다. 그런데 그 함수는 **호출부가
+//  0건인 죽은 코드**였다 — 회귀는 초록인데 운영은 그 규칙을 안 지켜도 아무도 몰랐다.
+//  *테스트가 통과한다*와 *운영이 그 규칙을 지킨다*는 다른 명제다(설계서 §6).
+//
+//  잠금은 실제로 도는 두 곳으로 옮겼다. 규칙을 고치려면 **거기**를 고쳐라:
+//    · 명단 lat/lng(동 → 입구 → 중심) — `functions/storeCoordPick.js`
+//         회귀 `scripts/store-coord-pick.test.mjs` (DS-15 outlier 차단 포함)
+//    · 내비 목적지(입구 → 중심, 동 금지 = F2) — `src/delivery/deliveryBrief.js`
+//         회귀 `scripts/delivery-brief.test.mjs`
+//  동 신뢰 판정(`matched==='dong'` 만 채택)은 아래 ⑤ `pickTrustedDong` 이 계속 잠근다.
 
 // ── ④ 동 표기 정규화 ──────────────────────────────────────────────
 test('동 표기 정규화 — 앞자리 0 제거, 한글·영문 동은 그대로', () => {

@@ -131,8 +131,10 @@ await withClient(async (c) => {
   //  실측 표본: B동 좌표 하나가 성암빌라·진아빌라·청양맨션·청정빌라·신한그린빌에
   //  동시에 붙어 있었다(빌라 6곳, 주소 6개). VWorld 동 매칭이 '가동'·'B동' 같은
   //  흔한 표기에서 주변의 **다른 건물**을 집은 것이다(설계서 F3).
-  //  → 지우지 않고 matched='suspect' 로 낮춘다. pickDeliveryCoord 는 matched='dong'
-  //    만 채택하므로 즉시 배송 경로에서 빠지고, 원본은 재검증용으로 남는다.
+  //  → 지우지 않고 matched='suspect' 로 낮춘다. **`pickTrustedDong`(coordStore.js)**이
+  //    matched='dong' 만 내주므로 즉시 배송 경로에서 빠지고, 원본은 재검증용으로 남는다.
+  //    (2026-08-12 정정: 예전엔 `pickDeliveryCoord` 를 근거로 적어뒀는데 그 함수는
+  //     호출부 0건인 죽은 코드였다 — 실제로 거르는 건 조회 단계의 `pickTrustedDong` 이다.)
   if (APPLY) {
     const { rowCount } = await c.query(`
       UPDATE ${S}.building_dong_coord d SET matched = 'suspect', updated_at = now()

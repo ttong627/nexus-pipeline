@@ -2,9 +2,20 @@
 //  C-5 좌표 저장소 클라 연동 — 설계서 좌표관리_설계.md §3-4
 //  회귀: scripts/coord-store-api.test.mjs
 //
-//  ★선택 규칙은 서버 coordStore.js `pickDeliveryCoord` 와 **같아야 한다**.
-//    클라가 제 나름대로 고르면 화면과 배치가 서로 다른 좌표를 쓰면서 아무 에러도
-//    안 난다 — 가장 찾기 어려운 종류의 불일치다.
+//  ⛔⛔ **이 모듈은 지금 아무도 안 쓴다(휴면). 여기를 고쳐도 운영은 안 바뀐다.** ⛔⛔
+//    유일한 호출부가 `App.jsx` `runSavedListBackgroundCoords` 인데 **그 함수 자체가
+//    호출부 0건**이다(브라우저 지오코딩 중단 정책으로 호출이 빠졌다). 딸린 진행 패널
+//    (`App.jsx` `bgSaveCoordState`)도 그래서 영영 안 뜬다. 2026-08-12 실측 확인.
+//    지우지 않고 남긴 이유 = 형이 "저장 후 백그라운드 좌표 매칭"을 되살릴 수 있어서다.
+//    **되살릴 때는 호출부부터 붙이고, 아래 규칙을 SSOT 와 대조할 것.**
+//
+//  ★실제로 도는 좌표 선택 규칙은 여기가 아니다 — 아래는 그 **사본**이다:
+//      · 명단 lat/lng(동 → 입구 → 중심) = `functions/storeCoordPick.js`
+//        (Cloud Function `geocodeAuto` 3분마다 · 회귀 `scripts/store-coord-pick.test.mjs`)
+//      · 내비 목적지(입구 → 중심, 동 금지 = F2)
+//        = `services/address-service/src/delivery/deliveryBrief.js` `pickCoordinate`
+//    (예전 주석은 서버 `coordStore.pickDeliveryCoord` 를 지목했는데, 그 함수도 호출부가
+//     0건이라 2026-08-12 에 지웠다. 죽은 코드를 SSOT 로 적어두면 고쳐도 안 바뀐다.)
 //
 //  ★정제 화면은 반드시 mode:'cache' 만 쓴다(F10). 채움(fill)은 외부 API 를 태워
 //    화면이 멈춘다. 여기에 fill 을 부르는 함수를 두지 않는 이유다.
@@ -24,7 +35,9 @@ const point = (p, kind) => (p && p.lat != null && p.lng != null
   : null);
 
 /**
- * 용도에 맞는 좌표를 고른다 — 서버 pickDeliveryCoord 와 동일 규칙.
+ * 용도에 맞는 좌표를 고른다(휴면 — 위 배너 참조).
+ *   `sequence` 는 `functions/storeCoordPick.js` 와, `navigation` 은 서버
+ *   `deliveryBrief.pickCoordinate` 와 같은 뜻이어야 한다. 되살릴 때 대조할 것.
  *
  *  navigation : 입구 → 중심.  **동 좌표는 쓰지 않는다**(F2 — 동 앞은 차가 못 들어간다)
  *  sequence   : 동 → 입구 → 중심 (단지를 한 점으로 보면 내부 동선이 통째로 사라진다)
