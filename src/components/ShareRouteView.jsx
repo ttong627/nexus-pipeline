@@ -1,10 +1,12 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { db } from '../config/firebase.js';
-import { doc, onSnapshot, updateDoc, deleteField } from 'firebase/firestore';
+import { doc, collection, onSnapshot, updateDoc, deleteField } from 'firebase/firestore';
 import { MapPin, List, Map as MapIcon, RefreshCw, Building2, Phone, ChevronUp, ChevronDown, Navigation, Crosshair, Star, X, AlertCircle, Share2, CheckCircle2, ArrowUpDown } from 'lucide-react';
 import { verifyDeliveryPositionApi } from '../engine/addressEngine.js';
 import { haversineKm } from '../engine/coordValidator.js';
 import { sortByRoadAddress } from '../utils/sortRecords.js';
+// 파생 계산(정렬·순번배지·지도대상) — 회귀 scripts/share-records-view.test.mjs 로 잠겨 있다.
+import { deriveDriverRecords } from '../utils/shareRecordsView.js';
 
 const KAKAO_JS_KEY = import.meta.env.VITE_KAKAO_JS_KEY;
 
@@ -144,6 +146,8 @@ function GpsGuideModal({ onClose }) {
 
 export default function ShareRouteView({ shareId, driverId }) {
   const [shareData, setShareData]     = useState(null);
+  // 건별 배송 문서(서브컬렉션). null = 아직/없음 → 옛 배열(`shareData.records`)로 폴백.
+  const [subRecords, setSubRecords]   = useState(null);
   const [loading, setLoading]         = useState(true);
   const [error, setError]             = useState(null);
   const [isMapReady, setIsMapReady]   = useState(false);
@@ -209,6 +213,21 @@ export default function ShareRouteView({ shareId, driverId }) {
       setError('데이터 로드 실패: ' + err.message);
       setLoading(false);
     });
+    return () => unsub();
+  }, [shareId]);
+
+  // ── 건별 배송 문서(서브컬렉션) 실시간 로드 (계획 Phase 1) ────────────────
+  //  ★배열이던 `records` 를 여기로 옮겼다. 배열은 부분 권한을 줄 수 없어서
+  //    읽히면 전부 읽혔다. 이제 보안규칙이 `driverPhone` 으로 걸러 **자기 것만** 온다.
+  //  ★전환 중 공존: 서브컬렉션이 비어 있으면 `null` 로 두고 옛 배열로 폴백한다.
+  //    (구·신 공유가 섞여 있는 기간에 옛 링크가 죽으면 현장이 선다)
+  useEffect(() => {
+    const unsub = onSnapshot(
+      collection(db, 'route_shares', shareId, 'records'),
+      (snap) => { setSubRecords(snap.empty ? null : snap.docs.map(d => ({ id: d.id, ...d.data() }))); },
+      // 권한 없음·미인증이면 조용히 폴백한다 — 여기서 화면을 죽이면 옛 링크까지 못 쓴다.
+      () => { setSubRecords(null); },
+    );
     return () => unsub();
   }, [shareId]);
 
@@ -398,23 +417,19 @@ export default function ShareRouteView({ shareId, driverId }) {
 
   // ── 파생 데이터 ──────────────────────────────────────────────────────
   const driver = shareData?.drivers?.find(d => d.id === driverId) || shareData?.drivers?.[0];
-  const baseRecords = (shareData?.records || [])
-    .filter(r => r.driverId === driver?.id)
-    .map((r, i) => ({ ...r, _uid: r.id || `${r.이름}_${r.배송순번 || i}` }));
   const remoteOrderIds = Array.isArray(shareData?.driverOrder?.[driver?.id]) ? shareData.driverOrder[driver.id] : [];
   const activeOrderIds = localOrderIds.length ? localOrderIds : remoteOrderIds;
-  const orderIndex = new Map(activeOrderIds.map((id, i) => [id, i]));
-  // 배송순번 발행 여부: 담당자 발행(driverOrder)·기사 편집(localOrderIds) 또는 저장된 배송순번이 있을 때만.
-  // 미발행이면 순번 번호·이동선을 표시하지 않는다.
-  const hasOrder = activeOrderIds.length > 0 || baseRecords.some(r => parseInt(r.배송순번, 10) > 0);
-  const allRecords = baseRecords
-    .sort((a, b) => {
-      const ai = orderIndex.has(a._uid) ? orderIndex.get(a._uid) : 100000 + (parseInt(a.배송순번) || 9999);
-      const bi = orderIndex.has(b._uid) ? orderIndex.get(b._uid) : 100000 + (parseInt(b.배송순번) || 9999);
-      return ai - bi;
-    })
-    .map((r, i) => ({ ...r, _displaySeq: hasOrder ? i + 1 : null }));
-  const mapRecords = allRecords.filter(r => r.lat && r.lng);
+  // ★파생 계산을 `src/utils/shareRecordsView.js` 로 옮겼다(계획 Phase 1 · 회귀
+  //   `scripts/share-records-view.test.mjs` 13건). 순번 배지·지도 대상·정렬이 전부
+  //   여기 걸려 있어, 출처를 서브컬렉션으로 바꿀 때 조용히 달라지면 기사가 엉뚱한
+  //   순서로 돈다. **계산을 먼저 못 박고 출처만 갈아 끼운다.**
+  //  ⚠️`subRecords`(서브컬렉션)가 있으면 그걸 쓴다 — 보안규칙이 이미 기사별로 걸렀으므로
+  //    `driverId` 로 다시 거르지 않는다. 없으면 옛 배열(부모 `records`)로 폴백한다.
+  const usingSub = Array.isArray(subRecords);
+  const { all: allRecords, map: mapRecords, hasOrder } = deriveDriverRecords(
+    usingSub ? subRecords : (shareData?.records || []),
+    { driverId: usingSub ? '' : driver?.id, orderIds: activeOrderIds },
+  );
   // ★목록 표시 순서만 바꾼다 — 순번 배지(_displaySeq)·지도 경로선(mapRecords)·다음 배송지는
   //   언제나 배송순번 기준을 유지한다. 보기 정렬이 동선 정보를 덮어쓰면 안 된다.
   const listRecords = sortMode === 'road' ? sortByRoadAddress(allRecords) : allRecords;
