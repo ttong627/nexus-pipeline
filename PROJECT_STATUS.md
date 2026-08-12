@@ -1,5 +1,9 @@
 # 📋 PROJECT STATUS — nexus-pipeline
-> 자동 생성: /확인 스킬 · 갱신 **2026-08-11 18:20 KST (D: 작업본 기준)** · 직전 갱신 2026-08-09 15:37 KST (I: 정본 기준)
+> 자동 생성: /확인 스킬 · 갱신 **2026-08-12 22:00 KST (I: 정본 · 운영 실측)** · 직전 갱신 2026-08-11 18:20 KST
+
+> ⚠️ **이 문서보다 `HANDOFF.md` 가 최신일 수 있다.** 좌표 작업(C 시리즈)의 현재 상태·다음 할 일은
+> `HANDOFF.md` → `좌표관리_설계.md` 가 SSOT 다. 여기는 프로젝트 전반의 스냅샷이다.
+> **아래 「이전 작업」 블록들은 그 시점 기록이다 — 현재 상태로 읽지 말 것.**
 
 ## 🔁 다른 PC에서 이어받기 (2026-08-11 18:20 KST 마감)
 
@@ -16,37 +20,49 @@ cd services/address-service && npm install && cd ../..
 `VITE_*` **10종**이 모두 있어야 한다: FIREBASE 6 · `VITE_KAKAO_REST_KEY` · `VITE_KAKAO_JS_KEY` · `VITE_ADDRESS_MATCH_API_URL` · `VITE_VWORLD_KEY`.
 빠지면 지도가 안 뜨거나(3D·루트맵) 주소매칭이 저하 모드로 돈다. 값은 운영 번들에서 복구할 수 있다(2026-08-11에 실제로 그렇게 복구함).
 
-**3) 지금 어디까지 왔나 — 좌표 작업(설계서 `좌표관리_설계.md`)**
+**3) 지금 어디까지 왔나 — 좌표 작업 ✅ C-1~C-7 전 단계 완료** (2026-08-12)
 
-| 단계 | 상태 | 비고 |
-|---|---|---|
-| C-1 스키마 | ✅ 운영 반영 | `building_coord`·`building_dong_coord` 생성 완료 |
-| C-2 조회 API | ✅ 운영 검증 | 키 일치 **300/300(100%)** · 동 좌표 회수 5/5 |
-| C-4 이관·격리 | ✅ 운영 반영 | 동 좌표 2,373건 이관 · 오염 375건 `suspect` 격리 · 남은 오염 0 |
-| **C-3 채움 파이프라인** | ⬜ **다음 작업** | 아래 참조 |
-| C-5 클라 연동 | ⬜ | 루트맵이 새 저장소를 쓰게 |
-| C-6 정기배치 편입 | ⬜ | `sync-address-data.mjs` ⑤⑥ 추가 |
-| C-7 출입구 자료 적재 | 🚫 **형 확인 대기** | 행안부 자료 파일 위치를 알아야 진행 |
+상세는 `HANDOFF.md`·`좌표관리_설계.md`. 여기는 결론만.
 
-**4) 다음 작업(C-3) 착수 전 반드시 알 것**
+| 단계 | 상태 |
+|---|---|
+| C-1 스키마 · C-2 조회 API · C-4 이관·격리 | ✅ 운영 반영 |
+| C-3 채움 파이프라인 · C-5 클라 연동 · C-6 정기배치 편입 | ✅ 운영 반영 |
+| C-7 출입구 자료 적재(행안부 642만 행) | ✅ 완료 — 자료는 `D:\Gemma4\govt_delivery_analysis\data\juso_db\` + GCS 사본 |
 
-- **현재 중심 좌표 보유 0건**이다. 동 좌표만 있다(건물 1,543 중 1,261). 내비용 점이 없어 `pickDeliveryCoord(purpose:'navigation')`는 아직 전부 null 이다.
-- ★**`가동`·`B동` 오염의 근본 원인을 아직 안 고쳤다.** 이관분 375건은 격리했지만
-  `src/vworld.js`의 동 매칭이 그대로라 **C-3로 새로 채우면 같은 오염이 재발한다.**
-  → C-3 첫 작업은 **한글·영문 단일 동(가·나·A·B)은 단지명 검증 없이 채택 금지** 규칙이다.
-  실측 근거: `B동` 좌표 하나가 성암빌라·진아빌라·청양맨션·청정빌라·신한그린빌에 동시에 붙어 있었다.
-- 정제 화면 경로는 **절대 외부 API를 태우지 않는다**(F10). 채움은 배치·루트맵 전용.
+**4) 좌표 실측 (2026-08-12 22:00 KST · `/v1/coords/status` 응답)**
+
+| 지표 | 값 |
+|---|---|
+| `building_coord` | **37,070건물** |
+| ├ 입구 좌표(행안부 측량) | **37,034** |
+| ├ 중심 좌표 | **37,040** |
+| ├ 이상치 표시(`outlier`) | 4 |
+| └ 좌표 전무 | 24 |
+| 동 좌표 | 4,873행 / 2,478건물 |
+| 명단 좌표 커버리지 | **99.9%** (16개 명단 98,020건 · 미보유 **56**) |
+
+- 미보유 56건은 **좌표 문제가 아니라 주소 문제**다(`no_anchor` 21 · `none` 28 · `outlier` 7).
+  전량 목록 = 바탕화면 `nexus_좌표미보유_56건_2026-08-12.txt`(PII 인접이라 리포에 없음).
+- ~~`가동`·`B동` 오염 근본원인 미수정~~ → **해결**(2026-08-11). 단일문자 동은 단지명 검증 없이
+  채택하지 않고, `sameComplex` 양방향 매칭으로 단지명 축약(`여월휴먼시아` vs `…2단지아파트`)도 받는다.
+- 정제 화면 경로는 **절대 외부 API를 태우지 않는다**(F10). 채움은 배치 전용.
+- **좌표 선택 규칙은 목적당 한 벌**이다(설계서 §6-1). 고칠 때 그 표부터 볼 것.
 
 **5) 운영 리소스 (전부 `logis-op` / `asia-northeast3` / 계정 `ttong627@gmail.com`)**
 
 | 리소스 | 용도 |
 |---|---|
-| Cloud Run `nexus-address-api` | 주소 API (현재 `00065-g8s`) |
-| Job `nexus-address-diag` | 좌표 실태 진단(읽기 전용) — 언제든 재측정 |
-| Job `nexus-address-coords` | 좌표 스키마 적용 + 이관 + 오염 격리 |
-| Job `nexus-address-verify` | C-2 키 일치 검증 |
-| Job `nexus-address-schema` | 학습주소 스키마 적용 |
-| Job `nexus-address-sync` + Scheduler | 정기 동기화 매일 04:23 KST |
+| Cloud Run `nexus-address-api` | 주소·좌표 API — 현재 **`00073-frq`**(롤백 지점 `00071-qr2`) |
+| Cloud Function `geocodeAuto` | 명단 `lat/lng` 채움(3분마다). **좌표 저장소를 먼저 본다** |
+| Job `nexus-address-sync` + Scheduler | 정기 동기화 **매일 04:23 KST**(C-6 ⑤채움·⑥이상치 포함) |
+| Job `nexus-address-listfill` + Scheduler | 명단 → 좌표저장소 행 생성 **매주 월 05:00** |
+| Job `nexus-address-entrc` | C-7 출입구 자료 적재(기본 예행) — 수동 |
+| Job `nexus-address-fill` | 진단·격리·백필(`--args` 갈아 끼우는 자리) — 수동 |
+| Job `diag`·`coords`·`verify`·`schema`·`import` | C-1~C-2 시절 도구. 남아 있으나 정기 실행 없음 |
+
+⚠️ **위 4개 Job 은 같은 소스·같은 이미지를 쓴다.** 하나만 재배포하면 나머지는 옛 이미지로
+**에러 없이 다른 동작**을 한다 → 배포는 `bash scripts/deploy-jobs.sh` 로 한 번에.
 
 ⚠️ **gh 활성 계정은 `ttong0627`이다.** 전역 전환하지 말고 명령마다 주입한다:
 `GH_TOKEN=$(gh auth token --user ttong627) git -c credential.helper='!gh auth git-credential' push origin main`
@@ -104,11 +120,35 @@ gcloud도 `--account ttong627@gmail.com`을 매 명령에 붙인다.
 | CLAUDE.md §5 CM-병합1·2·이름1 | ★2026-07-16 파싱 규칙 — 주소 서브헤더 라벨 데이터 오판 금지(컬럼밀림)·유령 후행 빈열 제거·**면/읍 이름 보호(정태면 누락 방지)** |
 | DELIVERY_SEQUENCE_RULES.md | 배송순번 독립 규칙 상세 |
 | 동명이인_주소오염_재발방지_설계.md | 2026-07-10 동대문 김옥순 사고 재발방지 — S-1~S-6 |
-| **prompt_plan.md** ★ | **세션 핸드오프 SSOT** — 서버 이관(P7) 진행상황·다음 작업 1~5순위·「이어가기 전 필수 지식(함정)」·재착수 금지 목록. 새 세션은 **이 문서부터** 읽는다 (최종 갱신 2026-08-01, 08-04~05 작업은 미기록) |
+| **HANDOFF.md** ★ | **현재 세션 핸드오프 SSOT** — 좌표 C 시리즈 현재 상태·다음 할 일·배포 대기. 새 세션은 **이 문서부터** 읽는다 |
+| **좌표관리_설계.md** ★ | 좌표 설계·실측 SSOT. **§6-1 = 좌표 선택 규칙 위치표**(고치기 전 필독) |
+| prompt_plan.md | 서버 이관(P7) 진행상황·「이어가기 전 필수 지식(함정)」. ⚠️**최종 갱신 2026-08-01 에서 멈춤** — 08-04 이후 작업은 미기록이니 현재 상태로 읽지 말 것 |
 | AGENTS.md | Codex/에이전트용 규칙 사본(CLAUDE.md와 동일 계열, 2026-07-30 갱신) |
 | HANDOFF_vworld.md · HANDOFF_배정저장_일정.md | VWorld 좌표 연동 · 배정저장/일정 기능 개별 핸드오프 |
 
-## 마지막 작업 (2026-08-06~08-08) — 브랜치 병합 + V7.4 부여 + 도로명 정렬 + 이용기록
+## 마지막 작업 (2026-08-11~08-12) — 좌표 C 시리즈 완결 + 앵커 수정 + 규칙 단일화
+
+> 상세·실측 근거는 `HANDOFF.md` 와 `좌표관리_설계.md`. 여기는 한 줄 요약만.
+
+- **C-7 출입구 자료 적재**: `entrance_core` **6,420,581행**(전국 16개 시도). 입구 좌표 37,034건 확보.
+  입구↔중심 평균 9.5m·최대 883.7m·**50m 초과 889건** — 그동안 건물 중심을 목적지로 받던 곳들이다.
+- **앵커가 안 생기던 원인 2건 규명·수정**(§5-8): ①같은 시군구에 같은 도로명코드가 둘
+  (동대문 `한천로58길`) ②세종시는 원본 도로명코드의 시군구 칸이 빈 값. → 동대문 98.3%→**100%**,
+  16개 명단 미보유 **316→56**.
+- **`probedDong` TDZ**: C-7 적재로 `findEntrance` 가 처음 값을 주자 채움이 통째로 죽었다.
+  **코드가 아니라 데이터가 바뀌어 드러난 잠복**의 표본. 회귀로 잠금. → `00073-frq`.
+- **`parseAptDong` 오탐 수정(DS-18)**: 전 명단 98,020건 실측 후 `호` 필수화 — 오탐 4,357건 제거 +
+  가려져 있던 진짜 동 578건 회복. 배포 확인은 **라이브 번들 내용으로** 했다(릴리스 시각 아님).
+- **좌표 선택 규칙 4벌 → 목적당 1벌**(설계서 §6-1): 죽은 2벌 제거, 운영 규칙을
+  `functions/storeCoordPick.js` 로 승격(회귀 8건). ★DS-15(outlier 차단)가 **이때 처음 운영 경로에 잠겼다** —
+  기존 잠금은 호출부 0건인 죽은 함수에만 붙어 있었다.
+- **미보유 56건 전량 목록화**: 재실행·배포 없이 Job 로그 + 운영 API 조회로 확보.
+  `outlier` 7건은 **정제된 주소가 다른 지자체로 찍힌 것**(시흥 명단에 서울 중랑구·성남 분당구·전북 부안군)
+  — 좌표가 아니라 정제 규칙 문제. **미조치.**
+- ⚠️ **배포 대기**: 규칙 단일화·`--miss-limit` 는 코드만 main. 동작 불변이라 급하지 않으나
+  **08-13 04:23 C-6 관찰 뒤 배포**(4개 Job 이 같은 이미지라 지금 갈면 관찰 대상이 바뀐다).
+
+## 이전 작업 (2026-08-06~08-08) — 브랜치 병합 + V7.4 부여 + 도로명 정렬 + 이용기록
 > 08-06 `d216186` 머지로 `feat/juso-entrc-loader` → **main 단일 라인 복귀**. 08-06 기록의 🟡"운영 코드가 main에 없다"·"버전 미부여(VER-1)" **2건 모두 해소**.
 
 - **54355d9 (08-08 16:56)** 계정 백업 파일 gitignore — 개인정보(이메일·uid) 커밋 차단
@@ -242,11 +282,20 @@ gcloud도 `--account ttong627@gmail.com`을 매 명령에 붙인다.
 ## 작업환경 (2026-08-09 15:37 KST 실측 · I: 정본 기준)
 - node **v24.18.0** / npm **11.16.0** · gh OK · gcloud OK · firebase OK
 - 앱 버전 배지: **V7.4**(`src/version.js`) / package.json **7.4.0** — 일치 ✅
-- 의존성: 루트 **재설치 완료**(FF로 `package.json` 변경 반영 · EXIT=0) · functions **미설치** · services/address-service **미설치** · 레거시 `address-service/` **미설치** → 해당 서비스 작업 시 그 폴더에서 `npm install`
-- 시크릿: `.env` **12키 설정됨**(FIREBASE 6·JUSO 3·KAKAO 2·ADDRESS_MATCH_API_URL 1) — 값 비노출.
-  ⚠️ **`VITE_VWORLD_KEY` 로컬 누락**(`.env.example`에는 있음). 운영 번들에는 키가 주입돼 있음을 실측 확인 → **이 폴더에서 빌드·배포하면 3D 지도 인증키가 빈 값으로 나간다**. 배포 전 키 주입 필수
+- 의존성(**2026-08-12 재실측**): 루트 ✅ · functions ✅ · services/address-service ✅ — **셋 다 설치돼 있다**
+  (08-09 기록의 "하위앱 미설치"는 그 시점 상태였고 지금은 해소)
+- 시크릿: `.env` **`VITE_*` 16키 설정됨**(FIREBASE 6·JUSO 6·KAKAO 2·VWORLD 1·ADDRESS_MATCH_API_URL 1) — 값 비노출.
+  ~~`VITE_VWORLD_KEY` 로컬 누락~~ → **해소**(2026-08-12 실측, 설정돼 있음).
+- 🟠 **알려진 노출(미조치·형 결정 대기)**: `VITE_KAKAO_REST_KEY` 는 Vite 가 번들에 인라인하므로
+  **공개 번들에서 그대로 읽힌다**(2026-08-12 라이브 번들에서 실측 확인). 브라우저에서 REST 키를 쓰는
+  구조라 IP 제한도 못 건다. 개인정보 접근 키는 아니고 **쿼터·과금** 문제다.
+  근본 해결 = `prompt_plan.md` **Phase3(클라 정제 → 서버 정제 전환)**. 키 교체는 다시 번들에 들어가므로
+  시간만 버는 조치다.
 - 헬스체크(08-09 15:32~15:35 KST): https://logis-op.web.app **200 0.32s** · Cloud Run `/v1/address/db-status` **200 0.40s** · `/healthz`는 **404**(구 리비전부터 동일한 기존 동작 — 실헬스는 `db-status`로 확인)
-- 운영 번들: `/assets/index-C5s-bWG1.js`(08-06 기록의 `index-C8Dwt6IY.js`에서 갱신됨 = **08-06 이후 재배포됨**) · 3D는 `assets/RouteMapModal-*.js` 청크에 포함, VWorld SDK 키 주입 확인
+- 운영 번들: **`/assets/index-fiTcEt_a.js`**(2026-08-12 실측 · Hosting live 릴리스 **08-12 20:47:28**).
+  3D는 `assets/RouteMapModal-*.js` 청크에 포함, VWorld SDK 키 주입 확인.
+  ★**"배포됐다"는 릴리스 시각이 아니라 번들 내용으로 확인한다** — 시각만으로는 무엇이 담겼는지 모른다.
+  실제로 DS-18 반영 여부를 번들 안 정규식(`\d{3,4}\s*[-]\s*\d{1,4}\s*호`)으로 확인했다.
 - 검증 명령: `node --test scripts/*.test.mjs`(파리티 포함) · `node --test scripts/address-golden.test.mjs` · `npx eslint .` · `npx vite build`
 - 품질 모니터 `scripts/monitor.log`: 최근 기록 **2026-08-03 09:00** — 88,463건 괄호붕괴 0·잡값 0·정본 100% **정상(악화 없음)**
 
@@ -258,19 +307,28 @@ gcloud도 `--account ttong627@gmail.com`을 매 명령에 붙인다.
 
 ## 리스크
 ### 2026-08-11 신규 (D: 작업본 실측)
-- 🔴 **origin HEAD 빌드 불가 — 미푸시 수정 대기**: `7382740`에 충돌 마커가 커밋돼 **origin을 받는 모든 클론이 빌드 실패**한다(I: 정본도 동일). D:에서 고쳤으나 **아직 커밋·푸시 안 함** → 형 승인 후 푸시해야 I:도 살아난다
+- 🟢 ~~origin HEAD 빌드 불가(충돌 마커)~~ → **해소**(2026-08-12 실측). 추적 파일 전수 검색
+  `git grep '^<<<<<<< |^>>>>>>> '` **0건** · `npx vite build` **EXIT=0** · `tsc --noEmit` 0 ·
+  루트 테스트 **308/308** · address-service **275/275** · eslint 0
 - 🟢 **`road_name` 인덱스 — 정상 존재(08-11 정정)**: `7382740`의 diff는 충돌 찌꺼기뿐이라 그 커밋은 아무것도 추가하지 않았으나, **인덱스 자체는 이미 `7a76284`에서 반영돼 있다** — `schema.sql:153` `address_core_roadname_exact`, `:169` `building_core_roadname_exact` 모두 `(version_id, road_name, building_main_no, building_sub_no)`. 08-11 최초 보고의 "인덱스 실종"은 **grep 범위 오류로 인한 오탐**이며 재작업 불필요
-- 🟡 **gh active 계정 = `ttong0627` ≠ repo owner `ttong627`**: 전역 전환 없이 owner 토큰 주입으로 처리함(`GH_TOKEN=$(gh auth token --user ttong627) git -c credential.helper='!gh auth git-credential' ...`). **푸시·배포 직전 계정 재확인 필수**
+- 🟡 **gh active 계정 = `ttong0627` ≠ repo owner `ttong627`** — 2026-08-12 재확인, **여전히 그렇다**.
+  ★이날 `gh auth switch --user ttong627` 로 바꿨는데 **나중에 보니 다시 `ttong0627`** 이었다
+  (다른 세션이 되돌린 것으로 보인다 — 전역 설정이라 세션끼리 서로 덮어쓴다).
+  → **전역 전환에 의존하지 말고 매번 토큰 주입**:
+  `GH_TOKEN=$(gh auth token --user ttong627) git -c credential.helper='!gh auth git-credential' ...`
+  gcloud 도 매 명령에 `--account ttong627@gmail.com`.
 - 🟢 **D: `.env` 키 완비**: `VITE_*` 10종 전부 채움(08-11 `VITE_VWORLD_KEY`·`VITE_KAKAO_JS_KEY` 복구). 빌드 산출물이 운영 번들과 해시 일치로 검증됨
 - 🟢 **D: 정체 해소**: behind 108 → 0. 로컬 5커밋은 `backup/d-clone-20260811`에 보존(내용은 origin에 이미 반영됨)
 
 ### 기존
-- 🟢 동기화·계정: **해소** — 08-09 FF로 최신(54355d9) · gh active `ttong627` 일치 · 워킹트리 clean
+- 🟢 동기화: **해소** — 워킹트리 clean · `main` = `origin/main`(2026-08-12 실측)
+  ⚠️ 이 줄에 있던 "gh active `ttong627` 일치"는 **더 이상 사실이 아니다** — 위 🟡 항목 참조(현재 `ttong0627`)
 - 🟢 **운영 코드 main 미반영**: **해소** — 08-06 `d216186` 병합으로 main 단일 라인 복귀
 - 🟢 **버전 미부여(VER-1)**: **해소** — 08-06 `7a3a09f`로 **V7.4** 부여, `version.js`·`package.json` 일치
 - 🟢 **`VITE_VWORLD_KEY`: 해소(08-09)** — 로컬 `.env`에 없어 이 폴더에서 빌드하면 3D가 빈 키로 나가던 문제. 운영 번들(`assets/RouteMapModal-*.js`)에서 키를 추출해 `.env`에 기록 → `npx vite build` **EXIT=0**, 새 산출물에 키 주입 확인. 백업 `.env.bak-20260809`(gitignore)
-  - ⚠️ **클라우드 시크릿은 아직 옛날판** — `tp-nexus-pipeline-clean-env`(Secret Manager, `wssc-nutrition`) 최신 버전이 **2026-07-18**이라 VWORLD 키가 없다. 허브 PC에서 `secrets_push` 재업로드 필요(안 하면 다음 새 PC가 같은 함정에 빠짐)
-- 🟡 하위앱 3곳(`functions`·`services/address-service`·레거시) **node_modules 미설치** — 서버·함수 작업 전 해당 폴더에서 `npm install`
+  - 🟢 ~~클라우드 시크릿이 옛날판(2026-07-18)~~ → **해소**. `tp-nexus-pipeline-clean-env`
+    (Secret Manager, `wssc-nutrition`) **버전 3 = 2026-08-09** 확인(2026-08-12 실측)
+- 🟢 ~~하위앱 node_modules 미설치~~ → **해소**(2026-08-12 실측: 루트·`functions`·`services/address-service` 셋 다 설치됨)
 - 🟡 **혼동 클론 `I:\ttong_project\nexus-pipeline`** — 06-30 시점 구버전에 미커밋 3건(`services/address-service/{sql/schema.sql,src/db.js,src/import-job.js}`) 방치. **`-clean`이 정본**이니 참조·작업 금지(7/21 2클론 분기 사고 재발 방지)
 - 🟢 배포·환경: 정상 (프론트 200 0.32s · API `db-status` 200 0.40s · 루트 의존성 재설치 완료)
 - 🟢 데이터 무결성: 무손실 원칙(M-1~M-10) 적용 — 대상자·포수 누락 차단 + 원본 소계 포수 자동 대조. 주소품질 모니터 정상
@@ -281,7 +339,15 @@ gcloud도 `--account ttong627@gmail.com`을 매 명령에 붙인다.
   - 이때 **nexus 외 4개도 같이 정체 중이었음이 드러남**: `yyplus`·`wellshare-platform`·`wellshare-latest`·`workspace-setup` → 08-09 최신화됨
 - 🟡 **작업 PC = 허브 `ttongfir`(Tailscale 100.98.244.52)** — `_deploy_done.bat`에 `cd /d "I:\ttong_project\nexus-pipeline-clean"`로 박혀 있어 **같은 경로를 쓰는 다른 PC**임이 확인됨. 이 PC는 `ttongse`. **두 PC에서 동시에 같은 저장소를 만지지 말 것**, **작업 종료 = 커밋·푸시**(미커밋으로 두면 자동 pull이 dirty guard로 스킵됨)
 - ⚪ 레거시 `address-service/`(루트) — 2026-06-24 최종, 배포설정 미참조. 삭제 여부는 형 판단(임의 삭제 금지)
-- 🟠 **핸드오프 1순위 미해결 가능성** — 08-01 기록: 백필 배치가 `읍면동 3340개…`에서 멈춘 채 API만 두드리고 watchdog이 반복 재시작. statement_timeout으로 운영 피해는 막았으나 **배치 자체는 진척 0**. 현재 가동 여부 미확인(정지하려면 watchdog 먼저 종료)
+- 🟡 **주소 백필 배치(08-01 기록)** — 당시 `읍면동 3340개…`에서 멈춘 채 API만 두드리고 watchdog 이 반복 재시작.
+  `statement_timeout` 으로 운영 피해는 막았으나 **배치 자체는 진척 0**이었다.
+  → **2026-08-12 실측: 이 PC 에서 관련 프로세스는 하나도 안 돌고 있다**(`Get-CimInstance Win32_Process`).
+  즉 "폭주 중"은 아니다. 다만 **백필이 아직 필요한 일인지는 미확인** — `prompt_plan.md`(08-01 정지) 소관.
 - 🟢 **xlsx 취약점 해소(2026-07-25)** — 사용자 업로드 엑셀 파싱 경로였던 `xlsx@0.18.5`(Prototype Pollution·ReDoS, HIGH)를 **SheetJS 공식 CDN판 `0.20.3`으로 교체**(package.json이 cdn.sheetjs.com tarball URL, import 코드 무변경·API 왕복 스모크 OK). 남은 audit 18건은 전부 dev 의존성(빌드툴) 경유라 프로덕션 번들 미포함(critical=`websocket-driver` dev)
 - 🟢 **nexus-address-api 콜드스타트 해소 확인(2026-07-25)** — 이미 `minScale=1`+startup-cpu-boost 적용 상태. 실측 매칭 응답 **145ms→23ms→22ms**(상시 웜). 과거 "20~23초"는 낡은 기록(당시 원인은 Windows curl 한글 인코딩, Node fetch는 정상이었음)
-- ⚠️ 08-06 기록의 "하위앱 node_modules 설치 완료"는 **이 폴더에는 해당 없음**(08-09 실측: functions·services/address-service·레거시 **모두 미설치**) — 위 2클론 분기 항목 참조
+- 🟢 ~~08-09 실측 "하위앱 node_modules 모두 미설치"~~ → **해소**(2026-08-12 실측: 셋 다 설치됨)
+- 🟠 **`VITE_KAKAO_REST_KEY` 공개 번들 노출 — 미조치·형 결정 대기**: Vite 가 빌드 때 값을 인라인하므로
+  `logis-op.web.app` 번들에서 그대로 읽힌다(2026-08-12 라이브 번들 실측). 브라우저에서 REST 키를 쓰는
+  구조라 **IP 제한도 못 건다**. 개인정보 접근 키가 아니라 **쿼터·과금** 문제.
+  근본 해결 = `prompt_plan.md` **Phase3(클라 정제 → 서버 정제 전환)** — 규모가 있어 `/plan` 선행 권장.
+  키 교체만으로는 새 키가 다시 번들에 들어간다.
