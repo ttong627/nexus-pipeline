@@ -1,4 +1,4 @@
-# 🔁 HANDOFF — nexus-pipeline (2026-08-12 05:10 KST)
+# 🔁 HANDOFF — nexus-pipeline (2026-08-12 21:10 KST)
 
 > 새 세션에서 **"이어서"** 라고 하면 이 문서 → `좌표관리_설계.md` → `PROJECT_STATUS.md` 순으로 읽고 재개.
 > 상세 근거·실측은 전부 **`좌표관리_설계.md` §5-2 ~ §5-7** 에 박제돼 있다. 여기는 현재 상태와 다음 할 일만.
@@ -78,6 +78,18 @@ Cloud Function **`geocodeAuto`**(3분마다) — 명단 `lat/lng` 를 채운다.
    - **남은 것**: 미보유 **56건**은 좌표 문제가 아니라 **주소 문제**다(A-36 — 주소를 지어내지
      않는다). `no_anchor` 잔여는 `장곡길319번길 285`·`천태리 131`(지번) 같은 형태.
      정제 화면에서 주소를 고쳐야 풀린다.
+   - ✅ **목록 뽑아둠**(2026-08-12 21:00 KST) — `바탕화면\nexus_좌표미보유_56건_2026-08-12.txt`.
+     출처는 Job `nexus-address-listfill-kgfft` 로그(추가 실행·배포 없이 재구성).
+     사유 분포 = `no_anchor` **21** · `none` **28** · `outlier` **7**(합 56, 검산 완료).
+     ⚠️**PII 인접이라 리포에 커밋하지 않는다.**
+     ⚠️ **56건 중 46건만 개별 식별된다** — 스크립트가 명단당 샘플을 5건까지만 찍는다
+     (`fill-list-coords.mjs` 의 `missSample.length < 5`). 시흥 2026-07·2026-06 이 각 10건이라
+     각각 5건씩 잘렸다. 나머지 10건을 보려면 그 상한을 옵션화(`--miss-limit`)하고 Job 을
+     재배포해야 하는데, **내일 04:23 관찰이 끝난 뒤에 한다**(아래 4번 — 지금 이미지를 갈면
+     관찰 대상이 바뀐다).
+   - `outlier` 7건은 성격이 다르다 — 좌표가 있는데 **명단 주소가 딴 지역**이다
+     (`인천 남동구 명단에 경남 밀양`·`충북 아산`). 정제 화면에서 주소를 고쳐야 하는 건
+     같지만, 이건 좌표 결손이 아니라 **입력 오류 검출**이라 C-6 ⑥이 이미 표시해 둔 것들이다.
 
 2. ~~`parseAptDong` 오탐~~ ✅ **완료·머지됨**(2026-08-12, 별도 워크트리 → main).
    전 명단 **98,020건 전수 실측** 후 `호` 필수화(규칙 **DS-18** · 근거 §5-3-B).
@@ -96,6 +108,13 @@ Cloud Function **`geocodeAuto`**(3분마다) — 명단 `lat/lng` 를 채운다.
 4. (관찰) C-6 **2026-08-12 04:23 실행 정상**(`nexus-address-sync-qw887`, exit 0).
    채움 대상 0건 · 이상치 4건 표시 유지. **단 이 "0건"은 저장소에 행이 있는 건만 센 값이다**
    — 1번의 `no_anchor` 는 여기 안 잡힌다(§5-3-A 모집단 함정). 배포 후 다시 볼 것.
+   - ✅ **시각 확정**(2026-08-12 21:00 KST 실측): 그 실행은 `2026-08-11 19:23 UTC` = **08-12 04:23 KST**,
+     `00073-frq` 배포는 `2026-08-12 11:13 UTC` = **08-12 20:13 KST**. 즉 **오늘 04:23 은 수정 이전 이미지**다.
+     → **2026-08-13 04:23 실행이 `probedDong` TDZ 수정 이후 첫 정기 실행**이다. 그걸 봐야 판정된다.
+   - 볼 것: 요약 로그의 **`★다음으로 이월`**(이틀 연속 안 줄면 막힌 것) + ⑤채움이 실제로
+     대상을 잡는지(1번 앵커 수정으로 `no_anchor` → `unknown` 이 됐으니 이제 대상이어야 한다).
+   - ⚠️ **그 관찰 전에는 Job 을 재배포하지 말 것** — 4개 Job 이 같은 이미지라 무엇을 관찰 중인지가
+     바뀐다. 1번의 `--miss-limit` 옵션화도 그래서 미뤘다.
 
 ---
 
@@ -130,6 +149,12 @@ gcloud logging read 'resource.labels.service_name="geocodeauto" AND textPayload:
 - address-service **275/275** · 루트 **281/281** · eslint **0 error** · `npx vite build` **EXIT=0**
 - Red-Green 실측: 이상치 최소표본·중복표시 가드·동 재조회 억제(dongCount 가드·주기) 전부 양방향 확인
 - 미커밋 없음 · origin/main 동기
+- ✅ **브랜치 정리 완료**(2026-08-12 21:0x KST) — `feat/coord-fill-c3`·`feat/juso-entrc-loader`
+  둘 다 `main` 에 전부 반영(`git log main..<브랜치>` 0건) 확인 후 로컬·원격 삭제.
+  되살릴 일이 생기면 SHA 로 복구된다:
+  `git push origin 0142068…:refs/heads/feat/coord-fill-c3` (c3) ·
+  `git push origin 54355d9…:refs/heads/feat/juso-entrc-loader` (entrc)
+  → 남은 브랜치는 `main` 하나. ⚠️ 이 리포의 기본 브랜치는 **`main`**(`master` 아님).
 
 ## 참고
 - **설계·실측 SSOT**: `좌표관리_설계.md`
@@ -157,3 +182,9 @@ gcloud logging read 'resource.labels.service_name="geocodeauto" AND textPayload:
   `gcloud run jobs executions list --job nexus-address-sync --region asia-northeast3 --project logis-op --account ttong627@gmail.com --limit 3`
   → 실행 이름으로
   `gcloud logging read 'resource.type="cloud_run_job" AND labels."run.googleapis.com/execution_name"="<이름>"' --project logis-op --account ttong627@gmail.com --format="value(textPayload)" --order asc`
+  ★로그는 **다시 돌리지 않아도 되는 자료다** — 미보유 56건 목록도 재실행 없이 이 로그에서 뽑았다.
+- ⚠️ **KST 함정(2026-08-12 실제로 헛짚음)**: 이 PC 의 Git Bash 에는 tzdata 가 없어
+  `TZ=Asia/Seoul date` 가 조용히 **UTC 를 그대로 뱉는다**(에러 없음). 그 값으로 계산하면
+  9시간이 틀어져 "배포가 미래에 일어났다" 같은 결론이 나온다.
+  **이 PC 는 로컬 시각이 곧 KST 다 → 그냥 `date`** 를 쓰고, UTC 비교가 필요하면 `date -u` 와 나란히 볼 것.
+  gcloud 가 주는 시각(`CREATED`·`creationTimestamp`)은 전부 **UTC** 다.
