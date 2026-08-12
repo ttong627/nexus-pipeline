@@ -38,6 +38,63 @@ Cloud Function **`geocodeAuto`**(3분마다) — 명단 `lat/lng` 를 채운다.
 
 ---
 
+## ★★★개인정보보호 대응 (2026-08-13) — 계획 SSOT = `prompt_plan.md`
+
+> 배경: **2026-09-11 시행 개정 개인정보보호법**(72시간 유출통지 · 대표자 최종책임 ·
+> 매출 10% 과징금 · 보호 투자실적은 감경사유). 형 지시로 4개 시스템을 점검하고
+> nexus 배송지도 접근통제를 재설계 중이다.
+
+### 🔴 다음 세션이 **가장 먼저** 볼 것
+
+1. **⛔`SHARE_TRANSITION_DUAL_WRITE = true` 를 내려야 한다**(`RouteMapModal.jsx` 상단).
+   Phase 2(휴대폰 인증) 배포 전에는 기사에게 `token.phone_number` 가 없어 서브컬렉션을
+   못 읽는다 → 새 공유가 통째로 죽는다. 그래서 옛 배열도 같이 쓰는 **임시 상태**다.
+   ★이 값이 `true` 인 동안 "자기 것만"은 성립하지 않는다.
+   **Phase 2 배포 직후 `false` 로 내리고 재배포할 것.**
+2. **Phone Auth 활성화 대기** — 형이 Console 에서 켜야 Phase 2 착수 가능.
+   `https://console.firebase.google.com/project/logis-op/authentication/providers`
+3. **텔레그램 채널 미설정** — 경보가 지금은 서버 로그에만 남는다.
+   `firebase functions:secrets:set TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID`
+
+### 진행 상황
+
+| Phase | 상태 |
+|---|---|
+| 0 기사 명부 | ✅ `org_drivers` 에 `phoneE164` 비교키 + 16명 백필 + 입력 검증 |
+| 1 문서 구조(메타/건별 분리) | ✅ 코어·생성측·읽기측 (⚠️이중쓰기 임시 ON) |
+| 3 사용일정(마감일) 지정 | ✅ 기본 7일·상한 30일·그날 끝까지 |
+| 5 열람기록 + 감시규칙 | ✅ `share_access_logs`(append-only) + `leakWatch.js` |
+| 5-b 알림 Function | ✅ 배포됨. ⏳인덱스 생성 중이라 **동작 검증 미완** |
+| 2 휴대폰 인증 | ⏳ Console 대기 |
+| 4 접속 시 갱신(Function) | ⏳ Phase 2 없이는 검증 불가 |
+
+**배포 완료**(2026-08-13): 규칙 · Functions(`leakAlert` 신설) · Hosting `index-DH7D9nRu.js`
+(롤백 `index-Biraov44.js`). 동대문 링크 200·1,524건 정상 확인.
+
+### ★이번에 데인 것 (되풀이 금지)
+
+- **부재 단정을 이름 하나로 하지 말 것** — "`drivers` 0건 → 명부가 없다"고 **두 번** 틀렸다.
+  진짜 명부는 `org_drivers/{소속사}/drivers`(17명·휴대폰 정상 16). 같은 것이 다른 이름으로 있다.
+- **"떴다" ≠ "동작한다"** — `leakAlert` 배포는 성공했는데 **복합 인덱스가 없어** 판정이 실패했다.
+  로그를 실제로 넣어보고서야 드러났다. try/catch 가 잡아 조용히 넘어갔다.
+- **`functions/` 는 CommonJS** — ESM 으로 쓰면 배포가 깨진다(쓸 뻔했다).
+- **규칙에 없는 함수를 지어 쓸 뻔했다**(`isShareWithinTTL2`). 배포 전 컴파일로 잡았다.
+  `isShareWithinTTL()` 은 `resource.data` 를 보므로 **신규 문서 create 규칙엔 못 쓴다.**
+- **`firebase deploy --only firestore:indexes` 는 원래 실패한다** — 기존 인덱스 2개의
+  한글 필드(`행정동`·`배송순번`)가 백틱 인용이 안 돼 CLI 가 400. 내 인덱스는 `gcloud` 로 직접 만들었다.
+- **보안을 조이다 배송을 세우면 그게 더 큰 사고다** — 번호 없는 기사, SMS 미수신, 옛 링크.
+  전부 폴백·경고를 함께 만들었다. 계획서 "현장 폴백" 절 참조.
+
+### 다른 시스템 점검 결과(요약 · 상세=바탕화면 `보안점검_4개시스템_2026-08-13.md`)
+
+- **yyplus 가 기준점** — Cloud KMS 필드 암호화 + `auditLogs` append-only + 비인증 규칙 0건
+- **nexus** ⚠️공유링크가 인증 없이 열림(이 작업이 그걸 닫는 중) · 카카오 REST 키 번들 노출(미조치)
+- **웰쉐어 플랫폼** ⚠️인증만 하면 기사·공문·긴급연락처 열람(역할 구분 없음)
+- **TMS** ✅계좌·정산은 관리자 전용(메모리의 "전체허용"은 낡은 기록) ⚠️`app_releases` 쓰기 완화(수정함)
+- **4개 전부 열람 로그 없음** → 72시간 통지 이행 불가. nexus 만 이번에 붙였다.
+
+---
+
 ## 다음 할 일
 
 1. **✅완료 — 동대문구 `no_anchor` 266건 해소**(설계서 **§5-8**)
