@@ -38,19 +38,28 @@ export function chunk(list, size = BATCH_LIMIT) {
  *   → 겹치면 **비운다**(찍어서 붙이면 남의 배송을 준다).
  */
 export function mapDriverPhones(drivers = [], roster = []) {
+  const byId = new Map();
   const byName = new Map();
   for (const r of roster || []) {
-    if (!r || r.active === false) continue;
+    if (!r) continue;
+    // 명부의 활성 판정: `status:'inactive'`(org_drivers) 또는 `active:false`
+    if (r.active === false || r.status === 'inactive') continue;
+    // ★비교키는 저장된 `phoneE164` 를 먼저 쓴다(정규화 결과가 이미 박혀 있다).
+    //   없으면 원문에서 뽑는다 — 백필 전 문서도 동작해야 한다.
+    const ph = toE164Mobile(r.phoneE164 || r.phone);
+    if (!ph) continue;
+    if (r.id) byId.set(String(r.id), ph);
     const nm = String(r.name || '').trim();
-    const ph = toE164Mobile(r.phone);
-    if (!nm || !ph) continue;
+    if (!nm) continue;
     if (byName.has(nm)) { byName.set(nm, null); continue; }  // 동명이인 → 판단 불가
     byName.set(nm, ph);
   }
   const out = {};
   for (const d of drivers || []) {
     if (!d || !d.id) continue;
-    out[d.id] = byName.get(String(d.name || '').trim()) || '';
+    // ★id 우선. 소속사 피커로 고른 기사는 화면 id 가 곧 명부 문서 id 라 정확히 맞는다.
+    //   직접 입력한 기사만 이름으로 폴백하고, 그때는 동명이인이면 비운다.
+    out[d.id] = byId.get(String(d.id)) || byName.get(String(d.name || '').trim()) || '';
   }
   return out;
 }

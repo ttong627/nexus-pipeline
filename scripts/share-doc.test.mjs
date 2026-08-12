@@ -86,6 +86,40 @@ test('비활성 기사는 명부 매칭에서 빠진다', () => {
   assert.equal(map.dx, '');
 });
 
+// ── ③-b org_drivers 실제 형태 (id 우선 매칭) ──────────────────────
+// 소속사 피커로 고른 기사는 화면 id 가 곧 org_drivers 문서 id 다 → 이름이 겹쳐도 정확히 맞는다.
+const ORG_ROSTER = [
+  { id: 'od1', name: '홍길동', phone: '010-1234-5678', phoneE164: '+821012345678', status: 'active' },
+  { id: 'od2', name: '홍길동', phone: '010-7777-6666', phoneE164: '+821077776666', status: 'active' },
+  { id: 'od3', name: '퇴사', phone: '010-1111-2222', phoneE164: '+821011112222', status: 'inactive' },
+];
+
+test('★id 로 맞추면 동명이인이어도 정확히 고른다', () => {
+  const map = mapDriverPhones([{ id: 'od1', name: '홍길동' }, { id: 'od2', name: '홍길동' }], ORG_ROSTER);
+  assert.equal(map.od1, '+821012345678');
+  assert.equal(map.od2, '+821077776666', '이름만 봤으면 둘 다 비었을 것이다');
+});
+
+test('id 가 없으면 이름으로 폴백하되, 동명이인이면 비운다', () => {
+  const map = mapDriverPhones([{ id: 'manual1', name: '홍길동' }], ORG_ROSTER);
+  assert.equal(map.manual1, '', '직접 입력 기사 + 동명이인이면 찍지 않는다');
+});
+
+test('org_drivers 의 status:inactive 도 비활성으로 본다', () => {
+  const map = mapDriverPhones([{ id: 'od3', name: '퇴사' }], ORG_ROSTER);
+  assert.equal(map.od3, '');
+});
+
+test('★저장된 phoneE164 를 우선 쓴다 — 백필된 정규화 결과가 정본이다', () => {
+  const roster = [{ id: 'od9', name: '김', phone: '엉망', phoneE164: '+821012341234', status: 'active' }];
+  assert.equal(mapDriverPhones([{ id: 'od9', name: '김' }], roster).od9, '+821012341234');
+});
+
+test('phoneE164 가 없어도 원문에서 뽑는다 — 백필 전 문서도 동작해야 한다', () => {
+  const roster = [{ id: 'od8', name: '박', phone: '010-5555-4444', status: 'active' }];
+  assert.equal(mapDriverPhones([{ id: 'od8', name: '박' }], roster).od8, '+821055554444');
+});
+
 // ── ④ 배치 ────────────────────────────────────────────────────────
 test('배치 상한으로 자른다 — 1,524건이면 4배치', () => {
   const parts = chunk(Array.from({ length: 1524 }, (_, i) => i));

@@ -14,6 +14,9 @@ import { getEffectiveLoad, parseAptDong } from '../engine/routeSequenceEngine.js
 import Vworld3DView from './Vworld3DView.jsx';
 import { annotateCarryover } from '../utils/prevMonthCarryover.js';
 import { newShareId } from '../utils/shareId.js';
+// 공유 문서 구조(메타/건별 분리) — 계획 Phase 1. 배열은 부분 권한을 줄 수 없다.
+import { buildShareMeta, buildShareRecords, chunk } from '../utils/shareDoc.js';
+import { getDriversCollection } from '../utils/company.js';
 
 const KAKAO_JS_KEY = import.meta.env.VITE_KAKAO_JS_KEY;
 const KAKAO_REST_KEY = import.meta.env.VITE_KAKAO_REST_KEY;
@@ -3222,36 +3225,65 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
     if (!assignedDrivers.length) { showToast('error', '배정된 기사가 없습니다.'); return; }
     setIsCreatingShare(true);
     try {
-      const shareRecords = records
-        .filter(r => r._driverId)
-        .map(r => ({
-          id: r.id || '',
-          driverId: r._driverId,
-          lat: r._lat || null,
-          lng: r._lng || null,
-          isApt: r._isApt || false,
-          배송순번: r.배송순번 ? parseInt(r.배송순번) : null,
-          이름: r.이름 || '',
-          주소: r.주소 || '',
-          행정동: r.행정동 || '',
-          포수: parseInt(r.포수 || r['수량(포수)']) || 1,
-          특이사항: r.특이사항 || '',
-          휴대폰: r.휴대폰 || '',
-        }));
+      // ★소속사 명부(org_drivers)를 읽어 기사별 인증 번호를 붙인다(계획 Phase 1).
+      //   명부를 못 읽어도 공유 생성 자체는 막지 않는다 — 대신 번호가 안 붙은 기사가
+      //   `unassigned` 로 드러나 담당자가 그 자리에서 알게 된다.
+      //   경로 해석은 `utils/company.js` 의 기존 규칙을 그대로 쓴다(소속사>기업>개인).
+      let roster = [];
+      try {
+        const uid = auth.currentUser?.uid || '';
+        const uSnap = uid ? await getDoc(doc(db, 'users', uid)) : null;
+        const u = uSnap?.exists() ? uSnap.data() : {};
+        const col = getDriversCollection({ orgId: u.orgId, companyCode: u.companyCode, uid });
+        if (col) {
+          const rosterSnap = await getDocs(col);
+          roster = rosterSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+        }
+      } catch { /* 명부를 못 읽어도 계속한다 — 아래에서 미배정으로 드러난다 */ }
+
+      const { docs: shareRecords, unassigned } = buildShareRecords(records, assignedDrivers, roster);
+      if (unassigned.length) {
+        // ★조용히 넘어가면 그 집은 배송을 못 받는다. 담당자가 지금 알아야 고칠 수 있다.
+        const names = [...new Set(unassigned.map(u => {
+          const d = assignedDrivers.find(x => x.id === u.driverId);
+          return d?.name || u.driverId;
+        }))];
+        if (!window.confirm(
+          `휴대폰이 등록되지 않은 기사가 있습니다: ${names.join(', ')}\n\n`
+          + `해당 배송건 ${unassigned.length}건은 그 기사가 지도에서 볼 수 없습니다.\n`
+          + '소속사 기사 관리에서 번호를 등록한 뒤 다시 만드는 것을 권합니다.\n\n그래도 생성할까요?')) {
+          setIsCreatingShare(false); return;
+        }
+      }
+
       // ★ID 를 아는 것이 곧 열람 권한이다(공유 문서는 인증 없이 읽힌다) → CSPRNG 로 만든다.
       //   근거·회귀는 `src/utils/shareId.js` 주석과 `scripts/share-id.test.mjs` 참조.
       const shareId = newShareId();
-      const expiresAtDate = new Date(Date.now() + SHARE_LINK_TTL_DAYS * 24 * 60 * 60 * 1000);
-      await setDoc(doc(db, 'route_shares', shareId), {
+      const meta = buildShareMeta({
         city: cloudCity || fileInfo?.city || '',
         monthId: cloudMonthId || '',
-        createdAt: serverTimestamp(),
-        expiresAt: Timestamp.fromDate(expiresAtDate),
+        drivers: assignedDrivers,
+        roster,
+        now: new Date(),
         ttlDays: SHARE_LINK_TTL_DAYS,
         createdBy: auth.currentUser?.email || '',
-        drivers: assignedDrivers.map(d => ({ id: d.id, name: d.name, color: d.color })),
-        records: shareRecords,
       });
+      const expiresAtDate = meta.expiresAt;
+      // 부모 = 메타만. ★배송건을 여기 넣으면 다시 통째로 새어나간다(계획 Phase 1).
+      await setDoc(doc(db, 'route_shares', shareId), {
+        ...meta,
+        createdAt: serverTimestamp(),
+        expiresAt: Timestamp.fromDate(expiresAtDate),
+        deadline: meta.deadline ? Timestamp.fromDate(meta.deadline) : null,
+      });
+      // 건별 = 서브컬렉션 배치 쓰기(1,524건이면 4배치). 규칙이 driverPhone 으로 거른다.
+      for (const part of chunk(shareRecords)) {
+        const batch = writeBatch(db);
+        for (const rec of part) {
+          batch.set(doc(db, 'route_shares', shareId, 'records', String(rec.id || `${Date.now()}_${Math.random()}`)), rec);
+        }
+        await batch.commit();
+      }
       const base = window.location.origin;
       setShareModal({
         shareId,
