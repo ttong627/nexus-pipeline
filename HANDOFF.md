@@ -48,12 +48,20 @@ Cloud Function **`geocodeAuto`**(3분마다) — 명단 `lat/lng` 를 채운다.
    덤: **세종시는 원본 시군구 칸이 빈 값**(2,647행)이라 세종 명단이 오면 전량 `no_anchor` 였다.
    - 코드: `src/coords/coordStore.js` · `coordQuery.js` / 회귀 `scripts/coord-store.test.mjs` +3
    - 검증: address-service 278/278 · 루트 281/281 · eslint 0 · Red-Green 확인
-   - **남은 것**: 배포 → `/v1/coords/resolve` 로 6개 주소 재확인 → 동대문 채움 실행
+   - ✅ **배포·검증 완료**(2026-08-12): 서비스 `00072-hwf`(롤백 `00071-qr2`) · Job 4개 재배포.
+     `/v1/coords/resolve` 실측 — 한천로58길 **6개 주소 전부 앵커 생성**(`112304115640#0#…`,
+     설계서가 예측한 그 코드) + 세종 한누리대로도 생성(`361102000002#0#2130-0`). **7/7**.
+     `no_anchor` → `unknown` 으로 바뀌었다 = 이제 채움 대상이 된다.
+   - **남은 것**: 명단 채움 실행 → 동대문 커버리지 재측정.
+
+     ⚠️ **`--apply` 는 로컬에서 안 된다** — 서버판은 in-process 로 DB 에 직접 붙는데
+     Cloud SQL 은 로컬에서 접근 불가다(`필수 환경변수가 없습니다: databaseUrl`).
+     `--list`·조회만 로컬 가능. **채움은 반드시 Job 으로**:
      ```
-     gcloud run deploy nexus-address-api --source services/address-service --region asia-northeast3 --project logis-op --account ttong627@gmail.com
-     node services/address-service/scripts/fill-list-coords.mjs --city "서울특별시 동대문구" --month 2026-07 --apply
+     gcloud run jobs execute nexus-address-listfill --region asia-northeast3 --project logis-op --account ttong627@gmail.com --wait
      ```
-     ⚠️ Job 4개가 같은 소스다 → `bash scripts/deploy-jobs.sh` 도 함께 (롤백 지점 `00071-qr2`)
+     `--all --apply` 라 16개 명단을 전부 돈다. 이미 채운 건은 `cached` 로 빠르게 지나가고
+     **앵커가 새로 생긴 건만** 채운다(동대문 266건 + 다른 지자체의 같은 유형 52종 중 해당분).
 
 2. **`parseAptDong` 오탐 — ✅다른 세션에서 완료됐으나 main 에 미머지**
    커밋 `d81786b`(브랜치 `claude/blissful-lichterman-57b571`, 08-11 23:36). 실측까지 끝냈다:
