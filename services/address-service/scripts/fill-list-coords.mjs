@@ -28,6 +28,7 @@
 //    node scripts/fill-list-coords.mjs --city "경기도 시흥시" --month 2026-07
 //    node scripts/fill-list-coords.mjs --city "경기도 시흥시" --month 2026-07 --apply
 //    node scripts/fill-list-coords.mjs --all --apply
+//    node scripts/fill-list-coords.mjs --all --miss-limit 0     (미보유 주소 전량 출력)
 // ══════════════════════════════════════════════════════════════════
 import { config } from '../src/config.js';
 import { closePool } from '../src/db.js';
@@ -46,6 +47,22 @@ const CITY = opt('city');
 const MONTH = opt('month');
 /** 한 번에 채울 건수. in-process 라 HTTP 300초 상한은 없지만, 진행 로그 간격으로 쓴다. */
 const CHUNK = Math.max(1, Number(opt('chunk', '100')));
+/**
+ * 미보유 주소를 몇 건까지 찍을 것인가(`--miss-limit`). 기본 5 = 종전과 같다.
+ *
+ * ★왜 옵션이 필요했나(2026-08-12): 미보유 56건을 고치려고 목록을 뽑는데, 상한이 5로
+ *   박혀 있어 **10건짜리 명단은 절반이 안 보였다**. 집계는 맞는데 조치할 목록이 안 나온다
+ *   — 숫자는 진행을 보여주지만 **고칠 대상은 주소로만 보인다**.
+ * ★기본값을 올리지 않은 이유: 정기 실행 로그가 명단마다 길어지면 요약이 묻힌다.
+ *   목록이 필요할 때만 `--miss-limit 0`(전량)으로 부른다.
+ */
+const MISS_LIMIT = (() => {
+  const raw = opt('miss-limit', '');
+  if (raw === '') return 5;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) return 5;
+  return n === 0 ? Infinity : Math.floor(n);   // 0 = 전량
+})();
 
 const num = (n) => Number(n || 0).toLocaleString('ko-KR');
 const out = (l, v) => console.log(`${String(l).padEnd(40)} ${v}`);
@@ -189,7 +206,7 @@ const runOne = async (db, city, month, quota) => {
       else if (q === 'outlier') stat.outlier += 1;
       else if (q === 'none') stat.none += 1;
       else stat.unknown += 1;
-      if (missSample.length < 5) missSample.push(`${t.roadAddress}  [${q || '?'}]`);
+      if (missSample.length < MISS_LIMIT) missSample.push(`${t.roadAddress}  [${q || '?'}]`);
     }
     if (t.dongNo) {
       stat.wantDong += 1;
@@ -204,6 +221,12 @@ const runOne = async (db, city, month, quota) => {
     + ` · outlier ${num(stat.outlier)} · unknown ${num(stat.unknown)})`);
   out('동 좌표 필요 / 확보', `${num(stat.wantDong)} / ${num(stat.gotDong)} (${pct(stat.gotDong, stat.wantDong)})`);
   for (const s of missSample) console.log(`    ${s}`);
+  // ★잘렸으면 잘렸다고 말한다 — 조용한 절단은 "전부 봤다"로 읽힌다.
+  //   실제로 2026-08-12 에 이 침묵 때문에 미보유 56건 중 10건을 놓칠 뻔했다.
+  if (stat.missing > missSample.length) {
+    console.log(`    … 나머지 ${num(stat.missing - missSample.length)}건은 표시 상한(--miss-limit ${
+      MISS_LIMIT === Infinity ? '전량' : MISS_LIMIT})에 잘림. 전량은 --miss-limit 0`);
+  }
   return stat;
 };
 
