@@ -34,7 +34,9 @@ Cloud Function **`geocodeAuto`**(3분마다) — 명단 `lat/lng` 를 채운다.
 | `nexus-address-fill` | 진단·격리·백필(=`--args` 갈아 끼우는 자리) | 수동 | 1Gi / 1800s |
 
 ⚠️ **Job 4개가 같은 소스를 쓴다.** 코드를 고치고 하나만 재배포하면 나머지는 옛 이미지로
-**에러 없이 다른 동작**을 한다 → 배포는 `bash scripts/deploy-jobs.sh` 로 한 번에.
+**에러 없이 다른 동작**을 한다 → 배포는 한 번에:
+`cd services/address-service && bash scripts/deploy-jobs.sh`
+⚠️경로 주의 — 스크립트는 **`services/address-service/scripts/`** 에 있다(리포 루트 아님).
 
 ---
 
@@ -257,7 +259,32 @@ curl -s https://logis-op.web.app/assets/index-XXXX.js | grep -oE '"assets/[A-Za-
    - Red-Green 실측: outlier 가드 제거 → 2건 FAIL, 복원 → 8/8 PASS.
    - ✅ **배포 완료**(2026-08-12 23:50 · Function·서비스·Hosting). **Job 4개만 남았다**(04:23 관찰 후).
 
-4. (관찰) C-6 **2026-08-12 04:23 실행 정상**(`nexus-address-sync-qw887`, exit 0).
+4. ✅ **관찰 완료 — 2026-08-13 04:23 실행**(`nexus-address-sync-922r2`, exit 0). **판정: 정상, 막힘 없음.**
+
+   전날(`qw887`)과 나란히 놓고 읽었다:
+
+   | 항목 | 08-12 04:23 | **08-13 04:23** |
+   |---|---|---|
+   | 좌표 채움 | 대상 0건 | **대상 0건** (전부 확보됨) |
+   | 이상치 | 검사 37,028 · **후보 4 → 표시 4** | 검사 37,034 · **후보 0 → 표시 0 · 해제후보 0** |
+   | `★다음으로 이월` | 없음 | **없음**(=막힌 것 없음) |
+
+   - ⛔**"후보 0" 을 "이상치가 사라졌다"로 읽으면 안 된다.** `coordOutlier.js:99`
+     `if (row.quality === 'outlier') continue;` — **이미 표시된 건은 후보에서 빠진다**(중복표시 가드).
+     즉 후보 0 = **새로 생긴 이상치가 없다**는 뜻이다.
+     운영 API 직접 확인: `/v1/coords/status` → **`outlier: 4`**. 기존 4건 표시는 그대로다.
+   - 전날 후보 목록에 있던 시흥 3건(봉우재로 36·37, 매화로 53)이 안 보이는 것도 같은 이유다.
+     **고쳐져서가 아니라 이미 표시돼서**다. 주소 자체는 여전히 깨져 있다(위 5·6번).
+   - 저장소 증가 실측: `total` 37,064 → **37,070** · `with_entrance` 37,028 → **37,034**(+6) ·
+     `with_center` 37,040(동일) · `no_point` 24(동일).
+   - ⚠️**이 실행은 `probedDong` TDZ 수정을 검증하지 못했다** — 채움 **대상이 0건이라 그 경로를
+     아예 안 탔다.** 「정기 실행이 정상이니 TDZ 도 괜찮다」는 성립하지 않는다.
+     TDZ 판정은 **이미 08-12 `nexus-address-listfill-kgfft`(exit 0 · 출입구 경로 실제 통과 · 6/6)**
+     에서 났다. 이 실행은 **막힘이 없다는 것만** 증명한다.
+
+<details><summary>관찰 전 기록(원문 보존) — ⛔지금 상태 아님</summary>
+
+   (관찰) C-6 **2026-08-12 04:23 실행 정상**(`nexus-address-sync-qw887`, exit 0).
    채움 대상 0건 · 이상치 4건 표시 유지. **단 이 "0건"은 저장소에 행이 있는 건만 센 값이다**
    — 1번의 `no_anchor` 는 여기 안 잡힌다(§5-3-A 모집단 함정). 배포 후 다시 볼 것.
    - ✅ **시각 확정**(2026-08-12 21:00 KST 실측): 그 실행은 `2026-08-11 19:23 UTC` = **08-12 04:23 KST**,
@@ -267,6 +294,8 @@ curl -s https://logis-op.web.app/assets/index-XXXX.js | grep -oE '"assets/[A-Za-
      대상을 잡는지(1번 앵커 수정으로 `no_anchor` → `unknown` 이 됐으니 이제 대상이어야 한다).
    - ⚠️ **그 관찰 전에는 Job 을 재배포하지 말 것** — 4개 Job 이 같은 이미지라 무엇을 관찰 중인지가
      바뀐다. 1번의 `--miss-limit` 옵션화도 그래서 미뤘다.
+
+</details>
 
 5. ★★**명단에 최대 201km 떨어진 좌표가 저장되고 있었다 — 원인 규명·수정**(2026-08-12).
    `outlier` 를 파고들다 나온 **실제 배송 영향** 결함이다.
@@ -371,8 +400,14 @@ curl -s https://logis-op.web.app/assets/index-XXXX.js | grep -oE '"assets/[A-Za-
   **`(?![HANGUL])` 가드까지 그대로** 들어갔다. 이전 번들엔 이 정규식이 없다.
 - `db-status` 200. DS-18(`호` 필수)도 새 번들에 그대로 유지된다(퇴행 없음).
 
-⚠️ **Job 4개는 아직 옛 이미지다** — 08-13 04:23 관찰이 끝난 뒤 `bash scripts/deploy-jobs.sh` 로 올린다.
-   Job 쪽 미반영분 = 죽은 코드 삭제(동작 불변) · `fill-list-coords --miss-limit`(보고용) · A-23.
+⚠️ **Job 4개는 아직 옛 이미지다.** ✅**게이트였던 04:23 관찰은 끝났다**(위 4번) → **형 승인만 남았다.**
+   Job 쪽 미반영분 = 죽은 코드 삭제(동작 불변) · `fill-list-coords --miss-limit`(보고용) · **A-23 파서**.
+   A-23 은 서비스·클라에는 이미 배포돼 실측 검증까지 끝났다(같은 SSOT 함수).
+```
+cd services/address-service && bash scripts/deploy-jobs.sh
+```
+   ⛔스크립트 머리에 **"형 승인 없이 돌리지 말 것"** 이 박혀 있다. 급하지 않다 —
+   `sync` 는 내일 04:23, `listfill` 은 다음 주 월 05:00 이 다음 실행이다.
 
 <details><summary>배포 전 기록(원문 보존) — ⛔지금 상태 아님</summary>
 
