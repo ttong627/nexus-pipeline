@@ -351,6 +351,7 @@ const apiPost = async (path, body) => {
  *   내비 링크는 목적이 달라 규칙도 다르다(입구→중심, 동 좌표 금지 — 설계서 F2).
  */
 const { pickStoreCoord } = require('./storeCoordPick');
+const { buildGeocodeQuery } = require('./geocodeQuery');
 
 const storeCoordsFor = async (docs, sigungu) => {
   const found = new Map();
@@ -385,9 +386,22 @@ const storeCoordsFor = async (docs, sigungu) => {
   return found;
 };
 
+/**
+ * ★질의에는 **반드시 지자체를 붙인다**(2026-08-12 · `./geocodeQuery.js` 참조).
+ *   정제가 실패해 도로명 조각(`매화로 53`)만 남으면 전국에서 아무 데나 맞는다 —
+ *   실측으로 시흥 명단에 성남·서울 좌표가 최대 201km 떨어져 저장돼 있었다.
+ *   지자체를 붙이면 그 시에 없는 도로는 NOT_FOUND 가 되어 **좌표 없음**으로 남는다.
+ *   **틀린 좌표보다 없는 좌표가 낫다** — 없으면 담당자 확인으로 가지만, 틀리면 그대로 배송으로 나간다.
+ */
 const apiGeocode = async (r, sido, sigungu) => {
-  const road = r.standardRoadAddress || extractRoadAddress(r.주소);
-  if (!road) return null;
+  const rawRoad = r.standardRoadAddress || extractRoadAddress(r.주소);
+  if (!rawRoad) return null;
+  const road = buildGeocodeQuery(rawRoad, sido, sigungu);
+  if (!road) {
+    // ★0건일 때도 사유를 말로 남긴다 — "안 돌았다"와 "돌았는데 없다"가 구분돼야 한다.
+    console.warn(`[geocode] 지자체를 몰라 조회를 건너뜀: ${String(rawRoad).slice(0, 40)}`);
+    return null;
+  }
   const complexName = r.건물명 || r.buildingName || '';
   const dongNo = parseDongNo(r.detailAddress);
   // 아파트 + 동번호 → 동별 정밀좌표
