@@ -97,7 +97,11 @@ Cloud Function **`geocodeAuto`**(3분마다) — 명단 `lat/lng` 를 채운다.
    가려져 있던 진짜 동을 회복**(`중앙로 265-36, 106-1305호 우방아파트` → 265동 ❌ → 106동 ✅).
    `호` 없는 정상 동호 표기는 **0건**이라 퇴행 없음. `RouteMapModal` 복제본도 SSOT import 로 제거.
    회귀 `scripts/apt-dong-parse.test.mjs` 19 PASS · 실측 도구 `scripts/measure-dong-parse.mjs`(읽기 전용).
-   ⚠️ **아직 배포 안 됨** — 순번은 클라(Firebase Hosting)라 `npm run build && firebase deploy` 필요.
+   - ✅ **배포 완료 — 실측 확인**(2026-08-12 21:10 KST). 앞선 "아직 배포 안 됨" 기록은 낡은 것이었다.
+     Firebase Hosting `live` 최종 릴리스 **2026-08-12 20:47:28**(머지 `801f0de` 20:25 이후).
+     **라이브 번들을 직접 열어 확인**했다 — `logis-op.web.app/assets/index-fiTcEt_a.js` 안에
+     `(\d{3,4})\s*[-]\s*\d{1,4}\s*호/` 가 있고 구버전의 `호?`(optional)는 **번들 전체에 0건**이다.
+     ★"배포했다"는 릴리스 시각이 아니라 **번들 내용**으로 확인한다(시각만으로는 무엇이 담겼는지 모른다).
 
 3. **내비 링크는 이미 입구를 쓴다 — 확인 완료.** `/v1/delivery/resolve` → `deliveryBrief.pickCoordinate`
    가 `juso_entrance`(측량) 를 1순위로 고르고 `navigationFromBrief` 가 그 좌표로 링크를 만든다.
