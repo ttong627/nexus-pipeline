@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { db } from '../config/firebase.js';
-import { doc, collection, onSnapshot, updateDoc, deleteField } from 'firebase/firestore';
+import { db, auth } from '../config/firebase.js';
+import { doc, collection, addDoc, onSnapshot, updateDoc, deleteField } from 'firebase/firestore';
 import { MapPin, List, Map as MapIcon, RefreshCw, Building2, Phone, ChevronUp, ChevronDown, Navigation, Crosshair, Star, X, AlertCircle, Share2, CheckCircle2, ArrowUpDown } from 'lucide-react';
 import { verifyDeliveryPositionApi } from '../engine/addressEngine.js';
 import { haversineKm } from '../engine/coordValidator.js';
@@ -230,6 +230,30 @@ export default function ShareRouteView({ shareId, driverId }) {
     );
     return () => unsub();
   }, [shareId]);
+
+  // ── 열람 기록 (계획 Phase 5) ────────────────────────────────────────────
+  //  ★개정 개인정보보호법(2026-09-11)의 72시간 통지는 **'인지'가 전제**다.
+  //    누가 언제 어느 공유를 몇 건 열었는지 안 남기면 유출을 알아챌 수단이 없다.
+  //  ★한 번 열 때 한 줄만 남긴다(건별로 남기면 로그가 명단을 복제하는 꼴이 된다).
+  //  ★기록 실패가 배송을 막지 않는다 — 조용히 넘기되 콘솔엔 남긴다.
+  const loggedRef = useRef(false);
+  useEffect(() => {
+    if (loggedRef.current) return;
+    const n = allRecords.length;
+    if (!n) return;                       // 아직 안 왔으면 나중에
+    loggedRef.current = true;
+    addDoc(collection(db, 'share_access_logs'), {
+      at: new Date().toISOString(),
+      shareId,
+      count: n,
+      driverId: driver?.id || '',
+      driverName: driver?.name || '',
+      // 인증이 붙기 전(Phase 2 이전)에는 비어 있다 — 그래도 '몇 건 열렸는지'는 남는다.
+      phone: auth?.currentUser?.phoneNumber || '',
+      uid: auth?.currentUser?.uid || '',
+      source: usingSub ? 'subcollection' : 'legacy_array',
+    }).catch((e) => { console.warn('[share_access_logs] 기록 실패(무시하고 계속):', e?.message); });
+  }, [allRecords.length, shareId, driver?.id, driver?.name, usingSub]);
 
   // ── Kakao Maps SDK ──────────────────────────────────────────────────
   useEffect(() => {

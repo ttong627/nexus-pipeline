@@ -257,6 +257,23 @@ service cloud.firestore {
                  && resource.data.phone == request.auth.token.phone_number;
     }
 
+    // ── 공유 열람 기록 (Phase 5 · 2026-08-13) ───────────────────────────────
+    //  ★개정 개인정보보호법(2026-09-11)의 **72시간 유출 통지는 '인지'가 전제**다.
+    //    누가 언제 어느 공유를 몇 건 열었는지 안 남기면 유출을 알아챌 수단이 없고,
+    //    알아채도 "언제 인지했는지"를 증명할 수 없다.
+    //  ★append-only — 수정·삭제 금지(yyplus `auditLogs` 방식).
+    //    지울 수 있는 기록은 사고 때 제일 먼저 지워진다.
+    match /share_access_logs/{logId} {
+      //  기록은 **막지 않는다** — 남기는 것이 목적이다. 다만 형태는 검사해 잡동사니를 거른다.
+      //  (⚠️`isShareWithinTTL()` 은 `resource.data` 를 보는데 여기엔 그 문서가 없다 → 못 쓴다)
+      allow create: if request.resource.data.keys().hasAll(['at', 'shareId', 'count'])
+                    && request.resource.data.count is number
+                    && request.resource.data.shareId is string;
+      //  읽기는 관리자만 — 누가 무엇을 봤는지가 담긴다(이것도 개인정보다).
+      allow read: if isAdmin() || isAdminEmail();
+      allow update, delete: if false;
+    }
+
     match /route_shares/{shareId} {
       allow read: if isShareWithinTTL();
 
