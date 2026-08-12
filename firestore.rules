@@ -281,6 +281,38 @@ service cloud.firestore {
 
       // 삭제는 생성자·관리자만
       allow delete: if isRouteOwner() || isAdmin();
+
+      // ── 건별 배송 문서 (Phase 1 · 2026-08-13) ──────────────────────────
+      //  ★배열이던 records 를 여기로 쪼갰다. **배열은 부분 권한을 줄 수 없다** —
+      //    읽히면 1,524건이 통째로 나간다. 건별 문서라야 "자기 것만"이 성립한다(형 확정 B).
+      //  ★화면에서 거르는 방식은 우회된다(개발자도구로 원본을 그대로 본다).
+      //    여기서 막아야 **DB 차원에서** 남의 배송을 못 읽는다.
+      match /records/{recId} {
+        // 기사: 휴대폰 인증 + 자기 배송건만. 생성자·관리자는 전체.
+        allow read: if isRouteOwner() || isAdmin() ||
+          (
+            isShareWithinTTL() &&
+            isAuthenticated() &&
+            request.auth.token.phone_number != null &&
+            resource.data.driverPhone == request.auth.token.phone_number
+          );
+
+        // 쓰기(명단 배치)는 생성자·관리자만.
+        allow create, delete: if isRouteOwner() || isAdmin();
+
+        // 기사는 **현장 기록만** 고친다(수령확인·순번 적용). 주소·이름·소유기사는 못 건드린다.
+        //  ⚠️driverPhone 을 고칠 수 있으면 자기 번호로 바꿔 남의 건을 가져갈 수 있다 → 반드시 제외.
+        allow update: if isRouteOwner() || isAdmin() ||
+          (
+            isShareWithinTTL() &&
+            isAuthenticated() &&
+            request.auth.token.phone_number != null &&
+            resource.data.driverPhone == request.auth.token.phone_number &&
+            request.resource.data.driverPhone == resource.data.driverPhone &&
+            request.resource.data.diff(resource.data).affectedKeys()
+              .hasOnly(['received', 'receivedAt', 'completion', 'held', 'heldReason', '배송순번'])
+          );
+      }
     }
 
     // ── 배송 세션: 기사구성·구역배정 영구저장 (승인 사용자) ─────────────────────

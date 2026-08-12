@@ -1,0 +1,124 @@
+// ══════════════════════════════════════════════════════════════════
+//  공유 문서 구조 — 메타(부모) + 건별(서브컬렉션)
+//  회귀: scripts/share-doc.test.mjs
+//
+//  ★왜 쪼개는가 (계획 prompt_plan.md Phase 1 · 형 확정 B="자기 것만")
+//    지금은 문서 하나에 `records[1524]` 가 **배열**로 들어 있다.
+//    **배열은 부분 권한을 줄 수 없다** — 읽을 수 있으면 전부 읽힌다.
+//    그래서 건별 문서로 나누고 보안규칙이 `driverPhone` 으로 거른다.
+//    화면에서 거르는 방식은 우회된다(개발자도구로 원본을 그대로 본다).
+//
+//      route_shares/{shareId}                     ← 메타만
+//      route_shares/{shareId}/records/{recordId}  ← 건별 · driverPhone 으로 소유 표시
+//
+//  ★번호 없는 기사는 **조용히 빠지면 안 된다**.
+//    그 기사의 배송건은 누구에게도 안 보이고, 그러면 그 집은 배송을 못 받는다.
+//    담당자가 생성 시점에 알아야 고칠 수 있다 → `unassigned` 로 돌려준다.
+// ══════════════════════════════════════════════════════════════════
+import { toE164Mobile } from './phone.js';
+import { activePhones } from './driverRoster.js';
+
+/** Firestore 배치 상한(500)보다 넉넉히 아래로 — 부모 문서 갱신분까지 한 배치에 들어간다. */
+export const BATCH_LIMIT = 450;
+
+/** 배열을 n개씩 자른다(배치 쓰기용). */
+export function chunk(list, size = BATCH_LIMIT) {
+  const arr = Array.isArray(list) ? list : [];
+  const n = Math.max(1, Number(size) || BATCH_LIMIT);
+  const out = [];
+  for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n));
+  return out;
+}
+
+/**
+ * 기사 id → 등록번호(E.164) 표. 명부에 **이름으로** 맞춘다.
+ *
+ * ⚠️화면의 기사는 세션 임시 객체(`{id:'d1', name:'기사1'}`)라 명부 id 와 다르다.
+ *   지금 이어 붙일 수 있는 유일한 키가 **이름**이다. 그래서 이름이 겹치면 못 고른다
+ *   → 겹치면 **비운다**(찍어서 붙이면 남의 배송을 준다).
+ */
+export function mapDriverPhones(drivers = [], roster = []) {
+  const byName = new Map();
+  for (const r of roster || []) {
+    if (!r || r.active === false) continue;
+    const nm = String(r.name || '').trim();
+    const ph = toE164Mobile(r.phone);
+    if (!nm || !ph) continue;
+    if (byName.has(nm)) { byName.set(nm, null); continue; }  // 동명이인 → 판단 불가
+    byName.set(nm, ph);
+  }
+  const out = {};
+  for (const d of drivers || []) {
+    if (!d || !d.id) continue;
+    out[d.id] = byName.get(String(d.name || '').trim()) || '';
+  }
+  return out;
+}
+
+/**
+ * 배송건 → 서브컬렉션에 넣을 문서들. 번호를 못 찾은 건은 **따로 돌려준다**.
+ *
+ * @returns {{docs: Array, unassigned: Array}}
+ */
+export function buildShareRecords(records = [], drivers = [], roster = []) {
+  const phoneOf = mapDriverPhones(drivers, roster);
+  const docs = [];
+  const unassigned = [];
+  for (const r of records || []) {
+    if (!r || !r._driverId) continue;
+    const phone = phoneOf[r._driverId] || '';
+    const doc = {
+      id: r.id || '',
+      driverId: r._driverId,
+      driverPhone: phone,                 // ★규칙이 이 값으로 거른다
+      lat: r._lat ?? null,
+      lng: r._lng ?? null,
+      isApt: r._isApt || false,
+      배송순번: r.배송순번 ? parseInt(r.배송순번, 10) : null,
+      이름: r.이름 || '',
+      주소: r.주소 || '',
+      행정동: r.행정동 || '',
+      포수: parseInt(r.포수 ?? r['수량(포수)'], 10) || 1,
+      특이사항: r.특이사항 || '',
+      휴대폰: r.휴대폰 || '',
+    };
+    docs.push(doc);
+    if (!phone) unassigned.push({ id: doc.id, 이름: doc.이름, driverId: doc.driverId });
+  }
+  return { docs, unassigned };
+}
+
+/**
+ * 부모(메타) 문서. **여기에 배송건을 넣지 않는다** — 넣는 순간 다시 통째로 새어나간다.
+ *
+ * @param {object} p
+ * @param {Date} p.now 기준 시각(주입 — 테스트 결정성)
+ * @param {Date} p.deadline 담당자가 정한 마감(이 날짜를 **넘겨 갱신되지 않는다**, 형 확정 C)
+ * @param {number} p.ttlDays 접속 시 갱신 폭(기본 7)
+ */
+export function buildShareMeta({ city = '', monthId = '', drivers = [], roster = [],
+  now = new Date(), deadline = null, ttlDays = 7, createdBy = '' } = {}) {
+  const base = new Date(now.getTime() + Math.max(1, ttlDays) * 24 * 60 * 60 * 1000);
+  // 만료는 마감을 넘지 않는다. 마감이 이미 지났으면 마감이 곧 만료다.
+  const expires = deadline && deadline < base ? new Date(deadline) : base;
+  return {
+    city, monthId, createdBy,
+    drivers: (drivers || []).map((d) => ({ id: d.id, name: d.name, color: d.color })),
+    driverPhones: activePhones(roster),   // ★부모 읽기 권한 판정용(정규화·중복제거·활성만)
+    deadline: deadline ? new Date(deadline) : null,
+    expiresAt: expires,
+    ttlDays: Math.max(1, ttlDays),
+  };
+}
+
+/**
+ * 접속 시 갱신값 — **마감일을 넘지 않는다**(형 확정 C).
+ * ⚠️이 계산은 서버(Function)에서 돈다. 클라가 `expiresAt` 을 직접 쓰면 기사가
+ *   자기 만료일을 늘릴 수 있고, 그 자체가 구멍이다.
+ */
+export function renewedExpiry({ now = new Date(), deadline = null, ttlDays = 7 } = {}) {
+  const want = new Date(now.getTime() + Math.max(1, ttlDays) * 24 * 60 * 60 * 1000);
+  if (!deadline) return want;
+  const dl = new Date(deadline);
+  return want > dl ? dl : want;
+}
