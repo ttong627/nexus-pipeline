@@ -63,12 +63,13 @@ Cloud Function **`geocodeAuto`**(3분마다) — 명단 `lat/lng` 를 채운다.
      `--all --apply` 라 16개 명단을 전부 돈다. 이미 채운 건은 `cached` 로 빠르게 지나가고
      **앵커가 새로 생긴 건만** 채운다(동대문 266건 + 다른 지자체의 같은 유형 52종 중 해당분).
 
-2. **`parseAptDong` 오탐 — ✅다른 세션에서 완료됐으나 main 에 미머지**
-   커밋 `d81786b`(브랜치 `claude/blissful-lichterman-57b571`, 08-11 23:36). 실측까지 끝냈다:
-   전 명단 98,020건 전수 → `호` 없는 정상 동호 표기 **0건**(퇴행 없음), 오탐 4,357 제거,
-   가려져 있던 진짜 동 578건 회복. RouteMapModal 복제본도 SSOT import 로 교체.
-   - **남은 것**: main 으로 머지(`git merge claude/blissful-lichterman-57b571`).
-     충돌은 **`HANDOFF.md`·`좌표관리_설계.md` 두 문서뿐**(코드는 자동 병합 확인 · merge-tree).
+2. ~~`parseAptDong` 오탐~~ ✅ **완료·머지됨**(2026-08-12, 별도 워크트리 → main).
+   전 명단 **98,020건 전수 실측** 후 `호` 필수화(규칙 **DS-18** · 근거 §5-3-B).
+   오탐 4,357건 제거(도로 부번 4,229 · 전화번호 117 · 괄호 지번 11) + **578건은 오탐에
+   가려져 있던 진짜 동을 회복**(`중앙로 265-36, 106-1305호 우방아파트` → 265동 ❌ → 106동 ✅).
+   `호` 없는 정상 동호 표기는 **0건**이라 퇴행 없음. `RouteMapModal` 복제본도 SSOT import 로 제거.
+   회귀 `scripts/apt-dong-parse.test.mjs` 19 PASS · 실측 도구 `scripts/measure-dong-parse.mjs`(읽기 전용).
+   ⚠️ **아직 배포 안 됨** — 순번은 클라(Firebase Hosting)라 `npm run build && firebase deploy` 필요.
 
 3. **내비 링크는 이미 입구를 쓴다 — 확인 완료.** `/v1/delivery/resolve` → `deliveryBrief.pickCoordinate`
    가 `juso_entrance`(측량) 를 1순위로 고르고 `navigationFromBrief` 가 그 좌표로 링크를 만든다.
