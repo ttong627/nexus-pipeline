@@ -13,11 +13,22 @@ import { splitByDay, splitBySequence, summarizeDaySplit } from '../engine/delive
 import { getEffectiveLoad, parseAptDong } from '../engine/routeSequenceEngine.js';
 import Vworld3DView from './Vworld3DView.jsx';
 import { annotateCarryover } from '../utils/prevMonthCarryover.js';
+import { newShareId } from '../utils/shareId.js';
 
 const KAKAO_JS_KEY = import.meta.env.VITE_KAKAO_JS_KEY;
 const KAKAO_REST_KEY = import.meta.env.VITE_KAKAO_REST_KEY;
 const ADMIN_EMAILS = ['ttong627@gmail.com', 'admin@logis-op.com', 'jsh6270@gmail.com'];
-const SHARE_LINK_TTL_DAYS = 45;
+/**
+ * 기사 공유링크 유효기간(일).
+ *
+ * ★45일 → 7일 (2026-08-13, 개인정보 점검)
+ *   공유 문서에는 대상자 **이름·주소·휴대폰**이 담기고, 보안규칙상 **인증 없이** 읽힌다
+ *   (`firestore.rules` `route_shares`: `allow read: if isShareWithinTTL()`).
+ *   즉 링크가 새면(카톡 전달·기사 폰 분실·브라우저 히스토리) 그 기간 내내 열린다.
+ *   배송은 월 단위로 끝나므로 45일은 노출 창만 길게 잡은 값이었다. 7일이면 배송 주기를 덮는다.
+ *   ⚠️이 값을 다시 늘리려면 그만큼 노출 창이 길어진다는 뜻이다.
+ */
+const SHARE_LINK_TTL_DAYS = 7;
 
 const DRIVER_COLORS = [
   '#3b82f6', '#10b981', '#f59e0b', '#ef4444',
@@ -3227,7 +3238,9 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
           특이사항: r.특이사항 || '',
           휴대폰: r.휴대폰 || '',
         }));
-      const shareId = `sr_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+      // ★ID 를 아는 것이 곧 열람 권한이다(공유 문서는 인증 없이 읽힌다) → CSPRNG 로 만든다.
+      //   근거·회귀는 `src/utils/shareId.js` 주석과 `scripts/share-id.test.mjs` 참조.
+      const shareId = newShareId();
       const expiresAtDate = new Date(Date.now() + SHARE_LINK_TTL_DAYS * 24 * 60 * 60 * 1000);
       await setDoc(doc(db, 'route_shares', shareId), {
         city: cloudCity || fileInfo?.city || '',
