@@ -1,3 +1,122 @@
+# 구현 계획 — nexus 배송지도 접근통제 재설계 (2026-08-13 형 확정)
+
+> `/plan` 산출물. **형 확정**: A=Firebase Phone Auth · B=자기 것만 · C=마감일까지만 갱신
+> 배경: 2026-09-11 시행 개정 개인정보보호법(72시간 유출통지·대표자 최종책임) 대응 겸함.
+
+## 왜 하는가 — 지금 상태
+
+`route_shares` 는 **인증 없이 읽힌다**(`allow read: if isShareWithinTTL()`).
+문서 하나에 **이름·주소·휴대폰·특이사항**이 통째로 담기고, 링크를 아는 사람은 누구나 연다.
+
+- 2026-08-13 실측: 살아있는 링크 1건(동대문 1,524건, **2026-08-18 마감**). 나머지는 전부 마감 처리함.
+- TTL 은 45일 → **7일**로 줄였고, `shareId` 는 `crypto.randomUUID()` 로 바꿨다(추측 차단).
+- 그래도 **링크를 아는 사람은 여전히 그냥 열 수 있다.** 그걸 이 계획이 닫는다.
+
+## 착수 전에 드러난 전제 결함 2가지 (실측)
+
+1. **등록된 기사 명부가 없다.** `drivers` 컬렉션 **0건**. 기사는 화면 세션 안의 임시 객체
+   (`{ id:'d1', name:'기사1', color, startAddr, capacity, deliveryDate }`)이고 **휴대폰 필드가 아예 없다.**
+   → "등록된 기사의 핸드폰 인증"은 **명부부터 만들어야** 성립한다(Phase 0).
+2. **동대문 링크가 2026-08-18 까지 살아 있다.** 그 전에 전환을 배포하면 **현장 기사가 못 들어간다.**
+   → 배포는 8/18 이후. 그 전에 해야 하면 구·신 병행(이행기간)을 따로 설계한다.
+
+## 형 확정 사항
+
+| | 확정 | 뜻 |
+|---|---|---|
+| A 인증 수단 | **Firebase Phone Auth(SMS)** | 건당 과금 · Console 활성화 · reCAPTCHA 설정 필요 |
+| B 기사가 보는 범위 | **자기 것만** | 문서 구조를 바꾼다(아래 Phase 1) |
+| C 갱신 상한 | **담당자가 지정한 마감일까지만** | 접속해도 그 날짜를 넘겨 연장되지 않는다 |
+
+## 데이터 구조 변경 (B 확정에 따른 핵심)
+
+지금은 문서 하나(`route_shares/{shareId}`)에 `records[1524]` 가 통째로 들어 있다.
+**배열은 부분 권한을 줄 수 없다** — 읽으면 전부 읽힌다. 그래서 나눈다.
+
+```
+route_shares/{shareId}                     ← 메타만: city·monthId·expiresAt·deadline·drivers[]·driverPhones[]
+route_shares/{shareId}/records/{recordId}  ← 건별. driverPhone 필드로 소유 기사 표시
+```
+
+규칙(핵심):
+```
+match /route_shares/{shareId} {
+  allow read: if isShareWithinTTL()
+              && request.auth != null
+              && request.auth.token.phone_number in resource.data.driverPhones;
+}
+match /route_shares/{shareId}/records/{recId} {
+  allow read: if isShareWithinTTL()
+              && request.auth != null
+              && resource.data.driverPhone == request.auth.token.phone_number;
+}
+```
+★기사는 **DB 차원에서** 남의 건을 못 읽는다. 화면에서 거르는 게 아니다 — 화면 필터는 우회된다.
+
+## 단계
+
+### Phase 0 — 기사 명부 (선행 필수)
+- `drivers/{driverId}`: `{ name, phone, active, createdBy, createdAt, updatedAt }`
+- **휴대폰은 E.164 정규화 저장**(`+8210…`). Phone Auth 의 `token.phone_number` 와 대조할 키라
+  표기가 흔들리면 영영 안 맞는다. 정규화 유틸 + 회귀 필수.
+- 담당자 관리 화면(추가·수정·비활성). 기존 화면 임시 기사에 `driverId` 연결.
+- 규칙: `drivers` 는 인증 + 지자체 권한자만. 기사 본인은 자기 문서만 읽기.
+
+### Phase 1 — 공유 문서 구조 변경 + 규칙 전환
+- 생성 시 records 를 **서브컬렉션에 배치 쓰기**(500건/배치 → 1,524건이면 4배치)
+- 부모 문서에 `driverPhones[]`(정규화) · `deadline`(담당자 지정 마감) 심기
+- `firestore.rules` 위 규칙으로 교체 — **여기서 무인증 접근이 닫힌다**
+
+### Phase 2 — 기사 휴대폰 인증 화면 (`ShareRouteView.jsx`)
+- 번호 입력 → SMS 코드 → `signInWithPhoneNumber` → 서브컬렉션 조회
+- ⚠️`ShareRouteView` 는 지금 `shareData.records` 배열을 쓴다 → 서브컬렉션 구독으로 재작성
+- 이미 있는 완료버튼·GPS·순번 기능은 **동작 보존**(퇴행 금지)
+
+### Phase 3 — 담당자 사용일정 지정 (`RouteMapModal.jsx`)
+- 공유 생성 시 마감일 선택(기본 오늘+7일, 상한 30일)
+- `deadline` = 담당자가 정한 진짜 상한. `expiresAt` 은 그 안에서 움직인다.
+
+### Phase 4 — 접속 시 갱신 (Cloud Function)
+- ⛔**클라가 `expiresAt` 을 직접 쓰게 하지 않는다.** 기사가 자기 만료일을 늘릴 수 있으면 그게 구멍이다.
+- Function `touchShare(shareId)`: 인증 확인 → `expiresAt = min(now + 7일, deadline)` 으로만 갱신
+- 규칙에서 `expiresAt` 클라 쓰기는 **금지**(Function 은 Admin SDK 라 규칙 우회)
+
+### Phase 5 — 열람 기록 + 실시간 감시
+- `share_access_logs`: 누가(전화)·언제·어느 공유·몇 건
+- 규칙: create 만 허용, update·delete 금지(**append-only** — yyplus `auditLogs` 방식)
+- 대량 열람·비정상 시간대 → 텔레그램 알림(팩토리에 넣은 규칙과 동일 계열)
+
+## ★현장 폴백 (이게 없으면 배송이 선다)
+
+**기사가 현장에서 SMS 를 못 받으면 배송이 멈춘다.** 지하주차장·통신 음영·요금 미납·폰 교체 —
+전부 실제로 일어난다. **보안을 조이다 배송을 세우면 그게 더 큰 사고다.**
+
+→ 담당자가 관리 화면에서 **임시 접근 승인**(해당 기사 1회·유효 몇 시간·**기록 남김**).
+   사람이 판단하고 흔적이 남는 방식. Phase 2 와 함께 만든다(나중으로 미루지 않는다).
+
+## 리스크
+
+| 리스크 | 대응 |
+|---|---|
+| 전환 배포로 현장 기사 접근 불가 | **8/18 이후 배포**. 그 전이면 구·신 병행 |
+| Phone Auth 미설정(Console·reCAPTCHA) | Phase 2 착수 전 형이 Console 에서 활성화 |
+| SMS 미수신 → 배송 중단 | 위 현장 폴백(필수) |
+| 폰 교체·번호 변경 | 담당자가 명부에서 수정 |
+| 서브컬렉션 전환 중 기존 화면 퇴행 | 완료버튼·GPS·순번 회귀 테스트 먼저 |
+| SMS 비용 | 기사 수 × 접속 횟수. 갱신이 잦으면 비용↑ → 세션 유지 기간 조정 |
+
+## 복잡도: HIGH
+Phase 0~2 가 필수 묶음(이것만으로 인증 성립) · 3~5 는 그 위에 얹는다.
+
+## 진행 순서
+`Phase 0` → `Phase 1` → `Phase 2`(+폴백) → `Phase 3` → `Phase 4` → `Phase 5`
+각 Phase 는 `/tdd`(RED→GREEN→회귀 잠금)로. 운영 배포는 형 확인 후.
+
+---
+---
+
+## 이전 계획 (아카이브)
+
 # 세션 핸드오프 — nexus 주소 서비스 (2026-08-01 P7 Phase2 **ⓐ+ⓒ+ⓓ 완료 · 서버 정제 가동**)
 
 > 새 세션에서 **"이어서"** 하면 이 문서부터 읽는다.
