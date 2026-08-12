@@ -15,7 +15,7 @@ import Vworld3DView from './Vworld3DView.jsx';
 import { annotateCarryover } from '../utils/prevMonthCarryover.js';
 import { newShareId } from '../utils/shareId.js';
 // 공유 문서 구조(메타/건별 분리) — 계획 Phase 1. 배열은 부분 권한을 줄 수 없다.
-import { buildShareMeta, buildShareRecords, chunk } from '../utils/shareDoc.js';
+import { buildShareMeta, buildShareRecords, chunk, normalizeDeadline, MAX_DEADLINE_DAYS } from '../utils/shareDoc.js';
 import { getDriversCollection } from '../utils/company.js';
 
 const KAKAO_JS_KEY = import.meta.env.VITE_KAKAO_JS_KEY;
@@ -1184,6 +1184,14 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
   // ── 공유 링크
   const [shareModal, setShareModal] = useState(null); // { links: [{driverId,name,color,url}] }
   const [isCreatingShare, setIsCreatingShare] = useState(false);
+  // ★공유 사용일정(마감일) — 담당자가 정한다(계획 Phase 3, 형 확정 C).
+  //   이 날짜가 접근 가능 기간의 **진짜 천장**이다. 접속해도 이 날을 넘겨 연장되지 않는다.
+  //   기본 = 오늘+7일(로컬/KST 기준 날짜 문자열).
+  const [shareDeadline, setShareDeadline] = useState(() => {
+    const d = new Date(Date.now() + SHARE_LINK_TTL_DAYS * 24 * 60 * 60 * 1000);
+    const p = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  });
   const [orderRequestModal, setOrderRequestModal] = useState(null); // { requests: [...] }
   const [isLoadingOrderRequests, setIsLoadingOrderRequests] = useState(false);
   const [isApplyingOrderRequest, setIsApplyingOrderRequest] = useState(false);
@@ -3223,6 +3231,9 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
   const handleCreateShareLink = useCallback(async () => {
     const assignedDrivers = drivers.filter(d => records.some(r => r._driverId === d.id));
     if (!assignedDrivers.length) { showToast('error', '배정된 기사가 없습니다.'); return; }
+    // ★사용일정 검증을 **만들기 전에** 한다 — 만든 뒤에 틀렸다고 하면 링크가 이미 나가 있다.
+    const dl = normalizeDeadline(shareDeadline);
+    if (!dl.ok) { showToast('error', `공유 마감일: ${dl.error}`); return; }
     setIsCreatingShare(true);
     try {
       // ★소속사 명부(org_drivers)를 읽어 기사별 인증 번호를 붙인다(계획 Phase 1).
@@ -3265,6 +3276,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
         drivers: assignedDrivers,
         roster,
         now: new Date(),
+        deadline: dl.value,           // ★담당자가 정한 천장. 갱신도 이 날을 못 넘는다.
         ttlDays: SHARE_LINK_TTL_DAYS,
         createdBy: auth.currentUser?.email || '',
       });
@@ -3305,7 +3317,9 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
     } finally {
       setIsCreatingShare(false);
     }
-  }, [records, drivers, cloudCity, cloudMonthId, fileInfo, showToast]);
+    // ★shareDeadline 을 deps 에 넣는다 — 빠지면 담당자가 날짜를 바꿔도
+    //   **처음 값으로 만들어진다**(에러 없이 조용히 어긋나는 종류다).
+  }, [records, drivers, cloudCity, cloudMonthId, fileInfo, showToast, shareDeadline]);
 
   // ── 기사 순번 반영 요청: 담당자 유선 확인 후 공식 명단에 승인 반영 ─────
   const handleLoadOrderApplyRequests = useCallback(async () => {
@@ -4508,6 +4522,16 @@ ${folders}
                       className="w-full text-left px-2.5 py-1.5 rounded-lg text-[11px] font-bold text-blue-400 hover:bg-blue-900/20 flex items-center gap-1.5 transition-colors">
                       <Download size={11} /> 배송루트 묶음
                     </button>
+                    {/* ★사용일정(마감일) — 이 날짜가 접근 가능 기간의 천장이다(계획 Phase 3).
+                        접속해도 이 날을 넘겨 연장되지 않는다. 공유 문서에는 대상자
+                        이름·주소·휴대폰이 담기므로 기간이 길수록 노출 창이 길어진다. */}
+                    <div className="px-2.5 pt-1.5 pb-1 border-t border-[#1f1f1f] mt-1"
+                      onClick={e => e.stopPropagation()}>
+                      <div className="text-[9px] font-bold text-gray-500 mb-1">공유 마감일 (최대 {MAX_DEADLINE_DAYS}일)</div>
+                      <input type="date" value={shareDeadline}
+                        onChange={e => setShareDeadline(e.target.value)}
+                        className="w-full bg-black/40 border border-[#2a2a2a] focus:border-green-500/50 rounded px-1.5 py-1 text-[11px] text-white outline-none font-bold" />
+                    </div>
                     <button onClick={() => { setShowExportMenu(false); handleCreateShareLink(); }}
                       disabled={isCreatingShare}
                       className="w-full text-left px-2.5 py-1.5 rounded-lg text-[11px] font-bold text-green-400 hover:bg-green-900/20 flex items-center gap-1.5 transition-colors disabled:opacity-50">

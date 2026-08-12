@@ -11,6 +11,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   chunk, mapDriverPhones, buildShareRecords, buildShareMeta, renewedExpiry, BATCH_LIMIT,
+  normalizeDeadline, MAX_DEADLINE_DAYS,
 } from '../src/utils/shareDoc.js';
 
 const ROSTER = [
@@ -162,4 +163,49 @@ test('마감까지 여유가 있으면 기간만큼 늘어난다', () => {
 test('마감이 없으면 기간만큼(마감 미지정 공유)', () => {
   const r = renewedExpiry({ now: NOW, ttlDays: 7 });
   assert.equal(r.toISOString(), '2026-08-20T00:00:00.000Z');
+});
+
+// ── ⑥ 담당자가 정하는 마감일 (Phase 3) ────────────────────────────
+test('미지정은 그대로 통과 — 기본 기간만 쓴다', () => {
+  const r = normalizeDeadline('', NOW);
+  assert.equal(r.ok, true);
+  assert.equal(r.value, null);
+});
+
+test('★마감일은 그 날 끝까지 쓸 수 있다 — 당일 배송이 있을 수 있다', () => {
+  const r = normalizeDeadline('2026-08-18', NOW);
+  assert.equal(r.ok, true);
+  assert.equal(r.value.getHours(), 23);
+  assert.equal(r.value.getMinutes(), 59);
+  assert.equal(r.value.getDate(), 18);
+});
+
+test('★지난 날짜는 거절 — 만들자마자 못 쓰는 링크는 담당자를 헷갈리게 한다', () => {
+  const r = normalizeDeadline('2026-08-01', NOW);
+  assert.equal(r.ok, false);
+  assert.ok(r.error.includes('지난'));
+});
+
+test(`★상한 ${MAX_DEADLINE_DAYS}일 — 길게 열어두면 노출 창만 길어진다`, () => {
+  const r = normalizeDeadline('2026-12-31', NOW);
+  assert.equal(r.ok, false);
+  assert.ok(r.error.includes(String(MAX_DEADLINE_DAYS)), '왜 막혔는지 숫자로 알려줘야 한다');
+});
+
+test('상한 경계 안쪽은 통과한다', () => {
+  const r = normalizeDeadline('2026-09-11', NOW);   // 29일 뒤
+  assert.equal(r.ok, true, r.error);
+});
+
+test('형식이 틀리면 무엇이 문제인지 말한다', () => {
+  assert.equal(normalizeDeadline('2026/08/18', NOW).ok, false);
+  assert.equal(normalizeDeadline('내일', NOW).ok, false);
+  assert.ok(normalizeDeadline('내일', NOW).error.length > 5);
+});
+
+test('★마감일이 만료를 잘라낸다 — buildShareMeta 와 이어진다', () => {
+  const { value } = normalizeDeadline('2026-08-15', NOW);
+  const meta = buildShareMeta({ now: NOW, ttlDays: 7, deadline: value });
+  assert.equal(meta.expiresAt.getDate(), 15, '기본 7일(8/20)보다 이른 마감이 이긴다');
+  assert.deepEqual(meta.deadline, value);
 });

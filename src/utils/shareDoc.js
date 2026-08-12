@@ -120,6 +120,42 @@ export function buildShareMeta({ city = '', monthId = '', drivers = [], roster =
   };
 }
 
+/** 담당자가 지정할 수 있는 마감일 상한(일). 이보다 길게 열어두면 노출 창만 길어진다. */
+export const MAX_DEADLINE_DAYS = 30;
+
+/**
+ * 담당자가 고른 마감일을 **받아도 되는 값으로** 다듬는다(Phase 3).
+ *
+ * ★왜 상한을 두는가: 마감일이 곧 접근 가능 기간의 진짜 천장이다(형 확정 C).
+ *   담당자가 무심코 6개월을 넣으면 그 기간 내내 이름·주소·휴대폰이 열려 있다.
+ * ★과거 날짜는 거절한다 — 만들자마자 못 쓰는 링크는 담당자를 헷갈리게만 한다.
+ *
+ * @param {string|Date} input `YYYY-MM-DD`(date input) 또는 Date
+ * @param {Date} [now]
+ * @returns {{ok:boolean, value:Date|null, error:string}}
+ */
+export function normalizeDeadline(input, now = new Date()) {
+  if (!input) return { ok: true, value: null, error: '' };   // 미지정 = 기본 기간만 쓴다
+  let d;
+  if (input instanceof Date) {
+    d = new Date(input);
+  } else {
+    const s = String(input).trim();
+    const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!m) return { ok: false, value: null, error: '날짜 형식이 올바르지 않습니다(YYYY-MM-DD).' };
+    // ★그 날 **끝까지** 쓸 수 있게 한다 — 마감일 당일에 배송이 있을 수 있다.
+    //   로컬(KST) 기준 23:59:59 로 잡는다.
+    d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 23, 59, 59, 0);
+  }
+  if (Number.isNaN(d.getTime())) return { ok: false, value: null, error: '날짜를 읽을 수 없습니다.' };
+  if (d <= now) return { ok: false, value: null, error: '이미 지난 날짜입니다. 오늘 이후로 정하세요.' };
+  const max = new Date(now.getTime() + MAX_DEADLINE_DAYS * 24 * 60 * 60 * 1000);
+  if (d > max) {
+    return { ok: false, value: null, error: `마감일은 최대 ${MAX_DEADLINE_DAYS}일 이내로 정하세요(개인정보 노출 기간).` };
+  }
+  return { ok: true, value: d, error: '' };
+}
+
 /**
  * 접속 시 갱신값 — **마감일을 넘지 않는다**(형 확정 C).
  * ⚠️이 계산은 서버(Function)에서 돈다. 클라가 `expiresAt` 을 직접 쓰면 기사가
