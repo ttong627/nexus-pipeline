@@ -1,4 +1,4 @@
-# 🔁 HANDOFF — nexus-pipeline (2026-08-12 23:00 KST)
+# 🔁 HANDOFF — nexus-pipeline (2026-08-12 23:40 KST)
 
 > 새 세션에서 **"이어서"** 라고 하면 이 문서 → `좌표관리_설계.md` → `PROJECT_STATUS.md` 순으로 읽고 재개.
 > 상세 근거·실측은 전부 **`좌표관리_설계.md` §5-2 ~ §5-7** 에 박제돼 있다. 여기는 현재 상태와 다음 할 일만.
@@ -174,6 +174,25 @@ Cloud Function **`geocodeAuto`**(3분마다) — 명단 `lat/lng` 를 채운다.
      앞서 "시흥에 없는 주소"라고 적은 것은 **부정확**했다. 정확히는 "도로는 있고 그 번지가 없다".
    - ⛔**A-36 — 이 규명으로 주소를 자동 치환하지 않는다.** 건물명으로 주소를 찾아 붙이는 것은 금지다.
      담당자가 정제 화면에서 확인·수정할 **근거**로만 쓴다.
+
+7. ★★**파서 결함 수정 — `번길` 이 건물명으로 떨어지던 원인**(2026-08-12 · 커밋 `518ac27`).
+   - **진짜 원인은 "쪼갠 것"이 아니라 "못 붙인 것"이다.** 원본이 `봉우재로 36 번길`(**숫자 뒤 공백**)인데
+     재결합 규칙이 `\d+[한글0-9]*번길` 을 **한 덩어리로만** 봐서 안 걸렸다. 그러면 파서가
+     `봉우재로 36` 까지만 도로로 보고 `번길` 을 건물명 슬롯에 떨어뜨린다.
+   - **수정**: `shared/roadTokens.js` `joinSpacedBranchRoad` **신설(SSOT)**.
+     ★**정제 경로**(`shared/detailNormalize.js`)와 **서버 매칭 경로**(`normalize.js`)가 같은 함수를 쓴다.
+     두 파일에 비슷한 정규식이 **각자** 있었고 미묘하게 달랐다(`normalize.js` 는 base 에 `길` 이 없다) —
+     새 규칙까지 복제했으면 또 갈라졌을 것이다. **규칙을 늘릴 때 복제본부터 세라.**
+   - ⚠️**`(?![HANGUL])` 가드 필수**: 없으면 `중앙로 12 길동아파트` → `중앙로12길동아파트`,
+     `시청로 20 길가온마을` → `시청로20길가온마을` 로 붙는다(가드 없는 안에서 **실측된 퇴행 2건**).
+     가지도로 토큰은 **그 자리에서 끝나야** 도로명이다.
+   - 검증: 회귀 `scripts/road-branch-space.test.mjs` **9건**(정제·매칭 양쪽 + 퇴행 감시) ·
+     Red-Green **2회**(수정 제거 → 2건 FAIL / 가드 제거 → 퇴행 1건 FAIL) ·
+     루트 **325/325** · address-service **275/275** · 기존 골든·parity **17/17** · eslint 0 · tsc 0 · build 0.
+   - ⛔**이미 저장된 값은 이 수정으로 복구되지 않는다** — `번길` 이 이미 건물명 슬롯(괄호)으로 넘어가
+     있어 재정제해도 `mainAddr` 에 없다(실측 확인). **다음 업로드부터 효과.**
+     기존 건은 재업로드 또는 정제 화면 수정.
+   - ⚠️미배포 — 서버(Cloud Run) 재배포 + 클라 빌드·배포가 있어야 효과가 난다.
    - **⛔남은 것 — 이미 저장된 5건**: 명단 레코드에 잘못된 `lat`/`lng` 가 `좌표상태='좌표확인'` 으로
      그대로 있다. 수정은 **새로 채우는 것만** 막는다. 정정하려면 그 5건의 좌표를 비우고
      다시 채우게 해야 하는데, **운영 데이터 수정이라 형 확인 후**에 한다(dry-run 먼저).
@@ -191,7 +210,8 @@ Cloud Function **`geocodeAuto`**(3분마다) — 명단 `lat/lng` 를 채운다.
 |---|---|---|
 | Cloud Function `geocodeAuto` ★ | ①인라인 규칙 → `storeCoordPick.js` ②**지오코딩 질의에 지자체 부착**(`geocodeQuery.js`) | `firebase deploy --only functions --account ttong627@gmail.com` |
 | Cloud Run 서비스·Job 4개 | `coordStore.pickDeliveryCoord` 삭제 · `fill-list-coords --miss-limit` | `bash scripts/deploy-jobs.sh` (+ 서비스 재배포) |
-| Hosting(클라) | 주석뿐 — **기능 변화 0**, 배포 불필요 | — |
+| Cloud Run 서비스 `nexus-address-api` ★ | **A-23 파서 수정**(`joinSpacedBranchRoad`) — 정제·매칭 양쪽 | 서비스 재배포 |
+| Hosting(클라) ★ | **A-23 파서 수정**(공용 SSOT라 클라도 같이 바뀐다) | `npm run build && firebase deploy --only hosting` |
 
 ⚠️ **`nexus-address-sync` 는 2026-08-13 04:23 관찰 대상이다.** 그 전에 이미지를 갈면
 무엇을 관찰 중인지가 바뀐다 → **관찰 뒤에 배포할 것.** (형 확인 후 실행)
