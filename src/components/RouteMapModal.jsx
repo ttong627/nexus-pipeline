@@ -33,6 +33,17 @@ const ADMIN_EMAILS = ['ttong627@gmail.com', 'admin@logis-op.com', 'jsh6270@gmail
  */
 const SHARE_LINK_TTL_DAYS = 7;
 
+/**
+ * 이행기간 이중쓰기 — **Phase 2(휴대폰 인증) 배포 직후 `false` 로 내린다.**
+ *
+ * ★왜 필요한가: 서브컬렉션 규칙은 `token.phone_number` 를 요구한다. 인증이 아직
+ *   배포되지 않은 상태에서 서브컬렉션만 쓰면 **새 공유를 기사가 아무도 못 읽는다** —
+ *   배송이 선다. 보안을 조이다 현장을 세우면 그게 더 큰 사고다.
+ * ⛔이 값이 `true` 인 동안은 "자기 것만"이 성립하지 않는다(옛 배열이 통째로 읽힌다).
+ *   즉 **지금보다 나빠지진 않지만 좋아지지도 않는다.** 임시 상태임을 잊지 말 것.
+ */
+const SHARE_TRANSITION_DUAL_WRITE = true;
+
 const DRIVER_COLORS = [
   '#3b82f6', '#10b981', '#f59e0b', '#ef4444',
   '#8b5cf6', '#06b6d4', '#f97316', '#ec4899',
@@ -3282,11 +3293,19 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
       });
       const expiresAtDate = meta.expiresAt;
       // 부모 = 메타만. ★배송건을 여기 넣으면 다시 통째로 새어나간다(계획 Phase 1).
+      //
+      // ⚠️**이행기간 이중쓰기**(SHARE_TRANSITION_DUAL_WRITE): Phase 2(휴대폰 인증)가
+      //   배포되기 전까지는 기사에게 `token.phone_number` 가 없다. 서브컬렉션 규칙은
+      //   그 값을 요구하므로, 지금 서브컬렉션만 쓰면 **새 공유를 아무도 못 읽는다** —
+      //   배송이 선다. 그래서 그때까지만 옛 배열도 같이 쓴다.
+      //   ★이 플래그가 켜져 있는 동안은 "자기 것만" 이 성립하지 않는다(배열이 통째로 읽힌다).
+      //     **Phase 2 배포 직후 반드시 false 로 내리고 재배포할 것.**
       await setDoc(doc(db, 'route_shares', shareId), {
         ...meta,
         createdAt: serverTimestamp(),
         expiresAt: Timestamp.fromDate(expiresAtDate),
         deadline: meta.deadline ? Timestamp.fromDate(meta.deadline) : null,
+        ...(SHARE_TRANSITION_DUAL_WRITE ? { records: shareRecords, _transitional: true } : {}),
       });
       // 건별 = 서브컬렉션 배치 쓰기(1,524건이면 4배치). 규칙이 driverPhone 으로 거른다.
       for (const part of chunk(shareRecords)) {

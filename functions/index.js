@@ -573,3 +573,66 @@ exports.geocodeAuto = onSchedule(
     }
   }
 );
+
+// ══════════════════════════════════════════════════════════════════
+//  개인정보 열람 감시 알림 (계획 Phase 5-b · 2026-08-13)
+//
+//  ★기록만 남기면 아무도 안 본다 — 사고는 로그를 뒤지는 사람이 없을 때 커진다.
+//    그래서 기록이 들어오는 **즉시** 규칙을 돌리고 사람에게 보낸다.
+//  ★개정 개인정보보호법(2026-09-11)의 72시간 통지는 '인지'가 전제다.
+//    이 함수가 그 '인지'를 만든다.
+//
+//  설정(없으면 서버 로그에만 남는다 — 그래도 죽지 않는다):
+//    TELEGRAM_BOT_TOKEN · TELEGRAM_CHAT_ID
+//  판정 규칙·임계값은 `./leakWatch.js`(회귀 scripts/leak-watch.test.mjs) 참조.
+// ══════════════════════════════════════════════════════════════════
+const { onDocumentCreated } = require('firebase-functions/v2/firestore');
+const { detectAnomalies, formatAlert, DEFAULTS } = require('./leakWatch');
+
+const sendTelegram = async (text) => {
+  const tok = process.env.TELEGRAM_BOT_TOKEN || '';
+  const chat = process.env.TELEGRAM_CHAT_ID || '';
+  if (!tok || !chat) return false;
+  try {
+    const res = await fetch(`https://api.telegram.org/bot${tok}/sendMessage`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ chat_id: chat, text }),
+    });
+    return res.ok;
+  } catch (e) {
+    // ★발송 실패가 감시를 멈추면 안 된다. 조용히 넘기되 로그엔 남긴다.
+    console.warn('[leakAlert] 텔레그램 발송 실패:', e?.message);
+    return false;
+  }
+};
+
+exports.leakAlert = onDocumentCreated(
+  { document: 'share_access_logs/{logId}', region: 'asia-northeast3', memory: '256MiB' },
+  async (event) => {
+    const cur = event.data?.data();
+    if (!cur) return;
+    try {
+      // 같은 행위자의 최근 기록만 모은다. 신원이 없으면(인증 전) 공유 단위로 본다 —
+      // ★"누구인지 모른다"고 감시를 건너뛰면 인증 붙기 전 기간이 통째로 사각이 된다.
+      const key = cur.phone || cur.uid || '';
+      const sinceIso = new Date(Date.now() - DEFAULTS.windowMin * 60 * 1000).toISOString();
+      let q = db.collection('share_access_logs').where('at', '>=', sinceIso);
+      q = key ? q.where('phone', '==', cur.phone || '') : q.where('shareId', '==', cur.shareId || '');
+      const snap = await q.limit(500).get();
+      const rows = snap.docs.map((d) => d.data());
+
+      const findings = detectAnomalies(rows, {});
+      if (!findings.length) return;
+
+      const actor = { name: cur.driverName, phone: cur.phone, uid: cur.uid };
+      const text = formatAlert(actor, findings)
+        + `\n공유: ${cur.shareId || '?'}${cur.driverName ? ` · 기사: ${cur.driverName}` : ''}`;
+      const sent = await sendTelegram(text);
+      // 채널이 없어도 최소한 서버 로그엔 남는다(형이 나중에라도 볼 수 있게).
+      console.warn(`[leakAlert]${sent ? '' : '(미발송)'} ${text.replace(/\n/g, ' | ')}`);
+    } catch (e) {
+      console.error('[leakAlert] 판정 실패:', e);
+    }
+  },
+);
