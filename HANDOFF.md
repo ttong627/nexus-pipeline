@@ -53,8 +53,7 @@ Cloud Function **`geocodeAuto`**(3분마다) — 명단 `lat/lng` 를 채운다.
    **Phase 2 배포 직후 `false` 로 내리고 재배포할 것.**
 2. **Phone Auth 활성화 대기** — 형이 Console 에서 켜야 Phase 2 착수 가능.
    `https://console.firebase.google.com/project/logis-op/authentication/providers`
-3. **텔레그램 채널 미설정** — 경보가 지금은 서버 로그에만 남는다.
-   `firebase functions:secrets:set TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID`
+3. ~~텔레그램 채널 미설정~~ ✅ **연결 완료**(2026-08-13 03:58 KST) — 아래 「텔레그램」 절.
 
 ### 진행 상황
 
@@ -78,9 +77,34 @@ Cloud Function **`geocodeAuto`**(3분마다) — 명단 `lat/lng` 를 채운다.
  · 심야(1~5시) 열람 480건. 배송 시간대가 아닙니다.
 ```
 두 규칙이 동시에 잡혔다. `(미발송)` = 텔레그램 시크릿 미설정(설계대로 로그엔 남는다).
+→ **이 `(미발송)` 은 03:58 에 해소됐다**(아래 「텔레그램」).
 ⚠️첫 시도는 **인덱스 생성 중**이라 실패했다 — `gcloud firestore indexes composite create` 로
 만든 뒤 READY 확인하고 재검증했다. 검증용 로그 3건(`source:'deploy_check'`)은 삭제했다
 (가짜 480건이 감사 기록에 남으면 나중 분석을 오염시킨다). **실제 열람 기록은 아직 0건.**
+
+### ✅ 텔레그램 경보 채널 — 연결·실동작 확인 (2026-08-13 03:58 KST)
+
+경보가 이제 **형 폰으로 간다.** 어제까지는 서버 로그에만 남아 아무도 안 봤다.
+
+- **★코드가 먼저 고쳐져야 했다** — `leakAlert` 옵션에 **`secrets:` 선언이 없었다.**
+  Functions v2 는 선언한 시크릿만 `process.env` 에 주입한다. 시크릿만 설정했으면
+  **값이 영영 안 들어와 계속 `(미발송)`** 이 찍혔을 것이다. 배포는 성공하고 로그도
+  남으니 "됐다"고 착각하기 딱 좋은 자리다. → `defineSecret` 2개 선언 후 배포.
+- 값 출처: **형이 이미 쓰는 봇**(`D:\Gemma4\telegram_config.json` · 일일리포트와 같은 채널).
+  따로 만들 필요가 없었다 — 형에게 토큰을 요청하기 전에 이 PC 를 먼저 뒤졌어야 했다.
+- 시크릿: `TELEGRAM_BOT_TOKEN` v1 · `TELEGRAM_CHAT_ID` v1(Secret Manager, 컴퓨트 SA 에 accessor 부여됨).
+- **실동작 증거 — 같은 검증을 두 번 흘린 로그가 나란히 있다:**
+
+  | 시각(KST) | 로그 | 의미 |
+  |---|---|---|
+  | 03:40 | `[leakAlert]`**`(미발송)`** | 미연결 |
+  | 03:58 | `[leakAlert]` — **`(미발송)` 없음** | 텔레그램이 200 으로 받음 |
+
+  `(미발송)` 은 `sendTelegram()` 이 `false` 일 때만 붙는다. 사라진 것이 발송의 증거다.
+- 검증 도구 상설화: **`scripts/verify-leak-alert.mjs`**(주입 / `--clean` 삭제).
+  지난 검증은 손으로 해서 다음 사람이 또 손으로 해야 했다.
+  ⚠️가짜 열람 기록은 감사 자료를 오염시킨다 → `source:'deploy_check'` 표식 + 확인 후 즉시 삭제.
+  **검증 후 실측: 잔재 0건 · `share_access_logs` 총 0건**(=실제 열람은 아직 없음).
 
 ### ★이번에 데인 것 (되풀이 금지)
 
@@ -88,6 +112,11 @@ Cloud Function **`geocodeAuto`**(3분마다) — 명단 `lat/lng` 를 채운다.
   진짜 명부는 `org_drivers/{소속사}/drivers`(17명·휴대폰 정상 16). 같은 것이 다른 이름으로 있다.
 - **"떴다" ≠ "동작한다"** — `leakAlert` 배포는 성공했는데 **복합 인덱스가 없어** 판정이 실패했다.
   로그를 실제로 넣어보고서야 드러났다. try/catch 가 잡아 조용히 넘어갔다.
+  ★**같은 함수에서 두 번째로 데었다**(2026-08-13 03:58) — 이번엔 `secrets:` 미선언.
+  둘 다 "배포 성공 + 로그 정상"인데 기능은 죽어 있었다. **이 함수는 반드시 흘려보고 판정할 것.**
+- **형에게 무언가를 요청하기 전에 이 PC 부터 뒤질 것** — 텔레그램 토큰을 "주시면 넣겠다"고
+  적어 뒀는데, `D:\Gemma4\telegram_config.json` 에 **이미 있었다**(일일리포트가 매일 쓰는 값).
+  형이 할 일로 넘긴 항목은 대부분 내가 먼저 찾아봐야 하는 항목이다.
 - **`functions/` 는 CommonJS** — ESM 으로 쓰면 배포가 깨진다(쓸 뻔했다).
 - **규칙에 없는 함수를 지어 쓸 뻔했다**(`isShareWithinTTL2`). 배포 전 컴파일로 잡았다.
   `isShareWithinTTL()` 은 `resource.data` 를 보므로 **신규 문서 create 규칙엔 못 쓴다.**

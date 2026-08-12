@@ -587,7 +587,14 @@ exports.geocodeAuto = onSchedule(
 //  판정 규칙·임계값은 `./leakWatch.js`(회귀 scripts/leak-watch.test.mjs) 참조.
 // ══════════════════════════════════════════════════════════════════
 const { onDocumentCreated } = require('firebase-functions/v2/firestore');
+const { defineSecret } = require('firebase-functions/params');
 const { detectAnomalies, formatAlert, DEFAULTS } = require('./leakWatch');
+
+// ★v2 는 `secrets:` 로 선언한 것만 process.env 에 주입한다.
+//   선언 없이 시크릿만 설정하면 값이 영영 안 들어와 계속 `(미발송)` 이 찍힌다 —
+//   배포는 성공하고 로그도 남으니 "됐다"고 착각하기 딱 좋은 자리다.
+const TELEGRAM_BOT_TOKEN = defineSecret('TELEGRAM_BOT_TOKEN');
+const TELEGRAM_CHAT_ID = defineSecret('TELEGRAM_CHAT_ID');
 
 const sendTelegram = async (text) => {
   const tok = process.env.TELEGRAM_BOT_TOKEN || '';
@@ -608,7 +615,12 @@ const sendTelegram = async (text) => {
 };
 
 exports.leakAlert = onDocumentCreated(
-  { document: 'share_access_logs/{logId}', region: 'asia-northeast3', memory: '256MiB' },
+  {
+    document: 'share_access_logs/{logId}',
+    region: 'asia-northeast3',
+    memory: '256MiB',
+    secrets: [TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID],
+  },
   async (event) => {
     const cur = event.data?.data();
     if (!cur) return;
