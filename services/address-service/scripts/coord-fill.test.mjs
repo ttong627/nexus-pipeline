@@ -293,6 +293,31 @@ test('★이미 아는 중심이 있으면 지오코딩을 다시 하지 않는�
   assert.equal(got.dongs[0]?.dongNo, '101');
 });
 
+// ★2026-08-12 실제 사고: `probedDong` 을 ②출입구 return **아래**에 선언해 두는 바람에
+//   그 경로를 타는 순간 `Cannot access 'probedDong' before initialization` 으로 터졌다.
+//   C-7 적재 전에는 findEntrance 가 늘 null 이라 **한 번도 안 탔고**, 642만 행이 들어온
+//   그날 처음 드러났다. 코드는 그대로인데 **데이터가 바뀌자** 터진 것이다.
+//   → 출입구 자료가 있는 상태를 회귀로 상시 재현한다.
+test('★출입구 자료가 있으면 그 좌표로 즉시 끝난다 — 지오코딩을 태우지 않는다', async () => {
+  const q = createQuotaCounter({ vworld: 10, kakao: 10 });
+  const fill = createCoordFiller({
+    findEntrance: async () => ({ lat: 37.5665, lng: 126.9780 }),
+    geocodeRoad: async () => { throw new Error('출입구 자료가 있는데 지오코딩을 했다'); },
+    kakaoGeocode: async () => { throw new Error('출입구 자료가 있는데 카카오를 불렀다'); },
+  });
+  const got = await fill({ coordKey: 'k1', roadAddress: 'A로 1' }, q);
+  assert.equal(got.source, 'juso_entrc');
+  assert.deepEqual(got.point, { lat: 37.5665, lng: 126.9780 });
+  assert.equal(q.used('vworld'), 0, '외부 지오코딩을 태우면 안 된다');
+});
+
+test('★출입구 경로도 probedDong 을 담아 돌려준다 — 호출부가 이 필드를 읽는다', async () => {
+  const fill = createCoordFiller({ findEntrance: async () => ({ lat: 37.5, lng: 127.0 }) });
+  const got = await fill({ coordKey: 'k1', roadAddress: 'A로 1', isApartment: true, dongNo: '101' }, null);
+  assert.equal('probedDong' in got, true, 'coordWrite 가 이 값으로 dong_probed_at 을 쓴다');
+  assert.equal(got.probedDong, false, 'BBOX 를 안 태웠으므로 false');
+});
+
 test('outlier 는 다시 채운다 — 이상 좌표를 그대로 두면 기사 구역이 부풀어 오른다(DS-15)', () => {
   const { fill } = classifyFillTargets([
     { roadAddress: 'A로 1', coordKey: 'k1', quality: 'outlier', center: { lat: 33, lng: 126 } },
