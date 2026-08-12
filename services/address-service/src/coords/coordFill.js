@@ -255,6 +255,12 @@ export const createCoordFiller = ({
 } = {}) => async (target, quota) => {
   const carried = [];
   const dongs = [];
+  // ★선언은 **모든 return 보다 위**에 있어야 한다. ②출입구 경로가 먼저 return 하는데
+  //   아래쪽에 선언해 두면 `Cannot access 'probedDong' before initialization` 으로 터진다.
+  //   2026-08-12 실측: C-7 적재 전에는 findEntrance 가 늘 null 이라 그 return 을 한 번도
+  //   안 탔고, 642만 행이 들어온 **그날 처음** 터졌다. 코드는 그대로인데 데이터가 바뀌자
+  //   드러난 것이다 — 회귀로 잠근다(findEntrance 를 주입한 케이스).
+  let probedDong = false;
 
   // ② 행안부 출입구 자료 — 입구 좌표를 채울 수 있는 유일한 자동 경로(F1)
   if (findEntrance) {
@@ -283,7 +289,6 @@ export const createCoordFiller = ({
   //   배치 경로(building_coord 기반)에는 동 번호가 없다. 동 좌표는 **명단 기반 fill**
   //   에서 채워진다(명단이 동 번호를 갖고 있다).
   const wantDong = toDongNo(target.dongNo);
-  let probedDong = false;
   if (center && target.isApartment && wantDong && getBuildingsNear) {
     if (!quota || quota.take('vworld', 1)) {
       probedDong = true;   // BBOX 를 실제로 태웠다 — 결과가 없어도 "물어봤다"를 남긴다
