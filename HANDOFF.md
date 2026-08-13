@@ -383,7 +383,7 @@ curl -s https://logis-op.web.app/assets/index-XXXX.js | grep -oE '"assets/[A-Za-
 
 ---
 
-## ⚠️ 배포 대기 (2026-08-12 작업분 — 코드는 main, 운영은 아직 옛 이미지)
+## ✅ 배포 상태 — **미배포분 없음** (2026-08-12 작업분 전량 반영 완료)
 
 ### ✅ 배포 완료 (2026-08-12 23:50 KST · 형 승인 "고")
 
@@ -400,14 +400,37 @@ curl -s https://logis-op.web.app/assets/index-XXXX.js | grep -oE '"assets/[A-Za-
   **`(?![HANGUL])` 가드까지 그대로** 들어갔다. 이전 번들엔 이 정규식이 없다.
 - `db-status` 200. DS-18(`호` 필수)도 새 번들에 그대로 유지된다(퇴행 없음).
 
-⚠️ **Job 4개는 아직 옛 이미지다.** ✅**게이트였던 04:23 관찰은 끝났다**(위 4번) → **형 승인만 남았다.**
-   Job 쪽 미반영분 = 죽은 코드 삭제(동작 불변) · `fill-list-coords --miss-limit`(보고용) · **A-23 파서**.
-   A-23 은 서비스·클라에는 이미 배포돼 실측 검증까지 끝났다(같은 SSOT 함수).
+### ✅ Job 4개 재배포 완료 (2026-08-13 04:5x KST · 형 승인 "고")
+
+**이로써 리포와 운영이 갈라진 곳이 없다.** 반영분 = 죽은 코드 삭제(동작 불변) ·
+`fill-list-coords --miss-limit`(보고용) · **A-23 파서**(서비스·클라엔 이미 배포·검증돼 있었다).
+
+| Job | 배포 전 이미지(롤백 지점) | **배포 후** |
+|---|---|---|
+| `nexus-address-sync` | `…389c269f068e1a15bc34cf7` | `…78799d1ca0b73012640f727` |
+| `nexus-address-listfill` | `…515ec1976f2563102868d1b` | `…8cf0a3202debe78ee452844` |
+| `nexus-address-entrc` | `…73969cf564668611f886123` | `…b78c34ab6828c5d08c13ca5` |
+| `nexus-address-fill` | `…d5fa4558460efc9e48b8c53` | `…58306e0786a2c1320a1559c` |
+
+- `args` 4개 전부 의도대로 들어갔다. ★**`gs://logis-op-address-source/entrc` 가 쪼개지지 않았다**
+  (`^|^` 구분자가 제 역할을 했다 — `^:^` 로 `://` 가 갈려 Job 이 `scandir 'gs'` 로 즉사한 적 있다).
+  `entrc` 는 설계대로 **`--apply` 없는 예행**으로 남겼다.
+- ★**"배포됐다" 로 끝내지 않고 새 이미지로 실제 실행했다** — `nexus-address-sync-r6txl`, **exit 0**.
+  요약이 04:23 실행(`922r2`)과 **수치까지 동일**(채움 대상 0 · 이상치 후보 0 · 해제후보 0) = 퇴행 없음.
+  저장소도 동일: `total 37,070 · 입구 37,034 · 중심 37,040 · outlier 4 · 좌표전무 24`.
+  **무인 배치가 내일 04:23 에 조용히 터지는 것을 기다리지 않는다** — 이 함수·이 Job 에서
+  이미 두 번 그렇게 데었다(`probedDong` TDZ · `leakAlert` 인덱스/시크릿).
+
+<details><summary>배포 전 기록(원문 보존) — ⛔지금 상태 아님</summary>
+
+⚠️ **Job 4개는 아직 옛 이미지다.** ✅게이트였던 04:23 관찰은 끝났다(위 4번) → 형 승인만 남았다.
 ```
 cd services/address-service && bash scripts/deploy-jobs.sh
 ```
    ⛔스크립트 머리에 **"형 승인 없이 돌리지 말 것"** 이 박혀 있다. 급하지 않다 —
    `sync` 는 내일 04:23, `listfill` 은 다음 주 월 05:00 이 다음 실행이다.
+
+</details>
 
 <details><summary>배포 전 기록(원문 보존) — ⛔지금 상태 아님</summary>
 
