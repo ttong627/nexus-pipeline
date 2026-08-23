@@ -16,6 +16,7 @@ import { annotateCarryover } from '../utils/prevMonthCarryover.js';
 import { newShareId } from '../utils/shareId.js';
 // 공유 문서 구조(메타/건별 분리) — 계획 Phase 1. 배열은 부분 권한을 줄 수 없다.
 import { buildShareMeta, buildShareRecords, chunk, normalizeDeadline, MAX_DEADLINE_DAYS } from '../utils/shareDoc.js';
+import { hashPasscode, newSalt, randomPasscode, isValidPasscode } from '../utils/sharePasscode.js';
 import { getDriversCollection } from '../utils/company.js';
 
 const KAKAO_JS_KEY = import.meta.env.VITE_KAKAO_JS_KEY;
@@ -42,7 +43,7 @@ const SHARE_LINK_TTL_DAYS = 7;
  * ⛔이 값이 `true` 인 동안은 "자기 것만"이 성립하지 않는다(옛 배열이 통째로 읽힌다).
  *   즉 **지금보다 나빠지진 않지만 좋아지지도 않는다.** 임시 상태임을 잊지 말 것.
  */
-const SHARE_TRANSITION_DUAL_WRITE = true;
+const SHARE_TRANSITION_DUAL_WRITE = false;   // 2026-08-23 비밀번호 입장(SH-1~6) 배포와 함께 내림 — 부모 문서 배열은 전 기사 PII 가 토큰으로 통째로 읽히던 뿌리(검사 실측)
 
 const DRIVER_COLORS = [
   '#3b82f6', '#10b981', '#f59e0b', '#ef4444',
@@ -1196,6 +1197,9 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
   const [shareModal, setShareModal] = useState(null); // { links: [{driverId,name,color,url}] }
   const [isCreatingShare, setIsCreatingShare] = useState(false);
   // ★공유 사용일정(마감일) — 담당자가 정한다(계획 Phase 3, 형 확정 C).
+  // ★기사 비밀번호(숫자 6자리 · 필수 · 2026-08-23 형 지시) — 공유 생성 때 담당자가 정한다.
+  //   평문은 저장하지 않는다(해시·솔트만 route_share_secrets 에). 기사는 이 번호를 넣어야 지도가 열린다(openShare Function).
+  const [sharePasscode, setSharePasscode] = useState('');
   //   이 날짜가 접근 가능 기간의 **진짜 천장**이다. 접속해도 이 날을 넘겨 연장되지 않는다.
   //   기본 = 오늘+7일(로컬/KST 기준 날짜 문자열).
   const [shareDeadline, setShareDeadline] = useState(() => {
@@ -3245,6 +3249,8 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
     // ★사용일정 검증을 **만들기 전에** 한다 — 만든 뒤에 틀렸다고 하면 링크가 이미 나가 있다.
     const dl = normalizeDeadline(shareDeadline);
     if (!dl.ok) { showToast('error', `공유 마감일: ${dl.error}`); return; }
+    // ★비밀번호도 만들기 전에 검증 — 없는 채로 나간 링크는 누구나 연다.
+    if (!isValidPasscode(sharePasscode)) { showToast('error', '기사 비밀번호: 숫자 6자리를 입력하세요(🎲 버튼으로 자동 생성 가능)'); return; }
     setIsCreatingShare(true);
     try {
       // ★소속사 명부(org_drivers)를 읽어 기사별 인증 번호를 붙인다(계획 Phase 1).
@@ -3294,19 +3300,33 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
       const expiresAtDate = meta.expiresAt;
       // 부모 = 메타만. ★배송건을 여기 넣으면 다시 통째로 새어나간다(계획 Phase 1).
       //
-      // ⚠️**이행기간 이중쓰기**(SHARE_TRANSITION_DUAL_WRITE): Phase 2(휴대폰 인증)가
-      //   배포되기 전까지는 기사에게 `token.phone_number` 가 없다. 서브컬렉션 규칙은
-      //   그 값을 요구하므로, 지금 서브컬렉션만 쓰면 **새 공유를 아무도 못 읽는다** —
-      //   배송이 선다. 그래서 그때까지만 옛 배열도 같이 쓴다.
-      //   ★이 플래그가 켜져 있는 동안은 "자기 것만" 이 성립하지 않는다(배열이 통째로 읽힌다).
-      //     **Phase 2 배포 직후 반드시 false 로 내리고 재배포할 것.**
-      await setDoc(doc(db, 'route_shares', shareId), {
+      // ★이중쓰기(SHARE_TRANSITION_DUAL_WRITE)는 **꺼졌다**(2026-08-23). 기사는 openShare 토큰(claims.driverId)으로
+      //   서브컬렉션을 `where driverId` 로 읽으므로 부모 배열이 필요 없고, 배열이 있으면 토큰 하나로 전 기사 PII 가
+      //   통째로 읽힌다(검사 실측). 다시 켜지 말 것 — 켜야 할 상황이면 규칙·토큰 설계가 깨진 것이다.
+      // ★비밀번호는 평문 저장 금지 — 해시·솔트만, 그것도 기사가 못 읽는 별도 문서(규칙 route_share_secrets)에.
+      //   검증은 openShare Function 만 한다. 공유 문서에 넣으면 토큰 가진 기사가 해시를 읽어 6자리를 즉시 역산한다.
+      // ★공유 문서 + 비밀번호 문서는 **한 배치**로 쓴다 — 둘 중 하나만 남는 창(비밀번호 없는 공유 = 누구나 여는 링크)이 생기지 않게.
+      //   규칙은 getAfter 로 같은 배치의 부모 소유자를 확인한다. createdByUid 는 SSO 담당자(email 클레임 없음)용 소유 키.
+      const passcodeSalt = newSalt();
+      const passcodeHash = await hashPasscode(sharePasscode, passcodeSalt);
+      const ownerUid = auth.currentUser?.uid || '';
+      const metaBatch = writeBatch(db);
+      metaBatch.set(doc(db, 'route_shares', shareId), {
         ...meta,
+        createdByUid: ownerUid,
         createdAt: serverTimestamp(),
         expiresAt: Timestamp.fromDate(expiresAtDate),
         deadline: meta.deadline ? Timestamp.fromDate(meta.deadline) : null,
         ...(SHARE_TRANSITION_DUAL_WRITE ? { records: shareRecords, _transitional: true } : {}),
       });
+      metaBatch.set(doc(db, 'route_share_secrets', shareId), {
+        passcodeHash,
+        passcodeSalt,
+        createdBy: auth.currentUser?.email || '',
+        createdByUid: ownerUid,
+        createdAt: serverTimestamp(),
+      });
+      await metaBatch.commit();
       // 건별 = 서브컬렉션 배치 쓰기(1,524건이면 4배치). 규칙이 driverPhone 으로 거른다.
       for (const part of chunk(shareRecords)) {
         const batch = writeBatch(db);
@@ -3318,6 +3338,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
       const base = window.location.origin;
       setShareModal({
         shareId,
+        passcode: sharePasscode,   // 이 창에서만 보여준다 — 닫으면 다시 볼 수 없다(재설정만 가능)
         expiresAtLabel: expiresAtDate.toLocaleString('ko-KR', {
           year: 'numeric',
           month: '2-digit',
@@ -3330,6 +3351,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
           url: `${base}/?r=${shareId}&d=${d.id}`,
         })),
       });
+      setSharePasscode('');   // 다음 공유가 같은 번호로 만들어지지 않게 — 모달에 한 번 보여준 뒤 입력칸은 비운다
       showToast('success', '공유 링크가 생성되었습니다.');
     } catch (e) {
       showToast('error', '공유 링크 생성 실패: ' + e.message);
@@ -3338,7 +3360,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
     }
     // ★shareDeadline 을 deps 에 넣는다 — 빠지면 담당자가 날짜를 바꿔도
     //   **처음 값으로 만들어진다**(에러 없이 조용히 어긋나는 종류다).
-  }, [records, drivers, cloudCity, cloudMonthId, fileInfo, showToast, shareDeadline]);
+  }, [records, drivers, cloudCity, cloudMonthId, fileInfo, showToast, shareDeadline, sharePasscode]);
 
   // ── 기사 순번 반영 요청: 담당자 유선 확인 후 공식 명단에 승인 반영 ─────
   const handleLoadOrderApplyRequests = useCallback(async () => {
@@ -3404,17 +3426,26 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
         limit(30)
       ));
       const rows = [];
-      snap.forEach(docSnap => {
+      for (const docSnap of snap.docs) {
         const data = docSnap.data();
         const driversArr = data.drivers || [];
-        Object.entries(data.completions || {}).forEach(([key, c]) => {
-          if (!c) return;
+        const entries = Object.entries(data.completions || {}).filter(([, c]) => !!c);
+        if (!entries.length) continue;
+        // ★이름·배송지 좌표는 부모 문서에 없다(같은 공유의 다른 기사에게 읽히므로 2026-08-23 부터 안 쓴다).
+        //   담당자(생성자·관리자)는 건별 문서를 읽을 수 있으니 여기서 이어 붙인다. 옛 기록(c.name/dongLat)은 그대로 읽는다.
+        const byId = new Map();
+        try {
+          const recSnap = await getDocs(collection(db, 'route_shares', docSnap.id, 'records'));
+          recSnap.forEach(rs => byId.set(rs.id, rs.data()));
+        } catch { /* 권한·네트워크 실패면 부모 기록만으로 표시(이름 없음) */ }
+        for (const [key, c] of entries) {
           const driver = driversArr.find(d => d.id === c.driverId);
+          const rec = byId.get(key) || {};
           const lat = Number(c.lat), lng = Number(c.lng);
-          const dLat = Number(c.dongLat), dLng = Number(c.dongLng);
+          const dLat = Number(c.dongLat ?? rec.lat), dLng = Number(c.dongLng ?? rec.lng);
           rows.push({
             key: `${docSnap.id}_${key}`,
-            name: c.name || '',
+            name: c.name || rec.이름 || '',
             at: c.at || '',
             lat: Number.isFinite(lat) ? lat : null,
             lng: Number.isFinite(lng) ? lng : null,
@@ -3426,8 +3457,8 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
             driverName: driver?.name || '',
             shareId: docSnap.id,
           });
-        });
-      });
+        }
+      }
       setCompletionData(rows);
       return rows;
     } catch (e) {
@@ -4550,6 +4581,19 @@ ${folders}
                       <input type="date" value={shareDeadline}
                         onChange={e => setShareDeadline(e.target.value)}
                         className="w-full bg-black/40 border border-[#2a2a2a] focus:border-green-500/50 rounded px-1.5 py-1 text-[11px] text-white outline-none font-bold" />
+                    </div>
+                    {/* ★기사 비밀번호(숫자 6자리 · 필수 · 2026-08-23 형 지시) — 기사는 링크 + 이 번호가 있어야 지도를 연다.
+                        링크와 번호는 따로 전달한다. 평문은 저장하지 않는다. */}
+                    <div className="px-2.5 pt-1 pb-1.5" onClick={e => e.stopPropagation()}>
+                      <div className="text-[9px] font-bold text-gray-500 mb-1">기사 비밀번호 (숫자 6자리 · 필수)</div>
+                      <div className="flex gap-1">
+                        <input type="text" inputMode="numeric" maxLength={6} value={sharePasscode}
+                          onChange={e => setSharePasscode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                          placeholder="예: 482917"
+                          className="flex-1 min-w-0 bg-black/40 border border-[#2a2a2a] focus:border-green-500/50 rounded px-1.5 py-1 text-[11px] text-white outline-none font-bold tracking-widest" />
+                        <button type="button" onClick={() => setSharePasscode(randomPasscode())} title="무작위 6자리 만들기"
+                          className="px-1.5 rounded border border-[#2a2a2a] text-[11px] text-gray-300 hover:text-white hover:border-green-500/40 transition-colors">🎲</button>
+                      </div>
                     </div>
                     <button onClick={() => { setShowExportMenu(false); handleCreateShareLink(); }}
                       disabled={isCreatingShare}
@@ -6386,6 +6430,37 @@ ${folders}
             </div>
             <div className="px-5 py-4 space-y-3">
               <p className="text-[10px] text-gray-500">링크 전달 → 기사가 모바일에서 배송루트 카카오지도 확인 및 <span className="text-green-400">● 내 위치 실시간 표시</span> 가능.</p>
+              {shareModal.passcode && (
+                <div className="rounded-xl border border-green-500/30 bg-green-950/20 px-3 py-2 text-[11px] text-green-200 flex items-center justify-between gap-2">
+                  <span>기사 비밀번호 <span className="font-black text-lg tracking-[0.3em] text-green-100 ml-1">{shareModal.passcode}</span></span>
+                  <div className="flex gap-1 shrink-0">
+                    <button
+                      onClick={() => { navigator.clipboard.writeText(shareModal.passcode); showToast('success', '비밀번호 복사됨'); }}
+                      className="px-2 py-1 bg-green-900/40 border border-green-600/40 text-green-300 hover:bg-green-800/40 rounded-lg text-[9px] font-bold transition-colors"
+                    >복사</button>
+                    <button
+                      onClick={async () => {
+                        // 재설정: 새 해시·솔트로 교체. ⚠️이미 발급된 기사 토큰은 살아 있다(비밀번호는 '입장' 열쇠이지 세션 열쇠가 아니다).
+                        const np = window.prompt('새 기사 비밀번호(숫자 6자리). 앞으로 입장하는 기사는 새 번호를 써야 합니다(이미 열어 둔 기사 화면은 만료일까지 유지).', randomPasscode());
+                        if (np === null) return;
+                        if (!isValidPasscode(np)) { showToast('error', '숫자 6자리만 가능합니다'); return; }
+                        try {
+                          const s = newSalt();
+                          await updateDoc(doc(db, 'route_share_secrets', shareModal.shareId), {
+                            passcodeHash: await hashPasscode(np, s), passcodeSalt: s, updatedAt: serverTimestamp(),
+                          });
+                          setShareModal(m => ({ ...m, passcode: np }));
+                          showToast('success', '비밀번호를 바꿨습니다');
+                        } catch (e) { showToast('error', '비밀번호 변경 실패: ' + e.message); }
+                      }}
+                      className="px-2 py-1 bg-[#111] border border-[#2a2a2a] text-gray-300 hover:text-white hover:border-green-500/40 rounded-lg text-[9px] font-bold transition-colors"
+                    >변경</button>
+                  </div>
+                </div>
+              )}
+              {shareModal.passcode && (
+                <p className="text-[9px] text-gray-500">기사는 링크를 열고 이 번호를 넣어야 지도가 보입니다. 링크와 번호는 <span className="text-amber-300">따로</span> 전달하세요. 이 창을 닫으면 번호를 다시 볼 수 없습니다.</p>
+              )}
               {shareModal.expiresAtLabel && (
                 <div className="rounded-xl border border-amber-500/25 bg-amber-950/20 px-3 py-2 text-[10px] text-amber-200">
                   이 배송 URL은 <span className="font-black text-amber-100">{shareModal.expiresAtLabel}</span>까지 사용할 수 있습니다. 만료 후에는 새 공유 링크를 다시 생성하세요.

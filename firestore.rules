@@ -3,19 +3,24 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
+    // ★공유 비밀번호 토큰(claims.shareId · openShare 발급)은 "인증 사용자"가 아니다(2026-08-23 검사 지적).
+    //   이걸 빼지 않으면 기사 토큰으로 users/{uid} 를 스스로 만들어 관리자로 올라가는 체인이 열린다.
+    //   (SSO 담당자도 커스텀 토큰을 쓰므로 provider 가 아니라 shareId 클레임으로 가른다)
     function isAuthenticated() {
-      return request.auth != null;
+      return request.auth != null && !('shareId' in request.auth.token);
     }
 
     function isAdmin() {
+      // users 문서가 없는 담당자(SSO 첫 진입·테스트)는 평가 오류가 아니라 **명시적 false** — exists 를 먼저 본다
       return isAuthenticated() &&
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('role', '') == 'admin';
     }
 
     // DB 읽기 없이 Auth 토큰에서 직접 확인 — 관리자 자기복구용 (#4)
     function isAdminEmail() {
       return isAuthenticated() &&
-        request.auth.token.email in [
+        request.auth.token.get('email', '') in [
           'ttong627@gmail.com'
         ];
     }
@@ -155,7 +160,11 @@ service cloud.firestore {
       allow read: if isAuthenticated() &&
         (request.auth.uid == userId || isAdmin());
 
-      allow create: if isAuthenticated() && request.auth.uid == userId;
+      // 최초 생성도 일반 등급만 — role/tier 를 들고 태어나는 문서는 막는다(2026-08-23 검사 지적: 자가 승격 차단)
+      allow create: if isAuthenticated() && request.auth.uid == userId
+                    && request.resource.data.get('role', 'user') == 'user'
+                    && request.resource.data.get('tier', 'basic') == 'basic'
+                    && !request.resource.data.keys().hasAny(['maxCities', 'citiesApproved', 'orgAssignments', 'orgId']);
 
       // 일반 사용자: role·tier·maxCities·status·citiesApproved·orgAssignments 직접 변경 불가
       allow update: if isAuthenticated() &&
@@ -222,11 +231,41 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
+    // ── 공유링크 비밀번호 토큰 (2026-08-23 · 형 지시 "지도 생성할 때 비밀번호 숫자 6자리") ──
+    //  openShare Function 이 비밀번호를 검증한 뒤 발급하는 커스텀 토큰(claims.shareId). 그 공유 하나에만 통한다.
+    //  ★링크만 아는 것으로는 더 이상 못 연다 — 화면 비교는 장식이고 **여기서 막아야** 개발자도구로도 못 본다.
+    function hasShareToken(shareId) {
+      return request.auth != null && request.auth.token.get('shareId', '') == shareId;
+    }
+    // 토큰에 박힌 기사 ID — 건별 문서는 **이 기사 것만** 읽힌다(토큰 하나로 그 공유 전 건이 열리면 안 된다 · 검사 지적)
+    function tokenDriverId() {
+      return request.auth.token.get('driverId', '');
+    }
+    // 건별 문서(records)는 만료 필드가 없다 — **부모 공유 문서**의 만료를 본다.
+    //  (예전 규칙은 레코드 자신의 expiresAt 을 봐서 기사 읽기가 원래부터 막혀 있었고, 옛 배열 폴백이 그걸 가리고 있었다)
+    function parentShareAlive(shareId) {
+      return exists(/databases/$(database)/documents/route_shares/$(shareId)) &&
+        'expiresAt' in get(/databases/$(database)/documents/route_shares/$(shareId)).data &&
+        get(/databases/$(database)/documents/route_shares/$(shareId)).data.expiresAt > request.time;
+    }
+    // 건별 문서의 소유자 = 부모 공유의 생성자(이메일 또는 uid — SSO 담당자는 email 클레임이 없을 수 있다)
+    // ★빈 문자열 동치 차단 — SSO 담당자(email 클레임 없음)가 만든 공유는 createdBy:'' 로 저장되는데,
+    //   '' == token.get('email','') 이 참이 되어 email 없는 담당자 전원이 서로의 공유를 읽고 지울 수 있었다(2차 검사 실측).
+    function ownerEmailMatch(createdBy) {
+      return createdBy != '' && createdBy == request.auth.token.get('email', '');
+    }
+    function isParentShareOwner(shareId) {
+      return isAuthenticated() &&
+        exists(/databases/$(database)/documents/route_shares/$(shareId)) &&
+        (ownerEmailMatch(get(/databases/$(database)/documents/route_shares/$(shareId)).data.get('createdBy', '')) ||
+         get(/databases/$(database)/documents/route_shares/$(shareId)).data.get('createdByUid', '-') == request.auth.uid);
+    }
+
     // ── 배송 루트 공유: 생성은 인증 사용자, 읽기는 누구나 (기사 접근) ──────────
     function isRouteOwner() {
       return isAuthenticated() &&
-        'createdBy' in resource.data &&
-        resource.data.createdBy == request.auth.token.email;
+        (ownerEmailMatch(resource.data.get('createdBy', '')) ||
+         resource.data.get('createdByUid', '-') == request.auth.uid);
     }
 
     function isShareWithinTTL() {
@@ -274,8 +313,34 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
+    // ── 공유링크 비밀번호 해시 (2026-08-23) — 기사·익명은 절대 못 읽는다. 검증은 openShare Function(admin SDK)이 한다 ──
+    //  ★공유 문서에 해시를 넣으면 토큰을 가진 기사가 읽어 6자리를 즉시 역산한다 → 별도 문서 + 읽기 금지.
+    match /route_share_secrets/{shareId} {
+      // 생성은 **부모 공유의 소유자**만 — 남의 옛 공유에 비밀번호를 걸어 기사를 잠그는 것 차단(검사 지적).
+      //  부모가 이미 있으면 그 문서로, 같은 배치에서 함께 만드는 중이면 getAfter 로 소유자를 본다.
+      allow create: if isAuthenticated()
+                    && request.resource.data.createdByUid == request.auth.uid
+                    && (
+                      (exists(/databases/$(database)/documents/route_shares/$(shareId)) &&
+                       get(/databases/$(database)/documents/route_shares/$(shareId)).data.get('createdByUid', '-') == request.auth.uid) ||
+                      (!exists(/databases/$(database)/documents/route_shares/$(shareId)) &&
+                       getAfter(/databases/$(database)/documents/route_shares/$(shareId)).data.get('createdByUid', '-') == request.auth.uid)
+                    )
+                    && request.resource.data.keys().hasAll(['passcodeHash', 'passcodeSalt', 'createdByUid'])
+                    && request.resource.data.passcodeHash is string
+                    && request.resource.data.passcodeSalt is string;
+      // 비밀번호 재설정: 생성자·관리자만, 해시·솔트만 바꿀 수 있다
+      allow update: if isAuthenticated()
+                    && (resource.data.get('createdByUid', '-') == request.auth.uid || isAdmin() || isAdminEmail())
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['passcodeHash', 'passcodeSalt', 'updatedAt']);
+      allow read, delete: if isAdmin() || isAdminEmail();
+    }
+
     match /route_shares/{shareId} {
-      allow read: if isShareWithinTTL();
+      // 관리자(목록 조회 포함) · 토큰 가진 기사(유효기간 내) · 생성자 · (보류 중인 휴대폰 인증 경로). ★무인증 읽기는 닫혔다(2026-08-23).
+      allow read: if isAdmin() || isAdminEmail() ||
+        (isShareWithinTTL() && (hasShareToken(shareId) || isRouteOwner() ||
+          (isAuthenticated() && request.auth.token.get('phone_number', '-') in resource.data.get('driverPhones', []))));
 
       allow create: if isAuthenticated();
 
@@ -284,6 +349,7 @@ service cloud.firestore {
       allow update: if isRouteOwner() || isAdmin() ||
         (
           isShareWithinTTL() &&
+          hasShareToken(shareId) &&
           request.resource.data.diff(resource.data).affectedKeys()
             .hasOnly(['liveGps', 'driverOrder', 'orderApplyRequests', 'completions']) &&
           (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['liveGps'])
@@ -307,26 +373,38 @@ service cloud.firestore {
       //  ★화면에서 거르는 방식은 우회된다(개발자도구로 원본을 그대로 본다).
       //    여기서 막아야 **DB 차원에서** 남의 배송을 못 읽는다.
       match /records/{recId} {
-        // 기사: 휴대폰 인증 + 자기 배송건만. 생성자·관리자는 전체.
-        allow read: if isRouteOwner() || isAdmin() ||
+        // 기사: 공유 비밀번호 토큰(2026-08-23, 그 공유의 전 건) 또는 휴대폰 인증(자기 배송건만). 생성자·관리자는 전체.
+        //  ★만료는 부모 공유 문서 기준(parentShareAlive) — 레코드엔 만료 필드가 없다.
+        //  ★토큰 경로는 **토큰에 박힌 기사(driverId)의 건만** — 토큰 하나로 그 공유 전 건이 열리면 기사 화면에 남의 명단이 뜬다(검사 지적).
+        //    (비밀번호는 지도 단위라 driverId 는 URL 값이지만, 최소한 같은 링크의 기사끼리는 서로의 건을 못 본다)
+        allow read: if isParentShareOwner(shareId) || isAdmin() || isAdminEmail() ||
           (
-            isShareWithinTTL() &&
-            isAuthenticated() &&
-            request.auth.token.phone_number != null &&
-            resource.data.driverPhone == request.auth.token.phone_number
+            parentShareAlive(shareId) &&
+            (
+              (hasShareToken(shareId) && resource.data.driverId == tokenDriverId()) ||
+              (
+                isAuthenticated() &&
+                resource.data.driverPhone == request.auth.token.get('phone_number', '-')
+              )
+            )
           );
 
         // 쓰기(명단 배치)는 생성자·관리자만.
-        allow create, delete: if isRouteOwner() || isAdmin();
+        allow create, delete: if isParentShareOwner(shareId) || isAdmin() || isAdminEmail();
 
         // 기사는 **현장 기록만** 고친다(수령확인·순번 적용). 주소·이름·소유기사는 못 건드린다.
         //  ⚠️driverPhone 을 고칠 수 있으면 자기 번호로 바꿔 남의 건을 가져갈 수 있다 → 반드시 제외.
-        allow update: if isRouteOwner() || isAdmin() ||
+        allow update: if isParentShareOwner(shareId) || isAdmin() || isAdminEmail() ||
           (
-            isShareWithinTTL() &&
-            isAuthenticated() &&
-            request.auth.token.phone_number != null &&
-            resource.data.driverPhone == request.auth.token.phone_number &&
+            parentShareAlive(shareId) &&
+            (
+              (hasShareToken(shareId) && resource.data.driverId == tokenDriverId()) ||
+              (
+                isAuthenticated() &&
+                resource.data.driverPhone == request.auth.token.get('phone_number', '-')
+              )
+            ) &&
+            request.resource.data.driverId == resource.data.driverId &&
             request.resource.data.driverPhone == resource.data.driverPhone &&
             request.resource.data.diff(resource.data).affectedKeys()
               .hasOnly(['received', 'receivedAt', 'completion', 'held', 'heldReason', '배송순번'])

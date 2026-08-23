@@ -522,6 +522,19 @@ export default function App() {
 
     const unsub = onAuthStateChanged(auth, async u => {
       if (u) {
+        // ★기사 공유 토큰(openShare · claims.shareId)은 사용자가 아니다 — users 문서를 만들지도, 프로필 모달을 띄우지도 않는다.
+        //   (2026-08-23 검사 지적: 공유×기사마다 가짜 사용자가 쌓이고 관리자 목록을 오염시키던 경로. 규칙도 같이 막는다)
+        try {
+          const tok = await u.getIdTokenResult();
+          if (tok?.claims?.shareId) {
+            // 기사 링크(?r=) 화면은 자기 리스너로 쓴다. 메인 앱에 토큰 세션만 남아 있으면 authStatus 가 'checking' 에 머물러
+            // 로그인 버튼 없는 스피너만 돌던 결함(2차 검사 지적) — 기사 화면이 아니면 토큰 세션을 끊어 일반 미로그인 흐름으로 보낸다.
+            if (!new URLSearchParams(window.location.search).get('r')) { await signOut(auth); return; }
+            setAuthStatus('unauthenticated');
+            setAuthLoading(false);
+            return;
+          }
+        } catch { /* 토큰 조회 실패는 일반 사용자 흐름으로 계속 */ }
         // 유저 문서 없으면 즉시 생성 (신규 회원 — 리다이렉트 로그인 포함)
         const userRef = doc(db, "users", u.uid);
         const d = await getDoc(userRef);

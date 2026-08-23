@@ -1,9 +1,10 @@
 {
   "name": "nexus-pipeline",
   "private": true,
-  "version": "7.9.0",
+  "version": "7.10.0",
   "type": "module",
   "scripts": {
+    "test:rules": "firebase emulators:exec --only firestore --project demo-nexus-rules \"node scripts/rules/firestore-rules.test.mjs\"",
     "dev": "vite",
     "version:bump": "node scripts/bump-version.cjs",
     "release": "node scripts/bump-version.cjs",
@@ -31,6 +32,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@firebase/rules-unit-testing": "^5.0.2",
     "@playwright/test": "^1.61.1",
     "@tailwindcss/postcss": "^4.2.4",
     "@tailwindcss/vite": "^4.2.4",

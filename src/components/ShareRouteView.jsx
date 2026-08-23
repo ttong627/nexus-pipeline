@@ -1,7 +1,10 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { db, auth } from '../config/firebase.js';
-import { doc, collection, addDoc, onSnapshot, updateDoc, deleteField } from 'firebase/firestore';
-import { MapPin, List, Map as MapIcon, RefreshCw, Building2, Phone, ChevronUp, ChevronDown, Navigation, Crosshair, Star, X, AlertCircle, Share2, CheckCircle2, ArrowUpDown } from 'lucide-react';
+import { db, auth, functions, signInWithCustomToken, onAuthStateChanged } from '../config/firebase.js';
+import { doc, collection, addDoc, onSnapshot, updateDoc, deleteField, query, where } from 'firebase/firestore';
+import { httpsCallable } from 'firebase/functions';
+import { MapPin, List, Map as MapIcon, RefreshCw, Building2, Phone, ChevronUp, ChevronDown, Navigation, Crosshair, Star, X, AlertCircle, Share2, CheckCircle2, ArrowUpDown, Lock } from 'lucide-react';
+import { decideGate, gateMessage } from '../utils/shareGate.js';
+import { isValidPasscode } from '../utils/sharePasscode.js';
 import { verifyDeliveryPositionApi } from '../engine/addressEngine.js';
 import { haversineKm } from '../engine/coordValidator.js';
 import { sortByRoadAddress } from '../utils/sortRecords.js';
@@ -150,6 +153,15 @@ export default function ShareRouteView({ shareId, driverId }) {
   const [subRecords, setSubRecords]   = useState(null);
   const [loading, setLoading]         = useState(true);
   const [error, setError]             = useState(null);
+  // ── 비밀번호 입장 (2026-08-23 · 형 지시 "지도 생성할 때 비밀번호 숫자 6자리") ──
+  //  링크만으로는 못 연다. 담당자가 정한 숫자 6자리를 넣으면 Function(openShare)이 검증하고 **이 공유 전용 토큰**을 준다 →
+  //  아래 Firestore 구독이 그 토큰으로 읽는다(규칙 hasShareToken). 화면에서 비교하면 장식이다.
+  //  · 담당자(이메일 로그인)가 미리보기로 열면 토큰을 받지 않는다 — 업무 세션을 덮어쓰면 안 된다(decideGate 'staff')
+  //  · 비밀번호 없이 만든 옛 링크는 빈 비밀번호 probe 로 바로 토큰이 온다(만료까지 현장이 서지 않게)
+  const [gate, setGate]               = useState('checking');   // checking | need | ok
+  const [passcodeInput, setPasscodeInput] = useState('');
+  const [gateMsg, setGateMsg]         = useState('');
+  const [gateBusy, setGateBusy]       = useState(false);
   const [isMapReady, setIsMapReady]   = useState(false);
   const [selectedId, setSelectedId]   = useState(null);
   const [layoutMode, setLayoutMode]   = useState('split');
@@ -203,18 +215,56 @@ export default function ShareRouteView({ shareId, driverId }) {
     followMyLocationRef.current = followMyLocation;
   }, [followMyLocation]);
 
+  // ── 비밀번호 입장 흐름 ─────────────────────────────────────────────────────
+  const requestToken = useCallback(async (passcode) => {
+    const call = httpsCallable(functions, 'openShare');
+    const res = await call({ shareId, driverId: driverId || '', passcode: passcode || '' });
+    await signInWithCustomToken(auth, res.data.token);
+  }, [shareId, driverId]);
+
+  useEffect(() => {
+    let cancelled = false; let handled = false;
+    const unsub = onAuthStateChanged(auth, async (user) => {
+      if (handled) return; handled = true;   // 최초 상태 한 번만 본다(토큰 로그인으로 바뀌는 건 여기서 다시 안 탄다)
+      try {
+        const claims = user ? (await user.getIdTokenResult()).claims : null;
+        if (decideGate(user, claims, shareId) !== 'probe') { if (!cancelled) setGate('ok'); return; }
+        await requestToken('');                 // 옛 링크(비밀번호 없음)면 여기서 바로 열린다
+        if (!cancelled) setGate('ok');
+      } catch (e) {
+        if (cancelled) return;
+        setGateMsg(gateMessage(e?.code, e?.details));   // PASSCODE_REQUIRED 면 빈 문장 = 입력창만
+        setGate('need');
+      }
+    });
+    return () => { cancelled = true; unsub(); };
+  }, [shareId, requestToken]);
+
+  const submitPasscode = useCallback(async () => {
+    if (!isValidPasscode(passcodeInput)) { setGateMsg('숫자 6자리를 입력해 주세요.'); return; }
+    setGateBusy(true); setGateMsg('');
+    try { await requestToken(passcodeInput); setGate('ok'); }
+    catch (e) { setGateMsg(gateMessage(e?.code, e?.details) || '비밀번호를 확인해 주세요.'); }
+    finally { setGateBusy(false); }
+  }, [passcodeInput, requestToken]);
+
   // ── Firestore 실시간 로드 ──────────────────────────────────────────────────
   useEffect(() => {
+    if (gate !== 'ok') return undefined;      // 토큰(또는 담당자 세션) 전에는 구독하지 않는다 — 권한 오류로 화면이 죽는다
     const unsub = onSnapshot(doc(db, 'route_shares', shareId), (snap) => {
       if (!snap.exists()) { setError('공유 데이터를 찾을 수 없거나 만료되었습니다.'); setLoading(false); return; }
       setShareData(snap.data());
       setLoading(false);
     }, (err) => {
-      setError('데이터 로드 실패: ' + err.message);
+      // 권한 오류 = 공유 만료(부모 TTL) 또는 생성자·관리자가 아닌 담당자 세션(미리보기는 생성자·관리자만).
+      const perm = /permission|insufficient/i.test(String(err?.message || ''));
+      setError(perm
+        ? '이 공유를 열 수 없습니다 — 만료됐거나 권한이 없습니다. 담당자 미리보기는 공유를 만든 담당자·관리자만 가능하고, 기사 화면으로 보려면 로그아웃된 브라우저(또는 시크릿 창)에서 링크를 여세요.'
+        : '데이터 로드 실패: ' + err.message);
       setLoading(false);
     });
     return () => unsub();
-  }, [shareId]);
+  }, [shareId, gate]);
 
   // ── 건별 배송 문서(서브컬렉션) 실시간 로드 (계획 Phase 1) ────────────────
   //  ★배열이던 `records` 를 여기로 옮겼다. 배열은 부분 권한을 줄 수 없어서
@@ -222,14 +272,17 @@ export default function ShareRouteView({ shareId, driverId }) {
   //  ★전환 중 공존: 서브컬렉션이 비어 있으면 `null` 로 두고 옛 배열로 폴백한다.
   //    (구·신 공유가 섞여 있는 기간에 옛 링크가 죽으면 현장이 선다)
   useEffect(() => {
+    if (gate !== 'ok') return undefined;
+    // ★기사 것만 구독한다(`where driverId`). 규칙도 토큰의 driverId 와 같은 건만 허용하므로, 이 필터가 없으면
+    //   목록 쿼리 자체가 거부된다(규칙 증명 불가). 토큰 하나로 그 공유 전 건이 보이던 결함 차단(2026-08-23 검사 지적).
     const unsub = onSnapshot(
-      collection(db, 'route_shares', shareId, 'records'),
-      (snap) => { setSubRecords(snap.empty ? null : snap.docs.map(d => ({ id: d.id, ...d.data() }))); },
+      query(collection(db, 'route_shares', shareId, 'records'), where('driverId', '==', driverId || '__none__')),
+      (snap) => { setSubRecords(snap.empty ? null : snap.docs.map(d => ({ ...d.data(), id: d.id }))); },   // ★문서 id 가 마지막 — data().id 가 '' 면 recordUid 가 `${이름}_${순번}` 폴백으로 키에 이름을 박는다(검사 지적)
       // 권한 없음·미인증이면 조용히 폴백한다 — 여기서 화면을 죽이면 옛 링크까지 못 쓴다.
       () => { setSubRecords(null); },
     );
     return () => unsub();
-  }, [shareId]);
+  }, [shareId, gate, driverId]);
 
   // ── 열람 기록 (계획 Phase 5) ────────────────────────────────────────────
   //  ★개정 개인정보보호법(2026-09-11)의 72시간 통지는 **'인지'가 전제**다.
@@ -452,7 +505,8 @@ export default function ShareRouteView({ shareId, driverId }) {
   const usingSub = Array.isArray(subRecords);
   const { all: allRecords, map: mapRecords, hasOrder } = deriveDriverRecords(
     usingSub ? subRecords : (shareData?.records || []),
-    { driverId: usingSub ? '' : driver?.id, orderIds: activeOrderIds },
+    // ★서브컬렉션이어도 다시 기사별로 거른다(이중 방어) — 규칙·쿼리가 이미 걸렀더라도 화면은 자기 것만 보여야 한다
+    { driverId: driver?.id, orderIds: activeOrderIds },
   );
   // ★목록 표시 순서만 바꾼다 — 순번 배지(_displaySeq)·지도 경로선(mapRecords)·다음 배송지는
   //   언제나 배송순번 기준을 유지한다. 보기 정렬이 동선 정보를 덮어쓰면 안 된다.
@@ -597,16 +651,15 @@ export default function ShareRouteView({ shareId, driverId }) {
             accuracyM: loc.accuracy ?? null,
           });
         }
+        // ★부모 공유 문서엔 수령자 이름·배송지 좌표를 쓰지 않는다 — 같은 공유의 다른 기사 토큰에게 읽힌다(2026-08-23 검사 지적).
+        //   uid 키 + 기사 위치·오차·판정만 남기고, 이름·배송지 좌표는 담당자가 건별 문서에서 이어 붙인다(RouteMapModal 수집부).
         await updateDoc(doc(db, 'route_shares', shareId), {
           [`completions.${r._uid}`]: {
             at: new Date().toISOString(),
             driverId: driver?.id || driverId || null,
-            name: r.이름 || null,
             lat: hasGps ? loc.lat : null,
             lng: hasGps ? loc.lng : null,
             accuracy: hasGps ? (loc.accuracy ?? null) : null,
-            dongLat: hasDong ? dLat : null,
-            dongLng: hasDong ? dLng : null,
             errM,
             // 코어 판정 결과(ok/far/unverifiable). 못 받았으면 null — 위반이 아니라 '판정 없음'이다.
             verdict: posCheck?.verdict || null,
@@ -740,6 +793,45 @@ export default function ShareRouteView({ shareId, driverId }) {
     const t = setTimeout(() => kakaoMapRef.current?.relayout(), 200);
     return () => clearTimeout(t);
   }, [layoutMode]);
+
+  // ── 비밀번호 입장 UI (토큰 전엔 아무 데이터도 안 읽는다) ─────────────────
+  if (!isInAppBrowser && gate !== 'ok') {
+    return (
+      <div className="fixed inset-0 bg-[#050505] flex flex-col items-center justify-center p-6 z-50 font-sans">
+        <div className="w-16 h-16 bg-green-500/15 rounded-full flex items-center justify-center mb-5">
+          <Lock size={30} className="text-green-400" />
+        </div>
+        <h2 className="text-white text-xl font-black mb-2 text-center">배송지도 비밀번호</h2>
+        <p className="text-gray-400 text-center text-sm mb-6 leading-relaxed">
+          담당자에게 받은 <span className="text-green-300 font-bold">숫자 6자리</span>를 입력하세요.
+        </p>
+        {gate === 'checking' ? (
+          <div className="text-gray-500 text-sm flex items-center gap-2"><RefreshCw size={14} className="animate-spin" /> 확인 중…</div>
+        ) : (
+          <form onSubmit={(e) => { e.preventDefault(); submitPasscode(); }} className="w-full max-w-xs flex flex-col gap-3">
+            <input
+              type="text" inputMode="numeric" pattern="[0-9]*" maxLength={6} autoFocus autoComplete="one-time-code"
+              value={passcodeInput}
+              onChange={(e) => setPasscodeInput(e.target.value.replace(/\D/g, '').slice(0, 6))}
+              placeholder="••••••"
+              className="w-full text-center tracking-[0.5em] text-3xl font-black bg-[#111] border border-[#2a2a2a] focus:border-green-500/60 rounded-2xl py-4 text-white outline-none"
+            />
+            <button
+              type="submit" disabled={gateBusy || passcodeInput.length !== 6}
+              className="w-full py-3 rounded-2xl bg-green-600 hover:bg-green-500 disabled:opacity-40 text-white font-black text-base transition-colors"
+            >
+              {gateBusy ? '확인 중…' : '지도 열기'}
+            </button>
+            {gateMsg && <p className="text-amber-300 text-xs text-center leading-relaxed">{gateMsg}</p>}
+            {gateMsg && (
+              <button type="button" onClick={() => window.location.reload()}
+                className="text-[11px] text-gray-500 hover:text-gray-300 underline underline-offset-2">다시 시도</button>
+            )}
+          </form>
+        )}
+      </div>
+    );
+  }
 
   // ── 인앱 브라우저 차단 UI ──────────────────────────────────────────────
   if (isInAppBrowser) {
@@ -1230,7 +1322,7 @@ export default function ShareRouteView({ shareId, driverId }) {
             );
           })}
           {listRecords.length === 0 && (
-            <div className="flex items-center justify-center h-32 text-gray-700 text-sm">배송 데이터가 없습니다</div>
+            <div className="flex items-center justify-center h-32 text-gray-700 text-sm text-center px-4">{driverId ? '배송 데이터가 없습니다' : '기사가 지정되지 않은 링크입니다 — 담당자에게 기사별 링크를 받아 주세요'}</div>
           )}
         </div>
       </div>

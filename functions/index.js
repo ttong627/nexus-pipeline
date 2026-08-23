@@ -3,11 +3,13 @@
  * Firebase Cloud Functions v2 (gen2) — asia-northeast3 (서울)
  *
  * 엔드포인트:
- *   GET /api/fav/kml?shareId={id}&driverId={id}
+ *   GET /api/fav/kml?shareId={id}&driverId={id}        (Authorization: Bearer <공유 토큰 · claims.shareId/driverId 일치>)
  *     → 기사별 배송루트 KML 반환 (카카오맵 나만의 지도 가져오기용)
  *
- *   GET /api/fav/locations?shareId={id}&driverId={id}
+ *   GET /api/fav/locations?shareId={id}&driverId={id}  (동일 토큰 필수)
  *     → 기사별 배송지 JSON 반환 (카카오맵 URL 생성용)
+ *
+ *   openShare (callable) — 공유 비밀번호 검증 → 커스텀 토큰. 잠금: 공유+IP 5회/10분 + 공유 전체 20회/h/30분 (CLAUDE.md §14-1)
  */
 
 const { onRequest } = require('firebase-functions/v2/https');
@@ -92,11 +94,32 @@ exports.api = onRequest(
   async (req, res) => {
     const path = req.path || '';
 
+    // ★(2026-08-23 SH 규칙) 이 두 엔드포인트는 shareId·driverId 만 알면 열리는 **무인증 경로**였다(주소·좌표 노출).
+    //   이제 openShare 가 발급한 공유 토큰(ID 토큰 · claims.shareId)을 Bearer 로 요구한다. 클라에서 부르는 곳은 없다(grep 0).
+    //   ★토큰의 driverId 도 대조한다 — 같은 공유의 기사 A 토큰으로 `?driverId=B` 의 주소·좌표를 받던 구멍(2차 검사 지적).
+    const requireShareToken = async (shareId, driverId) => {
+      const m = String(req.headers.authorization || '').match(/^Bearer\s+(.+)$/i);
+      if (!m) return false;
+      try {
+        const t = await admin.auth().verifyIdToken(m[1]);
+        return t.shareId === shareId && String(t.driverId || '') === String(driverId || '');
+      } catch { return false; }
+    };
+    // ★부모 문서의 `records` 배열은 더 이상 쓰지 않는다(전 기사 PII 가 토큰으로 통째로 읽히던 뿌리) — 서브컬렉션을 기사별로 읽는다.
+    const loadDriverRecords = async (shareId, driverId) => {
+      const q = await db.collection('route_shares').doc(String(shareId)).collection('records')
+        .where('driverId', '==', String(driverId)).get();
+      return q.docs.map((d) => ({ id: d.id, ...d.data() }));
+    };
+
     // ── GET /api/fav/kml ─────────────────────────────────────────────────
     if (path.includes('/fav/kml')) {
       const { shareId, driverId } = req.query;
       if (!shareId || !driverId) {
         return res.status(400).json({ error: 'shareId와 driverId가 필요합니다.' });
+      }
+      if (!(await requireShareToken(String(shareId), String(driverId)))) {
+        return res.status(401).json({ error: '공유 토큰이 필요합니다(비밀번호 입장 후 발급).' });
       }
 
       try {
@@ -114,9 +137,7 @@ exports.api = onRequest(
           return res.status(404).json({ error: '기사 정보를 찾을 수 없습니다.' });
         }
 
-        const records = (data.records || []).filter(
-          (r) => r.driverId === driverId && r.lat && r.lng
-        );
+        const records = (await loadDriverRecords(shareId, driverId)).filter((r) => r.lat && r.lng);
 
         if (!records.length) {
           return res.status(200).send(
@@ -144,6 +165,9 @@ exports.api = onRequest(
       if (!shareId || !driverId) {
         return res.status(400).json({ error: 'shareId와 driverId가 필요합니다.' });
       }
+      if (!(await requireShareToken(String(shareId), String(driverId)))) {
+        return res.status(401).json({ error: '공유 토큰이 필요합니다(비밀번호 입장 후 발급).' });
+      }
 
       try {
         const snap = await db.doc(`route_shares/${shareId}`).get();
@@ -158,8 +182,7 @@ exports.api = onRequest(
         const driver = data.drivers?.find((d) => d.id === driverId);
         // ★기본 비식별(KML 과 동일 기준) — 이름·휴대폰·특이사항을 내려보내지 않는다.
         //   이 엔드포인트도 shareId·driverId 만 알면 열리는 무인증 경로다.
-        const records = (data.records || [])
-          .filter((r) => r.driverId === driverId)
+        const records = (await loadDriverRecords(shareId, driverId))
           .sort(
             (a, b) => (parseInt(a.배송순번) || 9999) - (parseInt(b.배송순번) || 9999)
           )
@@ -204,6 +227,9 @@ exports.api = onRequest(
       let decoded;
       try { decoded = await admin.auth().verifyIdToken(token); }
       catch { return res.status(401).json({ error: '유효하지 않은 토큰입니다.' }); }
+      // ★기사 공유 토큰(claims.shareId)은 사용자가 아니다 — 여기서 받으면 admin SDK 가 `users/share_…` 를 만들어
+      //   규칙이 막은 users 오염이 서버 경로로 되살아난다(2차 검사 지적).
+      if (decoded.shareId) return res.status(403).json({ error: '공유 토큰으로는 사용기록을 보낼 수 없습니다.' });
 
       try {
         const body = sanitizeUsageEvent(req.body);
@@ -645,6 +671,114 @@ exports.leakAlert = onDocumentCreated(
       console.warn(`[leakAlert]${sent ? '' : '(미발송)'} ${text.replace(/\n/g, ' | ')}`);
     } catch (e) {
       console.error('[leakAlert] 판정 실패:', e);
+    }
+  },
+);
+
+// ══════════════════════════════════════════════════════════════════
+//  공유링크 비밀번호 입장 (2026-08-23 · 형 지시 "지도 생성할 때 비밀번호 숫자 6자리")
+// ══════════════════════════════════════════════════════════════════
+//   기사 화면이 보낸 비밀번호를 **여기서만** 검증한다 — 해시·솔트는 `route_share_secrets/{shareId}`(클라가 못 읽는 문서).
+//   맞으면 그 공유 하나에만 통하는 커스텀 토큰(claims.shareId)을 발급하고, Firestore 규칙(`hasShareToken`)이
+//   토큰 없는 읽기를 막는다. 화면에서 비교하면 장식이다(개발자도구로 원본을 그대로 본다).
+//   · 비밀번호 없이 만든 옛 링크(secrets 문서 없음)는 그대로 토큰 발급 — 만료(≤7일)까지 현장이 서지 않게(이행기)
+//   · 잠금: 공유+IP 5회→10분 + 공유 전체 20회/h→30분 — 6자리는 무제한 시도면 한 시간 안에 뚫린다
+//   · ⚠️커스텀 토큰 서명엔 실행 서비스계정(…-compute@)에 `roles/iam.serviceAccountTokenCreator`(자기 자신)가 필요하다.
+//     없으면 배포는 되고 **호출만 죽는다** — 배포 절차에 IAM 1줄이 들어가는 이유. 배포 후 반드시 실호출로 확인할 것.
+const { onCall, HttpsError } = require('firebase-functions/v2/https');
+const nodeCrypto = require('crypto');
+const { verifyPasscode, isValidPasscode } = require('./sharePasscode');
+const SHARE_ID_RE = /^sr_[A-Za-z0-9_-]{8,64}$/;     // 옛 형식(접두사 뒤 14자)도 받는다 · 길이 상한
+const DRIVER_ID_RE = /^[A-Za-z0-9_-]{0,40}$/;
+// 잠금 정책(검사 지적 반영): ① 공유+IP 단위 5회 → 10분(틀린 사람만 잠긴다 — 링크 아는 사람이 전 기사를 잠그지 못하게)
+//                        ② 공유 전체 시간당 20회 실패 → 30분(분산 대입 차단 — 최악 ≈40회/h, 30일 안에 뚫릴 확률 3% 미만)
+//   ★실질 방어선은 ②다. ①의 IP 는 위조 가능(XFF)해 보조 수단으로만 본다.
+const LOCK_AFTER_FAILS = 5;
+const LOCK_MINUTES = 10;
+const SHARE_HOUR_CAP = 20;
+const SHARE_CAP_LOCK_MINUTES = 30;
+const ATTEMPT_TTL_MS = 60 * 60 * 1000;   // 시도 문서 expiresAt — Firestore TTL 정책(선택)으로 정리
+const ipKeyOf = (req) => {
+  // ★XFF 는 클라이언트가 앞에 아무 값이나 붙일 수 있다 — Cloud Run 은 실제 접속 IP 를 **맨 뒤**에 덧붙이므로 마지막 원소를 쓴다.
+  //   첫 원소를 쓰면 요청마다 새 키가 생겨 IP 잠금을 영영 안 밟고 시도 문서만 무한 증식한다(2차 검사 지적).
+  const xff = String(req.rawRequest?.headers?.['x-forwarded-for'] || '').split(',').map((v) => v.trim()).filter(Boolean);
+  const raw = xff.length ? xff[xff.length - 1] : (String(req.rawRequest?.ip || '') || 'unknown');
+  return nodeCrypto.createHash('sha256').update(raw).digest('hex').slice(0, 24);   // 원IP 는 저장하지 않는다
+};
+const toMs = (t) => (t && typeof t.toMillis === 'function' ? t.toMillis() : 0);
+
+exports.openShare = onCall(
+  { region: 'asia-northeast3', memory: '256MiB', cors: true, maxInstances: 5 },
+  async (req) => {
+    const shareId = String(req.data?.shareId || '').trim();
+    const passcode = String(req.data?.passcode || '').trim();
+    const rawDriver = String(req.data?.driverId || '').trim();
+    const driverId = DRIVER_ID_RE.test(rawDriver) ? rawDriver : '';
+    if (!SHARE_ID_RE.test(shareId)) throw new HttpsError('invalid-argument', '공유 ID 형식이 아닙니다.');
+
+    const shareSnap = await db.collection('route_shares').doc(shareId).get();
+    const share = shareSnap.exists ? shareSnap.data() : null;
+    // ★만료일 없는 옛 문서는 "영원히 유효"가 아니라 "만료"다 — 검사 지적(옛 링크로 무기한 토큰 발급 차단)
+    if (!share || !share.expiresAt || isShareExpired(share)) {
+      throw new HttpsError('not-found', '공유 링크가 없거나 만료되었습니다.');
+    }
+
+    const secretRef = db.collection('route_share_secrets').doc(shareId);
+    const attemptRef = db.collection('route_share_attempts').doc(`${shareId}_${ipKeyOf(req)}`);
+    const nowMs = Date.now();
+    // ★검증·실패 집계·잠금을 **한 트랜잭션**에서 — 동시요청이 같은 카운트를 읽고 지나가는 경합을 막는다(검사 지적)
+    const outcome = await db.runTransaction(async (tx) => {
+      const [secSnap, attSnap] = await Promise.all([tx.get(secretRef), tx.get(attemptRef)]);
+      if (!secSnap.exists) return { kind: 'legacy' };
+      const sec = secSnap.data() || {};
+      const att = attSnap.exists ? (attSnap.data() || {}) : {};
+      const ipLock = toMs(att.lockUntil), shareLock = toMs(sec.lockUntil);
+      if (ipLock > nowMs) return { kind: 'locked', minutes: Math.ceil((ipLock - nowMs) / 60000) };
+      if (shareLock > nowMs) return { kind: 'locked', minutes: Math.ceil((shareLock - nowMs) / 60000) };
+      if (!passcode) return { kind: 'required' };
+      if (!isValidPasscode(passcode)) return { kind: 'invalid' };
+      if (verifyPasscode(passcode, sec.passcodeSalt, sec.passcodeHash)) {
+        if (attSnap.exists) tx.delete(attemptRef);
+        return { kind: 'ok' };
+      }
+      const fails = (att.failCount || 0) + 1;
+      const attPatch = {
+        shareId, failCount: fails, lastFailAt: admin.firestore.Timestamp.fromMillis(nowMs),
+        expiresAt: admin.firestore.Timestamp.fromMillis(nowMs + ATTEMPT_TTL_MS),
+      };
+      if (fails >= LOCK_AFTER_FAILS) {
+        attPatch.lockUntil = admin.firestore.Timestamp.fromMillis(nowMs + LOCK_MINUTES * 60000);
+        attPatch.failCount = 0;
+      }
+      tx.set(attemptRef, attPatch, { merge: true });
+      const hourStart = toMs(sec.hourStart);
+      const inWindow = hourStart > 0 && nowMs - hourStart < 3600000;
+      const hourFails = (inWindow ? (sec.hourFails || 0) : 0) + 1;
+      const secPatch = { hourFails, hourStart: inWindow ? sec.hourStart : admin.firestore.Timestamp.fromMillis(nowMs) };
+      if (hourFails >= SHARE_HOUR_CAP) {
+        secPatch.lockUntil = admin.firestore.Timestamp.fromMillis(nowMs + SHARE_CAP_LOCK_MINUTES * 60000);
+        secPatch.hourFails = 0;
+      }
+      tx.set(secretRef, secPatch, { merge: true });
+      return { kind: 'wrong', fails };
+    });
+
+    // uid 는 공유+기사로 고정 — 열람기록(share_access_logs)의 uid 로 같은 기사의 행동이 이어져 보이게(leakWatch 집계).
+    // 규칙은 claims.shareId 로 공유를, claims.driverId 로 건별 문서를 가른다.
+    const mint = async (legacy) => {
+      const uid = `share_${shareId}_${driverId || 'x'}`.slice(0, 128);
+      const token = await admin.auth().createCustomToken(uid, { shareId, driverId, role: 'driver' });
+      return { token, legacy, expiresAt: toMs(share.expiresAt) };
+    };
+    switch (outcome.kind) {
+      case 'legacy': return mint(true);                 // 비밀번호 없이 만든 옛 링크(이행기)
+      case 'ok': return mint(false);
+      case 'locked': throw new HttpsError('resource-exhausted', '여러 번 틀려 잠시 잠겼습니다.', { minutes: outcome.minutes });
+      case 'required': throw new HttpsError('failed-precondition', 'PASSCODE_REQUIRED');
+      case 'invalid': throw new HttpsError('invalid-argument', '숫자 6자리를 입력해 주세요.');
+      default:
+        console.warn(`[openShare] 비밀번호 불일치 share=${shareId} driver=${driverId || '-'} fails=${outcome.fails}`);
+        throw new HttpsError('permission-denied', '비밀번호가 맞지 않습니다.');
     }
   },
 );

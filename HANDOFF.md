@@ -86,9 +86,31 @@
 
 - ⚠️ **형 확인 대기 1건**: 3차 복구의 안양 동안구 기본명단 3건(`1- 열 sec2580`·`1- 5675#`·`1- 7266` → `1- 305호` 등 복원, note는 `열 sec2580`·`5675#`·`7266`으로)은 판단성이었는데 확인 없이 들어갔다. 틀렸다면 `node scripts/restore-from-backup.mjs "<바탕화면>/nexus_대시동조각_복구백업_all_2026-08-23_1787474696574.json" --write`로 그 실행분 10건이 되돌아간다.
 
+### ★ 형 지시 "지도 생성할 때 비밀번호 숫자 6자리" — 공유링크 비밀번호 (18:3x~ · Phase 2 SMS 대체 · 구현 완료 · **배포 대기**)
+
+- **왜**: 공유링크가 링크만 알면 인증 없이 열렸다. SMS 인증(Phase 2 원안)은 Console·과금·기사 번호가 필요해 형이 **비밀번호 방식**으로 결정.
+- **어떻게**(규칙 CLAUDE.md **§14-1 SH-1~SH-6**): 담당자 공유 생성 시 6자리 필수(🎲) → 해시·솔트만 `route_share_secrets/{shareId}`(기사 읽기 금지) → 기사 링크 열면 입장 화면 → Function **`openShare`**(callable · 서울)가 검증·잠금(5회/10분) 후 **그 공유 전용 커스텀 토큰** → Firestore 규칙 `hasShareToken`이 토큰 없는 읽기 차단. 옛 링크(secrets 없음)는 만료까지 빈 비밀번호 probe 로 토큰(이행기). 담당자 미리보기는 자기 세션 유지(`decideGate`).
+- 파일: `functions/index.js`(openShare) · `functions/sharePasscode.js` · `src/utils/sharePasscode.js`·`shareGate.js` · `RouteMapModal.jsx`(입력·secrets·모달) · `ShareRouteView.jsx`(게이트·토큰 후 구독) · `config/firebase.js`(functions 리전) · `firestore.rules`(hasShareToken·parentShareAlive·secrets) · 회귀 `scripts/share-passcode.test.mjs` 6.
+- ★규칙 정정 덤: 건별(`records`) 규칙이 레코드 자신의 `expiresAt`을 보고 있었다(레코드엔 없음) → 기사 읽기가 **원래부터 막혀** 옛 배열 폴백이 가리던 것. 부모 공유 기준(`parentShareAlive`)으로 고침. 관리자 목록 조회는 `isAdmin()` 선행.
+- **독립 검사 2종(보안·기능) 1차 판정 FAIL → 전부 반영**: ①커스텀 토큰이 "인증 사용자"로 격상돼 `users` 자가생성 → 관리자 승격 체인(🚨) → `isAuthenticated()`가 `shareId` 클레임 토큰을 제외 + `users` create 는 role/tier 기본값만 ②잠금 카운트 경합(🚨) → 트랜잭션 + 공유·IP 단위 잠금(틀린 사람만 잠긴다) + 공유 전체 시간당 상한 ③토큰 하나로 공유 전 건 열림 → 기사 화면에 남의 명단(🚨) → 규칙 `resource.data.driverId == token.driverId` + 클라 `where driverId` 구독 + 화면 이중 필터 ④**운영 CSP가 `cloudfunctions.net`을 막아 openShare 호출 자체가 차단**(🚨 · 같은 이유로 08-08부터 사용기록 전송 0건) → `firebase.json` connect-src 추가 ⑤`App.jsx` 전역 인증 리스너가 기사 토큰으로 `users/share_…` 생성(🚨) → `claims.shareId` 면 건너뜀 ⑥생성자가 건별 문서를 못 읽음 → `isParentShareOwner` ⑦secrets 소유 미검증 → 공유+secrets **한 배치** + `getAfter` 소유 검사 ⑧옛 `/api/fav/*` 무인증 경로 → 공유 토큰 필수 ⑨재설정 없음 → 모달 [변경] 버튼(⚠️기존 토큰은 살아 있음) ⑩만료일 없는 옛 문서에 무기한 토큰 → `expiresAt` 필수 ⑪옛 형식 shareId 거부 → 정규식 `{8,64}` ⑫SSO 담당자(email 없음) 세션 덮어쓰기 → `decideGate` 는 `shareId` 클레임 유무로 판정. **규칙 실측 = 에뮬레이터 35케이스**(아래) · Rules API 문법 0건.
+- 검증: 회귀 6/6 · share-records-view 13/13 · Functions 모듈 로드 OK · eslint/tsc/build 0 · 루트 446/446.
+- **2차 검사(보안·기능) 보충필요 → 전부 반영**: 🚨①**`SHARE_TRANSITION_DUAL_WRITE=false`** — 부모 공유 문서의 `records` 배열(전 기사 PII)이 토큰으로 통째로 읽히던 뿌리(실측 ALLOW). `/api/fav/*` 도 배열 대신 서브컬렉션을 기사별로 읽고 토큰의 **driverId 까지 대조** 🚨②규칙 `ownerEmailMatch` — `createdBy:''`(SSO 담당자) 빈 문자열 동치로 email 없는 담당자끼리 남의 공유를 읽고 지우던 구멍(실측 3건 ALLOW → DENY) ⚠️XFF **마지막** 원소(첫 원소는 위조로 잠금 우회) · 공유 전체 상한 50→**20회/h** · 시도 문서 `expiresAt` 1h ⚠️`/api/usage` 공유 토큰 거부(서버 경로 `users/share_…` 오염 차단) ⚠️`App.jsx` 토큰 세션 잔존 기기에서 메인 앱 무한 스피너 → 기사 화면이 아니면 signOut ⚠️ShareRouteView deps 경고·권한오류 문구(생성자·관리자만 미리보기)·기사 미지정 링크 안내 ⚠️[변경] 문구(이미 열어 둔 화면은 유지) ⚠️CLAUDE.md SH-3/SH-6 잠금 수치 정합 ⚠️**규칙 회귀를 리포에 수록** `scripts/rules/firestore-rules.test.mjs` + `npm run test:rules`(에뮬레이터 · devDep `@firebase/rules-unit-testing` · firebase.json emulators) — **47/47**.
+- **3차 검사**: 기능 **PASS** · 보안 보충필요 🚨1(새 발견) → 반영: 기사 수령확인이 부모 공유 문서 `completions.{uid}` 에 **수령자 이름·배송지 좌표**를 쓰고 있어 같은 공유의 다른 기사 토큰에게 읽혔다 → 페이로드에서 `name`·`dongLat/dongLng` 제거(`ShareRouteView.jsx` handleToggleComplete), 담당자 수집부(`RouteMapModal.jsx` handleLoadCompletions)는 건별 문서(생성자 권한)에서 이름·좌표를 이어 붙인다(옛 기록은 그대로 읽음). 보안 검사 확인 항목: XFF 마지막 원소는 **직접 호출(cloudfunctions.net) 구성에서만** 실제 IP — Hosting rewrite/LB 를 앞에 두면 깨진다(배포 직후 실호출로 `X-Forwarded-For: 203.0.113.9` 위조 → 무시되는지 1회 확인).
+- **`npm run test:rules` 전제**: Java(에뮬레이터) + 전역 `firebase-tools`. 없으면 `Could not spawn java -version` / `command not found` 로 즉시 실패(명확).
+- **4차 확인(보안)**: `completions` 🚨 닫힘 → **PASS**. 덤 ⚠️: ①`ShareRouteView` 서브컬렉션 매핑 `{ id: d.id, ...d.data() }` 는 `data().id` 가 문서 id 를 덮어 `recordUid` 의 `${이름}_${순번}` 폴백이 켜질 수 있는 구조 → `{ ...d.data(), id: d.id }` 로 고침(반영) ②**비관리자 담당자의 완료조회**(`RouteMapModal` handleLoadCompletions 의 `route_shares where city,monthId` 목록)는 규칙이 `resource` 에 의존해 증명 불가 → 관리자만 동작, 일반 담당자는 "완료 기록 조회 실패"(기존 결함 · 이번 변경으로 생긴 것 아님). 후속: 질의에 `where('createdByUid','==',uid)` + `where('expiresAt','>',now)` 를 붙이면 증명된다(복합 인덱스 필요 가능).
+- **후속(배포 뒤 판단 · 이번엔 안 넣음)**: ⓐ비밀번호 [변경] 시 기존 토큰 즉시 무효화(`ver` 클레임 + secrets.ver 규칙 대조 — 규칙 read 1회 추가) ⓑ부모 공유 문서의 `driverPhones`(전 기사 E.164)·`liveGps`(전 기사 위치)는 같은 공유의 토큰 전부에 보인다(휴대폰 인증 경로가 보류라 `driverPhones` 는 빼도 된다) ⓒ익명 로그인은 `isAuthenticated()` 에 포함(기존 노출 · 이번 변경으로 넓어지진 않음) ⓓ`route_share_attempts` TTL 정책: `gcloud firestore fields ttls update expiresAt --collection-group=route_share_attempts --project logis-op`(선택) ⓔ생성자·관리자가 아닌 담당자의 기사 링크 미리보기는 없다(문구로 안내).
+- **배포 절차(형 "배포" 후 · 순서 중요)**:
+  1. IAM 1줄(토큰 서명 권한 — 없으면 호출만 죽는다):
+     `gcloud iam service-accounts add-iam-policy-binding 31783407891-compute@developer.gserviceaccount.com --member="serviceAccount:31783407891-compute@developer.gserviceaccount.com" --role="roles/iam.serviceAccountTokenCreator" --project logis-op --account ttong627@gmail.com`
+  2. `firebase deploy --only functions:openShare,functions:api --account ttong627@gmail.com` (api = `/api/fav/*` 토큰 요구)
+  3. `firebase deploy --only firestore:rules --account ttong627@gmail.com` (⚠️indexes 는 같이 올리지 말 것 — 한글 필드로 원래 실패)
+  4. `npm run deploy` (Hosting — **CSP 헤더 변경 포함**)
+  5. **실호출 검증** `node scripts/verify-share-passcode-live.mjs`(테스트 공유 자동 생성·삭제 · 정답/오답/잠금/옛 링크/무토큰 거부/남의 기사 건 거부) **+ 실제 브라우저로 기사 링크 열어 비밀번호 입장까지**(node fetch 는 CSP 를 못 본다 — 검사 지적).
+- ⚠️ 기존에 살아 있는 공유링크(비밀번호 없음)는 만료까지 그대로 열린다. 담당자는 **새 공유부터** 비밀번호를 넣게 된다(필수). 링크와 번호는 따로 전달하라고 모달에 안내.
+
 ### 나머지 작업 — 실측 상태 (2026-08-23 11:5x)
 - ⏳ **Phase 2 휴대폰 인증 — 착수 불가(형 Console 대기)**: Identity Platform config 실측 `signIn.phoneNumber` **없음 = 꺼짐**
-  (`anonymous` 만 켜짐). `RouteMapModal.jsx:45` `SHARE_TRANSITION_DUAL_WRITE = true` 그대로. 법 시행(09-11)까지 **18일**.
+  (`anonymous` 만 켜짐). `RouteMapModal.jsx:46` `SHARE_TRANSITION_DUAL_WRITE` 는 **08-23 비밀번호 작업에서 `false` 로 내렸다**(아래「공유링크 비밀번호」). 법 시행(09-11)까지 **18일**.
 - ⚠️ **기사 번호 공란 1명 그대로** — `org_drivers` 2개 소속사 17명 중 `행복나눔 / 신입1`(active, phoneE164 없음). Phone Auth 켜기 **전에** 입력.
 - 🟠 카카오 REST 키 번들 노출 — 미조치(형 우선순위 판단).
 - 🟡 `.serena/` untracked(gitignore 미등록) — 형 확인 후 등록.
@@ -159,7 +181,7 @@ Cloud Function **`geocodeAuto`**(3분마다) — 명단 `lat/lng` 를 채운다.
 
 ### 🔴 다음 세션이 **가장 먼저** 볼 것
 
-1. **⛔`SHARE_TRANSITION_DUAL_WRITE = true` 를 내려야 한다**(`RouteMapModal.jsx` 상단).
+1. ~~⛔`SHARE_TRANSITION_DUAL_WRITE = true` 를 내려야 한다~~ → **08-23 `false` 로 내림**(비밀번호 입장 배포분 · 다시 켜지 말 것).
    Phase 2(휴대폰 인증) 배포 전에는 기사에게 `token.phone_number` 가 없어 서브컬렉션을
    못 읽는다 → 새 공유가 통째로 죽는다. 그래서 옛 배열도 같이 쓰는 **임시 상태**다.
    ★이 값이 `true` 인 동안 "자기 것만"은 성립하지 않는다.
