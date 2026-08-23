@@ -85,12 +85,26 @@ ${lineTag}
 };
 
 // ── 메인 API 핸들러 ─────────────────────────────────────────────────────────
+// ★v2 는 `secrets:` 로 선언한 것만 process.env 에 주입한다 — 선언 없이 콘솔에서 시크릿만 설정하면
+//   값이 영영 안 들어오고, 배포는 성공하며 스케줄러도 초록이라 "되고 있다"고 착각한다(같은 함정을 텔레그램에서 이미 겪었다).
+//   → 아래 KAKAO_SECRET 을 geocode·geocodeAuto 의 secrets 에 넣는다. 읽기는 `kakaoKey()` 하나로만.
+// ★시크릿 이름은 **Secret Manager 에 실재하는 것**을 쓴다 — `ADDRESS_KAKAO_REST_KEY`(주소 서비스와 공용).
+//   없는 이름을 선언하면 배포가 실패하고, 선언을 안 하면 값이 안 들어와 조용히 무동작이 된다(둘 다 겪은 함정).
+//   기존에 수동으로 넣어 둔 `KAKAO_REST_KEY` env 는 폴백으로 남긴다(다음 배포에서 사라져도 시크릿이 받아준다).
+const KAKAO_SECRET = defineSecret('ADDRESS_KAKAO_REST_KEY');
+const kakaoKey = () => {
+  try { return KAKAO_SECRET.value() || process.env.ADDRESS_KAKAO_REST_KEY || process.env.KAKAO_REST_KEY || ''; }
+  catch { return process.env.ADDRESS_KAKAO_REST_KEY || process.env.KAKAO_REST_KEY || ''; }
+};
+const KAKAO_REST_KEY = process.env.KAKAO_REST_KEY || '';
+
 exports.api = onRequest(
   {
     cors: true,
     region: 'asia-northeast3',
     timeoutSeconds: 30,
     memory: '256MiB',
+    secrets: [KAKAO_SECRET],   // /api/kakao 프록시가 서버 키로 대신 호출한다(클라 번들에서 REST 키 제거)
   },
   async (req, res) => {
     const path = req.path || '';
@@ -112,6 +126,59 @@ exports.api = onRequest(
         .where('driverId', '==', String(driverId)).get();
       return q.docs.map((d) => ({ id: d.id, ...d.data() }));
     };
+
+    // ── POST /api/kakao ──────────────────────────────────────────────────
+    //  ★카카오 REST 키를 클라이언트에서 걷어내기 위한 프록시(2026-08-23 점검).
+    //    REST 키는 도메인 제한이 안 되므로 번들에 실리면 누구나 가져다 쓴다 → 쿼터 소진 = 배송 당일 좌표매칭 중단.
+    //    여기서는 **로그인한 담당자**만, **정해진 4종 질의**만 통과시킨다(공유 토큰은 거부 — 기사에겐 필요 없다).
+    if (path.includes('/kakao')) {
+      if (req.method !== 'POST') return res.status(405).json({ error: 'POST만 허용' });
+      const bearer = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+      if (!bearer) return res.status(401).json({ error: '인증이 필요합니다.' });
+      let dec;
+      try { dec = await admin.auth().verifyIdToken(bearer); }
+      catch { return res.status(401).json({ error: '유효하지 않은 토큰입니다.' }); }
+      if (dec.shareId) return res.status(403).json({ error: '공유 토큰으로는 사용할 수 없습니다.' });
+      if (!kakaoKey()) return res.status(500).json({ error: '서버에 카카오 키가 설정되지 않았습니다.' });
+
+      const { op, params } = req.body || {};
+      const P = params || {};
+      const clamp = (v, lo, hi, dflt) => {
+        const n = Number(v);
+        return Number.isFinite(n) ? Math.min(hi, Math.max(lo, Math.round(n))) : dflt;
+      };
+      const q = String(P.query || '').trim().slice(0, 200);
+      try {
+        if (op === 'address' || op === 'keyword') {
+          if (!q) return res.status(400).json({ error: 'query 가 필요합니다.' });
+          const size = clamp(P.size, 1, 15, 5);
+          const url = `https://dapi.kakao.com/v2/local/search/${op === 'address' ? 'address' : 'keyword'}.json`
+            + `?query=${encodeURIComponent(q)}&size=${size}`;
+          const r = await fetch(url, { headers: { Authorization: `KakaoAK ${kakaoKey()}` } });
+          if (!r.ok) return res.status(502).json({ error: '카카오 조회 실패', status: r.status });
+          const j = await r.json();
+          return res.json({ documents: j.documents || [], meta: j.meta || null });
+        }
+        if (op === 'staticmap') {
+          const lat = Number(P.centerLat), lng = Number(P.centerLng);
+          if (!Number.isFinite(lat) || !Number.isFinite(lng)) return res.status(400).json({ error: '중심 좌표가 필요합니다.' });
+          const w = clamp(P.w, 1, 1280, 1200), h = clamp(P.h, 1, 1280, 900), level = clamp(P.level, 1, 14, 6);
+          const markers = String(P.markers || '').slice(0, 8000);
+          const url = `https://dapi.kakao.com/v2/maps/staticmap?appkey=${kakaoKey()}`
+            + `&center=${lng},${lat}&level=${level}&w=${w}&h=${h}`
+            + (markers ? `&markers=${encodeURIComponent(markers)}` : '');
+          const r = await fetch(url, { headers: { Authorization: `KakaoAK ${kakaoKey()}` } });
+          if (!r.ok) return res.status(502).json({ error: '지도 이미지 생성 실패', status: r.status });
+          const buf = Buffer.from(await r.arrayBuffer());
+          if (buf.length > 8 * 1024 * 1024) return res.status(413).json({ error: '이미지가 너무 큽니다.' });
+          return res.json({ base64: buf.toString('base64'), contentType: r.headers.get('content-type') || 'image/png' });
+        }
+        return res.status(400).json({ error: '허용되지 않은 요청입니다.' });
+      } catch (e) {
+        console.error('[kakao proxy]', e);
+        return res.status(500).json({ error: '카카오 조회 중 오류가 발생했습니다.' });
+      }
+    }
 
     // ── GET /api/fav/kml ─────────────────────────────────────────────────
     if (path.includes('/fav/kml')) {
@@ -270,15 +337,6 @@ exports.api = onRequest(
 //   POST body: { city, monthId, limit?=200 }  + Authorization: Bearer <Firebase ID token>
 //   좌표 없는 레코드를 coordinate_cache → Kakao 다단계 검색으로 채우고 cloud_lists에 저장.
 //   실패(에러) 건은 그대로 남는다. 브라우저 부하 0 — 카카오 호출은 전부 서버에서.
-// ★v2 는 `secrets:` 로 선언한 것만 process.env 에 주입한다 — 선언 없이 콘솔에서 시크릿만 설정하면
-//   값이 영영 안 들어오고, 배포는 성공하며 스케줄러도 초록이라 "되고 있다"고 착각한다(같은 함정을 텔레그램에서 이미 겪었다).
-//   → 아래 KAKAO_SECRET 을 geocode·geocodeAuto 의 secrets 에 넣는다. 읽기는 `kakaoKey()` 하나로만.
-const KAKAO_SECRET = defineSecret('KAKAO_REST_KEY');
-const kakaoKey = () => {
-  try { return KAKAO_SECRET.value() || process.env.KAKAO_REST_KEY || ''; }
-  catch { return process.env.KAKAO_REST_KEY || ''; }
-};
-const KAKAO_REST_KEY = process.env.KAKAO_REST_KEY || '';
 const SIDO_SHORT = { '서울특별시': '서울', '부산광역시': '부산', '대구광역시': '대구', '인천광역시': '인천', '광주광역시': '광주', '대전광역시': '대전', '울산광역시': '울산', '세종특별자치시': '세종', '경기도': '경기', '강원특별자치도': '강원', '강원도': '강원', '충청북도': '충북', '충청남도': '충남', '전북특별자치도': '전북', '전라북도': '전북', '전라남도': '전남', '경상북도': '경북', '경상남도': '경남', '제주특별자치도': '제주' };
 
 const extractRoadAddress = (addr) => {

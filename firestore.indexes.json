@@ -1,34 +1,6 @@
 {
   "indexes": [
     {
-      "collectionGroup": "audit_logs",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {
-          "fieldPath": "city",
-          "order": "ASCENDING"
-        },
-        {
-          "fieldPath": "createdAt",
-          "order": "DESCENDING"
-        }
-      ]
-    },
-    {
-      "collectionGroup": "audit_logs",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {
-          "fieldPath": "adminEmail",
-          "order": "ASCENDING"
-        },
-        {
-          "fieldPath": "createdAt",
-          "order": "DESCENDING"
-        }
-      ]
-    },
-    {
       "collectionGroup": "nexus_ai_logs",
       "queryScope": "COLLECTION",
       "fields": [
@@ -53,38 +25,6 @@
         {
           "fieldPath": "createdAt",
           "order": "DESCENDING"
-        }
-      ]
-    },
-    {
-      "collectionGroup": "records",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {
-          "fieldPath": "행정동",
-          "order": "ASCENDING"
-        },
-        {
-          "fieldPath": "주소",
-          "order": "ASCENDING"
-        },
-        {
-          "fieldPath": "이름",
-          "order": "ASCENDING"
-        }
-      ]
-    },
-    {
-      "collectionGroup": "records",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {
-          "fieldPath": "_driverId",
-          "order": "ASCENDING"
-        },
-        {
-          "fieldPath": "배송순번",
-          "order": "ASCENDING"
         }
       ]
     },

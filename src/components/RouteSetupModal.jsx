@@ -4,8 +4,8 @@ import { db, writeBatch } from '../config/firebase.js';
 import { getDocs, collection, getDoc, doc, setDoc, serverTimestamp } from 'firebase/firestore';
 // 배송지도 접근 인증의 열쇠 — 저장·비교 양쪽 모두 이 함수를 통과시킨다(계획 Phase 0).
 import { toE164Mobile } from '../utils/phone.js';
+import { kakaoCoordOf } from '../utils/kakaoApi.js';   // ★REST 키는 서버에만 있다(2026-08-23 점검)
 
-const KAKAO_REST_KEY = import.meta.env.VITE_KAKAO_REST_KEY;
 
 // 주소에서 괄호 밖 도로명 추출
 const extractRoadAddress = (addr) => {
@@ -151,21 +151,16 @@ export default function RouteSetupModal({
     if (!target) return;
     setSingleGeocodingId(recordId);
     const addr = extractRoadAddress(target.주소);
-    const tryFetch = async (url) => {
+    // ★서버 프록시 경유 — 클라이언트에는 REST 키가 없다(2026-08-23 점검)
+    const tryFetch = async (query, keyword = false) => {
       try {
-        const ctrl = new AbortController();
-        const tid = setTimeout(() => ctrl.abort(), 5000);
-        const res = await fetch(url, { headers: { Authorization: `KakaoAK ${KAKAO_REST_KEY}` }, signal: ctrl.signal });
-        clearTimeout(tid);
-        if (!res.ok) return null;
-        const data = await res.json();
-        const d = data.documents?.[0];
-        return (d?.x && d?.y) ? { lat: parseFloat(d.y), lng: parseFloat(d.x) } : null;
+        const hit = await kakaoCoordOf(query, { keyword });
+        return hit ? { lat: hit.lat, lng: hit.lng } : null;
       } catch { return null; }
     };
-    let coord = await tryFetch(`https://dapi.kakao.com/v2/local/search/address.json?query=${encodeURIComponent(addr)}&size=1`);
-    if (!coord) coord = await tryFetch(`https://dapi.kakao.com/v2/local/search/keyword.json?query=${encodeURIComponent(addr)}&size=1`);
-    if (!coord) coord = await tryFetch(`https://dapi.kakao.com/v2/local/search/keyword.json?query=${encodeURIComponent((target.dong ? `${target.dong} ` : '') + addr.slice(0, 32))}&size=1`);
+    let coord = await tryFetch(addr);
+    if (!coord) coord = await tryFetch(addr, true);
+    if (!coord) coord = await tryFetch((target.dong ? `${target.dong} ` : '') + addr.slice(0, 32), true);
     if (coord) {
       setCoordFixList(prev => prev.map(r => r.id === recordId ? { ...r, ...coord } : r));
     }
@@ -479,17 +474,12 @@ export default function RouteSetupModal({
     const saveCache = async (city, addr, lat, lng) => {
       try { await setDoc(doc(db, 'coordinate_cache', city, 'addresses', addrToDocId(addr)), { address: addr, lat, lng, fetchedAt: serverTimestamp() }, { merge: true }); } catch {}
     };
-    const fetchCoord = async (url) => {
-      const ctrl = new AbortController();
-      const tid = setTimeout(() => ctrl.abort(), 5000);
+    // ★서버 프록시 경유(2026-08-23 점검) — 인자는 URL 이 아니라 (질의어, 검색종류)다
+    const fetchCoord = async (query, keyword = false) => {
       try {
-        const res = await fetch(url, { headers: { Authorization: `KakaoAK ${KAKAO_REST_KEY}` }, signal: ctrl.signal });
-        clearTimeout(tid);
-        if (!res.ok) return null;
-        const data = await res.json();
-        const d = data.documents?.[0];
-        return (d?.x && d?.y) ? { lat: parseFloat(d.y), lng: parseFloat(d.x) } : null;
-      } catch { clearTimeout(tid); return null; }
+        const hit = await kakaoCoordOf(query, { keyword });
+        return hit ? { lat: hit.lat, lng: hit.lng } : null;
+      } catch { return null; }
     };
     // 캐시 라운드
     setCoordProgress({ done: 0, total: noCoordTargets.length, round: 0 });
@@ -504,7 +494,8 @@ export default function RouteSetupModal({
       const executing = new Set();
       for (const r of targets) {
         const p = (async () => {
-          const coord = await fetchCoord(queryFn(r));
+          const q = queryFn(r);
+          const coord = await fetchCoord(q.query ?? q, !!q.keyword);
           if (coord) { updates[r.id] = coord; await saveCache(cacheCity, extractRoadAddress(r.주소), coord.lat, coord.lng); }
           setCoordProgress(prev => prev ? { ...prev, done: prev.done + 1 } : prev);
         })().then(() => executing.delete(p));
@@ -514,9 +505,9 @@ export default function RouteSetupModal({
       await Promise.all(executing);
     };
     try {
-      await runRound(noCoordTargets.filter(r => !updates[r.id]), 1, r => `https://dapi.kakao.com/v2/local/search/address.json?query=${encodeURIComponent(extractRoadAddress(r.주소))}&size=1`);
-      await runRound(noCoordTargets.filter(r => !updates[r.id]), 2, r => `https://dapi.kakao.com/v2/local/search/keyword.json?query=${encodeURIComponent(extractRoadAddress(r.주소))}&size=1`);
-      await runRound(noCoordTargets.filter(r => !updates[r.id]), 3, r => `https://dapi.kakao.com/v2/local/search/keyword.json?query=${encodeURIComponent((r.dong ? `${r.dong} ` : '') + extractRoadAddress(r.주소).slice(0, 35))}&size=1`);
+      await runRound(noCoordTargets.filter(r => !updates[r.id]), 1, r => ({ query: extractRoadAddress(r.주소), keyword: false }));
+      await runRound(noCoordTargets.filter(r => !updates[r.id]), 2, r => ({ query: extractRoadAddress(r.주소), keyword: true }));
+      await runRound(noCoordTargets.filter(r => !updates[r.id]), 3, r => ({ query: (r.dong ? `${r.dong} ` : '') + extractRoadAddress(r.주소).slice(0, 35), keyword: true }));
       if (Object.keys(updates).length) {
         const entries = Object.entries(updates);
         for (let i = 0; i < entries.length; i += 499) {

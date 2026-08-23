@@ -27,6 +27,7 @@ import {
 // P7 Phase2 ⓒ-1 본체: 정제 코어(A-1~A-34 전체)는 서버와 공유하는 단일 파일에 있다.
 // 이 파일은 코어에 **클라 전용 IO·부수효과·학습사전을 주입**하는 어댑터 역할만 한다.
 import { createProcessAddress } from '../../services/address-service/src/shared/purifyCore.js';
+import { kakaoSearchAddress, kakaoSearchKeyword } from '../utils/kakaoApi.js';   // ★REST 키는 서버에만 있다(2026-08-23 점검)
 
 // ══════════════════════════════════════════════════════════════════
 //  TTong NEXUS — 주소 정제 엔진  (규칙 A-1 ~ A-20)
@@ -37,7 +38,28 @@ import { createProcessAddress } from '../../services/address-service/src/shared/
 // 클라이언트 직접 juso 호출 비활성화 — 서버(address-service)가 DB + juso fallback 전담.
 // VITE_JUSO_API_KEY_* 참조를 제거해 빌드 번들에 키가 박히지 않도록 함 (키 노출 차단).
 const JUSO_API_KEYS = [];
-const KAKAO_REST_KEY = import.meta.env.VITE_KAKAO_REST_KEY;
+// ★카카오 호출의 **전송 계층**만 환경에 따라 갈린다(2026-08-23 점검).
+//   · 브라우저: 서버 프록시(`utils/kakaoApi.js` → Functions `/api/kakao`). 번들에 REST 키를 두면
+//     도메인 제한이 안 되는 키라 페이지 소스만 봐도 가져다 쓸 수 있다(쿼터 소진 = 배송 당일 좌표매칭 중단).
+//   · Node(골든 녹화·재생, 운영 스크립트): 환경변수 키로 **직접** 호출한다 — 녹화본(cassette)이 카카오 URL 로
+//     키를 잡고 있어서, 여기서 URL 이 바뀌면 골든 회귀가 통째로 깨진다.
+//   ※`import.meta.env.VITE_*` 로 읽으면 빌드 때 값이 **번들에 박히므로** 절대 쓰지 않는다.
+// eslint-disable-next-line no-undef -- `process` 는 Node(골든 녹화·재생) 경로에서만 존재한다. typeof 로 감싸 브라우저에서는 건드리지 않는다.
+const KAKAO_NODE_KEY = (typeof process !== 'undefined' && process && process.env)
+  // eslint-disable-next-line no-undef
+  ? (process.env.KAKAO_REST_KEY || process.env.VITE_KAKAO_REST_KEY || '')
+  : '';
+const KAKAO_ENABLED = true;
+
+// url = 카세트 키(Node 경로에서만 실제로 쓰인다) · op/query/size = 프록시 경로 인자
+const kakaoJson = async (url, { op, query, size = 1 }) => {
+  if (KAKAO_NODE_KEY) {
+    const res = await fetchWithTimeout(url, { headers: { Authorization: `KakaoAK ${KAKAO_NODE_KEY}` } }, KAKAO_TIMEOUT_MS);
+    if (!res.ok) return null;
+    return res.json();
+  }
+  return op === 'keyword' ? kakaoSearchKeyword(query, { size }) : kakaoSearchAddress(query, { size });
+};
 const ADDRESS_MATCH_API_URL = String(import.meta.env.VITE_ADDRESS_MATCH_API_URL || '').replace(/\/+$/, '');
 const ADDRESS_MATCH_TIMEOUT_MS = 3000; // 전국 DB가 1순위 — 대량(easy) burst·콜드스타트에 1200ms는 너무 짧아 JUSO로 새던 문제 해결
 const COORD_SERVICE_TIMEOUT_MS = 700;
@@ -276,18 +298,16 @@ const fetchKakaoCoord = async (roadAddr, cityPrefix = '', buildingMgtNo = '') =>
     coordCache.set(key, serviceCoord);
     return serviceCoord;
   }
-  if (!KAKAO_REST_KEY) {
+  if (!KAKAO_ENABLED) {
     coordCache.set(key, null);
     return null;
   }
   try {
-    const res = await fetchWithTimeout(
+    const data = await kakaoJson(
       `https://dapi.kakao.com/v2/local/search/address.json?query=${encodeURIComponent(queryAddr)}&size=1`,
-      { headers: { Authorization: `KakaoAK ${KAKAO_REST_KEY}` } },
-      KAKAO_TIMEOUT_MS
+      { op: 'address', query: queryAddr, size: 1 },
     );
-    if (!res.ok) { coordCache.set(key, null); return null; }
-    const d = (await res.json()).documents?.[0];
+    const d = data?.documents?.[0];
     const coord = (d?.x && d?.y) ? { lat: parseFloat(d.y), lng: parseFloat(d.x) } : null;
     coordCache.set(key, coord);
     return coord;
@@ -328,7 +348,7 @@ const fetchDongCoord = async (roadAddr, dongNo, sigungu = '') => {
 const legalDongCache   = new Map();
 const legalDongPending = new Map();
 const fetchKakaoLegalDong = async (addr, cityLabel = '') => {
-  if (!KAKAO_REST_KEY || !addr) return null;
+  if (!KAKAO_ENABLED || !addr) return null;
   // 검색어 조립·채택 규칙은 shared/kakaoQueries.js SSOT — 서버 어댑터와 같은 파일을 쓴다.
   const query = buildLegalDongQuery(addr, cityLabel);
   if (!query) return null;
@@ -337,13 +357,8 @@ const fetchKakaoLegalDong = async (addr, cityLabel = '') => {
   if (!legalDongPending.has(key)) {
     const p = (async () => {
       try {
-        const res = await fetchWithTimeout(
-          kakaoAddressSearchUrl(query),
-          { headers: { Authorization: `KakaoAK ${KAKAO_REST_KEY}` } },
-          KAKAO_TIMEOUT_MS
-        );
-        if (!res.ok) return null;
-        return pickLegalDongFromKakao((await res.json()).documents?.[0], cityLabel);
+        const data = await kakaoJson(kakaoAddressSearchUrl(query), { op: 'address', query, size: 1 });
+        return pickLegalDongFromKakao(data?.documents?.[0], cityLabel);
       } catch { return null; }
     })().finally(() => legalDongPending.delete(key));
     legalDongPending.set(key, p);
@@ -355,19 +370,14 @@ const fetchKakaoLegalDong = async (addr, cityLabel = '') => {
 
 // ── Kakao: POI 키워드 검색 (주민센터 등) ──────────────────────────
 const searchKakaoFull = async (query) => {
-  if (!KAKAO_REST_KEY || !query) return null;
+  if (!KAKAO_ENABLED || !query) return null;
   const key = query.trim();
   if (kakaoCache.has(key)) return kakaoCache.get(key);
   if (!kakaoPending.has(key)) {
     const p = (async () => {
       try {
-        const res = await fetchWithTimeout(
-          kakaoKeywordSearchUrl(key),
-          { headers: { Authorization: `KakaoAK ${KAKAO_REST_KEY}` } },
-          KAKAO_TIMEOUT_MS
-        );
-        if (!res.ok) return null;
-        return (await res.json()).documents?.[0] || null;
+        const data = await kakaoJson(kakaoKeywordSearchUrl(key), { op: 'keyword', query: key, size: 5 });
+        return data?.documents?.[0] || null;
       } catch { return null; }
     })().finally(() => kakaoPending.delete(key));
     kakaoPending.set(key, p);

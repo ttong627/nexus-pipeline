@@ -22,6 +22,7 @@ import SharePasscodePrompt from './SharePasscodePrompt.jsx';
 // ★순번 엔진은 SSOT 한 곳에만 산다 — 예전엔 이 파일에 41개 심볼이 문자 단위로 복제돼 있었다(2026-08-23 점검에서 제거).
 //   복제는 드리프트 전엔 증상이 없다가, 다음 수정이 한쪽에만 들어가는 순간 화면과 서버 순번이 갈라진다.
 //   회귀 `scripts/apt-dong-parse.test.mjs` 의 '전 심볼 가드'가 재정의를 막는다.
+import { kakaoCoordOf, kakaoStaticMapBlob } from '../utils/kakaoApi.js';   // ★REST 키는 서버에만 있다(2026-08-23 점검)
 import {
   RENTAL_LIKE_RE,
   analyzeSequenceQuality,
@@ -48,7 +49,6 @@ const mergeReason = (prev, add) => {
 };
 
 const KAKAO_JS_KEY = import.meta.env.VITE_KAKAO_JS_KEY;
-const KAKAO_REST_KEY = import.meta.env.VITE_KAKAO_REST_KEY;
 /**
  * 기사 공유링크 유효기간(일).
  *
@@ -1860,18 +1860,12 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
 
   // ── 기사 출발지 주소 지오코딩 ────────────────────────────────────────
   const handleGeocodeStartAddr = useCallback(async (driverId, addr) => {
-    if (!addr?.trim() || !KAKAO_REST_KEY) return;
+    if (!addr?.trim()) return;
     try {
-      const res = await fetch(
-        `https://dapi.kakao.com/v2/local/search/address.json?query=${encodeURIComponent(addr.trim())}&size=1`,
-        { headers: { Authorization: `KakaoAK ${KAKAO_REST_KEY}` } }
-      );
-      if (!res.ok) return;
-      const data = await res.json();
-      const d = data.documents?.[0];
-      if (d?.x && d?.y) {
+      const hit = await kakaoCoordOf(addr.trim());
+      if (hit) {
         setDrivers(prev => prev.map(dr =>
-          dr.id === driverId ? { ...dr, startLat: parseFloat(d.y), startLng: parseFloat(d.x) } : dr
+          dr.id === driverId ? { ...dr, startLat: hit.lat, startLng: hit.lng } : dr
         ));
       }
     } catch { /* ignore */ }
@@ -1879,7 +1873,6 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
 
   // 마운트 시 startAddr 있으면 자동 지오코딩
   useEffect(() => {
-    if (!KAKAO_REST_KEY) return;
     drivers.forEach(d => {
       if (d.startAddr && !d.startLat) handleGeocodeStartAddr(d.id, d.startAddr);
     });
@@ -3083,12 +3076,9 @@ ${folders}
       const kakaoColor = KAKAO_COLOR_MAP[driver.color] || 'gray';
       const posStr = dRecs.map(r => `${r._lng} ${r._lat}`).join('|');
       const markerParam = `type:pos|color:${kakaoColor}|size:small&pos=${posStr}`;
-      const imgUrl = `https://dapi.kakao.com/v2/maps/staticmap?appkey=${KAKAO_REST_KEY}&center=${centerLng},${centerLat}&level=6&w=1200&h=900&markers=${encodeURIComponent(markerParam)}`;
-
       try {
-        const res = await fetch(imgUrl, { headers: { Authorization: `KakaoAK ${KAKAO_REST_KEY}` } });
-        if (res.ok) {
-          const blob = await res.blob();
+        const blob = await kakaoStaticMapBlob({ centerLat, centerLng, level: 6, w: 1200, h: 900, markers: markerParam });
+        if (blob) {
           const blobUrl = URL.createObjectURL(blob);
           const a = document.createElement('a');
           a.href = blobUrl;
@@ -3151,16 +3141,14 @@ ${folders}
     const areaMeta = {};
     const concurrency = 10;
 
-    const fetchCoord = async (url, source) => {
+    // ★서버 프록시 경유 — 클라이언트에는 REST 키가 없다(2026-08-23 점검)
+    const fetchCoord = async (query, source, keyword = false) => {
       const ctrl = new AbortController();
-      const tid = setTimeout(() => ctrl.abort(), 5000);
+      const tid = setTimeout(() => ctrl.abort(), 8000);
       try {
-        const res = await fetch(url, { headers: { Authorization: `KakaoAK ${KAKAO_REST_KEY}` }, signal: ctrl.signal });
+        const hit = await kakaoCoordOf(query, { keyword, signal: ctrl.signal });
         clearTimeout(tid);
-        if (!res.ok) return null;
-        const data = await res.json();
-        const d = data.documents?.[0];
-        return (d?.x && d?.y) ? { lat: parseFloat(d.y), lng: parseFloat(d.x), source, raw: d } : null;
+        return hit ? { ...hit, source } : null;
       } catch { clearTimeout(tid); return null; }
     };
 
@@ -3199,7 +3187,7 @@ ${folders}
           let coord = null;
           let used = null;
           for (const c of candidates.filter(Boolean)) {
-            coord = await fetchCoord(c.url, c.source || label);
+            coord = await fetchCoord(c.query, c.source || label, !!c.keyword);
             if (coord) { used = c; break; }
           }
           if (coord) {
@@ -3222,16 +3210,9 @@ ${folders}
       ? (cacheCity.trim().split(/\s+/).filter(t => /(시|군|구)$/.test(t)).pop() || '')
       : '';
     const cityFull = cacheCity || '';
-    const makeAddressUrl = (query, source) => ({
-      source,
-      query,
-      url: `https://dapi.kakao.com/v2/local/search/address.json?query=${encodeURIComponent(query)}&size=1`,
-    });
-    const makeKeywordUrl = (query, source) => ({
-      source,
-      query,
-      url: `https://dapi.kakao.com/v2/local/search/keyword.json?query=${encodeURIComponent(query)}&size=1`,
-    });
+    // ★후보는 URL 이 아니라 (질의어, 검색종류)다 — 호출은 서버 프록시가 한다(클라에 REST 키 없음, 2026-08-23 점검)
+    const makeAddressUrl = (query, source) => ({ source, query, keyword: false });
+    const makeKeywordUrl = (query, source) => ({ source, query, keyword: true });
 
     try {
       // 1라운드: 지자체+도로명 → address API (가장 정확)
@@ -4950,23 +4931,20 @@ ${folders}
           if (!addrToUse) return;
           setErrorFixingId(r.id);
           try {
-            const fetchCoord = async (url) => {
+            const fetchCoord = async (query, keyword = false) => {
               const ctrl = new AbortController();
-              const tid = setTimeout(() => ctrl.abort(), 5000);
+              const tid = setTimeout(() => ctrl.abort(), 8000);
               try {
-                const res = await fetch(url, { headers: { Authorization: `KakaoAK ${KAKAO_REST_KEY}` }, signal: ctrl.signal });
+                const hit = await kakaoCoordOf(query, { keyword, signal: ctrl.signal });
                 clearTimeout(tid);
-                if (!res.ok) return null;
-                const data = await res.json();
-                const d = data.documents?.[0];
-                return (d?.x && d?.y) ? { lat: parseFloat(d.y), lng: parseFloat(d.x), raw: d } : null;
+                return hit;
               } catch { clearTimeout(tid); return null; }
             };
             const road = extractRoadAddress(addrToUse);
             let coord =
-              await fetchCoord(`https://dapi.kakao.com/v2/local/search/address.json?query=${encodeURIComponent(road)}&size=1`) ||
-              await fetchCoord(`https://dapi.kakao.com/v2/local/search/keyword.json?query=${encodeURIComponent(road)}&size=1`) ||
-              await fetchCoord(`https://dapi.kakao.com/v2/local/search/keyword.json?query=${encodeURIComponent((getRouteDong(r) ? `${getRouteDong(r)} ` : '') + road.slice(0, 35))}&size=1`);
+              await fetchCoord(road) ||
+              await fetchCoord(road, true) ||
+              await fetchCoord((getRouteDong(r) ? `${getRouteDong(r)} ` : '') + road.slice(0, 35), true);
 
             if (coord) {
               const cacheCity = isCloudMode ? cloudCity : (fileInfo?.city || '');

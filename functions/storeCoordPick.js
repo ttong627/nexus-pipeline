@@ -7,7 +7,9 @@
 //    죽은 쪽을 고친 사람은 고쳤다고 믿지만 운영은 그대로였다 —
 //    에러가 안 나서 몇 달을 못 알아챈다. 지운 것:
 //      · services/address-service/src/coords/coordStore.js `pickDeliveryCoord` (호출부 0)
-//      · src/utils/coordStoreApi.js `pickStoreCoord`      (호출부가 죽은 함수뿐)
+//      · src/utils/coordStoreApi.js `pickStoreCoord` — ⚠️**아직 지우지 않았다**(2026-08-23 점검에서 확인).
+//        파일은 남아 있고 규칙도 이곳과 다르다(purpose 분기). 호출부가 죽은 함수뿐이라 동작에는 영향이 없지만,
+//        '지웠다'고 적어 두면 고쳐도 안 바뀌는 함정이 된다 — 실제로 지울 때 이 줄도 함께 지울 것.
 //    이제 이 규칙은 **여기 한 곳**뿐이고, 부르는 곳은 `index.js` `storeCoordsFor`
 //    (Cloud Function `geocodeAuto`, 3분마다) 하나다.
 //

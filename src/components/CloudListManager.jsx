@@ -33,8 +33,8 @@ import { useConfirmDelete } from '../contexts/ConfirmDeleteContext.jsx';
 import DriverSequenceView from './DriverSequenceView.jsx';
 import { isTranslitBuildingDong } from '../../services/address-service/src/shared/dongTokens.js';
 import { logAudit } from '../utils/audit.js';   // B-11 파괴적 작업 감사 로그
+import { kakaoSearchAddress, kakaoSearchKeyword } from '../utils/kakaoApi.js';   // ★REST 키는 서버에만 있다(2026-08-23 점검)
 
-const KAKAO_REST_KEY = import.meta.env.VITE_KAKAO_REST_KEY;
 const ttl90 = () => Timestamp.fromMillis(Date.now() + 90 * 24 * 60 * 60 * 1000);
 
 // ─── Records Cache (IndexedDB, 24h TTL) ───────────────────────────────────────
@@ -1072,28 +1072,22 @@ ${e.message}`);
     let successCount = 0;
     const updates = {};
 
-    // Kakao API 호출 (429 지수 백오프 3회 재시도, 10s 타임아웃)
-    const kakaoFetch = async (url) => {
+    // 카카오 조회는 **서버 프록시**를 거친다 — 클라이언트 번들에 REST 키를 두면 누구나 가져다 쓴다(2026-08-23 점검).
+    //   실패·미발견이면 빈 배열을 돌려주고, 일시 오류에는 지수 백오프로 3회까지 다시 시도한다.
+    const kakaoDocs = async (query, keyword = false) => {
       const go = async () => {
-        const ctrl = new AbortController();
-        const tid = setTimeout(() => ctrl.abort(), 10000);
         try {
-          const res = await fetch(url, {
-            headers: { Authorization: `KakaoAK ${KAKAO_REST_KEY}` },
-            signal: ctrl.signal,
-          });
-          clearTimeout(tid);
-          return res;
-        } catch { clearTimeout(tid); return null; }
+          const data = keyword ? await kakaoSearchKeyword(query, { size: 5 }) : await kakaoSearchAddress(query, { size: 5 });
+          return data?.documents || null;      // null = 호출 실패(재시도 대상)
+        } catch { return null; }
       };
-      let res = await go();
-      // 429 → 지수 백오프: 2s → 4s → 8s (최대 3회 재시도)
+      let docs = await go();
       for (const delay of [2000, 4000, 8000]) {
-        if (res?.status !== 429) break;
+        if (docs !== null) break;
         await new Promise(r => setTimeout(r, delay));
-        res = await go();
+        docs = await go();
       }
-      return res;
+      return docs || [];
     };
 
     // 검색 결과가 선택된 지자체 내인지 확인 (전체명·약칭 모두 허용)
@@ -1123,21 +1117,15 @@ ${e.message}`);
       const prefixedRoad = cityPrefix ? `${cityPrefix} ${road}` : road;
 
       // 1단계: 지자체+도로명으로 address 검색 (가장 정확)
-      const res1 = await kakaoFetch(
-        `https://dapi.kakao.com/v2/local/search/address.json?query=${encodeURIComponent(prefixedRoad)}&size=5`
-      );
-      if (res1?.ok) {
-        const docs = (await res1.json()).documents || [];
+      {
+        const docs = await kakaoDocs(prefixedRoad, false);
         const d = docs.find(isInRegion);
         if (d?.x && d?.y) return { lat: parseFloat(d.y), lng: parseFloat(d.x), _step: 1 };
       }
 
       // 2단계: 지자체+도로명으로 keyword 검색 (address 파싱 실패 보완)
-      const res2 = await kakaoFetch(
-        `https://dapi.kakao.com/v2/local/search/keyword.json?query=${encodeURIComponent(prefixedRoad)}&size=5`
-      );
-      if (res2?.ok) {
-        const docs = (await res2.json()).documents || [];
+      {
+        const docs = await kakaoDocs(prefixedRoad, true);
         const d = docs.find(isInRegion);
         if (d?.x && d?.y) return { lat: parseFloat(d.y), lng: parseFloat(d.x), _step: 2 };
       }
@@ -1145,12 +1133,9 @@ ${e.message}`);
       // 3단계: 지자체+전체주소(건물명 포함) keyword 검색 (아파트 단지명 등)
       const fullQuery = cityPrefix ? `${cityPrefix} ${주소}` : 주소;
       if (fullQuery !== prefixedRoad) {
-        const res3 = await kakaoFetch(
-          `https://dapi.kakao.com/v2/local/search/keyword.json?query=${encodeURIComponent(fullQuery)}&size=5`
-        );
-        if (res3?.ok) {
-          const docs = (await res3.json()).documents || [];
-          const d = docs.find(isInRegion);
+      {
+        const docs = await kakaoDocs(fullQuery, true);
+        const d = docs.find(isInRegion);
           if (d?.x && d?.y) return { lat: parseFloat(d.y), lng: parseFloat(d.x), _step: 3 };
         }
       }
@@ -1160,11 +1145,8 @@ ${e.message}`);
       if (isOnlyBuildingName) {
         const dongPrefix = 행정동?.trim() || sigungu;
         const step4Query = dongPrefix ? `${dongPrefix} ${road}` : `${sido} ${road}`;
-        const res4 = await kakaoFetch(
-          `https://dapi.kakao.com/v2/local/search/keyword.json?query=${encodeURIComponent(step4Query)}&size=5`
-        );
-        if (res4?.ok) {
-          const docs = (await res4.json()).documents || [];
+        {
+          const docs = await kakaoDocs(step4Query, true);
           const d = docs.find(isInRegion) || docs.find(doc => doc.category_group_code === 'PO3');
           if (d?.x && d?.y && isInRegion(d)) return { lat: parseFloat(d.y), lng: parseFloat(d.x), _step: 4 };
         }
