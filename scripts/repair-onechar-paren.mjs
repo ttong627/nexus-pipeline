@@ -88,7 +88,8 @@ if (WRITE && todo.length) {
   const stamp = new Date().toISOString().slice(0, 10);
   const dir = path.join(os.homedir(), 'Desktop');
   mkdirSync(dir, { recursive: true });
-  const backup = path.join(dir, `nexus_A38_괄호파편_복구백업_${stamp}.json`);
+  const cityTag = (ONLY_CITY || '전체').replace(/\s+/g, '_');
+  const backup = path.join(dir, `nexus_A38_괄호파편_복구백업_${cityTag}_${stamp}.json`);
   writeFileSync(backup, JSON.stringify(todo.map((x) => ({ path: x.ref.path, data: x.data })), null, 2), 'utf8');
   console.log(`백업: ${backup}`);
   const batch = db.batch();
