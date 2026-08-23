@@ -32,6 +32,8 @@ const BLD_TAIL = /(아파트|빌라|맨션|타워|하이츠|캐슬|파크|힐스
 // A-37: 음역 영문동(에이동·에이치동 …)도 동호 성분 — 빠지면 `에이동 201호`가 '메모'로 남아 상세주소로 승격되지 않는다
 const DONG_TOKEN_RE = new RegExp(`(?:${TRANSLIT_DONG_ALL_ALT}|[A-Za-z가-힣])?\\d{0,4}\\s*동`, 'g');
 function isDetailOnly(note) {
+  // 동 조각(`3-`·`◆2-`)은 상세주소 성분이 아니다 — 승격하면 상세주소 칸이 `3-`로 오염된다(2026-08-23 검사① 지적)
+  if (/-\s*$/.test(S(note))) return false;
   const rest = S(note)
     .replace(/지하|지층|반지하|옥탑/g, '')
     .replace(DONG_TOKEN_RE, '')                      // A동 · 가동 · 에이동 · 104동 · 2동

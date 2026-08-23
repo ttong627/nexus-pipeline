@@ -29,7 +29,8 @@ const DONG_UNIT_SRC = `(?:(?:\\d+(?:-\\d+)?|[A-Za-z]+|[가나다라마바사아�
 // A-10 ③(형 지시 2026-07-30): 동 대신 대시로 쓰인 숫자 동(101-203호)도 상세주소(동호수)로 인식한다.
 //   없으면 "101-"이 건물명 슬롯으로 새어 동 번호가 소실된다(실측 확인). 자리수 가드는 dongHoFormat.js 참조.
 const DETAIL_START_RE = new RegExp(`^(?:\\uC9C0\\uD558|\\uC9C0\\uCE35|\\uC625\\uD0D1|${DONG_UNIT_SRC}|${DONG_DASH_HO_SRC}|\\d+\\s*(?:\\uB3D9|\\uCE35|\\uD638)(?![\\uAC00-\\uD7A3])|[A-Za-z]?\\d+\\s*\\uD638)`, 'u');
-const DETAIL_MARKER_RE = new RegExp(`__P\\d+__|\\uC9C0\\uD558|\\uC9C0\\uCE35|\\uC625\\uD0D1|${DONG_UNIT_SRC}|${DONG_DASH_HO_SRC}|\\d+\\s*(?:\\uB3D9|\\uCE35|\\uD638)(?![\\uAC00-\\uD7A3])|[A-Za-z]?\\d+\\s*\\uD638`, 'u');
+// ※ 대시 동 마커는 **앞 경계**가 필요하다(`B1-302호`의 `1-302호`를 잡아 `B`+`1- 302호`로 갈라놓지 않도록) — 시작 앵커 판은 불필요.
+const DETAIL_MARKER_RE = new RegExp(`__P\\d+__|\\uC9C0\\uD558|\\uC9C0\\uCE35|\\uC625\\uD0D1|${DONG_UNIT_SRC}|(?<![A-Za-z\\d])${DONG_DASH_HO_SRC}|\\d+\\s*(?:\\uB3D9|\\uCE35|\\uD638)(?![\\uAC00-\\uD7A3])|[A-Za-z]?\\d+\\s*\\uD638`, 'u');
 // 주소칸에 섞인 전화번호 패턴(지역번호 0XX 또는 휴대폰 01X) — 건물명/상세 오염 차단용. 한국 지번·건물번호는 0으로 시작 안 함.
 export const PHONE_IN_ADDR_RE = /(?:0\d{1,2}|01[016789])[-.\s]?\d{3,4}[-.\s]?\d{4}/;
 
@@ -82,7 +83,23 @@ export const splitInlineBuildingTail = (tail) => {
   //   안 막으면 괄호가 `(제기동, 반)`·`(회기동, 비)`가 되고 반지층·B호 정보가 상세에서 사라진다.
   //   공백으로 떨어진 한 글자(`신 101호`)는 건드리지 않는다(마커에 붙은 경우만).
   if (cut > 0 && cut === marker && /(^|\s)[가-힣]$/.test(cleanTail.slice(0, cut))) cut -= 1;
-  const inlineBuildingName = stripAddressDelimiters(cut >= 0 ? cleanTail.slice(0, cut) : cleanTail);
+  // ★건물명 슬롯은 숫자·대시·공백만으로 이뤄질 수 없다(2026-08-23 · 형 지시 "동 '-' 특이사항 이동 결함 완전 해소").
+  //   `3-302호`·`1-2호`(다가구)·`3 302호`처럼 마커 앞이 `3-`·`1-`·`3`뿐이면 그건 동·호수의 일부다. 건물명으로 두면
+  //   주소DB 건물명과 달라 M-1 보존 경로로 **특이사항에 `3-`가 남고 주소에서 동이 사라진다**(전 명단 실측 3건 · 서초 07 `1-`·`3-`, 오정 08 `1-`).
+  //   마커가 없어도(`3-`·`101-203` 단독 꼬리) 같다 — 건물명이 아니라 상세에 남긴다(호수가 없어 복원은 못 하지만 조각이 특이사항으로 새지는 않는다).
+  if ((cut === marker || cut < 0) && /^[\d\s-]+$/.test(cut >= 0 ? cleanTail.slice(0, cut) : cleanTail)) cut = 0;
+  // 같은 뿌리의 영문·한글 대시 동(`A-302호`·`가-102호`·`지-3호`·`에이-402호`·`가동-402호`, 전 명단 414건) — 마커 앞 **마지막 토큰이 `X-` 꼴**이면
+  //   건물명이 아니라 동 조각이다: `행복빌라 A-302호` → 건물명 `행복빌라` / 상세 `A-302호`. 건물명은 대시로 끝나지 않는다.
+  //   토큰 = 숫자/영문 1~4자(건물명에 붙어 있어도 됨 — `행복빌라A-302호`) 또는 한글 1~3자(앞에 공백·시작 필요 — `대한빌라`를 자르지 않기 위해.
+  //   `호·층`이 든 것은 제외 — `201호-` 는 동 조각이 아니다). 마커가 없을 때(`행복빌라 3-`)도 같은 규칙으로 상세로 보낸다.
+  if (cut === marker || cut < 0) {
+    const pre = cut >= 0 ? cleanTail.slice(0, cut) : cleanTail;
+    // 영문/숫자 토큰은 **앞이 영문/숫자가 아닐 때만**(`SKVIEW-302호`의 `VIEW-`를 떼어 건물명을 찢지 않는다 · `행복빌라A-`는 한글 뒤라 허용)
+    const tail = pre.match(/(?<![A-Za-z\d])([A-Za-z\d]{1,4}\s*-)\s*$/) || pre.match(/(^|\s)((?:(?![호층])[가-힣]){1,3}\s*-)\s*$/);
+    if (tail) cut = pre.length - (tail[0].length - (tail.length === 3 ? tail[1].length : 0));
+  }
+  // 건물명은 대시로 끝나지 않는다 — 조각 규칙에 안 걸린 긴 토큰(`SKVIEW-302호`→`SKVIEW`, `대한빌라-302호`→`대한빌라`)은 끝 대시만 떼어 건물명으로
+  const inlineBuildingName = stripAddressDelimiters(cut >= 0 ? cleanTail.slice(0, cut) : cleanTail).replace(/\s*-+$/, '');
   const detail = normalizeAddressDetail(cut >= 0 ? cleanTail.slice(cut) : '');
   return { inlineBuildingName, detail };
 };

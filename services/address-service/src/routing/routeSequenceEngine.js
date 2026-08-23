@@ -40,7 +40,11 @@ export const haversine = (lat1, lng1, lat2, lng2) => {
  */
 export const parseAptDong = (addr) => {
   const text = String(addr || '');
-  const m = text.match(/(?:^|[\s,(])(\d{1,4})\s*동(?:[\s,)]|$)/) || text.match(/(?:^|[\s,(])(\d{3,4})\s*[-]\s*\d{1,4}\s*호/);
+  // DS-18 보강(2026-08-23 · 전 명단 실측): 1~2자리 동의 대시 표기(`3- 302호` 4,596건 · `10-1203호` 156건)도 동으로 읽는다 —
+  //   단 `호` 3~4자리일 때만(다가구 `1-2호`·`19-3호` 차단). 3~4자리 동은 기존대로 호 1~4자리 허용.
+  const m = text.match(/(?:^|[\s,(])(\d{1,4})\s*동(?:[\s,)]|$)/)
+    || text.match(/(?:^|[\s,(])(\d{3,4})\s*[-]\s*\d{1,4}\s*호/)
+    || text.match(/(?:^|[\s,(])(\d{1,2})\s*[-]\s*\d{3,4}\s*호/);
   return m ? parseInt(m[1], 10) : null;
 };
 export const parseFloorHo = (addr) => {

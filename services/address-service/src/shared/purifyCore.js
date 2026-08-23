@@ -423,6 +423,21 @@ export const createProcessAddress = (deps) => async (inputAddr, inputName = '', 
     if (!split || detailAddr.includes(split.dong)) return;
     detailAddr = `${split.dong} ${detailAddr}`.replace(/\s+/g, ' ').trim();
   };
+  // 괄호 안에 떨어진 동 조각(`(답십리동, 2-)`·`(고강동, 지-)`·`(용두동, B-)` — 실데이터 18건, 2026-08-23 검사①) — 건물명이 아니라 상세의 일부.
+  //   상세가 호수로 시작하면 앞에 되돌려 붙이고(`2-`+`709호` → A-10이 `2- 709호`로), 괄호에서는 뺀다. 상세가 비면 조각만이라도 상세에 남긴다.
+  //   다른 상세가 이미 있으면 손대지 않는다(보존). 토큰 = 숫자/영문 1~4자 또는 한글 1~3자(`호·층` 제외) + 대시.
+  const DASH_FRAG_TOKEN_RE = /^(?:[A-Za-z\d]{1,4}|(?:(?![호층])[가-힣]){1,3})-$/;
+  const salvageDashFragment = (inner) => {
+    const toks = String(inner || '').split(/\s*,\s*|\s+/).filter(Boolean);
+    const frags = toks.filter((t) => DASH_FRAG_TOKEN_RE.test(t));
+    if (frags.length !== 1) return inner;
+    const frag = frags[0];
+    const det = String(detailAddr || '').replace(/__P\d+__/g, '').replace(/\s+/g, ' ').trim();
+    if (/^\d{1,4}\s*호/.test(det)) detailAddr = `${frag}${det}`;
+    else if (!det) detailAddr = frag;
+    else return inner;
+    return toks.filter((t) => t !== frag).join(', ');
+  };
 
   // ── 입력 건물번호 SSOT 가드 (유사매칭/변조 차단 · 절대 되돌리지 말 것) ──
   // 입력이 도로명주소이고 API 결과의 도로명 뒤 건물번호가 입력과 다르면 → API 결과 전부 폐기.
@@ -495,7 +510,7 @@ export const createProcessAddress = (deps) => async (inputAddr, inputName = '', 
     }
     // 괄호 분류: 긴 문장(3단어↑ or 10자↑+공백) → 특이사항, 동명 토큰 → 제거, 나머지 → buildingName
     parens.forEach(p => {
-      const inner = p.replace(/^\(|\)$/g, '').trim();
+      const inner = salvageDashFragment(p.replace(/^\(|\)$/g, '').trim());
       if (!inner) return;
       // 주소 괄호(법정동+건물명)는 특이사항으로 보내지 않는다 — 법정동 토큰(OO동/읍/면) 포함 시 주소괄호로 간주.
       const isAddrParen = /[가-힣]{2,}\d*(읍|면|동)(?![가-힣])/.test(inner);
@@ -539,7 +554,7 @@ export const createProcessAddress = (deps) => async (inputAddr, inputName = '', 
     }
     // 괄호에서 dong/building/특이사항 추출 후 도로명 이후 내용 → detailAddr 이동
     parens.forEach((p, i) => {
-      const inner = p.replace(/^\(|\)$/g, '').trim();
+      const inner = salvageDashFragment(p.replace(/^\(|\)$/g, '').trim());
       const wordCount = inner ? inner.split(/\s+/).length : 0;
       if (!inner) {
         finalRoadAddr = finalRoadAddr.replace(`__P${i}__`, '');

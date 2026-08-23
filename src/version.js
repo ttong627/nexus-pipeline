@@ -1,8 +1,11 @@
-export const APP_VERSION = 'V7.8';
+export const APP_VERSION = 'V7.9';
 export const APP_BUILD = '2026.08.23';
-export const APP_BUILD_TIME = '2026.08.23 16:53';
+export const APP_BUILD_TIME = '2026.08.23 18:03';
 
 export const CHANGELOG = [
+  { v: "V7.9", date: "2026.08.23", items: [
+    "동 번호가 대시로 붙은 주소(3-302호·A-302호·괄호 속 2-)가 정제될 때 동 조각이 특이사항·괄호로 새거나 사라지던 문제를 완전히 해결했습니다 — 저장된 명단 199건도 복구",
+  ]},
   { v: "V7.8", date: "2026.08.23", items: [
     "3동 302호처럼 동 번호가 1~2자리인 주소를 다시 정제해도 동이 사라지지 않습니다(3- 302호 형식 유지)",
   ]},

@@ -60,6 +60,15 @@
     { "id": "A10-3-self-format-idempotent-2digit", "rule": "A-10 ③", "desc": "자기 출력형 멱등 — 2자리 동 `10-1203호`(패딩 없음)", "tags": ["offline"],
       "input": { "addr": "동대문구 왕산로 72, 10-1203호", "cityLabel": "서울특별시 동대문구" } },
 
+    { "id": "A10-3-glued-1digit-dong", "rule": "A-10 ③", "desc": "★입력형 `3-302호` — 동 조각 `3-`가 건물명·특이사항으로 새지 않고 `3- 302호`", "tags": ["offline"],
+      "input": { "addr": "동대문구 왕산로 72, 3-302호", "cityLabel": "서울특별시 동대문구" } },
+
+    { "id": "A10-3-dagagu-ho-kept", "rule": "A-10 ③", "desc": "다가구 `1-2호`는 동이 아니다 — 쪼개지 않고 그대로(특이사항 `1-` 금지)", "tags": ["offline"],
+      "input": { "addr": "동대문구 왕산로 72, 1-2호", "cityLabel": "서울특별시 동대문구" } },
+
+    { "id": "A10-3-alpha-dash-dong-kept", "rule": "A-10 ③", "desc": "영문 대시 동 `A-302호` — 건물명·특이사항으로 새지 않고 상세에 그대로(전 명단 414건 형태)", "tags": ["offline"],
+      "input": { "addr": "동대문구 왕산로 72, 행복빌라 A-302호", "cityLabel": "서울특별시 동대문구" } },
+
     { "id": "A10-3-dash-dongho-floor", "rule": "A-10 ③", "desc": "대시 동호 + 층", "tags": ["offline"],
       "input": { "addr": "권선구 권선로 472, 101-3층 203호", "cityLabel": "경기도 수원시 권선구" } },
 

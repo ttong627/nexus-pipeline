@@ -1,10 +1,11 @@
-// A-10 ③ 멱등 보강 회귀 — 1~2자리 동의 자기 출력형(`3- 302호`·`10-1203호`)을 다시 읽는다
+// A-10 ③ 멱등 회귀 — 1~2자리 동의 대시 표기(`3- 302호`·`10-1203호`·`3-302호`)를 다시 읽는다
 //   node --test scripts/dash-dong-idempotent.test.mjs
 //
 // 실측(2026-08-23 · 동대문구 08 재정제 dry-run): `답십리로 184, 3- 302호 (답십리동, 동서울한양아파트)` 를 다시 정제하면
 //   `302호`가 되고 동 `3-` 는 특이사항으로 밀렸다. `DONG_DASH_HO_SRC`·`DASH_HO_RE` 가 동 3~4자리만 알아서
-//   우리가 만든 출력(`3- 302호`)을 상세 시작으로 못 보고 건물명 슬롯으로 보냈기 때문. 자기 출력형 두 가지만 추가 인식한다.
-//   지번 부번·다가구 호수(`1-2호`·`40-25호`)·대시 바로 3자리 호(`12-301호`)는 여전히 미개입(주소 변조 차단).
+//   우리가 만든 출력(`3- 302호`)을 상세 시작으로 못 보고 건물명 슬롯으로 보냈기 때문.
+//   (같은 날 정정) 동 자리수는 가드가 아니다 — **동 1~4자리 + 호 3~4자리 + `호`**. 지번 부번·다가구 호수(`1-2호`·`40-25호`)는
+//   호가 1~2자리라 여전히 미개입. 상세 회귀는 dash-dong-parse.test.mjs.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { normalizeDongHoDetail } from '../services/address-service/src/shared/dongHoFormat.js';
@@ -41,12 +42,13 @@ test('A-10 ③ normalizeDongHoDetail — 1~2자리 동 자기 출력형은 멱�
   assert.equal(normalizeDongHoDetail('101- 203호'), '101- 203호', '기존 3자리 동 멱등 유지');
 });
 
-test('A-10 ③ 미개입 유지 — 지번 부번·다가구 호수·대시 바로 3자리 호', () => {
+test('A-10 ③ 미개입 유지 — 호 1~2자리(지번 부번·다가구 호수)는 동으로 보지 않는다', () => {
   assert.equal(normalizeDongHoDetail('1-2호'), '1-2호');
   assert.equal(normalizeDongHoDetail('40-25호'), '40-25호');
-  assert.equal(normalizeDongHoDetail('12-301호'), '12-301호', '공백 패딩도 4자리 호도 아니면 동으로 보지 않는다');
-  // 층이 끼면 자기 출력형이 아니다 — 동으로 변환하지 않는다(호수 패딩은 기존 동작이라 공백 수는 보지 않는다)
-  assert.match(normalizeDongHoDetail('3-3층 302호'), /^3-3층\s+302호$/);
+  assert.equal(normalizeDongHoDetail('19-3호'), '19-3호');
+  // (2026-08-23 정정) 동 자리수는 가드가 아니다 — `12-301호`·`3-3층 302호`도 호 3~4자리면 숫자 동이다
+  assert.equal(normalizeDongHoDetail('12-301호'), '12- 301호');
+  assert.equal(normalizeDongHoDetail('3-3층 302호'), '3- 302호 3층');
 });
 
 test('A-10 ③ splitInlineBuildingTail — 자기 출력형은 상세 시작으로 인식(건물명 슬롯으로 새지 않는다)', () => {

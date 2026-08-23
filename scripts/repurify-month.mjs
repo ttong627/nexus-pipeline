@@ -14,8 +14,9 @@
 //
 //   사용:
 //     node scripts/repurify-month.mjs "서울특별시 동대문구" 2026-08            # dry-run
-//     node scripts/repurify-month.mjs "서울특별시 동대문구" 2026-08 --write    # 반영(형 확인 후)
+//     node scripts/repurify-month.mjs "서울특별시 동대문구" 2026-08 --write    # 반영 — ★형 확인("고") 후에만. dry-run 수치를 먼저 보고할 것
 //     옵션 --limit N (앞 N건만 · 표본용)
+//   원복: 바탕화면 백업 JSON → node scripts/restore-from-backup.mjs <백업.json> --write
 import admin from 'firebase-admin';
 import { readFileSync, writeFileSync, mkdirSync } from 'fs';
 import path from 'path';
