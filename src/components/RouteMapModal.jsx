@@ -64,6 +64,8 @@ import {
   revalidateAreaMatch,
   strongMatchKey,
 } from './routeMap/mapHelpers.js';
+import AutoPinConfirmModal from './routeMap/AutoPinConfirmModal.jsx';   // 자동 핀 배치 확인(2026-08-23 Phase 4-5 분리)
+import DongNavConfirmModal from './routeMap/DongNavConfirmModal.jsx';   // 행정동 이동 확인(2026-08-23 Phase 4-5 분리)
 
 export const KAKAO_JS_KEY = import.meta.env.VITE_KAKAO_JS_KEY;   // 지도 SDK 키(도메인 제한 가능 → 번들에 있어도 된다). 환경 의존이라 순수 모듈에 두지 않는다
 
@@ -5279,120 +5281,49 @@ ${folders}
 
       {/* ── 행정동 이동 미저장 확인 모달 ────────────────────────────────── */}
       {showDongNavConfirm && (
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[700] flex items-center justify-center p-4">
-          <div className="w-full max-w-xs bg-[#0d0d0d] border border-amber-500/40 rounded-2xl p-5 shadow-[0_0_40px_rgba(245,158,11,0.15)]">
-            <div className="flex items-center gap-2 mb-2">
-              <AlertCircle size={16} className="text-amber-400 shrink-0" />
-              <span className="text-sm font-black text-white">미저장 변경이 있습니다</span>
-            </div>
-            <p className="text-[10px] text-gray-400 mb-4 leading-relaxed">
-              <span className="text-amber-300 font-bold">{activeDong}</span> 배정 결과가 저장되지 않았습니다.<br/>
-              다음 행정동(<span className="text-white font-bold">{dongQueue[showDongNavConfirm.targetIndex]}</span>)으로 이동하면 현재 배정이 유실됩니다.
-            </p>
-            <div className="space-y-2">
-              <button
-                onClick={async () => {
-                  await handleSaveSession(false);
-                  setShowDongNavConfirm(null);
-                  setActiveDongIndex(showDongNavConfirm.targetIndex);
-                }}
-                className="w-full py-2 bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/30 font-black rounded-xl text-xs transition-colors"
-              >
-                저장 후 이동
-              </button>
-              <button
-                onClick={() => {
-                  const { targetIndex } = showDongNavConfirm;
-                  setShowDongNavConfirm(null);
-                  setIsDirty(false);
-                  setActiveDongIndex(targetIndex);
-                }}
-                className="w-full py-2 bg-[#111] border border-[#2a2a2a] text-gray-400 hover:text-white hover:border-[#3a3a3a] font-bold rounded-xl text-xs transition-colors"
-              >
-                저장 안 하고 이동
-              </button>
-              <button
-                onClick={() => setShowDongNavConfirm(null)}
-                className="w-full py-1.5 text-gray-600 hover:text-gray-400 text-xs transition-colors"
-              >
-                취소
-              </button>
-            </div>
-          </div>
-        </div>
+        <DongNavConfirmModal
+          currentDong={activeDong}
+          targetDong={dongQueue[showDongNavConfirm.targetIndex]}
+          onSaveAndGo={async () => {
+            await handleSaveSession(false);
+            setShowDongNavConfirm(null);
+            setActiveDongIndex(showDongNavConfirm.targetIndex);
+          }}
+          onDiscardAndGo={() => {
+            const { targetIndex } = showDongNavConfirm;
+            setShowDongNavConfirm(null);
+            setIsDirty(false);
+            setActiveDongIndex(targetIndex);
+          }}
+          onCancel={() => setShowDongNavConfirm(null)}
+        />
       )}
 
       {/* ── 자동 핀 확인 모달 ──────────────────────────────────────────── */}
       {autoPinConfirmModal && (
-        <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-[600] flex items-center justify-center p-4">
-          <div className="w-full max-w-xs bg-[#0a0a0a] border border-emerald-500/30 rounded-2xl p-5 shadow-[0_0_50px_rgba(16,185,129,0.15)]">
-            <div className="flex items-center gap-2 mb-1">
-              <MapPin size={14} className="text-emerald-400 shrink-0" />
-              <span className="text-sm font-black text-white">자동 핀 배치 완료</span>
-            </div>
-            <p className="text-[10px] text-gray-500 mb-3 leading-relaxed">기사별 배정 구역 중심에 핀을 자동 생성했습니다.<br/>이대로 확정하거나 핀을 조정 후 재배정할 수 있습니다.</p>
-            <div className="space-y-1.5 mb-4 bg-[#111] rounded-xl p-3">
-              {drivers.slice(0, driverCount).filter(d => !d.isExternal).map(d => {
-                const cnt = Object.values(autoPinConfirmModal.clusterMap).filter(id => id === d.id).length;
-                const isNew = !!autoPinConfirmModal.pendingPins[d.id];
-                return (
-                  <div key={d.id} className="flex items-center gap-2 text-[11px]">
-                    <div className="w-2 h-2 rounded-full shrink-0" style={{ background: d.color }} />
-                    <span className="text-gray-200 flex-1 font-medium">{d.name}</span>
-                    <span className="text-gray-500">{cnt.toLocaleString()}건</span>
-                    {isNew && <span className="text-[9px] text-emerald-400 font-black">📍신규</span>}
-                  </div>
-                );
-              })}
-              {autoPinConfirmModal.diagnostics?.qualityScore !== undefined && (
-                <div className="mt-2 pt-2 border-t border-[#1e1e1e] flex items-center justify-between text-[9px]">
-                  <span className="text-gray-600">품질 점수</span>
-                  <span className={`font-black ${autoPinConfirmModal.diagnostics.qualityScore >= 70 ? 'text-emerald-400' : autoPinConfirmModal.diagnostics.qualityScore >= 40 ? 'text-amber-400' : 'text-red-400'}`}>
-                    {autoPinConfirmModal.diagnostics.qualityScore}점
-                  </span>
-                </div>
-              )}
-            </div>
-            <div className="flex flex-col gap-2">
-              <button
-                onClick={() => {
-                  const { clusterMap, pendingPins, diagnostics, affectedIds } = autoPinConfirmModal;
-                  const idSet = new Set(affectedIds);
-                  setDriverPins(prev => ({ ...prev, ...pendingPins }));
-                  setRecords(prev => prev.map(r => idSet.has(r.id)
-                    ? { ...r, _driverId: clusterMap[r.id] || null }
-                    : r
-                  ));
-                  const balanceMsg = diagnostics?.load?.maxAbsDiffPct !== undefined
-                    ? `최대 편차 ${diagnostics.load.maxAbsDiffPct}%` : '분석 완료';
-                  const qScore = diagnostics?.qualityScore !== undefined ? ` · 품질 ${diagnostics.qualityScore}점` : '';
-                  const stratLabel = { hilbert: '힐베르트 곡선', seedVoronoi: '핀 전체 기준', dongGroup: '자동 경계' }[diagnostics?.strategy || 'dongGroup'] || '자동 경계';
-                  setTimeout(() => showToast('success', `자동 배정 완료 [${stratLabel}] — ${balanceMsg}${qScore} · 핀 자동 설정`, 5000), 200);
-                  setAutoPinConfirmModal(null);
-                }}
-                className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-black rounded-xl text-xs transition-colors"
-              >
-                이대로 확정
-              </button>
-              <button
-                onClick={() => {
-                  const { clusterMap, pendingPins, affectedIds } = autoPinConfirmModal;
-                  const idSet = new Set(affectedIds);
-                  setDriverPins(prev => ({ ...prev, ...pendingPins }));
-                  setRecords(prev => prev.map(r => idSet.has(r.id)
-                    ? { ...r, _driverId: clusterMap[r.id] || null }
-                    : r
-                  ));
-                  showToast('info', '핀이 지도에 표시됩니다. [핀 꽂기]로 조정 후 [자동 N등분]을 다시 누르세요.', 7000);
-                  setAutoPinConfirmModal(null);
-                }}
-                className="w-full py-2 bg-[#111] border border-[#2a2a2a] text-gray-400 hover:text-white hover:border-emerald-500/40 font-bold rounded-xl text-xs transition-colors"
-              >
-                핀 조정 후 재배정
-              </button>
-            </div>
-          </div>
-        </div>
+        <AutoPinConfirmModal
+          data={autoPinConfirmModal} drivers={drivers} driverCount={driverCount}
+          onApply={() => {
+            const { clusterMap, pendingPins, diagnostics, affectedIds } = autoPinConfirmModal;
+            const idSet = new Set(affectedIds);
+            setDriverPins(prev => ({ ...prev, ...pendingPins }));
+            setRecords(prev => prev.map(r => (idSet.has(r.id) ? { ...r, _driverId: clusterMap[r.id] || null } : r)));
+            const balanceMsg = diagnostics?.load?.maxAbsDiffPct !== undefined
+              ? `최대 편차 ${diagnostics.load.maxAbsDiffPct}%` : '분석 완료';
+            const qScore = diagnostics?.qualityScore !== undefined ? ` · 품질 ${diagnostics.qualityScore}점` : '';
+            const stratLabel = { hilbert: '힐베르트 곡선', seedVoronoi: '핀 전체 기준', dongGroup: '자동 경계' }[diagnostics?.strategy || 'dongGroup'] || '자동 경계';
+            setTimeout(() => showToast('success', `자동 배정 완료 [${stratLabel}] — ${balanceMsg}${qScore} · 핀 자동 설정`, 5000), 200);
+            setAutoPinConfirmModal(null);
+          }}
+          onAdjustPins={() => {
+            const { clusterMap, pendingPins, affectedIds } = autoPinConfirmModal;
+            const idSet = new Set(affectedIds);
+            setDriverPins(prev => ({ ...prev, ...pendingPins }));
+            setRecords(prev => prev.map(r => (idSet.has(r.id) ? { ...r, _driverId: clusterMap[r.id] || null } : r)));
+            showToast('info', '핀이 지도에 표시됩니다. [핀 꽂기]로 조정 후 [자동 N등분]을 다시 누르세요.', 7000);
+            setAutoPinConfirmModal(null);
+          }}
+        />
       )}
 
       {/* ── 공유 링크 모달 ──────────────────────────────────────────── */}
