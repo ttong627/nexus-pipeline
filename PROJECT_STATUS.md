@@ -12,7 +12,7 @@
 | Functions | `openShare`·`api`·`geocode`·`geocodeAuto` 갱신 · 시크릿 `ADDRESS_KAKAO_REST_KEY` 접근권한 자동 부여 |
 | 규칙 | 컴파일·릴리스 성공(companyCode·기업열람·열람기록·TTL 7일·email_verified) |
 | Hosting | **`index-CtXhTV4U.js`** · 200 · **번들에 카카오 REST 키 없음** 실측 |
-| 인덱스 | 이번엔 배포하지 않음 — 파일에서 뺀 `audit_logs` 인덱스 2개를 운영에서 **삭제**하게 되므로 형 확인 후 |
+| 인덱스 | **배포 성공**(2026-08-23 22:00 KST) — 한글 필드 제거로 400 에러가 해소됐다(수년만). 파일에 없는 기존 2개는 `--force` 를 안 써서 **보존**(운영 6개 유지) |
 
 **배포 중 발견·해결한 두 가지(둘 다 조용히 죽어 있던 것)**
 1. `api` 함수에 **호출 권한(invoker)이 없었다** → `/api/fav/*`·`/api/usage`·신규 `/api/kakao` 전부 403.
