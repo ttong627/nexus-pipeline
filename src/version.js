@@ -1,8 +1,11 @@
-export const APP_VERSION = 'V7.7';
+export const APP_VERSION = 'V7.8';
 export const APP_BUILD = '2026.08.23';
-export const APP_BUILD_TIME = '2026.08.23 11:54';
+export const APP_BUILD_TIME = '2026.08.23 16:53';
 
 export const CHANGELOG = [
+  { v: "V7.8", date: "2026.08.23", items: [
+    "3동 302호처럼 동 번호가 1~2자리인 주소를 다시 정제해도 동이 사라지지 않습니다(3- 302호 형식 유지)",
+  ]},
   { v: "V7.7", date: "2026.08.23", items: [
     "반지층·비02호·지01호처럼 상세주소 앞에 붙은 한 글자가 괄호(건물명)로 새던 문제 수정 — 상세주소에 그대로 남습니다",
     "제101동 제205호의 '제' 접두어가 지워지지 않던 문제 수정",

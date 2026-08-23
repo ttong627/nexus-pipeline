@@ -54,6 +54,12 @@
     { "id": "A38-onechar-prefix-bi-ho", "rule": "A-38", "desc": "비02호(B02호의 한글 표기) — 괄호 (비) 금지", "tags": ["offline"],
       "input": { "addr": "동대문구 왕산로 72, 비02호", "cityLabel": "서울특별시 동대문구" } },
 
+    { "id": "A10-3-self-format-idempotent-1digit", "rule": "A-10 ③", "desc": "★자기 출력형 멱등 — 1자리 동 `3- 302호`를 다시 정제해도 동이 남는다(동대문구 08 재정제 실측)", "tags": ["offline"],
+      "input": { "addr": "동대문구 왕산로 72, 3- 302호", "cityLabel": "서울특별시 동대문구" } },
+
+    { "id": "A10-3-self-format-idempotent-2digit", "rule": "A-10 ③", "desc": "자기 출력형 멱등 — 2자리 동 `10-1203호`(패딩 없음)", "tags": ["offline"],
+      "input": { "addr": "동대문구 왕산로 72, 10-1203호", "cityLabel": "서울특별시 동대문구" } },
+
     { "id": "A10-3-dash-dongho-floor", "rule": "A-10 ③", "desc": "대시 동호 + 층", "tags": ["offline"],
       "input": { "addr": "권선구 권선로 472, 101-3층 203호", "cityLabel": "경기도 수원시 권선구" } },
 
