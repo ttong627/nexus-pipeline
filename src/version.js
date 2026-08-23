@@ -1,8 +1,11 @@
-export const APP_VERSION = 'V7.13';
+export const APP_VERSION = 'V7.14';
 export const APP_BUILD = '2026.08.24';
-export const APP_BUILD_TIME = '2026.08.24 07:58';
+export const APP_BUILD_TIME = '2026.08.24 08:28';
 
 export const CHANGELOG = [
+  { v: "V7.14", date: "2026.08.24", items: [
+    "도구 모달(중복분석·컬럼재배치·매칭·서식 등) 화면을 정리했습니다 — 동작은 그대로입니다",
+  ]},
   { v: "V7.13", date: "2026.08.24", items: [
     "명단 좌표 매칭이 훨씬 빨라졌습니다 — 7천 건 기준 3분 넘게 걸리던 캐시 조회가 1초 안에 끝납니다",
     "배송 지도에서 기사 배정·순번을 바꿀 때 화면이 즉시 반응합니다(핀 전체를 다시 그리지 않습니다)",

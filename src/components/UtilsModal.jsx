@@ -1,5 +1,5 @@
 ﻿import { useState, useEffect, useRef } from 'react';
-import { X, Layers, Download, Upload, Clock, Send, History, GitMerge, CheckSquare, Square, Trash2, Sparkles, FileX, SplitSquareHorizontal, RefreshCw, SlidersHorizontal, ArrowRight, ArrowUp, ArrowDown, Eye, Combine, Shuffle, ChevronRight, AlertCircle, Palette, Wand2, Building2, Truck } from 'lucide-react';
+import { X, Layers, History, GitMerge, Trash2, Sparkles, SplitSquareHorizontal, SlidersHorizontal, Combine, Shuffle, Palette, Building2, Truck } from 'lucide-react';
 import { db, collection, query, orderBy, limit, getDocs, addDoc, serverTimestamp, doc, getDoc } from '../config/firebase.js';
 import * as XLSX from 'xlsx';
 import MergerTab from './utils/MergerTab.jsx';   // 'merger' 탭(2026-08-24 Phase 4-6 분리)
