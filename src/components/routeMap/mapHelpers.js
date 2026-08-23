@@ -401,3 +401,15 @@ export const buildPinInnerHtml = ({ color, seq = '', name = '', dong = '', qtyNu
   const dotPx = Math.round(pinSize * 0.28);
   return `<div style="width:${pinSize}px;height:${pinSize}px;border-radius:50%;background:${color};display:flex;align-items:center;justify-content:center;border:3px solid rgba(255,255,255,0.9);box-shadow:${glowStyle};flex-shrink:0;position:relative;">${seq ? `<span style="font-size:${pinSize >= 40 ? 9 : 10}px;font-weight:900;color:white;line-height:1;">${seq}</span>` : `<div style="width:${dotPx}px;height:${dotPx}px;border-radius:50%;background:rgba(255,255,255,0.35);"></div>`}${qtyBadgeHtml}${samePointBadgeHtml}</div><div style="width:0;height:0;border-left:${arrowPx}px solid transparent;border-right:${arrowPx}px solid transparent;border-top:${arrowPx * 2}px solid ${color};margin-top:-1px;flex-shrink:0;"></div><div style="background:${qtyNum >= 5 ? 'rgba(20,10,5,0.95)' : 'rgba(8,8,8,0.88)'};color:white;font-size:11px;font-weight:800;padding:2px 6px;border-radius:4px;margin-top:2px;white-space:nowrap;max-width:92px;overflow:hidden;text-overflow:ellipsis;border:1px solid ${color}${qtyNum >= 5 ? '88' : '45'};">${name}·<span style="color:${qtyColor};font-weight:900;">${qtyNum}포</span></div>${dong ? `<div style="background:rgba(0,0,0,0.72);color:#94a3b8;font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;margin-top:1px;white-space:nowrap;max-width:80px;overflow:hidden;text-overflow:ellipsis;">${dong}</div>` : ''}`;
 };
+
+// ── 뷰포트 컬링 판정 (2026-08-23 Phase 3-4) ────────────────────────────────
+//   화면(bounds)에 여유(padRatio)를 더한 사각형 안인지. 여유를 두는 이유: 조금 밀어도 빈 화면이 안 보이게.
+//   ★이 값으로 **화면에 붙일지**만 정한다. 전체범위 맞춤·경로선·×N 은 전건 기준으로 따로 돈다.
+export const CULL_MIN_RECORDS = 1200;   // 이보다 적으면 컬링하지 않는다(평소 경로는 그대로)
+export const isWithinPaddedBounds = (lat, lng, box, padRatio = 0.4) => {
+  if (!box || !Number.isFinite(lat) || !Number.isFinite(lng)) return true;   // 모르면 보여준다(안전한 쪽)
+  const { south, west, north, east } = box;
+  const padLat = Math.abs(north - south) * padRatio;
+  const padLng = Math.abs(east - west) * padRatio;
+  return lat >= south - padLat && lat <= north + padLat && lng >= west - padLng && lng <= east + padLng;
+};

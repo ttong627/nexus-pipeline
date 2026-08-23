@@ -44,7 +44,9 @@ import {
 //   읽기도 고치기도 어려웠고, 순수함수는 모듈에 있어야 회귀 테스트로 잠글 수 있다.
 import { loadCityCoordCache, lookupCoordInCache, saveCoordCache } from '../utils/coordCache.js';   // ★좌표 캐시 SSOT(2026-08-23 Phase 1)
 import {
+  CULL_MIN_RECORDS,
   buildPinInnerHtml,
+  isWithinPaddedBounds,
   pinZIndex,
   DRIVER_COLORS,
   KAKAO_COLOR_MAP,
@@ -249,6 +251,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
   const overlayByIdRef = useRef(new Map());     // 레코드 id → { overlay, el, rec, sameCount, coordKey } — 변경분만 갱신하려고 둔 색인
   const coordRecsMapRef = useRef(new Map());    // 같은 좌표 그룹(팝업용) — 리스너가 **최신** 목록을 보게 한다
   const structuralSigRef = useRef('');          // 구조(누가·어디에·몇 포)가 바뀌었는지
+  const cullBoxRef = useRef(null);              // 마지막으로 붙일 때 쓴 화면 범위(컬링용)
   const polylinesRef = useRef([]);
   const driverPinOverlaysRef = useRef([]);
   const completionOverlaysRef = useRef([]); // ②-B 완료좌표 비교 오버레이(점·선·라벨)
@@ -1016,6 +1019,40 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
   // 오버레이는 기사 id·색만 영향 — 기사명 편집 등으로는 재생성하지 않도록 시그니처화(재생성 최소화).
   const driverColorSig = useMemo(() => drivers.map(d => `${d.id}:${d.color}`).join('|'), [drivers]);
 
+  // 현재 지도 화면 범위를 평범한 숫자 상자로 — 카카오 객체를 그대로 들고 다니지 않는다(테스트·비교가 쉬워진다).
+  const readMapBox = useCallback(() => {
+    const map = kakaoMapRef.current;
+    if (!map?.getBounds) return null;
+    try {
+      const b = map.getBounds();
+      const sw = b.getSouthWest(); const ne = b.getNorthEast();
+      return { south: sw.getLat(), west: sw.getLng(), north: ne.getLat(), east: ne.getLng() };
+    } catch { return null; }
+  }, []);
+
+  // ── 뷰포트 컬링 재평가 (지도를 멈췄을 때만) ─────────────────────────────
+  //   ★핀을 다시 만들지 않는다 — 이미 만든 오버레이를 붙였다 뗄 뿐이다.
+  //   평소 경로(수백 건)에서는 아예 동작하지 않는다(CULL_MIN_RECORDS 미만).
+  useEffect(() => {
+    const map = kakaoMapRef.current;
+    if (!map || !window.kakao?.maps) return undefined;
+    const onIdle = () => {
+      if (overlayByIdRef.current.size < CULL_MIN_RECORDS) return;
+      const box = readMapBox();
+      if (!box) return;
+      cullBoxRef.current = box;
+      overlayByIdRef.current.forEach((entry) => {
+        const r = entry.rec;
+        const want = isWithinPaddedBounds(r?._lat, r?._lng, box);
+        if (want === entry.attached) return;
+        entry.overlay?.setMap(want ? map : null);
+        entry.attached = want;
+      });
+    };
+    window.kakao.maps.event.addListener(map, 'idle', onIdle);
+    return () => { try { window.kakao.maps.event.removeListener(map, 'idle', onIdle); } catch { /* 지도 파괴됨 */ } };
+  }, [isMapReady, readMapBox]);
+
   useEffect(() => {
     if (!kakaoMapRef.current) return;
 
@@ -1050,6 +1087,10 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
     coordRecsMapRef.current = coordRecsMap;
 
     const driverColorById = new Map(drivers.map(d => [d.id, d.color]));
+    // 컬링 여부·현재 화면 범위 — 평소(수백 건)엔 cullActive=false 라 예전과 완전히 같다.
+    const cullActive = mapRecords.length >= CULL_MIN_RECORDS;
+    const cullBox = cullActive ? readMapBox() : null;
+    cullBoxRef.current = cullBox;
 
     if (canPatch) {
       // 변경분만 DOM 갱신 — 오버레이 객체는 그대로 두고 내용과 겹침순서만 바꾼다.
@@ -1120,7 +1161,10 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
         xAnchor: 0.5,
         zIndex: pinZIndex({ isError: !!r._에러, sameCount, qtyNum, seq }),
       });
-      overlay.setMap(kakaoMapRef.current);
+      // ★대량일 때만 화면 근처 핀만 붙인다(Phase 3-4) — 오버레이 객체는 버리지 않고 붙였다 뗀다.
+      const visible = !cullActive || isWithinPaddedBounds(r._lat, r._lng, cullBox);
+      overlay.setMap(visible ? kakaoMapRef.current : null);
+      entry.attached = visible;
       overlaysRef.current.push(overlay);
       entry.overlay = overlay;
       overlayByIdRef.current.set(r.id, entry);   // 다음 변경 때 이 핀만 갱신하기 위한 색인
