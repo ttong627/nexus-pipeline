@@ -361,7 +361,7 @@
 
 | # | 규칙 |
 |---|---|
-| SH-1 | **공유 생성 시 숫자 6자리 비밀번호 필수**(`RouteMapModal` 내보내기 메뉴 · 🎲 무작위). 없으면 생성 자체를 막는다 — 없는 채로 나간 링크는 누구나 연다 |
+| SH-1 | **지도를 배포할 때마다 담당자가 그 자리에서 숫자 6자리를 넣는다**(형 지시 2026-08-23 "미리 생성하는 방식이 아니라 지도마다 암호를 넣는 방식"). [기사 공유 링크] → 기사·마감일 검증 → **암호창(`SharePasscodePrompt`)** → 받은 번호로 생성. **미리 담아두는 상태를 두지 않는다** — 메뉴 입력칸처럼 미리 넣어 둔 값은 다음 지도에 딸려가거나 안 넣은 채 배포된다(그래서 입력값은 창 컴포넌트 안에만 두고 `runCreateShare(passcode)` 인자로만 넘긴다 · 부모 재렌더 방지 UI-1 과도 일치). **같은 번호 재사용 허용**(중복 검사 없음 — 형 지시 "똑같은 암호라도 상관없이"). 없으면 생성 자체를 막는다 — 없는 채로 나간 링크는 누구나 연다 |
 | SH-2 | **평문 저장 금지** — `sha256(salt:passcode)` 해시 + 16바이트 솔트만 **`route_share_secrets/{shareId}`**(기사·익명·비관리자 읽기 금지)에. 공유 문서에 넣으면 토큰 가진 기사가 해시를 읽어 6자리를 즉시 역산한다. 클라(`src/utils/sharePasscode.js` Web Crypto)·서버(`functions/sharePasscode.js` node crypto) **동일 규격** — 회귀 `scripts/share-passcode.test.mjs`가 두 해시 일치를 잠근다 |
 | SH-3 | **검증은 서버만** — Cloud Function `openShare`(callable · asia-northeast3)가 비밀번호를 대조하고 **그 공유 하나에만 통하는 커스텀 토큰**(claims.shareId · uid `share_{shareId}_{driverId}`)을 발급. 잠금은 **공유+IP 5회 → 10분**(틀린 사람만) + **공유 전체 20회/h → 30분**(분산 대입 차단 · 실질 방어선 — IP 는 XFF 위조 가능해 보조)을 한 트랜잭션으로 집계. 응답 `{token, legacy, expiresAt}`. 화면 비교는 장식이다 |
 | SH-4 | **규칙이 막는다** — `firestore.rules` `hasShareToken(shareId)`: 공유·건별 읽기/기사 쓰기는 토큰 또는 생성자·관리자만. **건별 문서는 토큰의 `driverId`와 같은 건만**(기사 화면은 `where driverId` 로 구독 — 토큰 하나로 그 공유 전 건이 열리면 남의 명단이 뜬다 · 검사 지적). 건별 만료는 **부모 공유 문서** 기준(`parentShareAlive`), 소유자 판정은 부모의 `createdBy`/`createdByUid`(`isParentShareOwner` — SSO 담당자는 email 클레임이 없다). ★**공유 토큰은 `isAuthenticated()`에서 제외**(`!('shareId' in token)`) — 빼지 않으면 기사 토큰으로 `users/{uid}`를 만들어 관리자로 올라가는 체인이 열린다(`users` create 도 role/tier 기본값만 허용). 담당자 목록 조회는 관리자 경로 |

@@ -16,8 +16,9 @@ import { annotateCarryover } from '../utils/prevMonthCarryover.js';
 import { newShareId } from '../utils/shareId.js';
 // 공유 문서 구조(메타/건별 분리) — 계획 Phase 1. 배열은 부분 권한을 줄 수 없다.
 import { buildShareMeta, buildShareRecords, chunk, normalizeDeadline, MAX_DEADLINE_DAYS } from '../utils/shareDoc.js';
-import { hashPasscode, newSalt, randomPasscode, isValidPasscode } from '../utils/sharePasscode.js';
+import { hashPasscode, newSalt, isValidPasscode } from '../utils/sharePasscode.js';
 import { getDriversCollection } from '../utils/company.js';
+import SharePasscodePrompt from './SharePasscodePrompt.jsx';
 
 const KAKAO_JS_KEY = import.meta.env.VITE_KAKAO_JS_KEY;
 const KAKAO_REST_KEY = import.meta.env.VITE_KAKAO_REST_KEY;
@@ -1196,10 +1197,12 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
   // ── 공유 링크
   const [shareModal, setShareModal] = useState(null); // { links: [{driverId,name,color,url}] }
   const [isCreatingShare, setIsCreatingShare] = useState(false);
+  const [askPasscode, setAskPasscode] = useState(false);   // 배포 순간 뜨는 암호 입력창
   // ★공유 사용일정(마감일) — 담당자가 정한다(계획 Phase 3, 형 확정 C).
-  // ★기사 비밀번호(숫자 6자리 · 필수 · 2026-08-23 형 지시) — 공유 생성 때 담당자가 정한다.
+  // ★기사 비밀번호(숫자 6자리 · 필수 · 2026-08-23 형 지시) — **지도를 배포할 때마다 그 자리에서 받는다.**
+  //   미리 메뉴에 넣어 두는 방식이 아니다(형 지시): 미리 넣은 값은 다음 지도에 딸려가거나 안 넣은 채 배포된다.
+  //   입력값은 `SharePasscodePrompt` 안에만 있고(부모 재렌더 방지 · UI-1), 확인을 누르는 순간 runCreateShare 로 넘어간다.
   //   평문은 저장하지 않는다(해시·솔트만 route_share_secrets 에). 기사는 이 번호를 넣어야 지도가 열린다(openShare Function).
-  const [sharePasscode, setSharePasscode] = useState('');
   //   이 날짜가 접근 가능 기간의 **진짜 천장**이다. 접속해도 이 날을 넘겨 연장되지 않는다.
   //   기본 = 오늘+7일(로컬/KST 기준 날짜 문자열).
   const [shareDeadline, setShareDeadline] = useState(() => {
@@ -3243,14 +3246,25 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
   };
 
   // ── 기사 배송루트 공유 링크 생성 ─────────────────────────────────────
-  const handleCreateShareLink = useCallback(async () => {
+  //  ★[기사 공유 링크] → ①기사·마감일 검증 ②**암호창을 연다**(지도마다 받는다) ③받은 번호로 runCreateShare.
+  //    검증을 암호보다 먼저 하는 이유: 번호까지 입력받고 나서 "기사가 없다"고 물리면 헛수고다.
+  const handleCreateShareLink = useCallback(() => {
     const assignedDrivers = drivers.filter(d => records.some(r => r._driverId === d.id));
     if (!assignedDrivers.length) { showToast('error', '배정된 기사가 없습니다.'); return; }
     // ★사용일정 검증을 **만들기 전에** 한다 — 만든 뒤에 틀렸다고 하면 링크가 이미 나가 있다.
     const dl = normalizeDeadline(shareDeadline);
     if (!dl.ok) { showToast('error', `공유 마감일: ${dl.error}`); return; }
-    // ★비밀번호도 만들기 전에 검증 — 없는 채로 나간 링크는 누구나 연다.
-    if (!isValidPasscode(sharePasscode)) { showToast('error', '기사 비밀번호: 숫자 6자리를 입력하세요(🎲 버튼으로 자동 생성 가능)'); return; }
+    setAskPasscode(true);
+  }, [drivers, records, showToast, shareDeadline]);
+
+  // 암호창에서 받은 번호로 실제 생성. 암호는 **인자로만** 들어온다 — 컴포넌트가 들고 있지 않으니 다음 지도로 샐 수 없다.
+  const runCreateShare = useCallback(async (passcode) => {
+    const assignedDrivers = drivers.filter(d => records.some(r => r._driverId === d.id));
+    if (!assignedDrivers.length) { showToast('error', '배정된 기사가 없습니다.'); return; }
+    const dl = normalizeDeadline(shareDeadline);
+    if (!dl.ok) { showToast('error', `공유 마감일: ${dl.error}`); return; }
+    // ★비밀번호도 만들기 전에 검증 — 없는 채로 나간 링크는 누구나 연다(창이 막지만 여기서도 막는다).
+    if (!isValidPasscode(passcode)) { showToast('error', '기사 비밀번호: 숫자 6자리를 입력하세요'); return; }
     setIsCreatingShare(true);
     try {
       // ★소속사 명부(org_drivers)를 읽어 기사별 인증 번호를 붙인다(계획 Phase 1).
@@ -3308,7 +3322,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
       // ★공유 문서 + 비밀번호 문서는 **한 배치**로 쓴다 — 둘 중 하나만 남는 창(비밀번호 없는 공유 = 누구나 여는 링크)이 생기지 않게.
       //   규칙은 getAfter 로 같은 배치의 부모 소유자를 확인한다. createdByUid 는 SSO 담당자(email 클레임 없음)용 소유 키.
       const passcodeSalt = newSalt();
-      const passcodeHash = await hashPasscode(sharePasscode, passcodeSalt);
+      const passcodeHash = await hashPasscode(passcode, passcodeSalt);
       const ownerUid = auth.currentUser?.uid || '';
       const metaBatch = writeBatch(db);
       metaBatch.set(doc(db, 'route_shares', shareId), {
@@ -3338,7 +3352,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
       const base = window.location.origin;
       setShareModal({
         shareId,
-        passcode: sharePasscode,   // 이 창에서만 보여준다 — 닫으면 다시 볼 수 없다(재설정만 가능)
+        passcode,   // 이 창에서만 보여준다 — 닫으면 다시 볼 수 없다(재설정만 가능)
         expiresAtLabel: expiresAtDate.toLocaleString('ko-KR', {
           year: 'numeric',
           month: '2-digit',
@@ -3351,7 +3365,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
           url: `${base}/?r=${shareId}&d=${d.id}`,
         })),
       });
-      setSharePasscode('');   // 다음 공유가 같은 번호로 만들어지지 않게 — 모달에 한 번 보여준 뒤 입력칸은 비운다
+      setAskPasscode(false);
       showToast('success', '공유 링크가 생성되었습니다.');
     } catch (e) {
       showToast('error', '공유 링크 생성 실패: ' + e.message);
@@ -3360,7 +3374,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
     }
     // ★shareDeadline 을 deps 에 넣는다 — 빠지면 담당자가 날짜를 바꿔도
     //   **처음 값으로 만들어진다**(에러 없이 조용히 어긋나는 종류다).
-  }, [records, drivers, cloudCity, cloudMonthId, fileInfo, showToast, shareDeadline, sharePasscode]);
+  }, [records, drivers, cloudCity, cloudMonthId, fileInfo, showToast, shareDeadline]);
 
   // ── 기사 순번 반영 요청: 담당자 유선 확인 후 공식 명단에 승인 반영 ─────
   const handleLoadOrderApplyRequests = useCallback(async () => {
@@ -4582,23 +4596,10 @@ ${folders}
                         onChange={e => setShareDeadline(e.target.value)}
                         className="w-full bg-black/40 border border-[#2a2a2a] focus:border-green-500/50 rounded px-1.5 py-1 text-[11px] text-white outline-none font-bold" />
                     </div>
-                    {/* ★기사 비밀번호(숫자 6자리 · 필수 · 2026-08-23 형 지시) — 기사는 링크 + 이 번호가 있어야 지도를 연다.
-                        링크와 번호는 따로 전달한다. 평문은 저장하지 않는다. */}
-                    <div className="px-2.5 pt-1 pb-1.5" onClick={e => e.stopPropagation()}>
-                      <div className="text-[9px] font-bold text-gray-500 mb-1">기사 비밀번호 (숫자 6자리 · 필수)</div>
-                      <div className="flex gap-1">
-                        <input type="text" inputMode="numeric" maxLength={6} value={sharePasscode}
-                          onChange={e => setSharePasscode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                          placeholder="예: 482917"
-                          className="flex-1 min-w-0 bg-black/40 border border-[#2a2a2a] focus:border-green-500/50 rounded px-1.5 py-1 text-[11px] text-white outline-none font-bold tracking-widest" />
-                        <button type="button" onClick={() => setSharePasscode(randomPasscode())} title="무작위 6자리 만들기"
-                          className="px-1.5 rounded border border-[#2a2a2a] text-[11px] text-gray-300 hover:text-white hover:border-green-500/40 transition-colors">🎲</button>
-                      </div>
-                    </div>
                     <button onClick={() => { setShowExportMenu(false); handleCreateShareLink(); }}
                       disabled={isCreatingShare}
                       className="w-full text-left px-2.5 py-1.5 rounded-lg text-[11px] font-bold text-green-400 hover:bg-green-900/20 flex items-center gap-1.5 transition-colors disabled:opacity-50">
-                      <Share2 size={11} /> 기사 공유 링크
+                      <Share2 size={11} /> 기사 공유 링크 <span className="text-[9px] text-gray-500 font-normal">(암호 입력)</span>
                     </button>
                   </div>
                 </>
@@ -6416,6 +6417,15 @@ ${folders}
       )}
 
       {/* ── 공유 링크 모달 ──────────────────────────────────────────── */}
+      {/* 지도 배포 순간에 그 지도의 암호를 받는다(형 지시 2026-08-23) — 입력값은 이 컴포넌트 안에만 있다 */}
+      <SharePasscodePrompt
+        open={askPasscode}
+        busy={isCreatingShare}
+        driverCount={drivers.filter(d => records.some(r => r._driverId === d.id)).length}
+        onCancel={() => setAskPasscode(false)}
+        onConfirm={(code) => runCreateShare(code)}
+      />
+
       {shareModal && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[200] flex items-center justify-center p-4">
           <div className="bg-[#0d0d0d] border border-[#2a2a2a] rounded-2xl w-full max-w-md shadow-2xl">
@@ -6441,7 +6451,7 @@ ${folders}
                     <button
                       onClick={async () => {
                         // 재설정: 새 해시·솔트로 교체. ⚠️이미 발급된 기사 토큰은 살아 있다(비밀번호는 '입장' 열쇠이지 세션 열쇠가 아니다).
-                        const np = window.prompt('새 기사 비밀번호(숫자 6자리). 앞으로 입장하는 기사는 새 번호를 써야 합니다(이미 열어 둔 기사 화면은 만료일까지 유지).', randomPasscode());
+                        const np = window.prompt('새 기사 비밀번호(숫자 6자리)를 입력하세요. 앞으로 입장하는 기사는 새 번호를 써야 합니다(이미 열어 둔 기사 화면은 만료일까지 유지).', '');   // ★미리 만들어 넣어 주지 않는다 — 담당자가 직접 넣는다(형 지시)
                         if (np === null) return;
                         if (!isValidPasscode(np)) { showToast('error', '숫자 6자리만 가능합니다'); return; }
                         try {
