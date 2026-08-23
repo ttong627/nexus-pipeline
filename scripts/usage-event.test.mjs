@@ -11,9 +11,15 @@ import mod from '../functions/usageEvent.js';
 const { extractClientIp, sanitizeUsageEvent, USAGE_TTL_DAYS } = mod;
 
 // ── IP 추출 ────────────────────────────────────────────────────────
-test('x-forwarded-for 첫 번째 값이 실제 클라이언트 IP', () => {
-  // Cloud Run/Functions gen2 는 "client, proxy1, proxy2" 순으로 붙인다
+test('XFF 꼬리의 구글 LB·사설 대역을 걷어내고 남는 마지막 값이 실제 클라이언트 IP', () => {
+  // ★앞쪽은 클라가 위조할 수 있고, 뒤쪽은 구글 LB IP 일 수 있다 → 뒤에서부터 인프라 IP 를 걷어낸다.
   assert.equal(extractClientIp({ 'x-forwarded-for': '203.0.113.45, 130.211.0.1, 35.191.0.2' }), '203.0.113.45');
+  // 직접 호출(run.app): "위조값, 실제IP" → 마지막이 실제 IP
+  assert.equal(extractClientIp({ 'x-forwarded-for': '1.2.3.4, 203.0.113.45' }), '203.0.113.45');
+  // 외부 LB 뒤: "위조값, 실제IP, LB" → LB 를 걷어내고 실제 IP
+  assert.equal(extractClientIp({ 'x-forwarded-for': '1.2.3.4, 203.0.113.45, 35.191.8.8' }), '203.0.113.45');
+  // 사설 대역만 남으면 그대로(내부 호출)
+  assert.equal(extractClientIp({ 'x-forwarded-for': '10.0.0.5' }), '10.0.0.5');
 });
 
 test('공백·단일 값·대문자 헤더 방어', () => {

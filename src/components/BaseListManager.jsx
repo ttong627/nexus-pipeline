@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import * as XLSX from 'xlsx';
 import {
@@ -103,6 +103,10 @@ export default function BaseListManager({ user, onBack, initialCity = '', export
   const [saving, setSaving] = useState(false);
 
   const [searchText, setSearchText] = useState('');
+  const [searchInput, setSearchInput] = useState('');            // 화면 입력값(즉시 반영)
+  const searchDebounceRef = useRef(null);                        // ★디바운스 — 87,674건에서 글자마다 전건 필터+정렬이 돌면 9초 멈춘다(점검 실측)
+  const [malformedCities, setMalformedCities] = useState([]);    // 비정규 지자체명 의심 — 삭제하지 않고 표시만
+  const baseCollatorRef = useRef(new Intl.Collator('ko', { numeric: true }));
   const [filterDong, setFilterDong] = useState('');
   const [showOnlyWithNote, setShowOnlyWithNote] = useState(true);
   const [showUpload, setShowUpload] = useState(false);
@@ -126,22 +130,50 @@ export default function BaseListManager({ user, onBack, initialCity = '', export
     return storedCities.filter(c => c.id.startsWith(filterSido));
   }, [storedCities, filterSido]);
 
+  // ★입력은 즉시, 무거운 계산은 150ms 뒤에 — CloudListManager 와 같은 방식(UI-1 취지)
+  const handleSearchChange = useCallback((val) => {
+    setSearchInput(val);
+    clearTimeout(searchDebounceRef.current);
+    searchDebounceRef.current = setTimeout(() => setSearchText(val), 150);
+  }, []);
+  const clearSearch = useCallback(() => {
+    clearTimeout(searchDebounceRef.current);
+    setSearchInput(''); setSearchText('');
+  }, []);
+  useEffect(() => () => clearTimeout(searchDebounceRef.current), []);
+
+  // ★B-8: 구스키마(한국어 키) 레코드도 읽는다. 이 화면만 영문 키만 보는 바람에
+  //   구스키마 레코드가 **빈 행**으로 보이고 「특이사항 없는 레코드 삭제」·「유령 정리」 대상으로 들어갔다(2026-08-23 점검).
+  const recName     = (r) => r?.name     ?? r?.이름     ?? '';
+  const recDong     = (r) => r?.dong     ?? r?.행정동   ?? '';
+  const recMobile   = (r) => r?.mobile   ?? r?.휴대폰   ?? '';
+  const recLandline = (r) => r?.landline ?? r?.유선전화 ?? '';
+  const recNote     = (r) => r?.note     ?? r?.특이사항 ?? '';
+  const recBirth    = (r) => r?.birthKey ?? r?.생년월일 ?? '';
+
   const displayRecords = useMemo(() => {
+    // ★순서가 중요하다: **거른 뒤에** dirty 를 병합한다. 전건을 먼저 map 하면 검색 한 글자마다
+    //   8만 개 객체를 새로 만들어 메인스레드가 멈춘다(점검 실측 8,998ms).
+    const q = searchText.trim().toLowerCase();
+    const coll = baseCollatorRef.current;
+    const merged = (r) => (dirtyMap[r.id] ? { ...r, ...dirtyMap[r.id] } : r);
     return records
       .filter(r => !deletedIds.has(r.id))
-      .map(r => ({ ...r, ...dirtyMap[r.id] }))
       .filter(r => {
-        if (showOnlyWithNote && !(r.note || '').trim()) return false;
-        if (filterDong && (r.dong || '') !== filterDong) return false;
-        if (!searchText.trim()) return true;
-        const q = searchText.toLowerCase();
-        return [r.name, r.dong, r.mobile, r.landline, r.note]
+        const m = merged(r);
+        const note = String(recNote(m) || '');
+        const dong = String(recDong(m) || '');
+        if (showOnlyWithNote && !note.trim()) return false;
+        if (filterDong && dong !== filterDong) return false;
+        if (!q) return true;
+        return [recName(m), dong, recMobile(m), recLandline(m), note]
           .some(v => String(v || '').toLowerCase().includes(q));
       })
+      .map(merged)
       .sort((a, b) => {
-        let cmp = (a.dong || '').localeCompare(b.dong || '', 'ko', { numeric: true });
+        const cmp = coll.compare(String(recDong(a) || ''), String(recDong(b) || ''));
         if (cmp !== 0) return cmp;
-        return (a.name || '').localeCompare(b.name || '', 'ko', { numeric: true });
+        return coll.compare(String(recName(a) || ''), String(recName(b) || ''));
       });
   }, [records, dirtyMap, deletedIds, searchText, filterDong, showOnlyWithNote]);
 
@@ -178,7 +210,7 @@ export default function BaseListManager({ user, onBack, initialCity = '', export
     setDirtyMap({});
     setDeletedIds(new Set());
     setEditingCell(null);
-    setSearchText('');
+    setSearchText(''); setSearchInput('');
     setShowUpload(false);
     if (!selectedCity) { setRecords([]); setLastUpdatedAt(''); return; }
     if (hasCityAccess) fetchRecords(selectedCity);
@@ -193,19 +225,13 @@ export default function BaseListManager({ user, onBack, initialCity = '', export
         .map(d => ({ id: d.id, ...d.data() }))
         .filter(d => d.id && !d.id.startsWith('__'));
 
-      // "시/도 시/군/구" 형식이 아닌 항목(공백 없음) → 자동 삭제
+      // ⛔**자동 삭제 금지**(2026-08-23 점검 · M-1 · §19) — 예전엔 "공백 없는 ID = 비정규명"으로 보고
+      //   화면을 여는 것만으로 확인·백업·audit 없이 지자체 문서와 records 전건을 지웠다.
+      //   `세종특별자치시`처럼 시·군·구가 없는 광역단체는 정상인데도 공백이 없어 통째로 사라진다.
+      //   → 지우지 않는다. 목록에서만 빼고(아래 filter) 담당자가 알 수 있게 표시만 한다.
       const malformed = all.filter(d => !d.id.includes(' '));
-      for (const c of malformed) {
-        try {
-          const recSnap = await getDocsFromServer(collection(db, `base_lists/${c.id}/records`));
-          for (let i = 0; i < recSnap.docs.length; i += 499) {
-            const batch = writeBatch(db);
-            recSnap.docs.slice(i, i + 499).forEach(d => batch.delete(d.ref));
-            await batch.commit();
-          }
-          await deleteDoc(doc(db, 'base_lists', c.id));
-        } catch (e) { console.error(`[cleanup] ${c.id}:`, e); }
-      }
+      if (malformed.length) console.warn('[base_lists] 비정규 지자체명 의심(삭제하지 않음):', malformed.map(d => d.id).join(', '));
+      setMalformedCities(malformed.map(d => d.id));
 
       setStoredCities(
         all
@@ -437,7 +463,7 @@ ${e.message}`);
 
   const handleDeleteNoNote = async () => {
     if (!selectedCity || !hasCityAccess) return;
-    const targets = records.filter(r => !(r.note || '').trim());
+    const targets = records.filter(r => !String(recNote(r) || '').trim());
     if (!targets.length) { alert('특이사항 없는 레코드가 없습니다.'); return; }
     if (!(await confirmDelete({ target: '특이사항 없는 레코드', count: targets.length, dangerous: targets.length >= 50 }))) return;
     setSaving(true);
@@ -485,7 +511,7 @@ ${e.message}`);
     setSaving(true);
     try {
       const snap = await getDocsFromServer(collection(db, `base_lists/${selectedCity}/records`));
-      const ghosts = snap.docs.filter(d => !d.data().name?.trim());
+      const ghosts = snap.docs.filter(d => !String(recName(d.data()) || '').trim());
       if (ghosts.length === 0) { alert('유령 데이터가 없습니다.'); return; }
       if (!(await confirmDelete({ target: '이름 없는 유령 레코드', count: ghosts.length, dangerous: ghosts.length >= 50 }))) return;
       for (let i = 0; i < ghosts.length; i += 499) {
@@ -568,13 +594,13 @@ ${e.message}`);
   const baseVal = (r, key, idx) => {
     switch (key) {
       case 'NO':       return idx + 1;
-      case '이름':     return r.name || '';
-      case '생년월일': return r.birthKey || '';
-      case '행정동':   return r.dong || '';
+      case '이름':     return recName(r) || '';
+      case '생년월일': return recBirth(r) || '';
+      case '행정동':   return recDong(r) || '';
       case '리':       return r.리 || '';
       case '주소':     return combineAddr(r);
-      case '휴대폰':   return r.mobile || '';
-      case '유선전화': return r.landline || '';
+      case '휴대폰':   return recMobile(r) || '';
+      case '유선전화': return recLandline(r) || '';
       case '포수':     return r.qty ?? '';
       case '특이사항': return r.note || '';
       case '문자수신': return r.sms || '';
@@ -1157,11 +1183,11 @@ ${e.message}`);
             <div className="shrink-0 border-b border-[#181818] flex items-center px-4 gap-2.5 bg-[#080808] py-2 flex-wrap">
               <div className="relative w-56">
                 <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-emerald-400" />
-                <input type="text" value={searchText} onChange={e => setSearchText(e.target.value)}
+                <input type="text" value={searchInput} onChange={e => handleSearchChange(e.target.value)}
                   placeholder="이름, 읍면동, 연락처, 특이사항..."
                   className="w-full bg-[#0a1410] border-2 border-emerald-500/50 rounded-xl pl-8 pr-7 py-1.5 text-xs font-bold text-white outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-500/30 focus:bg-[#0c1a13] placeholder:text-gray-500 placeholder:font-normal shadow-[0_0_14px_rgba(16,185,129,0.18)] transition-all" />
-                {searchText && (
-                  <button onClick={() => setSearchText('')} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-600 hover:text-gray-400">
+                {searchInput && (
+                  <button onClick={clearSearch} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-600 hover:text-gray-400">
                     <X size={11} />
                   </button>
                 )}
@@ -1183,7 +1209,7 @@ ${e.message}`);
                 특이사항 있는 것만
               </button>
               {(searchText || filterDong) && (
-                <button onClick={() => { setSearchText(''); setFilterDong(''); }}
+                <button onClick={() => { clearSearch(); setFilterDong(''); }}
                   className="text-[10px] text-gray-600 hover:text-red-400 border border-[#2a2a2a] hover:border-red-700/40 rounded-lg px-2 py-1.5 transition-colors">
                   초기화
                 </button>

@@ -243,6 +243,7 @@ export default function App() {
   const [operatorName, setOperatorName] = useState('');    // 담당자 이름(업로드 전 확인)
   const [selectedCity, setSelectedCity] = useState('');    // 업로드 전 선택한 지자체
   const [analyzing, setAnalyzing] = useState(false);       // 파일 정밀 분석 중(3D 오버레이용)
+  const analyzingRef = useRef(false);   // ★재업로드 가드 — state 는 같은 틱에 갱신이 안 보여 ref 로 잠근다
   const [analysisSummary, setAnalysisSummary] = useState(null); // 정밀 분석 요약(명단/제외 시트·잡음행)
   const [aiRules, setAiRules] = useState(null);
   const [mapDefs, setMapDefs] = useState({});
@@ -511,7 +512,10 @@ export default function App() {
     if (_ssoMatch) {
       const _ssoToken = decodeURIComponent(_ssoMatch[1]);
       // 토큰 노출 방지 — 즉시 해시 제거
-      history.replaceState(null, '', window.location.pathname + window.location.search);
+      // ★`window.` 필수 — 이 컴포넌트에 `const [history] = useState([])`(Undo 배열)가 있어
+      //   `history.replaceState`는 배열을 잡아 TypeError 로 죽고, 아래 SSO 로그인·인증 리스너 등록까지
+      //   통째로 실행되지 않았다(2026-08-23 점검 실측).
+      window.history.replaceState(null, '', window.location.pathname + window.location.search);
       setAuthLoading(true);
       signInWithCustomToken(auth, _ssoToken).catch(err => {
         console.error('SSO 로그인 실패:', err);
@@ -625,6 +629,9 @@ export default function App() {
         setAuthStatus('authenticated');
       } else {
         if (userUnsubRef.current) { userUnsubRef.current(); userUnsubRef.current = null; }
+        // ★문의 구독도 함께 끊는다 — 안 끊으면 권한 잃은 쿼리가 계속 재시도하고 다른 계정으로 로그인해도 남는다
+        if (inqUnsubRef.current) { inqUnsubRef.current(); inqUnsubRef.current = null; }
+        setPendingInquiriesCount(0);
         setUser(null);
         if (!guestModeRef.current) setShowAuth(true); // 게스트 체험 중이면 로그인 화면으로 쫓아내지 않음
         setAuthStatus('unauthenticated');
@@ -722,21 +729,32 @@ export default function App() {
   const handleFileUpload = async (e) => {
     const file = e.target.files ? e.target.files[0] : e.dataTransfer?.files[0];
     if (!file) return;
+    // ★분석 중 재업로드 차단 — 워커 두 개가 동시에 돌면 pendingSetup·worksheets 가 서로를 덮는다(2026-08-23 점검)
+    if (analyzingRef.current) { alert('이미 명단을 분석하고 있습니다. 끝난 뒤에 다시 올려 주세요.'); return; }
     
     // UI 로딩 상태 추가 가능
     setFileInfo({ name: file.name, size: file.size, file });
     
+    analyzingRef.current = true;
     setAnalyzing(true);
     try {
       const buffer = await file.arrayBuffer();
       const worker = new Worker(new URL("./excelWorker.js", import.meta.url), { type: "module" });
 
       gStart('파일 분석 중...', file.name);
+      // ★워커 로드 실패·대용량 OOM 이면 onmessage 가 영영 안 온다 → 오버레이가 안 풀려 화면이 멈춘 것처럼 보인다
+      worker.onerror = (err) => {
+        console.error('명단 분석 워커 오류:', err);
+        worker.terminate();
+        gDone('분석 실패');
+        analyzingRef.current = false; setAnalyzing(false);
+        alert('명단 파일 분석에 실패했습니다.\n파일이 너무 크거나 형식이 올바르지 않을 수 있습니다.\n다른 파일로 다시 시도해 주세요.');
+      };
       worker.postMessage({ action: "PARSE_TARGET", buffer, fileName: file.name, dynamicRules: aiRules });
       worker.onmessage = (evt) => {
         if (evt.data.ok && evt.data.action === "PARSE_TARGET") {
           gDone('파일 분석 완료!');
-          setAnalyzing(false);
+          analyzingRef.current = false; setAnalyzing(false);
           const { sheetsData, detectedCity, monthStr, cityCandidates, analysisSummary } = evt.data;
 
           // §5-2 지자체 허가지역 대조 — 후보 중 userCities와 일치하는 정확한 지자체명 우선
@@ -840,14 +858,14 @@ export default function App() {
           else setShowCityPicker(true);
         } else if (!evt.data.ok) {
           setGLoad({ show: false });
-          setAnalyzing(false);
+          analyzingRef.current = false; setAnalyzing(false);
         alert("파일 분석 중 오류가 발생했습니다: " + evt.data.error);
         }
         worker.terminate();
       };
     } catch {
       setGLoad({ show: false });
-      setAnalyzing(false);
+      analyzingRef.current = false; setAnalyzing(false);
       alert("파일을 읽는 중 오류가 발생했습니다.");
     }
   };
@@ -941,6 +959,11 @@ export default function App() {
     try {
       const buffer = await file.arrayBuffer();
       const worker = new Worker(new URL("./excelWorker.js", import.meta.url), { type: "module" });
+      worker.onerror = (err) => {
+        console.error('추가 파일 분석 워커 오류:', err);
+        worker.terminate();
+        alert('추가 파일 분석에 실패했습니다. 파일 형식을 확인해 주세요.');
+      };
       worker.postMessage({ action: "PARSE_TARGET", buffer, fileName: file.name, dynamicRules: aiRules });
       worker.onmessage = (evt) => {
         if (evt.data.ok && evt.data.action === "PARSE_TARGET") {
@@ -2482,7 +2505,32 @@ export default function App() {
         // 특이사항을 덮어써서 저장할수록 특이사항이 사라졌다(동대문구 3,074건 소실).
         // → 새 note가 비었으면 기존 값을 그대로 둔다. 빈값으로 덮어쓰지 않는다.
         const existingNote = (rec) => String(rec?.note ?? rec?.특이사항 ?? '').trim();
-        const updData = (rec) => (payload.note || !existingNote(rec)) ? payload : { ...payload, note: existingNote(rec) };
+        // ★M-9 확장(2026-08-23 점검) — 예전엔 `note` 하나만 지켰다. 같은 payload 가 merge:true 로 나가면서
+        //   좌표·기사·순번·상세주소가 **빈값/null 로 기존 값을 덮어썼다**(정제 직후 저장하면 좌표는 아직 없다).
+        //   `null` 은 undefined 와 달리 merge 에서 '지우기'로 기록된다 → 저장할수록 사라지는 M-9 와 같은 메커니즘.
+        //   규칙: 새 값이 비어 있으면 **기존 값을 그대로 둔다**. 값이 있을 때만 덮는다.
+        const KEEP_IF_EMPTY = [
+          ['note', (rec) => rec?.note ?? rec?.특이사항],
+          ['driver', (rec) => rec?.driver ?? rec?.기사],
+          ['seqNo', (rec) => rec?.seqNo ?? rec?.배송순번],
+          ['detailAddr', (rec) => rec?.detailAddr],
+          ['lat', (rec) => rec?.lat],
+          ['lng', (rec) => rec?.lng],
+          ['legalDong', (rec) => rec?.legalDong],
+          ['buildingName', (rec) => rec?.buildingName],
+        ];
+        const isEmptyVal = (v) => v === null || v === undefined || String(v).trim() === '';
+        const updData = (rec) => {
+          let out = payload;
+          for (const [key, getPrev] of KEEP_IF_EMPTY) {
+            if (!(key in payload) || !isEmptyVal(payload[key])) continue;
+            const prev = getPrev(rec);
+            if (isEmptyVal(prev)) continue;
+            if (out === payload) out = { ...payload };
+            out[key] = key === 'note' ? existingNote(rec) : prev;
+          }
+          return out;
+        };
 
         if (birthKey) {
           // ── 1순위: 이름+생년월일 ────────────────────────────────────────
@@ -3336,7 +3384,6 @@ export default function App() {
               onGoToCloud={(city) => { setDbNavCity(city); setStep(8); }}
             />
           )}
-          {step === 11 && <ScheduleTab user={user} onBack={() => setStep(0)} />}
         </main>
 
           </div>{/* end 메인 콘텐츠 영역 */}

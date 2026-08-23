@@ -31,6 +31,11 @@ await env.withSecurityRulesDisabled(async (ctx) => {
     await setDoc(doc(db, `route_shares/${id}/records/r2`), { driverId: 'd2', driverPhone: '+821033334444', name: 'B', received: false });
   }
   await setDoc(doc(db, 'route_share_secrets/sr_A'), { passcodeHash: 'h', passcodeSalt: 's', createdBy: 'owner@x.com', createdByUid: 'owneruid' });
+  // 기업(회사코드) — 남의 기업 기사명부를 companyCode 자가변경으로 열던 경로 검증용
+  await setDoc(doc(db, 'user_companies/CO_MINE'), { ownerUid: 'otheruid', name: '내 회사' });
+  await setDoc(doc(db, 'user_companies/CO_THEIRS'), { ownerUid: 'someoneelse', name: '남의 회사' });
+  await setDoc(doc(db, 'user_companies/CO_THEIRS/drivers/d9'), { name: '남의기사', phone: '010-0000-0000' });
+  await setDoc(doc(db, 'users/otheruid'), { email: 'other@x.com', role: 'user', tier: 'basic' });
 });
 
 const C = {
@@ -120,6 +125,17 @@ await run('관리자 secrets 읽기', 'admin', 'ALLOW', (db) => getDoc(doc(db, '
 await run('휴대폰 인증 공유 읽기', 'phoneD1', 'ALLOW', (db) => getDoc(doc(db, 'route_shares/sr_A')));
 await run('휴대폰 인증 자기 레코드', 'phoneD1', 'ALLOW(1)', (db) => rec(db, 'sr_A', 'r1'));
 await run('휴대폰 인증 남 레코드', 'phoneD1', 'DENY', (db) => rec(db, 'sr_A', 'r2'));
+
+// ── 회사코드 자가변경(2026-08-23 점검) ──
+await run('★companyCode 를 남의 기업 코드로 self-update', 'other', 'DENY', (db) => updateDoc(doc(db, 'users/otheruid'), { companyCode: 'CO_THEIRS' }));
+await run('★companyCode 를 내가 소유한 기업으로 self-update', 'other', 'ALLOW', (db) => updateDoc(doc(db, 'users/otheruid'), { companyCode: 'CO_MINE' }));
+await run('남의 기업 문서 읽기', 'other', 'DENY', (db) => getDoc(doc(db, 'user_companies/CO_THEIRS')));
+await run('내 소유 기업 문서 읽기', 'other', 'ALLOW', (db) => getDoc(doc(db, 'user_companies/CO_MINE')));
+await run('★남의 기업 기사명부 읽기', 'other', 'DENY', (db) => getDoc(doc(db, 'user_companies/CO_THEIRS/drivers/d9')));
+// ── 열람기록(share_access_logs) ──
+await run('★무인증 열람기록 생성', 'unauth', 'DENY', (db) => setDoc(doc(db, 'share_access_logs/l1'), { shareId: 'sr_A', at: new Date().toISOString(), count: 1 }));
+await run('공유 토큰으로 열람기록 생성', 'tokA1', 'ALLOW', (db) => setDoc(doc(db, 'share_access_logs/l2'), { shareId: 'sr_A', at: new Date().toISOString(), count: 1, driverId: 'd1' }));
+await run('담당자 세션으로 열람기록 생성', 'owner', 'ALLOW', (db) => setDoc(doc(db, 'share_access_logs/l3'), { shareId: 'sr_A', at: new Date().toISOString(), count: 1 }));
 
 for (const r of rows) console.log(r);
 console.log(`\n규칙 실측: ${rows.length}건 중 불일치 ${bad}`);

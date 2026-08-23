@@ -1373,19 +1373,24 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
   }, [records, allKnownDrivers, drivers]);
 
   const [listFilterGubun, setListFilterGubun] = useState('');
-  const displayRecords = (() => {
+  // ★`useMemo` 필수 — 예전엔 즉시실행(IIFE)이라 **렌더마다** 전건 정렬이 돌았다. 이 컴포넌트는 상태가 89개라
+  //   토스트 하나에도 재계산됐고, 3,000건에서 렌더당 103ms(8,000건 395ms)로 화면이 끊겼다(2026-08-23 점검 실측).
+  //   비교자 안에서 extractRoadAddress 를 부르면 n·log n 번 재파싱되므로 **한 번만** 뽑아 쓴다.
+  const displayRecords = useMemo(() => {
     let base = selectedDriverFilter === 'all' ? filteredRecords
       : selectedDriverFilter === 'none' ? filteredRecords.filter(r => !r._driverId)
       : filteredRecords.filter(r => r._driverId === selectedDriverFilter);
     if (listFilterGubun) base = base.filter(r => (r.구분 || '') === listFilterGubun);
-    // 도로명 → 이름 순 정렬
-    return [...base].sort((a, b) => {
-      const rA = extractRoadAddress(a.주소 || '');
-      const rB = extractRoadAddress(b.주소 || '');
-      const cmp = rA.localeCompare(rB, 'ko', { numeric: true });
-      return cmp !== 0 ? cmp : (a.이름 || '').localeCompare(b.이름 || '', 'ko');
-    });
-  })();
+    const coll = new Intl.Collator('ko', { numeric: true });
+    // 도로명 → 이름 순 정렬 (도로명은 레코드당 1회만 파싱)
+    return base
+      .map(r => ({ r, _road: extractRoadAddress(r.주소 || ''), _nm: r.이름 || '' }))
+      .sort((x, y) => {
+        const cmp = coll.compare(x._road, y._road);
+        return cmp !== 0 ? cmp : coll.compare(x._nm, y._nm);
+      })
+      .map(x => x.r);
+  }, [filteredRecords, selectedDriverFilter, listFilterGubun]);
   // 드래그 순번 모드: 배송순번 기준 정렬로 전환
   const listRecords = isSeqDragMode
     ? [...displayRecords].sort((a, b) => (parseInt(a.배송순번) || 9999) - (parseInt(b.배송순번) || 9999))

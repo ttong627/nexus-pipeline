@@ -5,6 +5,10 @@ import { doc, getDoc, setDoc, collection, getDocs, serverTimestamp } from 'fireb
 import { Calendar, Plus, Trash2, ChevronLeft, ChevronRight, Check, Printer, FileSpreadsheet, FileText, SortAsc, Copy, Wand2, RefreshCw, Loader2 } from 'lucide-react';
 import { REGIONS, getSigunguOptions } from '../utils/regions.js';
 
+// ★보고서 HTML 은 innerHTML 로 렌더된다 — 이름·전화·비고를 그대로 넣으면 저장형 XSS 가 된다
+//   (CSP 가 'unsafe-inline' 이라 실행된다 · 2026-08-23 점검). 같은 리포 RouteMapModal 의 escHtml 과 같은 규격.
+const escHtml = (v) => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
 // ─── Constants ──────────────────────────────────────────────────────────────
 const CHOSUNG_LIST = ['ㄱ','ㄴ','ㄷ','ㄹ','ㅁ','ㅂ','ㅅ','ㅇ','ㅈ','ㅊ','ㅋ','ㅌ','ㅍ','ㅎ','ㄲ','ㄸ','ㅃ','ㅆ','ㅉ'];
 const HANGUL_START = 0xAC00;
@@ -631,12 +635,12 @@ tr:nth-child(even) td{background:#f7f9fc;}
 ${rows.map((r, i) => `<tr>
 <td>${i + 1}</td>
 <td class="tl">${r.dong || ''}</td>
-<td>${r.driverName || ''}</td>
-<td>${r.phone || ''}</td>
-<td>${r.emergencyPhone || ''}</td>
+<td>${escHtml(r.driverName)}</td>
+<td>${escHtml(r.phone)}</td>
+<td>${escHtml(r.emergencyPhone)}</td>
 <td>${formatDateRanges(r.dates)}</td>
 <td class="${r.completed ? 'ok' : 'ng'}">${r.completed ? '완료' : '-'}</td>
-<td class="tl">${r.note || ''}</td>
+<td class="tl">${escHtml(r.note)}</td>
 </tr>`).join('')}
 </tbody></table>
 <div class="footer">출력: ${new Date().toLocaleString('ko-KR')}</div>

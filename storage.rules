@@ -25,10 +25,12 @@ service firebase.storage {
       allow write: if isAdmin();
     }
 
-    // ── 배송 루트 KML: 공개 읽기, 쓰기는 인증 사용자만 (기사 공유는 읽기만 필요) ──
+    // ── 배송 루트 KML: **사용하지 않는다**(코드 참조 0건 · 2026-08-23 점검).
+    //   예전 규칙은 `allow read: if true` 로 전면 공개 + 인증자 아무나 업로드였다 —
+    //   회사 도메인에 임의 파일을 올려 두는 통로가 되고, 과거 KML 에는 주소·좌표가 들어 있다.
+    //   되살릴 일이 생기면 공유 토큰 검증을 붙인 뒤에 열 것.
     match /route_kml/{fileName} {
-      allow read: if true;
-      allow write: if request.auth != null;
+      allow read, write: if false;
     }
 
     // 기타 모든 경로 접근 거부

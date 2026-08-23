@@ -14,6 +14,7 @@
 
 const { onRequest } = require('firebase-functions/v2/https');
 const { onSchedule } = require('firebase-functions/v2/scheduler');
+const { defineSecret } = require('firebase-functions/params');
 const admin = require('firebase-admin');
 const { extractClientIp, sanitizeUsageEvent, USAGE_TTL_DAYS } = require('./usageEvent');
 
@@ -269,6 +270,14 @@ exports.api = onRequest(
 //   POST body: { city, monthId, limit?=200 }  + Authorization: Bearer <Firebase ID token>
 //   좌표 없는 레코드를 coordinate_cache → Kakao 다단계 검색으로 채우고 cloud_lists에 저장.
 //   실패(에러) 건은 그대로 남는다. 브라우저 부하 0 — 카카오 호출은 전부 서버에서.
+// ★v2 는 `secrets:` 로 선언한 것만 process.env 에 주입한다 — 선언 없이 콘솔에서 시크릿만 설정하면
+//   값이 영영 안 들어오고, 배포는 성공하며 스케줄러도 초록이라 "되고 있다"고 착각한다(같은 함정을 텔레그램에서 이미 겪었다).
+//   → 아래 KAKAO_SECRET 을 geocode·geocodeAuto 의 secrets 에 넣는다. 읽기는 `kakaoKey()` 하나로만.
+const KAKAO_SECRET = defineSecret('KAKAO_REST_KEY');
+const kakaoKey = () => {
+  try { return KAKAO_SECRET.value() || process.env.KAKAO_REST_KEY || ''; }
+  catch { return process.env.KAKAO_REST_KEY || ''; }
+};
 const KAKAO_REST_KEY = process.env.KAKAO_REST_KEY || '';
 const SIDO_SHORT = { '서울특별시': '서울', '부산광역시': '부산', '대구광역시': '대구', '인천광역시': '인천', '광주광역시': '광주', '대전광역시': '대전', '울산광역시': '울산', '세종특별자치시': '세종', '경기도': '경기', '강원특별자치도': '강원', '강원도': '강원', '충청북도': '충북', '충청남도': '충남', '전북특별자치도': '전북', '전라북도': '전북', '전라남도': '전남', '경상북도': '경북', '경상남도': '경남', '제주특별자치도': '제주' };
 
@@ -286,7 +295,7 @@ const extractRoadAddress = (addr) => {
 const addrToDocId = (addr) => (addr || '').replace(/[/]/g, '_').slice(0, 400);
 
 const kakaoGeocode = async (주소, sido, sigungu) => {
-  if (!KAKAO_REST_KEY || !주소) return null;
+  if (!kakaoKey() || !주소) return null;
   const road = String(주소).replace(/\s*\([^)]*\).*$/, '').replace(/,.*$/, '').trim();
   const cityPrefix = sigungu || sido;
   const sidoShort = SIDO_SHORT[sido] || sido;
@@ -298,7 +307,7 @@ const kakaoGeocode = async (주소, sido, sigungu) => {
   };
   const kfetch = async (url) => {
     try {
-      const r = await fetch(url, { headers: { Authorization: `KakaoAK ${KAKAO_REST_KEY}` } });
+      const r = await fetch(url, { headers: { Authorization: `KakaoAK ${kakaoKey()}` } });
       if (!r.ok) return null;
       return await r.json();
     } catch { return null; }
@@ -442,7 +451,10 @@ const apiGeocode = async (r, sido, sigungu) => {
 };
 
 exports.geocode = onRequest(
-  { cors: true, region: 'asia-northeast3', timeoutSeconds: 300, memory: '512MiB' },
+  {
+    // ★secrets 로 선언해야 process.env 에 주입된다(v2 규약)
+    secrets: [KAKAO_SECRET],
+    cors: true, region: 'asia-northeast3', timeoutSeconds: 300, memory: '512MiB' },
   async (req, res) => {
     if (req.method !== 'POST') return res.status(405).json({ error: 'POST만 허용' });
     const token = (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
@@ -450,7 +462,7 @@ exports.geocode = onRequest(
     let decoded;
     try { decoded = await admin.auth().verifyIdToken(token); }
     catch { return res.status(401).json({ error: '유효하지 않은 토큰입니다.' }); }
-    if (!KAKAO_REST_KEY) return res.status(500).json({ error: '서버에 카카오 키가 설정되지 않았습니다.' });
+    if (!kakaoKey()) return res.status(500).json({ error: '서버에 카카오 키가 설정되지 않았습니다.' });
 
     const { city, monthId, limit = 200 } = req.body || {};
     if (!city || !monthId) return res.status(400).json({ error: 'city, monthId가 필요합니다.' });
@@ -516,9 +528,12 @@ exports.geocode = onRequest(
 //   좌표 없는 레코드를 배치(100)로 지오코딩(캐시→카카오). 실패는 coordFailed+확인필요로 남김.
 //   해당 월의 미좌표가 모두 해소되면 coordsDone=true + notifications에 완료 알림(에러 건수).
 exports.geocodeAuto = onSchedule(
-  { schedule: 'every 3 minutes', region: 'asia-northeast3', timeoutSeconds: 300, memory: '512MiB' },
+  {
+    // ★secrets 로 선언해야 process.env 에 주입된다(v2 규약)
+    secrets: [KAKAO_SECRET],
+    schedule: 'every 3 minutes', region: 'asia-northeast3', timeoutSeconds: 300, memory: '512MiB' },
   async () => {
-    if (!KAKAO_REST_KEY) { console.warn('[geocodeAuto] KAKAO 키 없음'); return; }
+    if (!kakaoKey()) { console.warn('[geocodeAuto] KAKAO 키 없음'); return; }
     try {
       // 1) 미완료 월 메타 수집 (도시 × 월 메타만 읽음 — 가벼움)
       const cityRefs = await db.collection('cloud_lists').listDocuments();
@@ -536,10 +551,33 @@ exports.geocodeAuto = onSchedule(
       const job = candidates[0];
 
       const recsRef = db.collection('cloud_lists').doc(job.city).collection('months').doc(job.monthId).collection('records');
-      const snap = await recsRef.get();
-      const missing = snap.docs.filter((d) => { const x = d.data(); return x.주소 && (x.lat == null || x.lng == null) && x.coordFailed !== true; });
+      // ★예전엔 3분마다 그 달 **전건**을 읽었다(3,000건이면 하루 약 144만 읽기 · 2026-08-23 점검).
+      //   좌표가 빈 건만 색인으로 집어온다. 색인 경로가 비면(옛 스키마 등) 예전처럼 전건 조회로 폴백한다.
+      const processable = (x) => x.주소 && (x.lat == null || x.lng == null) && x.coordFailed !== true;
+      let missing = [];
+      let snap = null;
+      try {
+        let cursor = null;
+        for (let page = 0; page < 6 && missing.length < 100; page++) {
+          let q = recsRef.where('lat', '==', null)
+            .orderBy(admin.firestore.FieldPath.documentId()).limit(400);
+          if (cursor) q = q.startAfter(cursor);
+          const pageSnap = await q.get();
+          if (pageSnap.empty) break;
+          cursor = pageSnap.docs[pageSnap.docs.length - 1].id;
+          missing.push(...pageSnap.docs.filter((d) => processable(d.data())));
+        }
+      } catch (e) {
+        console.warn('[geocodeAuto] 색인 조회 실패 → 전건 조회로 폴백:', e.message);
+      }
+      if (!missing.length) {
+        // 색인으로 못 찾았을 때만 전건 조회(완료 판정을 위해서도 필요)
+        snap = await recsRef.get();
+        missing = snap.docs.filter((d) => processable(d.data()));
+      }
 
       if (!missing.length) {
+        if (!snap) snap = await recsRef.get();
         // 이 월 좌표 처리 완료 → 완료 표시 + 담당자 알림
         const errorCount = snap.docs.filter((d) => d.data().coordFailed === true).length;
         await job.ref.set({ coordsDone: true, coordErrorCount: errorCount, coordDoneAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
@@ -586,7 +624,12 @@ exports.geocodeAuto = onSchedule(
             await docSnap.ref.update({ lat: coord.lat, lng: coord.lng, 좌표상태: '좌표확인', 좌표출처: viaStore ? 'coord-store' : 'cloud-auto', 좌표수정일시: admin.firestore.FieldValue.serverTimestamp() });
           } else {
             failed++;
-            await docSnap.ref.update({ coordFailed: true, 확인필요: true, 좌표상태: '좌표없음' });
+            await docSnap.ref.update({
+              coordFailed: true, 좌표상태: '좌표없음',
+              // ★확인필요만 되돌리면 배송상태·작업상태와 어긋나 같은 사람이 화면마다 다르게 집계된다(2026-08-23 점검).
+              //   담당자가 이미 확인 처리한 건(확인완료=true)은 서버가 되돌리지 않는다.
+              ...(docSnap.get('확인완료') === true ? {} : { 확인필요: true, 작업상태: '확인필요', 배송상태: '확인필요', 확인사유: docSnap.get('확인사유') || '좌표를 찾지 못했습니다(주소 확인 필요)' }),
+            });
           }
         }
       };
@@ -613,7 +656,6 @@ exports.geocodeAuto = onSchedule(
 //  판정 규칙·임계값은 `./leakWatch.js`(회귀 scripts/leak-watch.test.mjs) 참조.
 // ══════════════════════════════════════════════════════════════════
 const { onDocumentCreated } = require('firebase-functions/v2/firestore');
-const { defineSecret } = require('firebase-functions/params');
 const { detectAnomalies, formatAlert, DEFAULTS } = require('./leakWatch');
 
 // ★v2 는 `secrets:` 로 선언한 것만 process.env 에 주입한다.
@@ -699,11 +741,10 @@ const SHARE_HOUR_CAP = 20;
 const SHARE_CAP_LOCK_MINUTES = 30;
 const ATTEMPT_TTL_MS = 60 * 60 * 1000;   // 시도 문서 expiresAt — Firestore TTL 정책(선택)으로 정리
 const ipKeyOf = (req) => {
-  // ★XFF 는 클라이언트가 앞에 아무 값이나 붙일 수 있다 — Cloud Run 은 실제 접속 IP 를 **맨 뒤**에 덧붙이므로 마지막 원소를 쓴다.
-  //   첫 원소를 쓰면 요청마다 새 키가 생겨 IP 잠금을 영영 안 밟고 시도 문서만 무한 증식한다(2차 검사 지적).
-  const xff = String(req.rawRequest?.headers?.['x-forwarded-for'] || '').split(',').map((v) => v.trim()).filter(Boolean);
-  const raw = xff.length ? xff[xff.length - 1] : (String(req.rawRequest?.ip || '') || 'unknown');
-  return nodeCrypto.createHash('sha256').update(raw).digest('hex').slice(0, 24);   // 원IP 는 저장하지 않는다
+  // ★IP 판정은 `usageEvent.extractClientIp` **하나**만 쓴다(2026-08-23 점검: 두 곳이 서로 반대로 구현돼 있었다).
+  //   뒤에서부터 구글 LB·사설 대역을 걷어내고 남는 마지막 값 = 실제 접속 IP.
+  const raw = extractClientIp(req.rawRequest?.headers || {}, req.rawRequest?.ip || '');
+  return nodeCrypto.createHash('sha256').update(String(raw)).digest('hex').slice(0, 24);   // 원IP 는 저장하지 않는다
 };
 const toMs = (t) => (t && typeof t.toMillis === 'function' ? t.toMillis() : 0);
 
@@ -721,6 +762,15 @@ exports.openShare = onCall(
     // ★만료일 없는 옛 문서는 "영원히 유효"가 아니라 "만료"다 — 검사 지적(옛 링크로 무기한 토큰 발급 차단)
     if (!share || !share.expiresAt || isShareExpired(share)) {
       throw new HttpsError('not-found', '공유 링크가 없거나 만료되었습니다.');
+    }
+
+    // ★driverId 는 호출자가 보낸 값이다 — **그 공유에 실재하는 기사인지** 확인하지 않으면
+    //   비밀번호를 아는 사람이 부모 문서의 drivers[] 를 읽어 기사 id 를 하나씩 넣어 토큰을 받아
+    //   그 지도 전 기사의 명단(이름·주소·휴대폰)을 모을 수 있다(2026-08-23 점검 실측).
+    //   규칙(`resource.data.driverId == tokenDriverId()`)은 이 값을 그대로 믿으므로 여기서 막는다.
+    const knownDriver = Array.isArray(share.drivers) && share.drivers.some((d) => String(d && d.id || '') === driverId);
+    if (!driverId || !knownDriver) {
+      throw new HttpsError('invalid-argument', '이 지도에 없는 기사 링크입니다. 담당자에게 받은 링크를 그대로 열어 주세요.');
     }
 
     const secretRef = db.collection('route_share_secrets').doc(shareId);
@@ -766,7 +816,7 @@ exports.openShare = onCall(
     // uid 는 공유+기사로 고정 — 열람기록(share_access_logs)의 uid 로 같은 기사의 행동이 이어져 보이게(leakWatch 집계).
     // 규칙은 claims.shareId 로 공유를, claims.driverId 로 건별 문서를 가른다.
     const mint = async (legacy) => {
-      const uid = `share_${shareId}_${driverId || 'x'}`.slice(0, 128);
+      const uid = `share_${shareId}_${driverId}`.slice(0, 128);
       const token = await admin.auth().createCustomToken(uid, { shareId, driverId, role: 'driver' });
       return { token, legacy, expiresAt: toMs(share.expiresAt) };
     };

@@ -767,9 +767,9 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
     setIsDeletingMonth(true);
     try {
       const rSnap = await getDocs(collection(db, 'cloud_lists', city, 'months', month.id, 'records'));
-      for (let i = 0; i < rSnap.docs.length; i += 500) {
+      for (let i = 0; i < rSnap.docs.length; i += 499) {   // ★499 — B-6/§19(500 절대 초과 금지). 여유 0이면 필드 하나만 늘어도 터진다
         const batch = writeBatch(db);
-        rSnap.docs.slice(i, i + 500).forEach(d => batch.delete(d.ref));
+        rSnap.docs.slice(i, i + 499).forEach(d => batch.delete(d.ref));
         await batch.commit();
       }
       await deleteDoc(doc(db, 'cloud_lists', city, 'months', month.id));

@@ -166,11 +166,24 @@ service cloud.firestore {
                     && request.resource.data.get('tier', 'basic') == 'basic'
                     && !request.resource.data.keys().hasAny(['maxCities', 'citiesApproved', 'orgAssignments', 'orgId']);
 
-      // 일반 사용자: role·tier·maxCities·status·citiesApproved·orgAssignments 직접 변경 불가
+      // 일반 사용자: role·tier·maxCities·status·citiesApproved·orgAssignments·**companyCode** 직접 변경 불가
+      //  ★companyCode 가 빠져 있어서, 아무나 자기 companyCode 를 남의 기업 코드로 바꾸면
+      //    그 기업 기사명부(`user_companies/{code}/drivers` — 이름·휴대폰)를 읽고 쓸 수 있었다(2026-08-23 점검).
       allow update: if isAuthenticated() &&
         request.auth.uid == userId &&
         !request.resource.data.diff(resource.data).affectedKeys()
-          .hasAny(['role', 'tier', 'maxCities', 'status', 'citiesUsed', 'citiesApproved', 'orgAssignments', 'orgId']);
+          .hasAny(['role', 'tier', 'maxCities', 'status', 'citiesUsed', 'citiesApproved', 'orgAssignments', 'orgId', 'companyCode']);
+
+      // 예외 — **회사코드 승계**: 내가 소유자인 기업의 코드만 내 프로필에 적을 수 있다.
+      //  (승계 흐름은 `user_companies/{code}` 의 ownerUid 를 먼저 나로 만든 뒤 이 쓰기를 한다.
+      //   그 앞 단계는 `user_companies` update 규칙이 '주인 없는 남의 기업'을 막는다.)
+      allow update: if isAuthenticated() &&
+        request.auth.uid == userId &&
+        request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['companyCode', 'region', 'realName', 'profileCompleted', 'profileUpdatedAt', 'lastLogin']) &&
+        request.resource.data.companyCode is string &&
+        exists(/databases/$(database)/documents/user_companies/$(request.resource.data.companyCode)) &&
+        get(/databases/$(database)/documents/user_companies/$(request.resource.data.companyCode)).data.get('ownerUid', '-') == request.auth.uid;
 
       // 관리자 이메일 계정: DB role이 꼬였을 때 자기복구 허용 (#4)
       allow update: if isAdminEmail() && request.auth.uid == userId;
@@ -305,9 +318,8 @@ service cloud.firestore {
     match /share_access_logs/{logId} {
       //  기록은 **막지 않는다** — 남기는 것이 목적이다. 다만 형태는 검사해 잡동사니를 거른다.
       //  (⚠️`isShareWithinTTL()` 은 `resource.data` 를 보는데 여기엔 그 문서가 없다 → 못 쓴다)
-      allow create: if request.resource.data.keys().hasAll(['at', 'shareId', 'count'])
-                    && request.resource.data.count is number
-                    && request.resource.data.shareId is string;
+      allow create: if request.auth != null &&
+                       (hasShareToken(request.resource.data.get('shareId', '-')) || isAuthenticated());   // ★무인증 생성 금지(2026-08-23 점검)
       //  읽기는 관리자만 — 누가 무엇을 봤는지가 담긴다(이것도 개인정보다).
       allow read: if isAdmin() || isAdminEmail();
       allow update, delete: if false;
@@ -515,7 +527,15 @@ service cloud.firestore {
 
     // ── 사용자 회사(companyCode 기반): 본인 생성·수정, 관리자 전체 ───────────────
     match /user_companies/{companyCode} {
-      allow read: if isAuthenticated();
+      // ★전 기업 열람 금지(2026-08-23 점검) — 코드 목록을 훑어 남의 기업을 고르던 앞단계를 막는다.
+      //   소유자·소속 담당자·관리자만. (코드를 이미 아는 승계 대상자는 문서 하나를 get 할 수 있어야 하므로
+      //    '내 companyCode 와 같은 문서'도 허용한다.)
+      allow read: if isAuthenticated() && (
+        isAdmin() || isAdminEmail() ||
+        resource.data.get('ownerUid', '-') == request.auth.uid ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('companyCode', '-') == companyCode)
+      );
       // 관리자는 기업을 직접 생성(ownerUid 없이). 일반 사용자는 자기 소유 기업만.
       allow create: if isAuthenticated() &&
         (request.resource.data.ownerUid == request.auth.uid || isAdmin() || isAdminEmail());
