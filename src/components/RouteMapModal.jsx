@@ -64,6 +64,7 @@ import {
   revalidateAreaMatch,
   strongMatchKey,
 } from './routeMap/mapHelpers.js';
+import { isAdminEmail } from '../utils/admins.js';   // 관리자 판정 SSOT(화면 표시·질의 분기용 · 실권한은 규칙)
 import AutoPinConfirmModal from './routeMap/AutoPinConfirmModal.jsx';   // 자동 핀 배치 확인(2026-08-23 Phase 4-5 분리)
 import DongNavConfirmModal from './routeMap/DongNavConfirmModal.jsx';   // 행정동 이동 확인(2026-08-23 Phase 4-5 분리)
 
@@ -2321,6 +2322,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
       metaBatch.set(doc(db, 'route_share_secrets', shareId), {
         passcodeHash,
         passcodeSalt,
+        ver: 0,                     // 비밀번호 세대 — [변경] 때마다 오른다(옛 토큰을 끊는 근거)
         createdBy: auth.currentUser?.email || '',
         createdByUid: ownerUid,
         createdAt: serverTimestamp(),
@@ -2369,12 +2371,19 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
     }
     setIsLoadingOrderRequests(true);
     try {
-      const snap = await getDocs(query(
+      // ★규칙은 비관리자에게 **자기가 만든 · 기간 내** 공유만 허용한다(`isRouteOwner()` + `isShareWithinTTL()`).
+      //   목록 질의는 그 조건을 **질의로 증명**해야 통과한다 — 안 그러면 담당자 화면엔 늘 "완료 기록 조회 실패"만 떴다(2026-08-24).
+      //   관리자는 규칙이 먼저 통과시키므로 조건 없이 전부(만료분 포함) 본다.
+      const _uid = auth.currentUser?.uid || '';
+      const _isAdmin = isAdminEmail(auth.currentUser?.email);
+      const _base = [
         collection(db, 'route_shares'),
         where('city', '==', cloudCity),
         where('monthId', '==', cloudMonthId),
-        limit(30)
-      ));
+      ];
+      const snap = await getDocs(_isAdmin
+        ? query(..._base, limit(30))
+        : query(..._base, where('createdByUid', '==', _uid), where('expiresAt', '>', new Date()), limit(30)));
       const requests = [];
       snap.forEach(docSnap => {
         const data = docSnap.data();
@@ -5361,13 +5370,14 @@ ${folders}
                     <button
                       onClick={async () => {
                         // 재설정: 새 해시·솔트로 교체. ⚠️이미 발급된 기사 토큰은 살아 있다(비밀번호는 '입장' 열쇠이지 세션 열쇠가 아니다).
-                        const np = window.prompt('새 기사 비밀번호(숫자 6자리)를 입력하세요. 앞으로 입장하는 기사는 새 번호를 써야 합니다(이미 열어 둔 기사 화면은 만료일까지 유지).', '');   // ★미리 만들어 넣어 주지 않는다 — 담당자가 직접 넣는다(형 지시)
+                        const np = window.prompt('새 기사 비밀번호(숫자 6자리)를 입력하세요. 바꾸는 즉시 **이미 열어 둔 기사 화면도 끊기고**, 새 번호로 다시 들어가야 합니다.', '');   // ★미리 만들어 넣어 주지 않는다 — 담당자가 직접 넣는다(형 지시)
                         if (np === null) return;
                         if (!isValidPasscode(np)) { showToast('error', '숫자 6자리만 가능합니다'); return; }
                         try {
                           const s = newSalt();
                           await updateDoc(doc(db, 'route_share_secrets', shareModal.shareId), {
                             passcodeHash: await hashPasscode(np, s), passcodeSalt: s, updatedAt: serverTimestamp(),
+                            ver: increment(1),   // ★세대를 올리면 **이미 입장한 기사 토큰도 즉시 끊긴다**(규칙이 대조한다)
                           });
                           setShareModal(m => ({ ...m, passcode: np }));
                           showToast('success', '비밀번호를 바꿨습니다');

@@ -888,7 +888,8 @@ exports.openShare = onCall(
       if (!isValidPasscode(passcode)) return { kind: 'invalid' };
       if (verifyPasscode(passcode, sec.passcodeSalt, sec.passcodeHash)) {
         if (attSnap.exists) tx.delete(attemptRef);
-        return { kind: 'ok' };
+        // ★비밀번호 세대(ver) — 담당자가 번호를 바꾸면 이 값이 오르고, 규칙이 옛 토큰을 끊는다.
+        return { kind: 'ok', ver: Number(sec.ver || 0) };
       }
       const fails = (att.failCount || 0) + 1;
       const attPatch = {
@@ -914,14 +915,15 @@ exports.openShare = onCall(
 
     // uid 는 공유+기사로 고정 — 열람기록(share_access_logs)의 uid 로 같은 기사의 행동이 이어져 보이게(leakWatch 집계).
     // 규칙은 claims.shareId 로 공유를, claims.driverId 로 건별 문서를 가른다.
-    const mint = async (legacy) => {
+    const mint = async (legacy, ver = 0) => {
       const uid = `share_${shareId}_${driverId}`.slice(0, 128);
-      const token = await admin.auth().createCustomToken(uid, { shareId, driverId, role: 'driver' });
+      // ★`ver` 는 비밀번호 세대다 — 규칙이 secrets 문서의 ver 와 대조해 **옛 번호로 받은 토큰을 끊는다**.
+      const token = await admin.auth().createCustomToken(uid, { shareId, driverId, role: 'driver', ver });
       return { token, legacy, expiresAt: toMs(share.expiresAt) };
     };
     switch (outcome.kind) {
-      case 'legacy': return mint(true);                 // 비밀번호 없이 만든 옛 링크(이행기)
-      case 'ok': return mint(false);
+      case 'legacy': return mint(true, 0);                 // 비밀번호 없이 만든 옛 링크(이행기)
+      case 'ok': return mint(false, outcome.ver || 0);
       case 'locked': throw new HttpsError('resource-exhausted', '여러 번 틀려 잠시 잠겼습니다.', { minutes: outcome.minutes });
       case 'required': throw new HttpsError('failed-precondition', 'PASSCODE_REQUIRED');
       case 'invalid': throw new HttpsError('invalid-argument', '숫자 6자리를 입력해 주세요.');

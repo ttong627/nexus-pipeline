@@ -250,7 +250,16 @@ service cloud.firestore {
     //  openShare Function 이 비밀번호를 검증한 뒤 발급하는 커스텀 토큰(claims.shareId). 그 공유 하나에만 통한다.
     //  ★링크만 아는 것으로는 더 이상 못 연다 — 화면 비교는 장식이고 **여기서 막아야** 개발자도구로도 못 본다.
     function hasShareToken(shareId) {
-      return request.auth != null && request.auth.token.get('shareId', '') == shareId;
+      return request.auth != null && request.auth.token.get('shareId', '') == shareId
+        && shareTokenGenerationOk(shareId);
+    }
+    // ★비밀번호 세대 대조(2026-08-24) — 담당자가 [변경]으로 번호를 바꾸면 secrets.ver 가 오른다.
+    //   옛 번호로 받은 토큰은 ver 가 낮아 여기서 끊긴다(예전엔 만료일까지 살아 있어, 번호가 새도 막을 방법이 없었다).
+    //   secrets 문서가 없는 옛 공유는 세대가 0 이라 그대로 통과한다(이행기 · SH-5).
+    function shareTokenGenerationOk(shareId) {
+      return !exists(/databases/$(database)/documents/route_share_secrets/$(shareId))
+        || get(/databases/$(database)/documents/route_share_secrets/$(shareId)).data.get('ver', 0)
+           == request.auth.token.get('ver', 0);
     }
     // 토큰에 박힌 기사 ID — 건별 문서는 **이 기사 것만** 읽힌다(토큰 하나로 그 공유 전 건이 열리면 안 된다 · 검사 지적)
     function tokenDriverId() {
@@ -348,7 +357,7 @@ service cloud.firestore {
       // 비밀번호 재설정: 생성자·관리자만, 해시·솔트만 바꿀 수 있다
       allow update: if isAuthenticated()
                     && (resource.data.get('createdByUid', '-') == request.auth.uid || isAdmin() || isAdminEmail())
-                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['passcodeHash', 'passcodeSalt', 'updatedAt']);
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['passcodeHash', 'passcodeSalt', 'updatedAt', 'ver']);
       allow read, delete: if isAdmin() || isAdminEmail();
     }
 

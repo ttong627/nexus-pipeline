@@ -16,7 +16,7 @@
 //    담당자가 생성 시점에 알아야 고칠 수 있다 → `unassigned` 로 돌려준다.
 // ══════════════════════════════════════════════════════════════════
 import { toE164Mobile } from './phone.js';
-import { activePhones } from './driverRoster.js';
+// (`activePhones` 는 휴대폰 인증 경로가 살아날 때 다시 쓴다 — 지금은 부모 문서에 번호를 넣지 않는다)
 
 /** Firestore 배치 상한(500)보다 넉넉히 아래로 — 부모 문서 갱신분까지 한 배치에 들어간다. */
 export const BATCH_LIMIT = 450;
@@ -113,7 +113,9 @@ export function buildShareMeta({ city = '', monthId = '', drivers = [], roster =
   return {
     city, monthId, createdBy,
     drivers: (drivers || []).map((d) => ({ id: d.id, name: d.name, color: d.color })),
-    driverPhones: activePhones(roster),   // ★부모 읽기 권한 판정용(정규화·중복제거·활성만)
+    // ⛔`driverPhones` 는 더 이상 넣지 않는다(2026-08-24) — 휴대폰 인증 경로가 보류(비밀번호 입장으로 대체)라
+    //   쓰이지도 않는데, 부모 문서는 그 공유의 **토큰을 가진 기사 전원**에게 읽힌다 → 명부 전화번호가 통째로 노출된다.
+    //   휴대폰 인증을 되살릴 때만 다시 넣을 것(규칙의 phone 경로는 옛 문서 호환으로 남아 있다).
     deadline: deadline ? new Date(deadline) : null,
     expiresAt: expires,
     ttlDays: Math.max(1, ttlDays),

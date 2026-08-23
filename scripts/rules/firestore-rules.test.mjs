@@ -30,7 +30,7 @@ await env.withSecurityRulesDisabled(async (ctx) => {
     await setDoc(doc(db, `route_shares/${id}/records/r1`), { driverId: 'd1', driverPhone: '+821011112222', name: 'A', received: false });
     await setDoc(doc(db, `route_shares/${id}/records/r2`), { driverId: 'd2', driverPhone: '+821033334444', name: 'B', received: false });
   }
-  await setDoc(doc(db, 'route_share_secrets/sr_A'), { passcodeHash: 'h', passcodeSalt: 's', createdBy: 'owner@x.com', createdByUid: 'owneruid' });
+  await setDoc(doc(db, 'route_share_secrets/sr_A'), { passcodeHash: 'h', passcodeSalt: 's', createdBy: 'owner@x.com', createdByUid: 'owneruid', ver: 1 });
   // 기업(회사코드) — 남의 기업 기사명부를 companyCode 자가변경으로 열던 경로 검증용
   await setDoc(doc(db, 'user_companies/CO_MINE'), { ownerUid: 'otheruid', name: '내 회사' });
   await setDoc(doc(db, 'user_companies/CO_THEIRS'), { ownerUid: 'someoneelse', name: '남의 회사' });
@@ -40,8 +40,9 @@ await env.withSecurityRulesDisabled(async (ctx) => {
 
 const C = {
   unauth: env.unauthenticatedContext(),
-  tokA1: env.authenticatedContext('share_sr_A_d1', { shareId: 'sr_A', driverId: 'd1', role: 'driver' }),
+  tokA1: env.authenticatedContext('share_sr_A_d1', { shareId: 'sr_A', driverId: 'd1', role: 'driver', ver: 1 }),
   tokExp: env.authenticatedContext('share_sr_exp_d1', { shareId: 'sr_exp', driverId: 'd1', role: 'driver' }),
+  tokOldVer: env.authenticatedContext('share_sr_A_old', { shareId: 'sr_A', driverId: 'd1', role: 'driver', ver: 0 }),   // 번호가 바뀌기 전에 받은 토큰
   owner: env.authenticatedContext('owneruid', { email: 'owner@x.com' }),
   ownerSso: env.authenticatedContext('owneruid', { firebase: { sign_in_provider: 'custom' } }),
   sso: env.authenticatedContext('ssouid', { firebase: { sign_in_provider: 'custom' } }),
@@ -99,6 +100,11 @@ await run('토큰 base_lists 읽기', 'tokA1', 'DENY', (db) => getDoc(doc(db, 'b
 await run('토큰 secrets 읽기', 'tokA1', 'DENY', (db) => getDoc(doc(db, 'route_share_secrets/sr_A')));
 await run('토큰 공유 생성', 'tokA1', 'DENY', (db) => setDoc(doc(db, 'route_shares/sr_new'), { createdBy: 'x' }));
 await run('토큰 공유 삭제', 'tokA1', 'DENY', (db) => deleteDoc(doc(db, 'route_shares/sr_A')));
+// ── 비밀번호 세대(2026-08-24) — [변경] 하면 이미 나간 토큰도 끊긴다 ──
+await run('★옛 번호로 받은 토큰(ver 낮음) 공유 읽기', 'tokOldVer', 'DENY', (db) => getDoc(doc(db, 'route_shares/sr_A')));
+await run('★옛 번호 토큰 자기 레코드 읽기', 'tokOldVer', 'DENY', (db) => rec(db, 'sr_A', 'r1'));
+await run('현재 세대 토큰은 그대로 통과', 'tokA1', 'ALLOW', (db) => getDoc(doc(db, 'route_shares/sr_A')));
+
 // ── 만료 공유의 토큰 ──
 await run('만료 토큰 공유 읽기', 'tokExp', 'DENY', (db) => getDoc(doc(db, 'route_shares/sr_exp')));
 await run('만료 토큰 레코드', 'tokExp', 'DENY', (db) => rec(db, 'sr_exp', 'r1'));

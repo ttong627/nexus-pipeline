@@ -1,8 +1,13 @@
-export const APP_VERSION = 'V7.14';
+export const APP_VERSION = 'V7.15';
 export const APP_BUILD = '2026.08.24';
-export const APP_BUILD_TIME = '2026.08.24 08:28';
+export const APP_BUILD_TIME = '2026.08.24 08:53';
 
 export const CHANGELOG = [
+  { v: "V7.15", date: "2026.08.24", items: [
+    "지도 비밀번호를 바꾸면 이미 열어둔 기사 화면도 즉시 끊깁니다(번호가 샜을 때 바로 막을 수 있습니다)",
+    "담당자 화면에서 배송완료 기록 조회가 되지 않던 문제를 고쳤습니다",
+    "공유 문서에 기사 전화번호를 더 이상 저장하지 않습니다",
+  ]},
   { v: "V7.14", date: "2026.08.24", items: [
     "도구 모달(중복분석·컬럼재배치·매칭·서식 등) 화면을 정리했습니다 — 동작은 그대로입니다",
   ]},
