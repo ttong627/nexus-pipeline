@@ -2,11 +2,7 @@
 import { useVirtualizer } from '@tanstack/react-virtual';
 import CellInput, { ColEditToggle } from './CellInput.jsx';
 import * as XLSX from 'xlsx';
-import {
-  db, storage, auth,
-  collection, getDocs, getDocsFromServer, getDoc, setDoc, doc, deleteDoc, writeBatch, serverTimestamp, addDoc, Timestamp,
-  ref, getDownloadURL, deleteObject,
-} from '../config/firebase.js';
+import { db, storage, auth, collection, getDocs, getDocsFromServer, getDoc, setDoc, doc, deleteDoc, writeBatch, serverTimestamp, addDoc, Timestamp, ref, getDownloadURL, deleteObject, increment } from '../config/firebase.js';
 import { normalizeBirth, formatPhoneInput } from '../utils/parsers.js';
 import { deliveryCompare } from '../utils/sortRecords.js';
 import { annotateCarryover } from '../utils/prevMonthCarryover.js';
@@ -547,7 +543,11 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
       const recs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
       setRecords(recs);
       writeRecsCache(cityId, monthId, recs, serverRev);
-    } catch (e) { console.error('[CloudListManager] fetchRecords:', e); }
+    } catch (e) {
+      // ★실패를 '0건'으로 보이게 두면 담당자는 명단이 사라진 줄 안다(M-1 취지 · 2026-08-23 점검)
+      console.error('[CloudListManager] fetchRecords:', e);
+      alert('명단을 불러오지 못했습니다.\n네트워크 상태를 확인하고 새로고침해 주세요.');
+    }
     finally { setLoadingRecords(false); }
   };
 
@@ -1000,6 +1000,8 @@ ${e.message}`);
         if (!ok) { setSaving(false); return; }
       }
       const nextRev = (serverRev ?? loadedRevRef.current ?? 0) + 1;
+      // ★rev 는 화면 캐시 비교용 값이고, 실제 문서에는 `increment(1)` 로 올린다(2026-08-23 점검) —
+      //   두 담당자가 동시에 저장하면 둘 다 같은 값을 읽고 같은 값을 써서 충돌 감지가 통과해 버렸다.
 
       const allOps = [
         ...Object.entries(dirtyRecords).map(([id, changes]) => ({ type: 'update', id, changes })),
@@ -1034,7 +1036,7 @@ ${e.message}`);
       const 차상위Count = remaining.filter(r => r.구분 === '차상위').length;
       // 월 메타 + 최상위 city 캐시 문서를 병렬 기록
       await Promise.all([
-        setDoc(doc(db, 'cloud_lists', selectedCity, 'months', selectedMonth.id), { totalCount, 수급자Count, 차상위Count, rev: nextRev }, { merge: true }),
+        setDoc(doc(db, 'cloud_lists', selectedCity, 'months', selectedMonth.id), { totalCount, 수급자Count, 차상위Count, rev: increment(1) }, { merge: true }),
         setDoc(doc(db, 'cloud_lists', selectedCity), {
           latestTotalCount: totalCount,
           'latest수급자Count': 수급자Count,

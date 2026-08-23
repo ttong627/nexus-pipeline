@@ -474,6 +474,8 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
   const saveTimerRef = useRef(null);
   const [toast, setToast] = useState(null);
   const toastTimerRef = useRef(null);
+  // ★언마운트 때 타이머를 정리한다 — 안 하면 닫힌 모달의 setToast 가 뒤늦게 호출된다(2026-08-23 점검)
+  useEffect(() => () => { if (toastTimerRef.current) clearTimeout(toastTimerRef.current); }, []);
 
   // 배송 일정 상태
   const [scheduleMode, setScheduleMode] = useState(false);
@@ -1318,7 +1320,8 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
             city: cloudCity, monthId: cloudMonthId,
             savedAt: serverTimestamp(),
             savedBy: auth.currentUser?.email || '',
-            drivers: d.map(dr => ({ id: dr.id, name: dr.name, color: dr.color, capacity: dr.capacity || 100, deliveryDate: dr.deliveryDate || '', startAddr: dr.startAddr || '', startLat: dr.startLat || null, startLng: dr.startLng || null })),
+            // ★DS-9-5: 출발지(startAddr/startLat/startLng)는 세션 저장에 넣지 않는다 — 기사 집주소일 수 있다(2026-08-23 점검)
+            drivers: d.map(dr => ({ id: dr.id, name: dr.name, color: dr.color, capacity: dr.capacity || 100, deliveryDate: dr.deliveryDate || '' })),
             status: 'draft',
             totalRecords: r.length,
             assignedCount: r.filter(rec => rec._driverId).length,
@@ -1770,7 +1773,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
             monthId: cloudMonthId,
             savedAt: serverTimestamp(),
             savedBy: auth.currentUser?.email || '',
-            drivers: drivers.map(d => ({ id: d.id, name: d.name, color: d.color, capacity: d.capacity || 100, deliveryDate: d.deliveryDate || '', startAddr: d.startAddr || '' })),
+            drivers: drivers.map(d => ({ id: d.id, name: d.name, color: d.color, capacity: d.capacity || 100, deliveryDate: d.deliveryDate || '' })),   // DS-9-5
             status: 'draft',
             totalRecords: resetRecords.length,
             assignedCount: 0,
@@ -2118,7 +2121,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
           if (!dongDriverMap[routeDong].includes(r._driverId)) dongDriverMap[routeDong].push(r._driverId);
         });
         // 기사 명단 병합: 기존 + 이번 세션(id/name 갱신, 없으면 추가) → 부분 세션이 전체 기사를 날리지 않게
-        const sessionDrivers = drivers.map(d => ({ id: d.id, name: d.name, color: d.color, capacity: d.capacity || 100, startAddr: d.startAddr || '' }));
+        const sessionDrivers = drivers.map(d => ({ id: d.id, name: d.name, color: d.color, capacity: d.capacity || 100 }));   // DS-9-5: 출발지 제외
         const mergedDrivers = [...baseDrivers];
         sessionDrivers.forEach(sd => {
           const i = mergedDrivers.findIndex(d => d.id === sd.id || (d.name && d.name === sd.name));

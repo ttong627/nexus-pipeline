@@ -19,7 +19,9 @@ service cloud.firestore {
 
     // DB 읽기 없이 Auth 토큰에서 직접 확인 — 관리자 자기복구용 (#4)
     function isAdminEmail() {
+      // ★email_verified 를 함께 본다 — 확인되지 않은 같은 주소 계정이 생기면 관리자 경로가 통째로 넘어간다(2026-08-23 점검)
       return isAuthenticated() &&
+        request.auth.token.get('email_verified', false) == true &&
         request.auth.token.get('email', '') in [
           'ttong627@gmail.com'
         ];
@@ -283,8 +285,10 @@ service cloud.firestore {
 
     function isShareWithinTTL() {
       return ('expiresAt' in resource.data && resource.data.expiresAt > request.time) ||
+        // ★만료 필드가 없는 옛 문서의 폴백 — 45일은 너무 길다(SH-5 는 7일 기준). 2026-08-23 점검에서 좁혔다.
+        //   현재 살아 있는 그런 공유는 0건이고, 기사 토큰은 openShare 가 expiresAt 을 요구하므로 발급되지도 않는다.
         (!('expiresAt' in resource.data) && 'createdAt' in resource.data &&
-         resource.data.createdAt + duration.value(45, 'd') > request.time);
+         resource.data.createdAt + duration.value(7, 'd') > request.time);
     }
 
     // ⛔`drivers` 는 **이 프로젝트의 기사 명부가 아니다**(2026-08-13 실측: 0건).

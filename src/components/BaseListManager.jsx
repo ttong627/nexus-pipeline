@@ -1,9 +1,7 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import * as XLSX from 'xlsx';
-import {
-  db, collection, getDocs, getDocsFromServer, getDoc, setDoc, doc, deleteDoc, writeBatch, serverTimestamp, query, where
-} from '../config/firebase.js';
+import { db, collection, getDocs, getDocsFromServer, getDoc, setDoc, doc, deleteDoc, writeBatch, serverTimestamp, query, where, increment } from '../config/firebase.js';
 import {
   Database, Upload, Trash2, ArrowLeft, AlertCircle,
   Download, Search, Save, Clock, RotateCcw, FileSpreadsheet, X, RefreshCw, Calendar, Columns
@@ -412,6 +410,8 @@ ${e.message}`);
         if (!ok) { setSaving(false); return; }
       }
       const nextRev = (serverRev ?? loadedBaseRevRef.current ?? 0) + 1;
+      // ★rev 는 화면 캐시 비교용 값이고, 실제 문서에는 `increment(1)` 로 올린다(2026-08-23 점검) —
+      //   두 담당자가 동시에 저장하면 둘 다 같은 값을 읽고 같은 값을 써서 충돌 감지가 통과해 버렸다.
 
       const allOps = [
         ...modifiedEntries.map(([id, changes]) => ({ type: 'update', id, changes })),
@@ -438,7 +438,7 @@ ${e.message}`);
           `화면을 새로고침해 실제 저장 상태를 확인한 뒤 다시 저장해 주세요.`;
         throw new Error(_msg);
       }
-      await setDoc(doc(db, 'base_lists', selectedCity), { updatedAt: serverTimestamp(), rev: nextRev }, { merge: true });
+      await setDoc(doc(db, 'base_lists', selectedCity), { updatedAt: serverTimestamp(), rev: increment(1) }, { merge: true });
 
       // 저장 성공 → 서버 전체 재조회 대신 로컬 state·캐시 즉시 반영 (체감 속도 ↑, 결과 동일)
       const deletedSet = new Set(deletedArr);

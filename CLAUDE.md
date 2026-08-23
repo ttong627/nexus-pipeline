@@ -368,6 +368,20 @@
 | SH-5 | **이행기** — 비밀번호 없이 만든 옛 링크(secrets 문서 없음)는 만료(≤7일)까지 빈 비밀번호 probe 로 토큰을 받는다(현장이 서지 않게). 기사 화면 `decideGate`: 담당자(이메일 로그인)는 토큰 없이 자기 세션으로 본다(커스텀 토큰으로 덮어쓰면 업무 세션이 날아간다) |
 | SH-6 | **배포 전제** — ①Functions 실행 계정(`31783407891-compute@developer.gserviceaccount.com`)에 `roles/iam.serviceAccountTokenCreator`(자기 자신)가 있어야 토큰 서명이 된다 — 없으면 배포는 되고 **호출만 죽는다** ②**CSP**(`firebase.json` connect-src)에 `https://*.cloudfunctions.net`이 있어야 브라우저가 callable을 부를 수 있다 — 없어서 08-08부터 사용기록 전송이 15일간 조용히 죽어 있었다(검사 발견) ③잠금은 `route_share_attempts/{shareId}_{ipHash}`(공유+IP 5회→10분 · IP 는 XFF **마지막** 원소 · 문서 `expiresAt` 1h) + secrets `hourFails`(공유 전체 20회/h→30분)를 **한 트랜잭션**으로 집계(동시요청 경합 차단) ④옛 `/api/fav/*` 엔드포인트는 공유 토큰(Bearer · shareId **와 driverId** 일치) 필수, `/api/usage` 는 공유 토큰 거부 ⑤`App.jsx` 인증 리스너는 `claims.shareId` 토큰을 사용자로 취급하지 않는다(기사 화면이 아니면 토큰 세션을 끊는다) ⑥**`SHARE_TRANSITION_DUAL_WRITE=false`** — 부모 공유 문서에 `records` 배열을 다시 넣으면 토큰 하나로 전 기사 PII 가 통째로 읽힌다(2차 검사 실측). 건별은 서브컬렉션 + `where driverId` 만 ⑦규칙 `ownerEmailMatch`: `createdBy:''`(SSO 담당자) 빈 문자열 동치 차단 ⑧규칙 회귀 `npm run test:rules`(에뮬레이터 · `scripts/rules/firestore-rules.test.mjs` · 전제 Java + 전역 firebase-tools) ⑨**부모 공유 문서(`route_shares/{id}`)엔 PII 금지** — 토큰 가진 기사 전원에게 읽힌다. `completions` 도 uid 키 + 기사 위치·오차·판정만(수령자 이름·배송지 좌표 금지 · 3차 검사 실측), 담당자 수집은 건별 문서에서 이어 붙인다 → 배포 직후 `scripts/verify-share-passcode-live.mjs` **+ 실제 브라우저**(기사 링크 열어 비밀번호 입장)로 확인 |
 
+## 14-2. 점검에서 확정된 절대규칙 (2026-08-23 전체 점검 · 절대 되돌리지 말 것)
+
+| # | 규칙 |
+|---|---|
+| G-1 | **자동 삭제 금지** — 화면을 여는 것만으로 데이터가 지워지는 코드를 두지 않는다. 예전 `BaseListManager` 는 마운트 시 "공백 없는 지자체명"을 확인·백업·audit 없이 전건 삭제했다(`세종특별자치시`처럼 시·군·구가 없는 광역단체가 대상이 된다). 삭제는 **담당자가 명시적으로 누를 때만**, confirm + `logAudit()` + 백업을 갖춰서. |
+| G-2 | **파괴적 작업은 `src/utils/audit.js` 의 `logAudit()` 를 거친다**(B-11 실행판). 전체삭제·유령정리·월 초기화·마이그레이션 9개 경로가 무기록이었다. |
+| G-3 | **쓰고 나서 지운다** — 교체 저장은 새 데이터를 전부 쓴 뒤 옛 데이터를 지운다(M-1). 먼저 지우면 중간 실패에서 옛 명단만 사라진다. 병렬 커밋은 `Promise.allSettled` 로 **부분 저장을 드러낸다**. |
+| G-4 | **빈값은 기존 값을 덮지 않는다**(M-9 확장) — `note` 뿐 아니라 `driver·seqNo·detailAddr·lat·lng·legalDong·buildingName` 모두. `null` 은 `merge:true` 에서 '지우기'로 기록된다. |
+| G-5 | **카카오 REST 키는 서버에만 둔다** — 도메인 제한이 불가능한 키라 번들에 실리면 누구나 쓴다(쿼터 소진 = 배송 당일 좌표매칭 중단). 클라이언트는 Functions `POST /api/kakao` 프록시(`src/utils/kakaoApi.js`)만 쓴다. 시크릿 이름은 실재하는 `ADDRESS_KAKAO_REST_KEY`. ※엔진은 **전송 계층만** 분기한다 — Node(골든 녹화·재생)는 카세트 키를 위해 직접 호출. |
+| G-6 | **엔진 복제 금지(전 심볼)** — `RouteMapModal` 에 순번 엔진 심볼을 재정의하지 않는다. 회귀 `scripts/apt-dong-parse.test.mjs` 의 '전 심볼 가드'가 엔진 export 를 읽어 전수 차단한다(2026-08-23 에 41개를 제거했다). |
+| G-7 | **공유 토큰의 driverId 는 서버가 검증한다** — `openShare` 가 `share.drivers` 에 실재하는 기사인지 확인한다. 안 하면 비밀번호 하나로 그 지도 전 기사 명단을 모을 수 있다. |
+| G-8 | **부모 공유 문서에 PII 금지**(SH-6 ⑨ 연장) — `records` 배열·`completions` 의 이름/배송지 좌표 모두. 기사 화면은 서브컬렉션을 `where driverId` 로 읽는다. |
+| G-9 | **IP 판정은 XFF 마지막에서 구글 LB·사설 대역을 걷어낸 값**(`functions/usageEvent.js` `extractClientIp` 하나만 쓴다). 첫 원소는 클라가 위조할 수 있다. |
+
 ## 15. 인트로 화면 규칙
 
 - **표시 조건**: 신규 회원가입 + 지자체·성명 등록 완료 직후 1회만

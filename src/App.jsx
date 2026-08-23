@@ -923,6 +923,17 @@ export default function App() {
       setImporting(true);
       try {
         const fetchAsFile = async (url, name) => {
+          // ★임의 호스트를 그대로 fetch 하면 안 된다(2026-08-23 점검) — 링크 하나로 앱이 남의 서버에서
+          //   파일을 받아 명단으로 여는 통로가 된다. 허용한 오리진만 통과시킨다(운영 CSP 와 같은 취지).
+          try {
+            const u = new URL(String(url), window.location.origin);
+            const ok = u.origin === window.location.origin
+              || /(^|\.)firebasestorage\.googleapis\.com$/.test(u.hostname)
+              || /(^|\.)storage\.googleapis\.com$/.test(u.hostname)
+              || /(^|\.)run\.app$/.test(u.hostname)
+              || /(^|\.)cloudfunctions\.net$/.test(u.hostname);
+            if (!ok) { alert('허용되지 않은 주소에서는 파일을 가져올 수 없습니다.'); return null; }
+          } catch { alert('파일 주소 형식이 올바르지 않습니다.'); return null; }
           const res = await fetch(url);
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const blob = await res.blob();
