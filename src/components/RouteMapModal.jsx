@@ -44,6 +44,8 @@ import {
 //   읽기도 고치기도 어려웠고, 순수함수는 모듈에 있어야 회귀 테스트로 잠글 수 있다.
 import { loadCityCoordCache, lookupCoordInCache, saveCoordCache } from '../utils/coordCache.js';   // ★좌표 캐시 SSOT(2026-08-23 Phase 1)
 import {
+  buildPinInnerHtml,
+  pinZIndex,
   DRIVER_COLORS,
   KAKAO_COLOR_MAP,
   SHARE_LINK_TTL_DAYS,
@@ -244,6 +246,9 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
   const kakaoMapRef = useRef(null);
   const overlaysRef = useRef([]);
   const mapCoordCacheRef = useRef(new Map());   // 도시 좌표 캐시 1회 로드분(레코드마다 getDoc 하던 N+1 제거)
+  const overlayByIdRef = useRef(new Map());     // 레코드 id → { overlay, el, rec, sameCount, coordKey } — 변경분만 갱신하려고 둔 색인
+  const coordRecsMapRef = useRef(new Map());    // 같은 좌표 그룹(팝업용) — 리스너가 **최신** 목록을 보게 한다
+  const structuralSigRef = useRef('');          // 구조(누가·어디에·몇 포)가 바뀌었는지
   const polylinesRef = useRef([]);
   const driverPinOverlaysRef = useRef([]);
   const completionOverlaysRef = useRef([]); // ②-B 완료좌표 비교 오버레이(점·선·라벨)
@@ -1001,18 +1006,38 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
     () => mapRecords.map(r => `${r.id}:${r._driverId||''}:${r.배송순번||''}:${!!r._에러}`).join('|'),
     [mapRecords]
   );
+  // ★구조 시그니처 — **누가·어디에·몇 포**만 담는다(2026-08-23 Phase 3-3).
+  //   색(기사배정)·순번은 여기 없다: 그건 핀 DOM 만 고쳐 쓰면 되고 오버레이를 다시 만들 이유가 없다.
+  //   구조가 바뀌면(추가·삭제·좌표변경·포수변경) 예전처럼 전량 재생성한다 — 안전한 쪽으로 폴백.
+  const structuralSig = useMemo(
+    () => mapRecords.map(r => `${r.id}:${r._lat}:${r._lng}:${r.포수 || r['수량(포수)'] || ''}`).join('|'),
+    [mapRecords],
+  );
   // 오버레이는 기사 id·색만 영향 — 기사명 편집 등으로는 재생성하지 않도록 시그니처화(재생성 최소화).
   const driverColorSig = useMemo(() => drivers.map(d => `${d.id}:${d.color}`).join('|'), [drivers]);
 
   useEffect(() => {
     if (!kakaoMapRef.current) return;
-    overlaysRef.current.forEach(o => o.setMap(null));
-    overlaysRef.current = [];
+
+    // ★구조가 그대로면 핀을 **다시 만들지 않는다**(2026-08-23 Phase 3-3).
+    //   예전엔 색·순번 1건만 달라져도 전량(파괴 N + 생성 N + DOM 6~9N개)을 다시 만들었다 —
+    //   우클릭 배정취소 1회·드롭다운 1회·순번 1칸 입력이 전부 그 비용을 치렀다.
+    //   ⚠️경로선·전체범위 맞춤·×N 카운트는 **아래에서 전건 기준으로 그대로** 돈다(불변식 유지).
+    const canPatch = structuralSigRef.current === structuralSig
+      && overlayByIdRef.current.size === mapRecords.length
+      && mapRecords.length > 0;
+
+    if (!canPatch) {
+      overlaysRef.current.forEach(o => o.setMap(null));
+      overlaysRef.current = [];
+      overlayByIdRef.current = new Map();
+    }
     polylinesRef.current.forEach(p => p.setMap(null));
     polylinesRef.current = [];
-    if (!mapRecords.length) return;
+    structuralSigRef.current = structuralSig;
+    if (!mapRecords.length) { overlayByIdRef.current = new Map(); return; }
 
-    // 같은 좌표 그룹 카운트 (소수점 5자리 ≈ 1m 정밀도)
+    // 같은 좌표 그룹 카운트 (소수점 5자리 ≈ 1m 정밀도) — ★항상 **전건** 기준(부분집합으로 세면 ×N 이 틀어진다)
     const coordCountMap = new Map();
     const coordRecsMap  = new Map();
     mapRecords.forEach(r => {
@@ -1022,9 +1047,33 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
       if (!coordRecsMap.has(key)) coordRecsMap.set(key, []);
       coordRecsMap.get(key).push(r);
     });
+    coordRecsMapRef.current = coordRecsMap;
 
     const driverColorById = new Map(drivers.map(d => [d.id, d.color]));
-    mapRecords.forEach(r => {
+
+    if (canPatch) {
+      // 변경분만 DOM 갱신 — 오버레이 객체는 그대로 두고 내용과 겹침순서만 바꾼다.
+      mapRecords.forEach(r => {
+        const entry = overlayByIdRef.current.get(r.id);
+        if (!entry) return;
+        const color = r._에러 ? '#ef4444' : (driverColorById.get(r._driverId) || '#6b7280');
+        const seq = r.배송순번 || '';
+        const qtyNum = parseInt(r.포수 || r['수량(포수)']) || 1;
+        const prev = entry.rec;
+        entry.rec = r;                                   // 리스너가 최신 레코드를 보게 한다(stale 방지)
+        const prevColor = prev?._에러 ? '#ef4444' : (driverColorById.get(prev?._driverId) || '#6b7280');
+        if (prevColor === color && String(prev?.배송순번 || '') === String(seq) && !!prev?._에러 === !!r._에러) return;
+        entry.el.innerHTML = buildPinInnerHtml({
+          color, seq,
+          name: escHtml((r.이름 || '').slice(0, 5)),
+          dong: escHtml((r.행정동 || '').replace(/동$/, '').slice(0, 5)),
+          qtyNum, sameCount: entry.sameCount,
+        });
+        entry.overlay?.setZIndex?.(pinZIndex({ isError: !!r._에러, sameCount: entry.sameCount, qtyNum, seq }));
+      });
+    }
+
+    if (!canPatch) mapRecords.forEach(r => {
       const color = r._에러 ? '#ef4444' : (driverColorById.get(r._driverId) || '#6b7280');
       const seq = r.배송순번 || '';
       const name = escHtml((r.이름 || '').slice(0, 5));
@@ -1037,52 +1086,31 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
         ? `<div style="position:absolute;bottom:-7px;left:50%;transform:translateX(-50%);background:#1e293b;color:#f97316;font-size:8px;font-weight:900;padding:1px 5px;border-radius:6px;border:1.5px solid #f97316;line-height:1.5;white-space:nowrap;z-index:2;">×${sameCount}</div>`
         : '';
 
-      // 포수 강조 레벨 (0=1포, 1=2포, 2=3-4포, 3=5-9포, 4=10포+)
-      const qtyLv = qtyNum >= 10 ? 4 : qtyNum >= 5 ? 3 : qtyNum >= 3 ? 2 : qtyNum >= 2 ? 1 : 0;
-      const pinSize = [32, 34, 36, 39, 44][qtyLv];
-      const glowStyle = [
-        `0 0 0 2px ${color}55,0 3px 10px rgba(0,0,0,0.7)`,
-        `0 0 0 2px ${color}99,0 0 8px 3px ${color}30,0 3px 10px rgba(0,0,0,0.7)`,
-        `0 0 0 2px ${color},0 0 0 4px ${color}55,0 0 10px 4px ${color}33,0 3px 10px rgba(0,0,0,0.7)`,
-        `0 0 0 3px ${color},0 0 0 6px ${color}66,0 0 14px 6px ${color}44,0 3px 12px rgba(0,0,0,0.8)`,
-        `0 0 0 3px ${color},0 0 0 7px ${color}88,0 0 20px 8px ${color}55,0 4px 14px rgba(0,0,0,0.9)`,
-      ][qtyLv];
-      const qtyBadgeHtml = qtyNum >= 10
-        ? `<div style="position:absolute;top:-7px;right:-7px;background:linear-gradient(135deg,#f59e0b,#ef4444);color:white;font-size:9px;font-weight:900;padding:1px 4px;border-radius:8px;border:2px solid #000;line-height:1.4;white-space:nowrap;">${qtyNum}</div>`
-        : qtyNum >= 5
-          ? `<div style="position:absolute;top:-6px;right:-6px;background:#f97316;color:white;font-size:9px;font-weight:900;padding:1px 4px;border-radius:7px;border:2px solid #000;line-height:1.4;">${qtyNum}</div>`
-          : qtyNum >= 3
-            ? `<div style="position:absolute;top:-5px;right:-5px;background:#eab308;color:#000;font-size:9px;font-weight:900;padding:1px 3px;border-radius:6px;border:1.5px solid #000;line-height:1.4;">${qtyNum}</div>`
-            : qtyNum >= 2
-              ? `<div style="position:absolute;top:-5px;right:-5px;background:#facc15;color:#000;font-size:9px;font-weight:900;padding:1px 3px;border-radius:6px;border:1.5px solid #000;line-height:1.4;">2</div>`
-              : '';
-      const qtyColor = qtyNum >= 10 ? '#fbbf24' : qtyNum >= 5 ? '#fb923c' : qtyNum >= 3 ? '#fde047' : qtyNum >= 2 ? '#facc15' : color;
-      const arrowPx = Math.round(pinSize / 5.3);
-      const dotPx = Math.round(pinSize * 0.28);
-
-      // 옷핀(thumbtack) DOM 마커 — 포수 강조: 2포↑ 뱃지·링·크기 확대
+      // 핀 시각 규칙은 `routeMap/mapHelpers.js` 로 뺐다(2026-08-23 Phase 3-3) — 순수함수라 회귀로 잠긴다.
+      const qtyNumSafe = qtyNum;
       const pinEl = document.createElement('div');
       pinEl.setAttribute('data-record-id', r.id);
       pinEl.style.cssText = 'display:flex;flex-direction:column;align-items:center;cursor:pointer;user-select:none;';
-      pinEl.innerHTML = `<div style="width:${pinSize}px;height:${pinSize}px;border-radius:50%;background:${color};display:flex;align-items:center;justify-content:center;border:3px solid rgba(255,255,255,0.9);box-shadow:${glowStyle};flex-shrink:0;position:relative;">${seq ? `<span style="font-size:${pinSize >= 40 ? 9 : 10}px;font-weight:900;color:white;line-height:1;">${seq}</span>` : `<div style="width:${dotPx}px;height:${dotPx}px;border-radius:50%;background:rgba(255,255,255,0.35);"></div>`}${qtyBadgeHtml}${samePointBadgeHtml}</div><div style="width:0;height:0;border-left:${arrowPx}px solid transparent;border-right:${arrowPx}px solid transparent;border-top:${arrowPx * 2}px solid ${color};margin-top:-1px;flex-shrink:0;"></div><div style="background:${qtyNum >= 5 ? 'rgba(20,10,5,0.95)' : 'rgba(8,8,8,0.88)'};color:white;font-size:11px;font-weight:800;padding:2px 6px;border-radius:4px;margin-top:2px;white-space:nowrap;max-width:92px;overflow:hidden;text-overflow:ellipsis;border:1px solid ${color}${qtyNum >= 5 ? '88' : '45'};">${name}·<span style="color:${qtyColor};font-weight:900;">${qtyNum}포</span></div>${dong ? `<div style="background:rgba(0,0,0,0.72);color:#94a3b8;font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;margin-top:1px;white-space:nowrap;max-width:80px;overflow:hidden;text-overflow:ellipsis;">${dong}</div>` : ''}`;
+      pinEl.innerHTML = buildPinInnerHtml({ color, seq, name, dong, qtyNum: qtyNumSafe, sameCount });
+      const entry = { el: pinEl, rec: r, sameCount, coordKey };
       pinEl.addEventListener('click', (e) => {
         e.stopPropagation();
-        if (sameCount > 1) {
+        if (entry.sameCount > 1) {
           // 같은 좌표 여러 명 → 팝업으로 목록 표시
           const rect = mapRef.current?.getBoundingClientRect();
           const mapCont = mapRef.current?.parentElement?.getBoundingClientRect();
           const ox = rect ? e.clientX - (mapCont?.left || 0) : e.clientX;
           const oy = rect ? e.clientY - (mapCont?.top  || 0) : e.clientY;
-          setSamePointPopup({ recs: coordRecsMap.get(coordKey) || [], x: ox, y: oy });
+          setSamePointPopup({ recs: coordRecsMapRef.current.get(entry.coordKey) || [], x: ox, y: oy });
         } else {
           setLayoutMode(prev => (prev === 'map' || prev === 'mapfull') ? 'split' : prev);
-          handleSelectRecord(r);
+          handleSelectRecord(entry.rec);
         }
       });
       // 우클릭: 배정 취소
       pinEl.addEventListener('contextmenu', (e) => {
         e.preventDefault(); e.stopPropagation();
-        setRecords(prev => prev.map(pr => pr.id === r.id ? { ...pr, _driverId: null } : pr));
+        setRecords(prev => prev.map(pr => pr.id === entry.rec.id ? { ...pr, _driverId: null } : pr));
       });
 
       const overlay = new window.kakao.maps.CustomOverlay({
@@ -1090,10 +1118,12 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
         content: pinEl,
         yAnchor: 0.63,
         xAnchor: 0.5,
-        zIndex: r._에러 ? 10 : (sameCount > 1 ? 9 : qtyNum >= 5 ? 8 : qtyNum >= 2 ? 6 : seq ? 5 : 1),
+        zIndex: pinZIndex({ isError: !!r._에러, sameCount, qtyNum, seq }),
       });
       overlay.setMap(kakaoMapRef.current);
       overlaysRef.current.push(overlay);
+      entry.overlay = overlay;
+      overlayByIdRef.current.set(r.id, entry);   // 다음 변경 때 이 핀만 갱신하기 위한 색인
     });
 
     drivers.forEach(driver => {
@@ -1125,7 +1155,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
       shouldFitBoundsRef.current = false; // 이후 업데이트에서는 줌 고정
     }
 
-  }, [mapPinSignature, driverColorSig]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [mapPinSignature, driverColorSig, structuralSig]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── 혼재(겹침) 집계 — **마커 렌더링과 분리**(2026-08-23 Phase 3-2) ─────────
   //   예전엔 마커 effect 끝에 얹혀 있어서, 핀을 다시 그릴 때마다 전건 주소파싱이 함께 돌았다.

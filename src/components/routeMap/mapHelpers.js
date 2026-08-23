@@ -356,3 +356,48 @@ export const buildMapInsights = ({ records, drivers, largeAptComplexes = [] }) =
     actions,
   };
 };
+
+// ── 지도 핀 시각 규칙 (2026-08-23 Phase 3-3) ────────────────────────────────
+//   왜 여기로 뺐나: 핀 HTML 이 렌더 루프 한가운데 100줄로 박혀 있어 **규칙이 테스트 불가능**했다.
+//   포수별 크기·glow·뱃지, 이름/포수/동 라벨, 순번 배지, zIndex 우선순위는 이 화면의 업무 규칙이다
+//   (혼재·순번을 눈으로 확인하는 근거) — 순수함수로 빼서 회귀로 잠근다(`scripts/map-pin.test.mjs`).
+//   ★값을 바꾸면 테스트가 먼저 깨진다. 의도한 변경이면 테스트도 함께 고칠 것.
+
+/** 포수 강조 레벨 0~4 (1포 / 2포 / 3~4포 / 5~9포 / 10포+) */
+export const pinQtyLevel = (qtyNum) => (qtyNum >= 10 ? 4 : qtyNum >= 5 ? 3 : qtyNum >= 3 ? 2 : qtyNum >= 2 ? 1 : 0);
+
+/** 레벨별 핀 지름(px) */
+export const pinSizeOf = (qtyNum) => [32, 34, 36, 39, 44][pinQtyLevel(qtyNum)];
+
+/** 겹침 우선순위 — 오류 > 같은좌표 > 5포↑ > 2포↑ > 순번 > 기본 */
+export const pinZIndex = ({ isError, sameCount = 1, qtyNum = 1, seq = '' }) =>
+  (isError ? 10 : sameCount > 1 ? 9 : qtyNum >= 5 ? 8 : qtyNum >= 2 ? 6 : seq ? 5 : 1);
+
+/** 핀 내부 HTML — 색·순번·포수·같은좌표·이름·동 라벨. (문자열만 만든다: DOM 을 만들지 않는다) */
+export const buildPinInnerHtml = ({ color, seq = '', name = '', dong = '', qtyNum = 1, sameCount = 1 }) => {
+  const qtyLv = pinQtyLevel(qtyNum);
+  const pinSize = pinSizeOf(qtyNum);
+  const glowStyle = [
+    `0 0 0 2px ${color}55,0 3px 10px rgba(0,0,0,0.7)`,
+    `0 0 0 2px ${color}99,0 0 8px 3px ${color}30,0 3px 10px rgba(0,0,0,0.7)`,
+    `0 0 0 2px ${color},0 0 0 4px ${color}55,0 0 10px 4px ${color}33,0 3px 10px rgba(0,0,0,0.7)`,
+    `0 0 0 3px ${color},0 0 0 6px ${color}66,0 0 14px 6px ${color}44,0 3px 12px rgba(0,0,0,0.8)`,
+    `0 0 0 3px ${color},0 0 0 7px ${color}88,0 0 20px 8px ${color}55,0 4px 14px rgba(0,0,0,0.9)`,
+  ][qtyLv];
+  const samePointBadgeHtml = sameCount > 1
+    ? `<div style="position:absolute;bottom:-7px;left:50%;transform:translateX(-50%);background:#1e293b;color:#f97316;font-size:8px;font-weight:900;padding:1px 5px;border-radius:6px;border:1.5px solid #f97316;line-height:1.5;white-space:nowrap;z-index:2;">×${sameCount}</div>`
+    : '';
+  const qtyBadgeHtml = qtyNum >= 10
+    ? `<div style="position:absolute;top:-7px;right:-7px;background:linear-gradient(135deg,#f59e0b,#ef4444);color:white;font-size:9px;font-weight:900;padding:1px 4px;border-radius:8px;border:2px solid #000;line-height:1.4;white-space:nowrap;">${qtyNum}</div>`
+    : qtyNum >= 5
+      ? `<div style="position:absolute;top:-6px;right:-6px;background:#f97316;color:white;font-size:9px;font-weight:900;padding:1px 4px;border-radius:7px;border:2px solid #000;line-height:1.4;">${qtyNum}</div>`
+      : qtyNum >= 3
+        ? `<div style="position:absolute;top:-5px;right:-5px;background:#eab308;color:#000;font-size:9px;font-weight:900;padding:1px 3px;border-radius:6px;border:1.5px solid #000;line-height:1.4;">${qtyNum}</div>`
+        : qtyNum >= 2
+          ? `<div style="position:absolute;top:-5px;right:-5px;background:#facc15;color:#000;font-size:9px;font-weight:900;padding:1px 3px;border-radius:6px;border:1.5px solid #000;line-height:1.4;">2</div>`
+          : '';
+  const qtyColor = qtyNum >= 10 ? '#fbbf24' : qtyNum >= 5 ? '#fb923c' : qtyNum >= 3 ? '#fde047' : qtyNum >= 2 ? '#facc15' : color;
+  const arrowPx = Math.round(pinSize / 5.3);
+  const dotPx = Math.round(pinSize * 0.28);
+  return `<div style="width:${pinSize}px;height:${pinSize}px;border-radius:50%;background:${color};display:flex;align-items:center;justify-content:center;border:3px solid rgba(255,255,255,0.9);box-shadow:${glowStyle};flex-shrink:0;position:relative;">${seq ? `<span style="font-size:${pinSize >= 40 ? 9 : 10}px;font-weight:900;color:white;line-height:1;">${seq}</span>` : `<div style="width:${dotPx}px;height:${dotPx}px;border-radius:50%;background:rgba(255,255,255,0.35);"></div>`}${qtyBadgeHtml}${samePointBadgeHtml}</div><div style="width:0;height:0;border-left:${arrowPx}px solid transparent;border-right:${arrowPx}px solid transparent;border-top:${arrowPx * 2}px solid ${color};margin-top:-1px;flex-shrink:0;"></div><div style="background:${qtyNum >= 5 ? 'rgba(20,10,5,0.95)' : 'rgba(8,8,8,0.88)'};color:white;font-size:11px;font-weight:800;padding:2px 6px;border-radius:4px;margin-top:2px;white-space:nowrap;max-width:92px;overflow:hidden;text-overflow:ellipsis;border:1px solid ${color}${qtyNum >= 5 ? '88' : '45'};">${name}·<span style="color:${qtyColor};font-weight:900;">${qtyNum}포</span></div>${dong ? `<div style="background:rgba(0,0,0,0.72);color:#94a3b8;font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;margin-top:1px;white-space:nowrap;max-width:80px;overflow:hidden;text-overflow:ellipsis;">${dong}</div>` : ''}`;
+};
