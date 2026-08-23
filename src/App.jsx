@@ -197,7 +197,7 @@ const ScheduleTab           = lazyWithChunkRecovery(() => import("./components/S
 import { processAddress, asyncPool, addTypoRecord, loadTypoDict } from "./engine/addressEngine.js";
 import { parsePhoneNumbers, parseSMS, parseBirthDate, normalizeBirth, extractPhoneNote, formatPhone } from "./utils/parsers.js";
 import { canUseRouteMap, canUseDbOverview, getMonthlyLimit } from "./utils/tierUtils.js";
-import { getCachedCoord, saveCoordCache } from "./utils/coordCache.js";
+import { getCachedCoord, saveCoordCache, loadCityCoordCache, lookupCoordInCache } from "./utils/coordCache.js";
 import { resolveCoordsBatch, pickStoreCoord } from "./utils/coordStoreApi.js";
 import { guardAddressDetail, cleanAddressPiece, parseDisplayedAddress } from "./utils/addressFormat.js";
 import { buildStepStatus, getVisibleWorkflowSteps, getWorkflowMeta, getWorkflowMode, WORKFLOW_STEP_LABELS } from "./utils/workflow.js";
@@ -2002,6 +2002,11 @@ export default function App() {
       }
     };
 
+    // ★도시 좌표 캐시를 **한 번에** 읽는다(2026-08-23 Phase 1). 예전엔 레코드마다 getDoc 1회였고
+    //   실측 건당 27.8ms → 7,402건이면 **약 206초**를 캐시 조회에만 썼다. 일괄 로드는 637ms(323배).
+    //   실패해도 아래 개별 조회로 폴백하므로 동작은 그대로다.
+    const cityCoordCache = await loadCityCoordCache(db, city);
+
     try {
       for (const record of targets) {
         if (bgSaveCoordCancelRef.current) break;
@@ -2009,7 +2014,10 @@ export default function App() {
         // 좌표 저장소(building_coord) 우선 — 이미 확보한 좌표는 다시 사지 않는다(C-5).
         const fromStore = storeByRecordId.get(record.id);
         // 그다음 영구 캐시(coordinate_cache) — 같은 주소면 카카오 호출 없이 즉시 적용(API 최소화).
-        let coord = fromStore ? { lat: fromStore.lat, lng: fromStore.lng } : await getCachedCoord(db, city, record.주소);
+        let coord = fromStore
+          ? { lat: fromStore.lat, lng: fromStore.lng }
+          : (lookupCoordInCache(cityCoordCache, record.주소)
+             || (cityCoordCache.size ? null : await getCachedCoord(db, city, record.주소)));
         // 출처를 뭉뚱그리면 나중에 출처별로 품질을 재평가할 수 없다 — 저장소 출처를 그대로 싣는다.
         let source = fromStore ? `store:${fromStore.source || fromStore.kind}` : 'cache';
         if (!coord) {

@@ -21,7 +21,7 @@ import { useColumnEditor } from '../hooks/useColumnEditor.js';
 import { processAddress, asyncPool } from '../engine/addressEngine.js';
 import { guardAddressDetail, parseDisplayedAddress } from '../utils/addressFormat.js';
 import { canUseCoords, canUseCoordsBg } from '../utils/tierUtils.js';
-import { getCachedCoord, saveCoordCache } from '../utils/coordCache.js';
+import { getCachedCoord, saveCoordCache, loadCityCoordCache, lookupCoordInCache } from '../utils/coordCache.js';
 import { idbGet, idbSet, idbDel } from '../utils/idbCache.js';
 import { orderFieldsByExport, hasRi, getColWidth, colCellStyle } from '../utils/colOrder.js';
 import { getCityExportTemplate } from '../utils/cityExportTemplates.js';
@@ -1158,8 +1158,11 @@ ${e.message}`);
     };
 
     // 영구 캐시 우선 — 같은 주소면 카카오 호출 없이 즉시 반환, 새로 받은 좌표는 캐시에 저장(API 최소화).
+    //   ★도시 캐시를 한 번에 읽어 둔다(2026-08-23 Phase 1) — 레코드마다 getDoc 하던 N+1 제거.
+    const cityCoordCache = await loadCityCoordCache(db, cityId);
     const getCoord = async (주소, 행정동 = '') => {
-      const cached = await getCachedCoord(db, cityId, 주소);
+      const cached = lookupCoordInCache(cityCoordCache, 주소)
+        || (cityCoordCache.size ? null : await getCachedCoord(db, cityId, 주소));
       if (cached) return { ...cached, _step: 0 };
       const r = await getCoordKakao(주소, 행정동);
       if (r?.lat && r?.lng) await saveCoordCache(db, cityId, 주소, r.lat, r.lng);

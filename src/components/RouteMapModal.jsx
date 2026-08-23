@@ -42,6 +42,7 @@ import {
 
 // ★순수 헬퍼·상수는 `routeMap/mapHelpers.js` 로 옮겼다(2026-08-23 Phase 4-1) — 이 파일이 5,850줄이라
 //   읽기도 고치기도 어려웠고, 순수함수는 모듈에 있어야 회귀 테스트로 잠글 수 있다.
+import { loadCityCoordCache, lookupCoordInCache, saveCoordCache } from '../utils/coordCache.js';   // ★좌표 캐시 SSOT(2026-08-23 Phase 1)
 import {
   DRIVER_COLORS,
   KAKAO_COLOR_MAP,
@@ -242,6 +243,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
   const mapRef = useRef(null);
   const kakaoMapRef = useRef(null);
   const overlaysRef = useRef([]);
+  const mapCoordCacheRef = useRef(new Map());   // 도시 좌표 캐시 1회 로드분(레코드마다 getDoc 하던 N+1 제거)
   const polylinesRef = useRef([]);
   const driverPinOverlaysRef = useRef([]);
   const completionOverlaysRef = useRef([]); // ②-B 완료좌표 비교 오버레이(점·선·라벨)
@@ -268,7 +270,12 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
   // 작업 큐 기반 — activeDong이 있으면 해당 동만, 없으면 전체
   const activeDong = dongQueue[activeDongIndex] ?? null;
   const selectedDong = activeDong ?? '전체'; // 기존 코드 호환 alias (setSelectedDong 없음)
-  const filteredRecords = activeDong ? records.filter(r => getRouteDong(r) === activeDong) : records;
+  // ★`useMemo` 필수(2026-08-23 Phase 3-1) — 예전엔 매 렌더 새 배열이라, 이걸 deps 로 쓰는 `displayRecords`·
+  //   `mapRecords` 의 메모가 **동 큐가 잡힌 상시 경로에서 전부 무력화**됐다(전건 정렬이 렌더마다 다시 돌았다).
+  const filteredRecords = useMemo(
+    () => (activeDong ? records.filter(r => getRouteDong(r) === activeDong) : records),
+    [records, activeDong],
+  );
 
   const hasDongSetupMapping = !!setupDongDriverMapProp && Object.keys(setupDongDriverMapProp).length > 0;
 
@@ -1118,15 +1125,19 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
       shouldFitBoundsRef.current = false; // 이후 업데이트에서는 줌 고정
     }
 
-    // 경계에 가까운 정상 인접지는 혼재가 아니다.
-    // 같은 아파트/동일주소 단위가 갈라졌거나, 주변이 타 기사 권역으로 압도되는 "섬"만 혼재로 센다.
+  }, [mapPinSignature, driverColorSig]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── 혼재(겹침) 집계 — **마커 렌더링과 분리**(2026-08-23 Phase 3-2) ─────────
+  //   예전엔 마커 effect 끝에 얹혀 있어서, 핀을 다시 그릴 때마다 전건 주소파싱이 함께 돌았다.
+  //   둘은 서로 필요 없는 계산이다: 마커는 화면, 혼재는 숫자 배지.
+  //   경계에 가까운 정상 인접지는 혼재가 아니다 — 같은 아파트/동일주소 단위가 갈라진 경우만 센다(R-F).
+  useEffect(() => {
     const routeUnits = buildAssignedRouteUnits(filteredRecords, drivers);
     const mixedKeys = getMixedRouteUnitKeys(routeUnits);
-    const cnt = routeUnits
+    setOverlapCount(routeUnits
       .filter(unit => mixedKeys.has(unit.key))
-      .reduce((sum, unit) => sum + unit.records.length, 0);
-    setOverlapCount(cnt);
-  }, [mapPinSignature, driverColorSig]); // eslint-disable-line react-hooks/exhaustive-deps
+      .reduce((sum, unit) => sum + unit.records.length, 0));
+  }, [filteredRecords, drivers]);
 
   // ── 도로주소 단위 연속 권역 자동 배정 ────────────────────────────────
   const handleAutoSplit = useCallback(() => {
@@ -1904,23 +1915,11 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
   // ── 2단계: 좌표 캐시 유틸 ────────────────────────────────────────────
   const addrToDocId = (addr) => (addr || '').replace(/[/]/g, '_').slice(0, 400);
 
-  const getCachedCoord = async (city, addr) => {
-    try {
-      const snap = await getDoc(doc(db, 'coordinate_cache', city, 'addresses', addrToDocId(addr)));
-      if (snap.exists()) { const d = snap.data(); return { lat: d.lat, lng: d.lng }; }
-    } catch {}
-    return null;
-  };
-
-  const saveCoordCache = async (city, addr, lat, lng) => {
-    try {
-      await setDoc(
-        doc(db, 'coordinate_cache', city, 'addresses', addrToDocId(addr)),
-        { address: addr, lat, lng, fetchedAt: serverTimestamp() },
-        { merge: true }
-      );
-    } catch {}
-  };
+  // ★좌표 캐시는 `src/utils/coordCache.js` SSOT 를 쓴다(2026-08-23 Phase 1) — 여기 사본이 있었다.
+  //   시그니처가 달랐다: 유틸은 원주소를 받아 내부에서 도로명을 뽑고, 이 파일은 **이미 뽑힌 도로명**을 넘겼다.
+  //   그래서 넘기기 전 도로명을 그대로 전달해도 같은 키가 나오도록 유틸 함수를 그대로 쓴다(키 회귀 `coord-cache.test.mjs`).
+  const getCachedCoordLocal = (addr) => lookupCoordInCache(mapCoordCacheRef.current, addr);
+  const saveCoordCacheLocal = async (city, addr, lat, lng) => { await saveCoordCacheLocal(db, city, addr, lat, lng); };
 
   // ── 3단계: 이전달 좌표+배정 승계 ────────────────────────────────────
   const handleLoadPrevMonth = useCallback(async () => {
@@ -2817,11 +2816,14 @@ ${folders}
 
     // 2단계: 캐시에서 먼저 확인 (API 호출 전)
     const cacheCity = isCloudMode ? cloudCity : (fileInfo?.city || '');
+    // ★도시 좌표 캐시를 **한 번에** 읽는다(2026-08-23 Phase 1) — 예전엔 레코드마다 getDoc 1회(건당 27.8ms)라
+    //   7,402건이면 약 206초를 캐시 조회에만 썼다. 일괄 로드는 637ms.
+    if (cacheCity) mapCoordCacheRef.current = await loadCityCoordCache(db, cacheCity);
     if (cacheCity && !force) {
       setCoordProgress({ done: 0, total: targets.length, round: 0 });
       for (const r of targets) {
         const road = extractRoadAddress(r.주소);
-        const cached = await getCachedCoord(cacheCity, road);
+        const cached = getCachedCoordLocal(road);
         if (cached) {
           updates[r.id] = cached;
           updateMeta[r.id] = { source: 'cache', query: road };
@@ -2850,7 +2852,7 @@ ${folders}
             updateMeta[r.id] = { source: coord.source || label, query: used?.query || '' };
             areaMeta[r.id] = assessKakaoAreaMatch(r, coord.raw, cacheCity);
             // 캐시에 저장
-            if (cacheCity) await saveCoordCache(cacheCity, extractRoadAddress(r.주소), coord.lat, coord.lng);
+            if (cacheCity) await saveCoordCacheLocal(cacheCity, extractRoadAddress(r.주소), coord.lat, coord.lng);
           }
           setCoordProgress(prev => prev ? { ...prev, done: prev.done + 1 } : prev);
         })().then(() => executing.delete(p));
@@ -4625,7 +4627,7 @@ ${folders}
                 _사유: mergeReason(x._사유, area.reason),
                 배송상태: isCityOut ? '타지자체확인필요' : (isDongOut ? '타동이관필요' : (x.확인필요 || x._에러 ? '확인후배정가능' : '배송준비')),
               } : x));
-              if (cacheCity) await saveCoordCache(cacheCity, road, coord.lat, coord.lng);
+              if (cacheCity) await saveCoordCacheLocal(cacheCity, road, coord.lat, coord.lng);
               if (isCloudMode && cloudCity && cloudMonthId && r._cloudDocId) {
                 const batch = writeBatch(db);
                 batch.update(doc(db, 'cloud_lists', cloudCity, 'months', cloudMonthId, 'records', r._cloudDocId), {
