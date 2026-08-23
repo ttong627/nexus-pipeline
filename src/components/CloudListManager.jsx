@@ -32,6 +32,7 @@ import { getCityExportTemplate } from '../utils/cityExportTemplates.js';
 import { useConfirmDelete } from '../contexts/ConfirmDeleteContext.jsx';
 import DriverSequenceView from './DriverSequenceView.jsx';
 import { isTranslitBuildingDong } from '../../services/address-service/src/shared/dongTokens.js';
+import { logAudit } from '../utils/audit.js';   // B-11 파괴적 작업 감사 로그
 
 const KAKAO_REST_KEY = import.meta.env.VITE_KAKAO_REST_KEY;
 const ttl90 = () => Timestamp.fromMillis(Date.now() + 90 * 24 * 60 * 60 * 1000);
@@ -1013,7 +1014,17 @@ ${e.message}`);
         });
         batches.push(batch);
       }
-      await Promise.all(batches.map(b => b.commit()));  // 499 청크 유지, commit만 병렬 → 대기시간 단축
+      // ★청크 하나가 실패해도 나머지는 이미 커밋된다 — 예전엔 "저장 오류" 한 줄만 띄워
+      //   담당자는 전부 실패한 줄 알고 다시 눌렀고, 화면과 DB 가 갈라졌다(2026-08-23 점검).
+      //   → allSettled 로 **몇 개가 들어갔고 몇 개가 실패했는지** 드러낸다.
+      const _results = await Promise.allSettled(batches.map(b => b.commit()));
+      const _failed = _results.filter(r => r.status === 'rejected');
+      if (_failed.length) {
+        const _msg = `저장이 부분적으로 실패했습니다 — 성공 ${_results.length - _failed.length}/${_results.length} 묶음.\n` +
+          `실패 사유: ${_failed[0].reason?.message || _failed[0].reason}\n\n` +
+          `화면을 새로고침해 실제 저장 상태를 확인한 뒤 다시 저장해 주세요.`;
+        throw new Error(_msg);
+      }
       // Update month meta counts
       const remaining = records
         .filter(r => !deletedRecordIds.has(r.id))
@@ -1302,6 +1313,7 @@ ${e.message}`);
       setDirtyRecords({});
       setDeletedRecordIds(new Set());
       await fetchMonths();
+      await logAudit('RESET_CLOUD_MONTH', { city: selectedCity, monthId: selectedMonth?.id || '' });
       alert(`✅ ${selectedMonth.id} 레코드 ${count.toLocaleString()}건 전체 삭제 완료`);
     } catch (e) {
       alert('삭제 오류: ' + e.message);
@@ -1376,6 +1388,7 @@ ${e.message}`);
       setDirtyRecords({});
       setDeletedRecordIds(new Set());
       await fetchMonths();
+      await logAudit('DELETE_CLOUD_GHOSTS', { city: selectedCity, monthId: selectedMonth?.id || '', count: ghosts.length });
       alert(`✅ 유령데이터 ${ghosts.length}건 삭제 완료\n남은 레코드: ${totalCount.toLocaleString()}건`);
     } catch (e) {
       alert('정리 오류: ' + e.message);

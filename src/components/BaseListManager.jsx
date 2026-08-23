@@ -22,6 +22,7 @@ import { orderFieldsByExport, getColWidth, colCellStyle } from '../utils/colOrde
 import { idbGet, idbSet, idbDel } from '../utils/idbCache.js';
 import SpecialNoteImporter from './SpecialNoteImporter.jsx';
 import { isTranslitBuildingDong } from '../../services/address-service/src/shared/dongTokens.js';
+import { logAudit } from '../utils/audit.js';   // B-11 파괴적 작업 감사 로그
 
 const FIELDS = [
   { key: 'name',     label: '이름',     minW: '90px'  },
@@ -255,9 +256,15 @@ export default function BaseListManager({ user, onBack, initialCity = '', export
     } catch (e) { console.error('[BaseListManager] loadUserRequests:', e); }
   };
 
+  // ★늦게 온 응답이 **다른 지자체** 화면을 덮어쓰면, 그 화면에서 셀을 고칠 때
+  //   A 지자체 사람이 B 지자체 문서로 저장된다(2026-08-23 점검). 요청 순번으로 막는다.
+  const fetchSeqRef = useRef(0);
   const fetchRecords = async (cityId, force = false) => {
+    const myTurn = ++fetchSeqRef.current;
+    const stale = () => myTurn !== fetchSeqRef.current;
     // 캐시 우선 즉시 표시(체감 로딩 0) → 백그라운드에서 서버 최신값으로 갱신. force면 rev-skip 무시(항상 전체 조회).
     const cached = force ? null : await readBaseCache(cityId);
+    if (stale()) return;
     if (cached) { setRecords(cached.data); setLoading(false); }
     else setLoading(true);
     try {
@@ -271,6 +278,7 @@ export default function BaseListManager({ user, onBack, initialCity = '', export
       if (cached && serverRev != null && cached.rev === serverRev) { setLoading(false); return; }
       const snap = await getDocsFromServer(collection(db, `base_lists/${cityId}/records`));
       const recs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      if (stale()) return;               // 그 사이 다른 지자체로 넘어갔다 — 이 응답은 버린다
       setRecords(recs);
       writeBaseCache(cityId, recs, serverRev);
     } catch (e) {
@@ -419,7 +427,17 @@ ${e.message}`);
         });
         batches.push(batch);
       }
-      await Promise.all(batches.map(b => b.commit()));  // 499 청크 유지, commit만 병렬 → 대기시간 단축
+      // ★청크 하나가 실패해도 나머지는 이미 커밋된다 — 예전엔 "저장 오류" 한 줄만 띄워
+      //   담당자는 전부 실패한 줄 알고 다시 눌렀고, 화면과 DB 가 갈라졌다(2026-08-23 점검).
+      //   → allSettled 로 **몇 개가 들어갔고 몇 개가 실패했는지** 드러낸다.
+      const _results = await Promise.allSettled(batches.map(b => b.commit()));
+      const _failed = _results.filter(r => r.status === 'rejected');
+      if (_failed.length) {
+        const _msg = `저장이 부분적으로 실패했습니다 — 성공 ${_results.length - _failed.length}/${_results.length} 묶음.\n` +
+          `실패 사유: ${_failed[0].reason?.message || _failed[0].reason}\n\n` +
+          `화면을 새로고침해 실제 저장 상태를 확인한 뒤 다시 저장해 주세요.`;
+        throw new Error(_msg);
+      }
       await setDoc(doc(db, 'base_lists', selectedCity), { updatedAt: serverTimestamp(), rev: nextRev }, { merge: true });
 
       // 저장 성공 → 서버 전체 재조회 대신 로컬 state·캐시 즉시 반영 (체감 속도 ↑, 결과 동일)
@@ -456,6 +474,7 @@ ${e.message}`);
       setDirtyMap({});
       setDeletedIds(new Set());
       await fetchStoredCities();
+      await logAudit('DELETE_BASE_ALL', { city: selectedCity, count: freshSnap.docs.length });
       alert(`"${selectedCity}" 기본명단 전체 삭제 완료 (${freshSnap.docs.length.toLocaleString()}건)`);
     } catch (e) { alert('삭제 오류: ' + e.message); }
     finally { setSaving(false); }
@@ -478,6 +497,7 @@ ${e.message}`);
       await setDoc(doc(db, 'base_lists', selectedCity), { updatedAt: serverTimestamp() }, { merge: true });
       await fetchRecords(selectedCity, true);
       await fetchStoredCities();
+      await logAudit('DELETE_BASE_NO_NOTE', { city: selectedCity, count: targets.length });
       alert(`특이사항 없는 레코드 ${targets.length.toLocaleString()}건 삭제 완료`);
     } catch (e) { alert('삭제 오류: ' + e.message); }
     finally { setSaving(false); }
@@ -501,6 +521,7 @@ ${e.message}`);
         setLastUpdatedAt('');
       }
       await fetchStoredCities();
+      await logAudit('DELETE_BASE_CITY', { city: cityId });
       alert(`"${cityId}" 삭제 완료`);
     } catch (e) { alert('삭제 오류: ' + e.message); }
     finally { setSaving(false); }
@@ -520,6 +541,7 @@ ${e.message}`);
         await batch.commit();
       }
       await fetchRecords(selectedCity, true);
+      await logAudit('DELETE_BASE_GHOSTS', { city: selectedCity, count: ghosts.length });
       alert(`유령 데이터 ${ghosts.length}건 삭제 완료`);
     } catch (e) { alert('유령 정리 오류: ' + e.message); }
     finally { setSaving(false); }
@@ -574,6 +596,7 @@ ${e.message}`);
       }
       await setDoc(doc(db, 'base_lists', selectedCity), { updatedAt: serverTimestamp() }, { merge: true });
       await fetchRecords(selectedCity, true);
+      await logAudit('MIGRATE_BASE_PHONE', { city: selectedCity, count: updates.length });
       alert(`✅ 전화번호 이동 완료: ${updates.length.toLocaleString()}건\n유선전화 → 휴대폰으로 이동했습니다.`);
     } catch (e) { alert('처리 오류: ' + e.message); }
     finally { setSaving(false); }

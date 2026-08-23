@@ -366,8 +366,11 @@ export default function ShareRouteView({ shareId, driverId }) {
   useEffect(() => {
     startGps();
     let cleanup;
+    // ★언마운트 뒤에 프로미스가 풀리면 그때 등록한 리스너는 정리 함수가 이미 지나가 **영원히 남는다**(2026-08-23 점검).
+    let dead = false;
     if (navigator.permissions) {
       navigator.permissions.query({ name: 'geolocation' }).then(perm => {
+        if (dead) return;
         // 설정 변경 시 (denied→granted 포함) 자동 재시도
         const handler = () => startGps();
         perm.addEventListener('change', handler);
@@ -375,6 +378,7 @@ export default function ShareRouteView({ shareId, driverId }) {
       }).catch(() => {});
     }
     return () => {
+      dead = true;
       if (watchIdRef.current != null) navigator.geolocation.clearWatch(watchIdRef.current);
       cleanup?.();
     };
@@ -401,21 +405,37 @@ export default function ShareRouteView({ shareId, driverId }) {
   }, [gpsStatus, applyGpsPosition, handleGpsError]);
 
   // ── 실시간 위치 Firestore 방송 (모바일만 자동) ──────────────────────────
+  // ★5초마다 쓰면 기사 1명당 12회/분(8시간·12명이면 하루 7만 회)이고, 그 쓰기마다 공유 문서가
+  //   접속 중인 **전 기사에게 재방송**된다(2026-08-23 점검). 20초 주기 + **의미 있게 움직였을 때만** 쓴다.
+  const lastSentLocRef = useRef(null);
   useEffect(() => {
     if (!isMobile) return;
+    const GPS_BROADCAST_MS = 20000;     // 방송 주기
+    const GPS_MIN_MOVE_M = 25;          // 이만큼 안 움직였으면 건너뛴다(정차·신호대기)
+    const distM = (a2, b2) => {
+      if (!a2 || !b2) return Infinity;
+      const R = 6371000, toRad = (d) => d * Math.PI / 180;
+      const dLat = toRad(b2.lat - a2.lat), dLng = toRad(b2.lng - a2.lng);
+      const s1 = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(a2.lat)) * Math.cos(toRad(b2.lat)) * Math.sin(dLng / 2) ** 2;
+      return 2 * R * Math.asin(Math.sqrt(s1));
+    };
     const interval = setInterval(() => {
       const loc = latestLocRef.current;
-      if (loc && gpsStatus === 'ok') {
-        updateDoc(doc(db, 'route_shares', shareId), {
-          [`liveGps.${driverId}`]: {
-            lat: loc.lat,
-            lng: loc.lng,
-            accuracy: loc.accuracy ?? null,
-            updatedAt: new Date().toISOString()
-          }
-        }).catch(e => console.warn('GPS Upload error:', e));
-      }
-    }, 5000);
+      if (!loc || gpsStatus !== 'ok') return;
+      const prev = lastSentLocRef.current;
+      // 2분 넘게 안 보냈으면 정차 중이어도 한 번은 보낸다(담당자 화면의 '살아있음' 표시가 120초 기준이다)
+      const stale = !prev || (Date.now() - prev.at) > 110000;
+      if (!stale && distM(prev, loc) < GPS_MIN_MOVE_M) return;
+      lastSentLocRef.current = { lat: loc.lat, lng: loc.lng, at: Date.now() };
+      updateDoc(doc(db, 'route_shares', shareId), {
+        [`liveGps.${driverId}`]: {
+          lat: loc.lat,
+          lng: loc.lng,
+          accuracy: loc.accuracy ?? null,
+          updatedAt: new Date().toISOString()
+        }
+      }).catch(e => console.warn('GPS Upload error:', e));
+    }, GPS_BROADCAST_MS);
     return () => clearInterval(interval);
   }, [shareId, driverId, gpsStatus, isMobile]);
 
@@ -668,7 +688,9 @@ export default function ShareRouteView({ shareId, driverId }) {
         });
       }
     } catch (e) {
+      // ★예전엔 조용히 삼켰다 — 기사는 체크가 된 줄 알고 지나가고, 담당자 화면엔 완료가 없다(2026-08-23 점검).
       console.warn('Complete toggle error:', e);
+      alert('배송완료 기록에 실패했습니다. 통신 상태를 확인하고 다시 눌러 주세요.');
     } finally {
       setSavingDoneId(null);
     }

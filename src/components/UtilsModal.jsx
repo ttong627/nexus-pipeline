@@ -2,8 +2,8 @@
 import { X, Layers, Download, Upload, Clock, Send, History, GitMerge, CheckSquare, Square, Trash2, Sparkles, FileX, SplitSquareHorizontal, RefreshCw, SlidersHorizontal, ArrowRight, ArrowUp, ArrowDown, Eye, Combine, Shuffle, ChevronRight, AlertCircle, Palette, Wand2, Building2, Truck } from 'lucide-react';
 import { db, collection, query, orderBy, limit, getDocs, addDoc, serverTimestamp, doc, getDoc } from '../config/firebase.js';
 import * as XLSX from 'xlsx';
+import { ADMIN_EMAILS } from '../utils/admins.js';   // 관리자 목록 SSOT(2026-08-23 점검: 세 벌이 갈라져 있었다)
 
-const ADMIN_EMAILS = ['ttong627@gmail.com'];
 
 const fmtPhone = (v) => {
   const d = String(v ?? '').replace(/[^0-9]/g, '');

@@ -202,6 +202,47 @@ import { resolveCoordsBatch, pickStoreCoord } from "./utils/coordStoreApi.js";
 import { guardAddressDetail, cleanAddressPiece, parseDisplayedAddress } from "./utils/addressFormat.js";
 import { buildStepStatus, getVisibleWorkflowSteps, getWorkflowMeta, getWorkflowMode, WORKFLOW_STEP_LABELS } from "./utils/workflow.js";
 import { LogOut, ShieldCheck, Database, Crown, Layers, UserCircle, Undo2, BarChart3, MapPin, Map as MapIcon, Truck, CalendarDays, FileSpreadsheet, Home, ChevronLeft, ChevronRight, BookOpen, HardDrive, HelpCircle } from "lucide-react";
+import { ADMIN_EMAILS } from './utils/admins.js';   // 관리자 목록 SSOT(2026-08-23 점검: 세 벌이 갈라져 있었다)
+
+// ★사이드바 항목은 **App 밖**에 둔다 — 컴포넌트 함수 안에서 정의하면 렌더마다 새 타입이 되어
+//   React 가 20여 개 항목을 통째로 파괴·재생성한다(단순 리렌더가 아니다 · 2026-08-23 점검).
+const SidebarSection = ({ label, collapsed }) => collapsed ? (
+  <div className="my-1 mx-1.5 border-t border-[#0d1520]" />
+) : (
+  <div className="px-3 pt-3 pb-0.5">
+    <span className="text-[8.5px] font-black tracking-[0.15em] text-gray-700 uppercase">{label}</span>
+  </div>
+);
+
+const SidebarItem = ({ icon: Icon, label, active, onClick, badge, locked, recommended, collapsed }) => (
+  <button
+    onClick={locked ? undefined : onClick}
+    title={collapsed ? label : undefined}
+    className={`relative flex items-center rounded-xl transition-all group text-left w-full
+      ${collapsed ? 'justify-center h-9 w-9 mx-auto px-0' : 'gap-2.5 px-3 py-2.5'}
+      ${active
+        ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/25 shadow-[0_0_12px_rgba(16,185,129,0.08)]'
+        : locked
+        ? 'text-gray-700 cursor-default border border-transparent'
+        : recommended
+        ? 'text-emerald-300 bg-emerald-500/8 border border-emerald-500/15 hover:bg-emerald-500/12'
+        : 'text-gray-500 hover:bg-white/5 hover:text-gray-200 border border-transparent'}
+    `}
+  >
+    <Icon size={15} className="shrink-0" />
+    {!collapsed && (
+      <>
+        <span className="text-[11.5px] font-bold flex-1 truncate leading-none">{label}</span>
+        {badge && <span className={`text-[9px] min-w-[16px] px-1 py-0.5 rounded-full font-black text-center ${badge.type === 'error' ? 'bg-amber-500 text-black' : 'bg-emerald-500/25 text-emerald-300'}`}>{badge.count}</span>}
+        {locked && <span className="text-[8px] bg-purple-900/30 text-purple-500 border border-purple-800/30 px-1 py-0.5 rounded font-black">PRO</span>}
+        {recommended && <span className="text-[8px] bg-emerald-500/15 text-emerald-400 border border-emerald-500/25 px-1 py-0.5 rounded font-black">추천</span>}
+      </>
+    )}
+    {collapsed && badge && badge.count > 0 && (
+      <span className="absolute top-0.5 right-0.5 w-2 h-2 bg-red-500 rounded-full" />
+    )}
+  </button>
+);
 
 // 등급별 사용설명서 열기 — 게스트/일반(무료)=무료가이드, VIP↑(유료)=유료가이드(따라하기). 두 문서는 상호 링크됨.
 const openManualFor = (tier) => {
@@ -555,8 +596,7 @@ export default function App() {
           updateDoc(userRef, { lastLogin: serverTimestamp() }).catch(() => {});
         }
         
-        const ADMIN_EMAILS = ['ttong627@gmail.com'];
-        const isAdminEmail = ADMIN_EMAILS.includes(u.email);
+        const isAdminEmail = ADMIN_EMAILS.includes(String(u.email || '').toLowerCase().trim());
 
         // 1. 최고 관리자 계정이 일반 유저로 꼬여있다면 복구 (Root Cause Fix)
         if (isAdminEmail && (userData.role !== 'admin' || userData.tier !== 'sapphire' || (userData.maxCities ?? 0) < 999)) {
@@ -2080,6 +2120,10 @@ export default function App() {
 
       // 유지(보존)되는 기존 레코드의 구분·포수·확인필요 — 메타 합산용. 병합 저장 시에만 채워짐.
       let keptGubunData = [];
+      // ★삭제 예정 목록만 모아 두고 **새 명단을 다 쓴 뒤에** 지운다(2026-08-23 점검 · M-1).
+      //   예전엔 먼저 지웠다 — 중간에 실패하면 **옛 명단은 없고 새 명단은 절반만** 남았고 되돌릴 백업도 없었다.
+      //   레코드 ID 가 UUID 라 새로 쓰는 문서와 충돌하지 않으므로 순서를 바꿔도 안전하다.
+      let pendingDelete = [];
       if (existingSnap.docs.length > 0) {
         // 이번 업로드에 들어있는 구분(수급자/차상위) — 그 구분만 교체, 나머지 구분은 보존
         const uploadGubuns = new Set(allData.map(r => r.구분).filter(Boolean));
@@ -2103,13 +2147,7 @@ export default function App() {
           if (!window.confirm(`[${city}] ${monthStr} 명단이 이미 ${existingSnap.docs.length}건 저장되어 있습니다.\n기존 데이터를 지우고 새로 저장하시겠습니까?`)) return;
           toDelete = existingSnap.docs;
         }
-        try {
-          for (let i = 0; i < toDelete.length; i += 499) {
-            const batch = writeBatch(db);
-            toDelete.slice(i, i + 499).forEach(d => batch.delete(d.ref));
-            await batch.commit();
-          }
-        } catch (e) { throw new Error(`[2단계 기존명단 삭제 권한 오류] ${e.message}\n계정: ${user?.email}`); }
+        pendingDelete = toDelete;   // 실제 삭제는 새 명단을 다 쓴 뒤(아래 [5-2단계])
       }
 
       // 메타 합산 = 이번 업로드 + (분리 저장 시) 유지된 기존 구분 데이터 → 둘 다 카운트에 반영
@@ -2223,6 +2261,17 @@ export default function App() {
         }
       } catch (e) { throw new Error(`[5단계 레코드 배치저장 권한 오류] ${e.message}\n계정: ${user?.email}`); }
 
+      // [5-2단계] 이제서야 기존(교체 대상) 레코드를 지운다 — 새 명단이 전부 들어간 뒤다.
+      if (pendingDelete.length) {
+        try {
+          for (let i = 0; i < pendingDelete.length; i += 499) {
+            const batch = writeBatch(db);
+            pendingDelete.slice(i, i + 499).forEach(d => batch.delete(d.ref));
+            await batch.commit();
+          }
+        } catch (e) { throw new Error(`[5-2단계 기존명단 삭제 권한 오류] ${e.message}\n계정: ${user?.email}\n(새 명단은 이미 저장됐습니다 — 같은 달을 다시 저장하면 정리됩니다)`); }
+      }
+
       // 자가학습 캡처: 정제직후값(_learnBaseline) vs 최종 확정값 diff만 기록(확정분만·비차단).
       //   위험분류(classifyCorrection)로 저위험 자동/고위험 검토 분기. 실패해도 저장 흐름 무영향.
       try {
@@ -2291,17 +2340,32 @@ export default function App() {
         const digitKey = v => String(v || '').replace(/[^\d]/g, '');
         const baseSnap = await getDocs(collection(db, 'base_lists', city, 'records'));
         if (!baseSnap.empty) {
+          // ★S-2 유일성 가드(2026-08-23 점검 · 김옥순 사고와 같은 계열) —
+          //   예전엔 같은 키가 겹치면 **마지막 레코드가 조용히 이겼다**. 가족 공용 유선전화 + 동명이인이면
+          //   남의 기본명단 문서에 좌표·기사·순번이 기록된다(좌표는 사실상 주소라 S-1 이 금지한 개인 데이터 쓰기다).
+          //   → 키가 2건 이상이면 그 키는 **아예 쓰지 않는다**(스킵하고 담당자 확인으로 남긴다).
           const byBirth = new Map(), byPhone = new Map(), byLandline = new Map();
+          const dupBirth = new Set(), dupPhone = new Set(), dupLandline = new Set();
+          const put = (map, dup, key, ref) => {
+            if (!key) return;
+            if (map.has(key)) { dup.add(key); return; }
+            map.set(key, ref);
+          };
           baseSnap.docs.forEach(d => {
             const b = d.data();
             const nm = b.name || b.이름 || '';
             const bk = digitKey(b.birthKey || b.생년월일 || '');
             const ph = digitKey(b.mobile || b.휴대폰 || '');
             const ld = digitKey(b.landline || b.유선전화 || '');
-            if (bk) byBirth.set(`${nm}_${bk}`, d.ref);
-            if (ph) byPhone.set(`${nm}_${ph}`, d.ref);
-            if (ld) byLandline.set(`${nm}_${ld}`, d.ref);
+            if (bk) put(byBirth, dupBirth, `${nm}_${bk}`, d.ref);
+            if (ph) put(byPhone, dupPhone, `${nm}_${ph}`, d.ref);
+            if (ld) put(byLandline, dupLandline, `${nm}_${ld}`, d.ref);
           });
+          dupBirth.forEach(k => byBirth.delete(k));
+          dupPhone.forEach(k => byPhone.delete(k));
+          dupLandline.forEach(k => byLandline.delete(k));
+          const _skipped = dupBirth.size + dupPhone.size + dupLandline.size;
+          if (_skipped) console.warn(`[sync-back] 동명이인 의심 키 ${_skipped}건은 건너뜀(S-2) — 담당자 확인 필요`);
           const syncUpdates = [];
           validData.forEach(r => {
             const nm = r.이름 || '';
@@ -3046,44 +3110,6 @@ export default function App() {
   const LazyFallback = null;
 
   // ── V5.0 사이드바 헬퍼 컴포넌트 ──────────────────────────────────────────────
-  const SidebarSection = ({ label }) => sidebarCollapsed ? (
-    <div className="my-1 mx-1.5 border-t border-[#0d1520]" />
-  ) : (
-    <div className="px-3 pt-3 pb-0.5">
-      <span className="text-[8.5px] font-black tracking-[0.15em] text-gray-700 uppercase">{label}</span>
-    </div>
-  );
-
-  const SidebarItem = ({ icon: Icon, label, active, onClick, badge, locked, recommended }) => (
-    <button
-      onClick={locked ? undefined : onClick}
-      title={sidebarCollapsed ? label : undefined}
-      className={`relative flex items-center rounded-xl transition-all group text-left w-full
-        ${sidebarCollapsed ? 'justify-center h-9 w-9 mx-auto px-0' : 'gap-2.5 px-3 py-2.5'}
-        ${active
-          ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/25 shadow-[0_0_12px_rgba(16,185,129,0.08)]'
-          : locked
-          ? 'text-gray-700 cursor-default border border-transparent'
-          : recommended
-          ? 'text-emerald-300 bg-emerald-500/8 border border-emerald-500/15 hover:bg-emerald-500/12'
-          : 'text-gray-500 hover:bg-white/5 hover:text-gray-200 border border-transparent'}
-      `}
-    >
-      <Icon size={15} className="shrink-0" />
-      {!sidebarCollapsed && (
-        <>
-          <span className="text-[11.5px] font-bold flex-1 truncate leading-none">{label}</span>
-          {badge && <span className={`text-[9px] min-w-[16px] px-1 py-0.5 rounded-full font-black text-center ${badge.type === 'error' ? 'bg-amber-500 text-black' : 'bg-emerald-500/25 text-emerald-300'}`}>{badge.count}</span>}
-          {locked && <span className="text-[8px] bg-purple-900/30 text-purple-500 border border-purple-800/30 px-1 py-0.5 rounded font-black">PRO</span>}
-          {recommended && <span className="text-[8px] bg-emerald-500/15 text-emerald-400 border border-emerald-500/25 px-1 py-0.5 rounded font-black">추천</span>}
-        </>
-      )}
-      {sidebarCollapsed && badge && badge.count > 0 && (
-        <span className="absolute top-0.5 right-0.5 w-2 h-2 bg-red-500 rounded-full" />
-      )}
-    </button>
-  );
-
   return (
     <ErrorBoundary>
     <Suspense fallback={LazyFallback}>
@@ -3199,10 +3225,10 @@ export default function App() {
             <nav className="flex-1 overflow-y-auto overflow-x-hidden px-1.5 pb-2 space-y-0.5 scrollbar-none">
 
               {/* 홈 */}
-              <SidebarItem icon={Home} label="홈 / 대시보드" active={step === 0} onClick={() => setStep(guestMode ? 1 : 0)} />
+              <SidebarItem collapsed={sidebarCollapsed} icon={Home} label="홈 / 대시보드" active={step === 0} onClick={() => setStep(guestMode ? 1 : 0)} />
 
               {/* ── 파이프라인 ── */}
-              <SidebarSection label="파이프라인" />
+              <SidebarSection collapsed={sidebarCollapsed} label="파이프라인" />
               {step >= 1 && step <= 5 && !sidebarCollapsed ? (
                 <div className="px-1 py-1 space-y-0.5">
                   {[
@@ -3228,8 +3254,7 @@ export default function App() {
                   })}
                 </div>
               ) : (
-                <SidebarItem
-                  icon={FileSpreadsheet}
+                <SidebarItem collapsed={sidebarCollapsed}                   icon={FileSpreadsheet}
                   label="새 명단 처리"
                   active={step >= 1 && step <= 5}
                   onClick={() => setStep(step >= 1 && step <= 5 ? step : 1)}
@@ -3238,11 +3263,10 @@ export default function App() {
               )}
 
               {/* ── 배송 관리 ── */}
-              <SidebarSection label="배송 관리" />
-              <SidebarItem icon={Database} label="이번달 배송명단" active={step === 8} onClick={guardGuest(() => { setDbNavCity(''); setStep(8); })} />
+              <SidebarSection collapsed={sidebarCollapsed} label="배송 관리" />
+              <SidebarItem collapsed={sidebarCollapsed} icon={Database} label="이번달 배송명단" active={step === 8} onClick={guardGuest(() => { setDbNavCity(''); setStep(8); })} />
               {(workflowMode === 'deliveryFull' || gridData.length === 0) ? (
-                <SidebarItem
-                  icon={MapPin}
+                <SidebarItem collapsed={sidebarCollapsed}                   icon={MapPin}
                   label="기사 배정 · 루트맵"
                   active={showRouteQuick || showRouteSetup || showRouteMap}
                   onClick={() => { if (!canUseRouteMap(user)) { setUpgradeReason('routeMap'); setShowUpgrade(true); } else setShowRouteQuick(true); }}
@@ -3250,49 +3274,45 @@ export default function App() {
                   recommended={step === 5 && gridData.length > 0 && !gridData.some(r => r.기사)}
                 />
               ) : (
-                <SidebarItem
-                  icon={MapPin}
+                <SidebarItem collapsed={sidebarCollapsed}                   icon={MapPin}
                   label="배송 배정 추가"
                   active={false}
                   onClick={openRouteFlow}
                   locked={!canUseRouteMap(user)}
                 />
               )}
-              <SidebarItem
-                icon={MapIcon}
+              <SidebarItem collapsed={sidebarCollapsed}                 icon={MapIcon}
                 label="동별 배송지도"
                 active={showDongMap}
                 onClick={() => { if (!canUseRouteMap(user)) { setUpgradeReason('routeMap'); setShowUpgrade(true); } else setShowDongMap(true); }}
                 locked={!canUseRouteMap(user)}
               />
-              <SidebarItem icon={CalendarDays} label="배송일정" active={step === 11} onClick={guardGuest(() => setStep(11))} />
+              <SidebarItem collapsed={sidebarCollapsed} icon={CalendarDays} label="배송일정" active={step === 11} onClick={guardGuest(() => setStep(11))} />
 
               {/* ── 데이터 관리 ── */}
-              <SidebarSection label="데이터 관리" />
-              <SidebarItem icon={BookOpen} label="기본명단 관리" active={step === 6} onClick={guardGuest(() => { setDbNavCity(''); setStep(6); })} />
-              <SidebarItem
-                icon={BarChart3}
+              <SidebarSection collapsed={sidebarCollapsed} label="데이터 관리" />
+              <SidebarItem collapsed={sidebarCollapsed} icon={BookOpen} label="기본명단 관리" active={step === 6} onClick={guardGuest(() => { setDbNavCity(''); setStep(6); })} />
+              <SidebarItem collapsed={sidebarCollapsed}                 icon={BarChart3}
                 label="DB 현황 조회"
                 active={step === 9}
                 onClick={() => { if (!canUseDbOverview(user)) { setUpgradeReason('dbOverview'); setShowUpgrade(true); } else { setStep(9); setDbNavCity(''); } }}
                 locked={!canUseDbOverview(user)}
               />
-              <SidebarItem icon={Truck} label="기사 관리" active={showDriverRegistry} onClick={guardGuest(() => setShowDriverRegistry(true))} />
-              <SidebarItem icon={HardDrive} label="저장 내역" active={showSavedRecords} onClick={guardGuest(() => setShowSavedRecords(true))} />
+              <SidebarItem collapsed={sidebarCollapsed} icon={Truck} label="기사 관리" active={showDriverRegistry} onClick={guardGuest(() => setShowDriverRegistry(true))} />
+              <SidebarItem collapsed={sidebarCollapsed} icon={HardDrive} label="저장 내역" active={showSavedRecords} onClick={guardGuest(() => setShowSavedRecords(true))} />
 
               {/* ── 설정 ── */}
-              <SidebarSection label="설정" />
-              <SidebarItem icon={Layers} label="부가서비스" active={showUtils} onClick={() => setShowUtils(true)} />
-              <SidebarItem icon={HelpCircle} label="사용 가이드" active={false} onClick={() => openManualFor(user?.tier)} />
-              <SidebarItem icon={Crown} label="회원등급" active={false} onClick={guardGuest(() => { setUpgradeReason('city_limit'); setShowUpgrade(true); })} />
-              <SidebarItem icon={UserCircle} label="내 프로필" active={profileModal.open} onClick={guardGuest(() => setProfileModal({ open: true, isNew: false }))} />
+              <SidebarSection collapsed={sidebarCollapsed} label="설정" />
+              <SidebarItem collapsed={sidebarCollapsed} icon={Layers} label="부가서비스" active={showUtils} onClick={() => setShowUtils(true)} />
+              <SidebarItem collapsed={sidebarCollapsed} icon={HelpCircle} label="사용 가이드" active={false} onClick={() => openManualFor(user?.tier)} />
+              <SidebarItem collapsed={sidebarCollapsed} icon={Crown} label="회원등급" active={false} onClick={guardGuest(() => { setUpgradeReason('city_limit'); setShowUpgrade(true); })} />
+              <SidebarItem collapsed={sidebarCollapsed} icon={UserCircle} label="내 프로필" active={profileModal.open} onClick={guardGuest(() => setProfileModal({ open: true, isNew: false }))} />
 
               {/* ── 관리자 ── */}
               {user?.role === 'admin' && (
                 <>
-                  <SidebarSection label="관리자" />
-                  <SidebarItem
-                    icon={ShieldCheck}
+                  <SidebarSection collapsed={sidebarCollapsed} label="관리자" />
+                  <SidebarItem collapsed={sidebarCollapsed}                     icon={ShieldCheck}
                     label="관리자 패널"
                     active={step === 7}
                     onClick={() => setStep(7)}

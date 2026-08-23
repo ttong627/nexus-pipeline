@@ -17,9 +17,12 @@ test('id 가 있으면 그것이 식별자', () => {
   assert.equal(recordUid({ id: 'abc' }), 'abc');
 });
 
-test('★id 가 없어도 화면이 죽지 않는다 — 옛 문서 호환', () => {
-  assert.equal(recordUid({ 이름: '홍길동', 배송순번: 3 }, 0), '홍길동_3');
-  assert.equal(recordUid({}, 7), '_7');
+test('★id 가 없어도 화면이 죽지 않는다 — 폴백 키에 이름을 쓰지 않는다', () => {
+  // 이 키는 부모 공유 문서의 `completions.{uid}` 필드명이 된다 —
+  // 예전 폴백 `${이름}_${순번}` 은 **수령자 이름을 문서 키에 박았다**(2026-08-23 점검).
+  assert.equal(recordUid({ 이름: '홍길동', 배송순번: 3 }, 0), '_idx0');
+  assert.equal(recordUid({}, 7), '_idx7');
+  assert.equal(recordUid({ id: 'abc' }, 2), 'abc');
 });
 
 // ── ② 기사별 필터 ────────────────────────────────────────────────

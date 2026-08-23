@@ -122,6 +122,22 @@ describe('복제 금지 — 규칙은 SSOT 한 곳에만 산다', () => {
       'RouteMapModal 에 parseAptDong 재정의가 생겼다 — 복제가 부활했다');
   });
 
+  test('★RouteMapModal 이 엔진 심볼을 재정의하지 않는다(전 심볼 가드)', async () => {
+    // 예전엔 `parseAptDong` 하나만 지켰는데, 실제로는 순번 엔진 심볼 41개가 문자 단위로 복제돼 있었다(2026-08-23 점검).
+    // 복제는 드리프트가 생기기 전엔 아무 증상이 없다 — 다음 수정이 한쪽에만 들어가는 순간 화면과 서버 순번이 갈라진다.
+    // → 엔진의 export 목록을 읽어 **RouteMapModal 안의 동명 재정의**를 전수 차단한다.
+    const enginePath = path.join(ROOT, 'services/address-service/src/routing/routeSequenceEngine.js');
+    const engine = await readFile(enginePath, 'utf8');
+    const modal = await readFile(path.join(ROOT, 'src/components/RouteMapModal.jsx'), 'utf8');
+    const exported = [...engine.matchAll(/^export\s+(?:const|function)\s+([A-Za-z_$][\w$]*)/gm)].map(m => m[1]);
+    assert.ok(exported.length > 30, `엔진 export 를 못 읽었다(${exported.length}개) — 가드가 헛돈다`);
+    const dup = exported.filter(name =>
+      new RegExp(`^\\s*(?:const|function|let)\\s+${name}\\s*[=(]`, 'm').test(modal));
+    assert.deepEqual(dup, [],
+      `RouteMapModal 에 엔진 심볼 재정의가 생겼다(복제 부활): ${dup.join(', ')}\n` +
+      `→ services/.../routeSequenceEngine.js 에서 import 해서 쓰세요(SSOT).`);
+  });
+
   test('엔진 정규식의 `호` 가 필수로 유지된다', async () => {
     const src = await readFile(
       path.join(ROOT, 'services/address-service/src/routing/routeSequenceEngine.js'), 'utf8');
