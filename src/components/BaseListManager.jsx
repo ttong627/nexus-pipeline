@@ -21,6 +21,7 @@ import { useColumnEditor } from '../hooks/useColumnEditor.js';
 import { orderFieldsByExport, getColWidth, colCellStyle } from '../utils/colOrder.js';
 import { idbGet, idbSet, idbDel } from '../utils/idbCache.js';
 import SpecialNoteImporter from './SpecialNoteImporter.jsx';
+import { isTranslitBuildingDong } from '../../services/address-service/src/shared/dongTokens.js';
 
 const FIELDS = [
   { key: 'name',     label: '이름',     minW: '90px'  },
@@ -318,7 +319,8 @@ ${e.message}`);
     if (!val && field === 'legalDong') {
       const paren = r.parenInfo || (r.address ? parseDisplayedAddress(r.address).paren : '');
       const tok = String(paren || '').split(',')[0].trim();
-      if (/^[가-힣\d]+(읍|면|동)$/.test(tok)) val = tok;
+      // A-37: 괄호 첫 토큰이 음역 건물동(에이동 …)이면 법정동으로 표시하지 않는다(과거 저장분 방어)
+      if (/^[가-힣\d]+(읍|면|동)$/.test(tok) && !isTranslitBuildingDong(tok)) val = tok;
     }
     // 칼럼 수정모드면 그 칼럼의 모든 셀이 입력창(현재 칸만 포커스) · 아니면 편집 중인 셀만
     const colMode = colEditMode === field;

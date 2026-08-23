@@ -31,6 +31,7 @@ import { orderFieldsByExport, hasRi, getColWidth, colCellStyle } from '../utils/
 import { getCityExportTemplate } from '../utils/cityExportTemplates.js';
 import { useConfirmDelete } from '../contexts/ConfirmDeleteContext.jsx';
 import DriverSequenceView from './DriverSequenceView.jsx';
+import { isTranslitBuildingDong } from '../../services/address-service/src/shared/dongTokens.js';
 
 const KAKAO_REST_KEY = import.meta.env.VITE_KAKAO_REST_KEY;
 const ttl90 = () => Timestamp.fromMillis(Date.now() + 90 * 24 * 60 * 60 * 1000);
@@ -858,7 +859,8 @@ ${e.message}`);
     // A-31 법정동: 저장값 없는 기존 레코드는 저장된 legalDong → 괄호 첫 토큰 순으로 파생
     if (!val && key === '법정동') {
       const tok = String(r.legalDong || parseDisplayedAddress(r.주소 || '').paren || '').split(',')[0].trim();
-      if (/^[가-힣\d]+(읍|면|동)$/.test(tok)) val = tok;
+      // A-37: 괄호 첫 토큰이 음역 건물동(에이동 …)이면 법정동으로 표시하지 않는다(과거 저장분 방어)
+      if (/^[가-힣\d]+(읍|면|동)$/.test(tok) && !isTranslitBuildingDong(tok)) val = tok;
     }
 
     const colMode = colEditMode === key;

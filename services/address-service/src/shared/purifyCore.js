@@ -30,6 +30,7 @@ import {
   splitInlineBuildingTail,
 } from './detailNormalize.js';
 import { normalizeDongHoDetail } from './dongHoFormat.js';
+import { isTranslitBuildingDong, splitBuildingDongTail } from './dongTokens.js';
 import { protectParenBlocks, balanceParens } from './addressFormat.js';
 import { applyVariant } from './normalizeVariant.js';
 import { applyNoteNormalize } from './applyNoteNormalize.js';
@@ -407,6 +408,21 @@ export const createProcessAddress = (deps) => async (inputAddr, inputName = '', 
   result.도 = DO_PATTERN.exec(text)?.[1] || '';
 
   let dongPart = '', buildingName = '', finalRoadAddr = mainAddr;
+  // ── A-37 보조 (2026-08-23 · 형 지적 "에이동·비동·씨동·에이치동이 읍면동으로 인식") ──
+  // 토큰이 음역 건물동(棟)인가 — ambiguous 음역(이·지·오·유)은 src 안에서 그 토큰 뒤에 N호가 따라야 건물동.
+  const isBldgDongTok = (tok, src) => {
+    const t = String(tok || '').trim();
+    const i = String(src || '').indexOf(t);
+    return isTranslitBuildingDong(t, i >= 0 ? String(src).slice(i + t.length) : '');
+  };
+  // 건물명 슬롯으로 못 가는 괄호 문구의 끝에 건물 동(棟)[+호]이 있으면 상세주소로 건진다(버리면 동이 통째로 사라진다).
+  // ★guarded — 괄호엔 법정동·행정동이 흔하므로 `답십리2동`의 `2동`·`장안동 201호`의 `안동 201호`를 잘라내지 않도록
+  //   동 토큰 앞에 공백·콤마·시작 경계를 요구한다(A-29의 건물명 경로와 달리).
+  const salvageBuildingDong = (text) => {
+    const split = splitBuildingDongTail(text, { guarded: true });
+    if (!split || detailAddr.includes(split.dong)) return;
+    detailAddr = `${split.dong} ${detailAddr}`.replace(/\s+/g, ' ').trim();
+  };
 
   // ── 입력 건물번호 SSOT 가드 (유사매칭/변조 차단 · 절대 되돌리지 말 것) ──
   // 입력이 도로명주소이고 API 결과의 도로명 뒤 건물번호가 입력과 다르면 → API 결과 전부 폐기.
@@ -489,10 +505,15 @@ export const createProcessAddress = (deps) => async (inputAddr, inputName = '', 
         return;
       }
       if (!buildingName) {
+        // A-26 동명 토큰 제거 — 단 A-37 음역 건물동(에이동 …)은 법정동이 아니므로 남긴다(아래 A-29가 상세로 보낸다)
         const toks = inner.split(/[,\s]+/)
-          .filter(tok => tok && !/^[가-힣][가-힣\d]*(읍|면|동)$/.test(tok.trim()));
+          .filter(tok => tok && !(/^[가-힣][가-힣\d]*(읍|면|동)$/.test(tok.trim()) && !isBldgDongTok(tok, inner)));
         const candidate = toks.join(' ').trim();
         if (candidate) buildingName = candidate;
+      } else {
+        // A-37: 건물명이 이미 있어 괄호를 버리는 경우에도 괄호 끝의 건물 동(棟)[+호]은 상세주소로 건진다
+        //   (예 주소DB bdNm 채택 후 "(행복빌라 에이동)" → 에이동이 통째로 사라지던 손실 차단)
+        salvageBuildingDong(inner);
       }
     });
     detailAddr = detailAddr.replace(/__P\d+__/g, '').replace(/\s+/g, ' ').trim();
@@ -528,19 +549,25 @@ export const createProcessAddress = (deps) => async (inputAddr, inputName = '', 
       const isAddrParen = /[가-힣]{2,}\d*(읍|면|동)(?![가-힣])/.test(inner);
       if (!isAddrParen && (wordCount >= 3 || (inner.length >= 10 && /\s/.test(inner)))) {
         result.특이사항 += (result.특이사항 ? ' ' : '') + inner;
-      } else if (!dongPart && DONG_SUFFIX.test(inner)) {
+      } else if (!dongPart && DONG_SUFFIX.test(inner) && !isBldgDongTok(inner, inner)) {
+        // A-37: `(에이동)`은 법정동이 아니라 건물 동 — dongPart로 올리지 않고 건물명 슬롯 → A-29가 상세로 보낸다
         dongPart = inner.replace(/^([가-힣]+)\d+(동)$/, '$1$2');
       } else if (!dongPart) {
-        const dongTok = inner.split(/[,\s]+/).find(t => DONG_SUFFIX.test(t.trim()));
+        const dongTok = inner.split(/[,\s]+/).find(t => DONG_SUFFIX.test(t.trim()) && !isBldgDongTok(t, inner));
         if (dongTok) {
           dongPart = dongTok.trim().replace(/^([가-힣]+)\d+(동)$/, '$1$2');
           const rest = inner.replace(dongTok, '').replace(/^[,\s]+|[,\s]+$/g, '').trim();
           if (rest && !buildingName) buildingName = rest;
+          else if (rest) salvageBuildingDong(rest);   // A-37: 건물명이 이미 있어도 건물 동은 상세로
         } else if (!buildingName) {
           buildingName = inner;
+        } else {
+          salvageBuildingDong(inner);
         }
       } else if (!buildingName) {
         buildingName = inner;
+      } else {
+        salvageBuildingDong(inner);
       }
       finalRoadAddr = finalRoadAddr.replace(`__P${i}__`, '');
       detailAddr    = detailAddr.replace(`__P${i}__`, '');
@@ -567,15 +594,14 @@ export const createProcessAddress = (deps) => async (inputAddr, inputName = '', 
   // 상세(A-10 대시변환)로 갈려 표기가 뒤죽박죽된다. 건물 동은 항상 detailAddr로 보내
   // A-10이 일관 정규화하도록 한다(법정동 dongPart·진짜 건물명은 보존).
   if (buildingName) {
-    const bn = buildingName.trim();
-    // 끝에 붙은 건물 동(棟)[+호] 분리:
-    //  - 숫자동(101동)·영문동(B동)은 호수 동반 무관하게 건물 동으로 확정
+    // 끝에 붙은 건물 동(棟)[+호] 분리 — 규칙은 dongTokens.js `splitBuildingDongTail`(SSOT, A-37 음역동 포함):
+    //  - 숫자동(101동)·영문동(B동)·음역동(에이동·비동 …)은 호수 동반 무관하게 건물 동으로 확정
     //  - 단일 한글동(가동·나동)은 "호수 동반" 시에만 — 법정동(사동·본동 등) 오인 방지
     //  - 앞 건물명은 보존: "푸르지오 101동" → 상세 "101동" / 괄호 건물명 "푸르지오"
-    const m = bn.match(/^(.*?)\s*((?:\d+|[A-Za-z]+)동(?:\s*제?\s*\d+\s*호)?|[가-힣]동\s*제?\s*\d+\s*호)$/);
-    if (m && m[2]) {
-      detailAddr = `${m[2].trim()} ${detailAddr}`.replace(/\s+/g, ' ').trim();
-      buildingName = m[1].trim();
+    const split = splitBuildingDongTail(buildingName);
+    if (split) {
+      detailAddr = `${split.dong} ${detailAddr}`.replace(/\s+/g, ' ').trim();
+      buildingName = split.head;
     }
   }
 
@@ -670,7 +696,8 @@ export const createProcessAddress = (deps) => async (inputAddr, inputName = '', 
   if (!legalDong) {
     const jibunTok = String(finalRoadAddr || '').trim().match(/^([가-힣][가-힣\d]*(?:동|리|가))\s+산?\s*\d/);
     const tok = jibunTok?.[1] ? jibunTok[1].replace(/^([가-힣]+)\d+(동)$/, '$1$2') : '';
-    if (tok && LEGAL_DONG_RE.test(tok)) legalDong = tok;
+    // A-37: `에이동 201호`처럼 건물 동이 앞에 선 문자열을 지번으로 오인해 법정동에 넣지 않는다(이동 123-4 같은 실존 법정동은 유지)
+    if (tok && LEGAL_DONG_RE.test(tok) && !isTranslitBuildingDong(tok, String(finalRoadAddr || '').trim().slice(tok.length))) legalDong = tok;
   }
 
   // 법정동을 얻었으면 괄호 동명은 무조건 법정동으로 교체(행정동 폴백값이 남아 있어도 덮어쓴다)

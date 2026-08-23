@@ -7,6 +7,7 @@
 // ══════════════════════════════════════════════════════════════════
 import { HANGUL, BRANCH_SUFFIX, ROAD_NAME_SOURCE, ROAD_NUMBER_TAIL, joinSpacedBranchRoad } from './roadTokens.js';
 import { DONG_DASH_HO_SRC } from './dongHoFormat.js';
+import { TRANSLIT_DONG_UNIT_SRC } from './dongTokens.js';
 
 // ※ 선행 구분자 캡처는 클라만 필요하다(문장 중간에서 도로명을 찾으므로). 서버는 정제된 질의를 받는다.
 export const ROAD_ADDRESS_RE = new RegExp(`(^|[\\s,/\\(])(${ROAD_NAME_SOURCE})${ROAD_NUMBER_TAIL}`, 'u');
@@ -22,7 +23,9 @@ const ROAD_NUMBER_SPACE_RE = new RegExp(`([${HANGUL}A-Za-z0-9]+(?:\\uB300\\uB85C
 // 오염되고 건물명 매칭이 깨졌다. DONG_UNIT_SRC(동 토큰) 규칙 자체는 그대로 둔다(A-10).
 // 동(棟) 단위 토큰 — 상세주소(동호수)의 일부. 숫자동(101동)·대시동(1-1동)·영문동(B동)·단일한글동(가동~하동).
 // 뒤에 공백/숫자/호/콤마/끝이 와야 매칭(건물명 중간의 '하동' 등 오절단 방지). 건물명으로 새는 버그 차단.
-const DONG_UNIT_SRC = '(?:\\d+(?:-\\d+)?|[A-Za-z]+|[가나다라마바사아자차카타파하])\\uB3D9(?=\\s|\\d|\\uD638|,|$)';
+// A-37(2026-08-23): 한글 음역 영문동(에이동·비동·씨동·에이치동 …)도 동(棟) 토큰이다 — 빠져 있어 `[가-힣]+동`
+//   (법정동 모양)으로 흘러가 괄호·특이사항으로 새거나 삭제됐다. 등급(strict/ambiguous)·앞글자 가드는 dongTokens.js(SSOT).
+const DONG_UNIT_SRC = `(?:(?:\\d+(?:-\\d+)?|[A-Za-z]+|[가나다라마바사아자차카타파하])\\uB3D9(?=\\s|\\d|\\uD638|,|$)|${TRANSLIT_DONG_UNIT_SRC})`;
 // A-10 ③(형 지시 2026-07-30): 동 대신 대시로 쓰인 숫자 동(101-203호)도 상세주소(동호수)로 인식한다.
 //   없으면 "101-"이 건물명 슬롯으로 새어 동 번호가 소실된다(실측 확인). 자리수 가드는 dongHoFormat.js 참조.
 const DETAIL_START_RE = new RegExp(`^(?:\\uC9C0\\uD558|\\uC9C0\\uCE35|\\uC625\\uD0D1|${DONG_UNIT_SRC}|${DONG_DASH_HO_SRC}|\\d+\\s*(?:\\uB3D9|\\uCE35|\\uD638)(?![\\uAC00-\\uD7A3])|[A-Za-z]?\\d+\\s*\\uD638)`, 'u');

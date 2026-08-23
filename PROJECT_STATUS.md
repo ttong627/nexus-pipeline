@@ -1,9 +1,53 @@
 # 📋 PROJECT STATUS — nexus-pipeline
-> 자동 생성: /확인 스킬 · 갱신 **2026-08-12 22:00 KST (I: 정본 · 운영 실측)** · 직전 갱신 2026-08-11 18:20 KST
+> 자동 생성: /확인 스킬 · 갱신 **2026-08-23 10:53 KST (I: 정본 · 운영 실측)** · 직전 갱신 2026-08-12 22:00 KST
 
-> ⚠️ **이 문서보다 `HANDOFF.md` 가 최신일 수 있다.** 좌표 작업(C 시리즈)의 현재 상태·다음 할 일은
-> `HANDOFF.md` → `좌표관리_설계.md` 가 SSOT 다. 여기는 프로젝트 전반의 스냅샷이다.
+> ⚠️ **이 문서보다 `HANDOFF.md` 가 최신일 수 있다.** 좌표 작업(C 시리즈)·개인정보보호 대응의 현재 상태·다음 할 일은
+> `HANDOFF.md` → `prompt_plan.md`(접근통제 계획) → `좌표관리_설계.md` 가 SSOT 다. 여기는 프로젝트 전반의 스냅샷이다.
 > **아래 「이전 작업」 블록들은 그 시점 기록이다 — 현재 상태로 읽지 말 것.**
+
+## ✅ 현재 스냅샷 (2026-08-23 10:50~10:53 KST · /확인 실측 · 읽기 전용)
+
+> 10일 공백(마지막 커밋 08-13 21:26) 뒤 첫 확인. **리포는 최신·clean, 운영은 전부 살아 있다.** 단 아래 🟡 3건은 형 판단이 필요하다.
+
+| 블록 | 판정 | 근거(실측) |
+|---|---|---|
+| 동기화 | 🟢 | `main` = `origin/main` = **`c3bded2`** · behind 0 / ahead 0 · 추적파일 clean. untracked `.serena/` 1건(아래) |
+| 계정·식별 | 🟡 | repo owner **ttong627** / gh active **ttong0627**(불일치 — 전역 전환 안 함, 토큰 주입으로 fetch 성공) · gcloud active **ttong627@gmail.com** ✅ · firebase **ttong627@gmail.com** ✅ · ⚠️gcloud 기본 project = `wssc-nutrition`(타 프로젝트) → **`--project logis-op` 매 명령 필수** |
+| 환경 | 🟢 | node **v24.15.0** / npm **11.12.1** · gh·gcloud·firebase OK · node_modules 루트 439·functions 182·services/address-service 172 **전부 설치** · `.env` `VITE_*` **16키**(값 비노출) · `src/version.js` **V7.5** = package.json **7.5.0** 일치 |
+| 배포 | 🟢 | Hosting **200 0.05s** · 라이브 엔트리 **`assets/index-DH7D9nRu.js`**(= HANDOFF 08-13 배포본 그대로, 그 뒤 코드 변경 없음) · Cloud Run `nexus-address-api` **`00074-v4m` 100%**(= HANDOFF 기록과 일치) · `/v1/address/db-status` **200 0.13s** · `/v1/coords/status` **200** |
+| 정기배치 | 🟢 | `nexus-address-sync` **08-18~08-23 매일 04:23 KST 5회 연속 exit 0**(오늘 `9569l`: 채움 대상 0 · 이상치 후보 0 → 표시 0 · 해제후보 0) · `nexus-address-listfill` **08-17(월) 05:10 KST exit 0** · 스케줄러 3개 ENABLED(`23 4 * * *` / `0 5 * * 1` / geocodeAuto 3분, 마지막 10:51) |
+| 좌표 저장소 | 🟢 | `total` **37,142**(08-13 37,070 → +72) · 입구 **37,106** · 중심 37,040 · `outlier` 4(변동 없음) · `no_point` 24 · 동 4,873행/2,478건물 |
+| 앱구성 | 🟢 | 루트(React 19.2+Vite 8) · `functions`(CJS) · `services/address-service`(운영 API) · `address-service/`(레거시, node_modules 없음 = 미사용 그대로) |
+| 마지막 작업 | 🟢 | 08-13 `c3bded2` Job 4개 재배포 — **미배포분 없음**(HANDOFF「배포 상태」) |
+
+### 🟡 형 판단·조치가 필요한 것 (우선순위순)
+
+1. **개인정보보호 Phase 2(휴대폰 인증) 착수 대기 — 법 시행 2026-09-11까지 18일.**
+   - 코드 상태 실측: `src/components/RouteMapModal.jsx:45` **`SHARE_TRANSITION_DUAL_WRITE = true`**(이행기 임시값 그대로).
+     이 값이 `true` 인 동안 "자기 것만"은 성립하지 않는다(HANDOFF 🔴 1번). Phase 2 배포 직후 `false` 로 내려야 한다.
+   - 형이 할 일: ① Console 에서 **Phone Auth 켜기**(`logis-op` → Authentication → Sign-in method)
+     ② **그 전에** 기사 `사회적협동조합 행복나눔 / 신입1` 휴대폰 번호 입력(화면「소속사 기사 관리」 — 안 넣으면 그 기사만 로그인 불가).
+   - 동대문 공유링크 마감(08-18)은 **이미 지났다** → 배포 시점 제약(8/18 이후)은 해소됨.
+2. **주소품질 모니터 08-17 `⚠️ 악화` 판정 — 텔레그램으로 이미 발송됨, 리포엔 미조치.**
+   `scripts/monitor.log` 08-17 09:00: 모집단 88,463 → **98,020건**(16개 명단) · 괄호잡값 **19(+19)** · 표기갈림 **142그룹(+57)** · 건물관리번호·정본 **99.9%**(100%→).
+   ★모집단이 바뀐 첫 실행이라 **"악화"가 진짜 퇴행인지 새 명단(시흥 등)의 기존 품질인지 미분리** — 19건 목록을 뽑아 봐야 판정된다. 06일 경과.
+3. **untracked `.serena/`(08-12 23:32 생성, Serena MCP 설정·캐시)** — `.gitignore` 에 항목 없음. 커밋 대상이 아니면 `.gitignore` 에 `.serena/` 추가 권장(임의 추가 안 함 — 형 확인 후).
+
+### ✅ 같은 날 작업 — A-37 한글 음역 영문동 수정 (2026-08-23 · 형 지적 · 미커밋 → 형 "고" 대기)
+
+형 지적 *"빌라·아파트에 한글로 동(에이동·비동·씨동·에이치동)이 붙으면 읍면동으로 인식"* — 오프라인 실측으로 **사실 확인**
+(`행복빌라 에이동 201호` → 상세 `201호`/괄호 `(행복빌라 에이동)`, 괄호 입력이면 `(에이동, 행복빌라)`로 법정동 자리 승격,
+주소DB 건물명이 다르면 `행복빌라 에이동` 통째로 **특이사항**, 같으면 `에이동` **조용히 삭제**). 규칙 **A-37**(CLAUDE.md)로 박제.
+- SSOT 신설 `services/address-service/src/shared/dongTokens.js` — strict/ambiguous 2등급(행안부 juso.sqlite 전국 대조: `이동·지동·오동·유동`만 실존 법정동과 겹침)
+- 수정 8파일: `detailNormalize.js`(DONG_UNIT_SRC) · `purifyCore.js`(A-26 필터·A-29 꼬리·무API 괄호·지번 방어선·괄호 건지기) · `noteSanitizer.js` · `BaseListManager.jsx`·`CloudListManager.jsx`(법정동 파생 표시) · 골든 케이스 3건 · CLAUDE.md
+- 검증(증거): 회귀 `scripts/translit-dong.test.mjs` **10 PASS** · **Red-Green 실측**(수정 제거 → 7 FAIL / 복원 → 10 PASS) · 루트 **425/425** · address-service **271/275(4 skipped=JUSO_DATA_DIR 실자료 없음, 기존)** · 골든 offline/replay **불변 통과** · eslint 0 · tsc 0 · `vite build` exit 0
+- ⛔ **이미 저장된 명단의 `(에이동, …)` 괄호는 이 수정으로 자동 복구되지 않는다**(재정제 또는 화면 수정). 그리드 법정동 칸엔 더 이상 `에이동`이 뜨지 않는다.
+- 다음: 형 "고" → 커밋·푸시 → Hosting(클라) + Cloud Run 서비스 + Job 4개(공용 SSOT라 전부) 배포
+
+### 이번 확인에서 바뀐 사실(기존 기록 정정)
+- node 는 **v24.15.0 / npm 11.12.1**(08-09 기록 v24.18.0/11.16.0 과 다르다 — 다른 PC 또는 버전 변경. 동작엔 지장 없음).
+- gcloud 기본 project 가 **`wssc-nutrition`** 이다 — 이 리포 명령은 전부 `--project logis-op --account ttong627@gmail.com` 를 붙여야 한다(이번 확인은 전부 그렇게 실행).
+- `/healthz`·`/v1/db-status` 는 404 가 정상 — 실헬스는 **`/v1/address/db-status`**.
 
 ## 🔁 다른 PC에서 이어받기 (2026-08-11 18:20 KST 마감)
 
@@ -126,7 +170,19 @@ gcloud도 `--account ttong627@gmail.com`을 매 명령에 붙인다.
 | AGENTS.md | Codex/에이전트용 규칙 사본(CLAUDE.md와 동일 계열, 2026-07-30 갱신) |
 | HANDOFF_vworld.md · HANDOFF_배정저장_일정.md | VWorld 좌표 연동 · 배정저장/일정 기능 개별 핸드오프 |
 
-## 마지막 작업 (2026-08-11~08-12) — 좌표 C 시리즈 완결 + 앵커 수정 + 규칙 단일화
+## 마지막 작업 (2026-08-13) — 개인정보보호 대응 Phase 0·1·3·5 배포 + 텔레그램 경보 실동작 + Job 4개 재배포
+
+> 상세는 `HANDOFF.md`(08-13 01:30 기준 + 같은 날 추기)·`prompt_plan.md`. 여기는 한 줄 요약만. 이후 08-23 까지 커밋 0건.
+
+- **접근통제 재설계(형 확정 A=Phone Auth · B=자기 것만 · C=마감일까지)**: Phase 0 기사명부 `phoneE164` 백필(16/17명) ·
+  Phase 1 `route_shares` 메타/건별 분리(⚠️`SHARE_TRANSITION_DUAL_WRITE=true` 이행기) · Phase 3 마감일(기본 7일·상한 30일) ·
+  Phase 5 열람기록 `share_access_logs` + `leakWatch.js` + Cloud Function **`leakAlert`** — 규칙·Functions·Hosting(`index-DH7D9nRu.js`) 배포.
+- **`leakAlert` 두 번 데임**: ①복합 인덱스 없음(gcloud 로 생성) ②`secrets:` 미선언(v2 는 선언한 시크릿만 주입) — 둘 다 "배포 성공+로그 정상"인데 죽어 있었다.
+  → `defineSecret` 2개 선언 후 **텔레그램 실발송 확인**(`(미발송)` 표식 소멸). 검증 도구 `scripts/verify-leak-alert.mjs`.
+- **Job 4개 재배포**(`deploy-jobs.sh`) → 새 이미지로 `nexus-address-sync-r6txl` 실행 exit 0, 수치 동일 = 퇴행 없음. **리포와 운영이 갈라진 곳 0.**
+- 실측 기록: 카카오 REST 키 라이브 번들 평문 노출 **확인**(미조치·형 판단) · 번호 공란 기사 `신입1` 은 권역 배정된 **실기사**.
+
+## 이전 작업 (2026-08-11~08-12) — 좌표 C 시리즈 완결 + 앵커 수정 + 규칙 단일화
 
 > 상세·실측 근거는 `HANDOFF.md` 와 `좌표관리_설계.md`. 여기는 한 줄 요약만.
 
@@ -279,7 +335,18 @@ gcloud도 `--account ttong627@gmail.com`을 매 명령에 붙인다.
 ## 직전 작업 (2026-07-11)
 - 외부 시스템(정부양곡 정산 SYSTEM) 명단 가져오기 — importUrl/import2Url · address-service 매칭 hang 근본 수정
 
-## 작업환경 (2026-08-09 15:37 KST 실측 · I: 정본 기준)
+## 작업환경 (2026-08-23 10:51 KST 실측 · I: 정본 기준)
+- node **v24.15.0** / npm **11.12.1** · gh OK(`C:\Program Files\GitHub CLI`) · gcloud OK · firebase OK(`AppData\Roaming\npm`)
+- 앱 버전 배지: **V7.5**(`src/version.js` 빌드 2026.08.11 13:18) / package.json **7.5.0** — 일치 ✅
+- 의존성: 루트 **439** · `functions` **182** · `services/address-service` **172** 패키지 — 셋 다 설치 ✅ (자동설치 실행 없음). 레거시 `address-service/` 는 미설치(미사용이라 정상)
+- 시크릿: `.env` **`VITE_*` 16키**(FIREBASE 6·JUSO 6·KAKAO 2·VWORLD 1·ADDRESS_MATCH_API_URL 1) — 값 비노출. `functions/.env`·`services/address-service/.env` 없음(운영은 Secret Manager·Cloud Run env)
+- 계정: gh active **ttong0627**(owner ttong627 과 불일치 — 토큰 주입으로 운용) · gcloud active **ttong627@gmail.com**(기본 project `wssc-nutrition` ⚠️) · firebase **ttong627@gmail.com**
+- 헬스체크(10:52 KST): Hosting **200 0.05s** · `/v1/address/db-status` **200 0.13s** · `/v1/coords/status` **200 0.51s**
+- 운영 번들: **`assets/index-DH7D9nRu.js`**(08-13 배포본. 코드 스플리팅이라 화면별 청크는 `RouteMapModal-*.js` 등 별도 — 엔트리만 보고 판단 금지)
+- 품질 모니터 `scripts/monitor.log`: 최근 **2026-08-17 09:00 ⚠️ 악화**(괄호잡값 +19·표기갈림 +57·정본 99.9%) — 모집단 98,020 으로 바뀐 첫 실행. 텔레그램 발송됨·미조치
+- 검증 명령(이번엔 미실행 — 코드 변경 0이라 08-13 결과 유효): `node --test scripts/*.test.mjs` · `npx eslint .` · `npx tsc --noEmit` · `npx vite build`
+
+## 작업환경 (2026-08-09 15:37 KST 실측 · I: 정본 기준) — 과거 기록
 - node **v24.18.0** / npm **11.16.0** · gh OK · gcloud OK · firebase OK
 - 앱 버전 배지: **V7.4**(`src/version.js`) / package.json **7.4.0** — 일치 ✅
 - 의존성(**2026-08-12 재실측**): 루트 ✅ · functions ✅ · services/address-service ✅ — **셋 다 설치돼 있다**
@@ -299,13 +366,31 @@ gcloud도 `--account ttong627@gmail.com`을 매 명령에 붙인다.
 - 검증 명령: `node --test scripts/*.test.mjs`(파리티 포함) · `node --test scripts/address-golden.test.mjs` · `npx eslint .` · `npx vite build`
 - 품질 모니터 `scripts/monitor.log`: 최근 기록 **2026-08-03 09:00** — 88,463건 괄호붕괴 0·잡값 0·정본 100% **정상(악화 없음)**
 
-## 동기화 (2026-08-09 15:31~15:36 KST)
+## 동기화 (2026-08-23 10:50 KST)
+- fetch: owner 토큰 주입(`GH_TOKEN=$(gh auth token --user ttong627) git -c credential.helper='!gh auth git-credential' fetch origin`) — **전역 계정 전환 없음**
+- 결과: `main` = `origin/main` = **`c3bded2`**(08-13 21:26) · **behind 0 / ahead 0** · 추적파일 clean → 이미 최신(merge 불필요)
+- untracked: `.serena/` 1건(08-12 생성, gitignore 미등록) — 앱 코드 아님, 보류
+- 브랜치: `main` 단일(원격도 `main` 뿐) ✅
+- 마지막 커밋 이후 **9일** 무변경 — 정체가 아니라 작업 공백(운영은 정상 가동 중)
+
+## 동기화 (2026-08-09 15:31~15:36 KST) — 과거 기록
 - 시작 상태: 로컬 main = `8cf7992`(07-16, **V6.94**) → origin/main = `54355d9`(08-08, **V7.4**) · **behind 120 / ahead 0** (약 3주 정체)
 - **FF 차단 → 형 승인 후 해소**: 미커밋 2건이 원격에서도 수정된 파일이라 병합 거부됨 → `claude-forge/hooks/output-secret-filter.sh`(로컬 삭제됨)·`claude-forge/skills/security-compliance/reference/threat-modeling-risk.md`. 둘 다 **앱 코드 아닌 동봉 툴킷**이고 마지막 로컬 커밋이 05-26이라 잔여물로 판단 → `git checkout --`로 복원 후 **`git merge --ff-only` 성공**(176 files, +25074/−3983)
 - 현재: `main` = `origin/main` = **54355d9** · behind 0 / ahead 0 · 워킹트리 clean
 - gh active 계정: **ttong627** = repo owner **일치** ✅ (08-06 기록의 ttong0627 불일치는 해소)
 
 ## 리스크
+### 2026-08-23 신규·갱신 (I: 정본 실측)
+- 🟡 **개인정보보호 Phase 2 미착수 — 법 시행(09-11)까지 18일.** 코드 `SHARE_TRANSITION_DUAL_WRITE = true` 이행기 그대로(`RouteMapModal.jsx:45`).
+  형 할 일 = Phone Auth 켜기 **전에** 기사 `신입1` 번호 입력. 동대문 링크 마감(08-18)은 지나서 배포 시점 제약은 해소.
+- 🟡 **주소품질 모니터 08-17 악화 판정 미조치** — 괄호잡값 19(+19)·표기갈림 142그룹(+57)·정본 99.9%. 모집단 88,463→98,020 전환 첫 실행이라
+  **진짜 퇴행인지 새 명단의 기존 품질인지 미분리**. 19건 목록 추출 후 판정 필요(텔레그램은 이미 감).
+- 🟡 **untracked `.serena/`** — gitignore 미등록. 커밋 대상 아니면 `.serena/` 등록(형 확인 후).
+- 🟡 **gcloud 기본 project = `wssc-nutrition`** — `--project logis-op` 빠뜨리면 타 프로젝트에 명령이 간다. 매 명령 명시.
+- 🟠 **카카오 REST 키 라이브 번들 평문 노출 — 여전히 미조치**(08-13 실측 그대로, 번들 `index-DH7D9nRu.js` 변동 없음). 해법은 서버 편입(Phase 3)뿐. 형 우선순위 판단 대기(법 대응 관점에선 Phase 2·4 우선).
+- 🟢 **정기배치 5일 연속 정상**(sync 08-18~23 exit 0 · listfill 08-17 exit 0) · 좌표 저장소 37,070→**37,142**(+72, 무인 증가 = 파이프라인 산다)
+- 🟢 **운영 = 리포**(서비스 `00074-v4m` · Hosting `index-DH7D9nRu.js` · Job 4개 새 이미지) — 08-13 이후 코드 변경 0
+
 ### 2026-08-11 신규 (D: 작업본 실측)
 - 🟢 ~~origin HEAD 빌드 불가(충돌 마커)~~ → **해소**(2026-08-12 실측). 추적 파일 전수 검색
   `git grep '^<<<<<<< |^>>>>>>> '` **0건** · `npx vite build` **EXIT=0** · `tsc --noEmit` 0 ·

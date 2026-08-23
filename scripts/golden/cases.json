@@ -39,6 +39,15 @@
     { "id": "A10-3-dash-dongho", "rule": "A-10 ③", "desc": "대시 동호 인식 → 숫자 동과 동일 형식", "tags": ["offline"],
       "input": { "addr": "권선구 권선로 472, 101-203호", "cityLabel": "경기도 수원시 권선구" } },
 
+    { "id": "A37-translit-dong-detail", "rule": "A-37", "desc": "★한글 음역 영문동(에이동)은 건물 동 → 상세주소(형 지적 2026-08-23)", "tags": ["offline"],
+      "input": { "addr": "동대문구 왕산로 72, 행복빌라 에이동 201호", "cityLabel": "서울특별시 동대문구" } },
+
+    { "id": "A37-translit-dong-paren", "rule": "A-37", "desc": "괄호 안 (빌라 에이동) — 법정동 자리로 승격 금지", "tags": ["offline"],
+      "input": { "addr": "동대문구 왕산로 72, 201호 (행복빌라 에이동)", "cityLabel": "서울특별시 동대문구" } },
+
+    { "id": "A37-translit-dong-ambiguous-ho", "rule": "A-37", "desc": "실존 법정동과 겹치는 음역(이동)은 호수 동반 시에만 건물 동", "tags": ["offline"],
+      "input": { "addr": "동대문구 왕산로 72, 행복빌라 이동 201호", "cityLabel": "서울특별시 동대문구" } },
+
     { "id": "A10-3-dash-dongho-floor", "rule": "A-10 ③", "desc": "대시 동호 + 층", "tags": ["offline"],
       "input": { "addr": "권선구 권선로 472, 101-3층 203호", "cityLabel": "경기도 수원시 권선구" } },
 

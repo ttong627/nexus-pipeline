@@ -10,6 +10,7 @@
 //    - 판단이 애매하면 무조건 특이사항에 그대로 둔다
 //  ★ 호수 규칙(형 지시): 호수는 지우기 전에 반드시 상세주소 컬럼에 먼저 채운다.
 // ══════════════════════════════════════════════════════════════════════════
+import { TRANSLIT_DONG_ALL_ALT } from '../../services/address-service/src/shared/dongTokens.js';
 
 const S = (v) => String(v ?? '').trim();
 const nospace = (v) => S(v).replace(/\s/g, '');
@@ -28,10 +29,12 @@ const BLD_TAIL = /(아파트|빌라|맨션|타워|하이츠|캐슬|파크|힐스
  *   `계단위 201호 정면`은 배송메모지 상세주소가 아니다(회귀 테스트로 고정).
  *   동/호/지하/옥탑 토큰을 모두 걷어내고 남는 글자가 없을 때만 상세주소로 본다.
  */
+// A-37: 음역 영문동(에이동·에이치동 …)도 동호 성분 — 빠지면 `에이동 201호`가 '메모'로 남아 상세주소로 승격되지 않는다
+const DONG_TOKEN_RE = new RegExp(`(?:${TRANSLIT_DONG_ALL_ALT}|[A-Za-z가-힣])?\\d{0,4}\\s*동`, 'g');
 function isDetailOnly(note) {
   const rest = S(note)
     .replace(/지하|지층|반지하|옥탑/g, '')
-    .replace(/[A-Za-z가-힣]?\d{0,4}\s*동/g, '')      // A동 · 가동 · 104동 · 2동
+    .replace(DONG_TOKEN_RE, '')                      // A동 · 가동 · 에이동 · 104동 · 2동
     .replace(/[A-Za-z가-힣]?\d{1,4}(-\d{1,4})?\s*호/g, '')  // 201호 · 104-202호 · 나102호
     .replace(/[A-Za-z0-9\-\s,]/g, '');
   return rest === '' && /\d/.test(nospace(note));

@@ -1,8 +1,11 @@
-export const APP_VERSION = 'V7.5';
-export const APP_BUILD = '2026.08.11';
-export const APP_BUILD_TIME = '2026.08.11 13:18';
+export const APP_VERSION = 'V7.6';
+export const APP_BUILD = '2026.08.23';
+export const APP_BUILD_TIME = '2026.08.23 11:41';
 
 export const CHANGELOG = [
+  { v: "V7.6", date: "2026.08.23", items: [
+    "빌라·아파트의 한글 영문동(에이동·비동·씨동·에이치동 등)을 건물 동으로 인식합니다 — 상세주소에 그대로 남고 법정동·특이사항으로 새거나 사라지지 않습니다",
+  ]},
   { v: "V7.5", date: "2026.08.11", items: [
     "배송순번 정렬 개선 — 골목길(번길)을 큰길 번호 순서에 맞춰 배치해 실제 주행 순서대로 나옵니다 (삼작로256번길이 삼작로 258보다 먼저)",
     "주소 정제 안전장치 — 건물명으로 다른 주소를 가져다 붙이지 않습니다. 주소가 확인 안 되면 바꾸지 않고 확인필요로 표시합니다",
