@@ -640,16 +640,24 @@ export default function ShareRouteView({ shareId, driverId }) {
     }
   }, [allRecords, driver?.id, isRequestingOrderApply, shareData, shareId]);
 
+  // ★완료 여부는 **건별 문서**를 먼저 본다(2026-08-23 Phase 2). 옛 공유(부모 문서에 쌓아 둔 것)는
+  //   만료될 때까지 폴백으로 계속 읽는다 — 이행기에 현장이 서면 안 된다.
+  const completionOf = useCallback(
+    (r) => r?.completion || shareData?.completions?.[r?._uid] || null,
+    [shareData],
+  );
+
   // ── 배송완료 토글 (현재 GPS 캡처 + 동별좌표 오차 기록) ──────────────────
   const handleToggleComplete = useCallback(async (r) => {
     if (savingDoneId) return;
-    const alreadyDone = !!shareData?.completions?.[r._uid];
+    const alreadyDone = !!completionOf(r);
     setSavingDoneId(r._uid);
     try {
       if (alreadyDone) {
         // 완료 취소
-        await updateDoc(doc(db, 'route_shares', shareId), {
-          [`completions.${r._uid}`]: deleteField(),
+        await updateDoc(doc(db, 'route_shares', shareId, 'records', r.id || r._uid), {
+          completion: deleteField(),
+          received: false,
         });
       } else {
         // 완료 기록 — 현재 GPS와 배송지(동별)좌표 오차 계산
@@ -671,20 +679,25 @@ export default function ShareRouteView({ shareId, driverId }) {
             accuracyM: loc.accuracy ?? null,
           });
         }
-        // ★부모 공유 문서엔 수령자 이름·배송지 좌표를 쓰지 않는다 — 같은 공유의 다른 기사 토큰에게 읽힌다(2026-08-23 검사 지적).
-        //   uid 키 + 기사 위치·오차·판정만 남기고, 이름·배송지 좌표는 담당자가 건별 문서에서 이어 붙인다(RouteMapModal 수집부).
-        await updateDoc(doc(db, 'route_shares', shareId), {
-          [`completions.${r._uid}`]: {
-            at: new Date().toISOString(),
-            driverId: driver?.id || driverId || null,
-            lat: hasGps ? loc.lat : null,
-            lng: hasGps ? loc.lng : null,
-            accuracy: hasGps ? (loc.accuracy ?? null) : null,
-            errM,
-            // 코어 판정 결과(ok/far/unverifiable). 못 받았으면 null — 위반이 아니라 '판정 없음'이다.
-            verdict: posCheck?.verdict || null,
-            verdictDistanceM: Number.isFinite(posCheck?.distanceM) ? posCheck.distanceM : null,
-          },
+        // ★완료 기록은 **건별 문서**에 쓴다(2026-08-23 Phase 2). 예전엔 부모 공유 문서 하나에 전 기사가 써서
+        //   ①문서당 초당 1회 쓰기 한계에 배송 러시아워가 걸리고 ②1MiB 상한에 닿으면 그 시점부터 완료가 전부 실패하고
+        //   ③한 기사의 완료 1건이 접속 중인 **전 기사에게 문서 전체를 재방송**했다.
+        //   규칙은 이미 기사가 자기 건의 `completion` 을 쓰도록 허용하고 있었는데(firestore.rules) 아무도 안 쓰고 있었다.
+        const completionPayload = {
+          at: new Date().toISOString(),
+          driverId: driver?.id || driverId || null,
+          lat: hasGps ? loc.lat : null,
+          lng: hasGps ? loc.lng : null,
+          accuracy: hasGps ? (loc.accuracy ?? null) : null,
+          errM,
+          // 코어 판정 결과(ok/far/unverifiable). 못 받았으면 null — 위반이 아니라 '판정 없음'이다.
+          verdict: posCheck?.verdict || null,
+          verdictDistanceM: Number.isFinite(posCheck?.distanceM) ? posCheck.distanceM : null,
+        };
+        await updateDoc(doc(db, 'route_shares', shareId, 'records', r.id || r._uid), {
+          completion: completionPayload,
+          received: true,
+          receivedAt: completionPayload.at,
         });
       }
     } catch (e) {
@@ -694,7 +707,7 @@ export default function ShareRouteView({ shareId, driverId }) {
     } finally {
       setSavingDoneId(null);
     }
-  }, [shareData, shareId, driver, driverId, savingDoneId]);
+  }, [shareData, shareId, driver, driverId, savingDoneId, completionOf]);
 
   // ── 링크 복사 ────────────────────────────────────────────────────────
   const handleCopyLink = useCallback(async () => {
@@ -770,7 +783,7 @@ export default function ShareRouteView({ shareId, driverId }) {
     }
     mapRecords.forEach((r) => {
       const isSelected = r._uid === selectedId;
-      const isDone = !!shareData?.completions?.[r._uid];
+      const isDone = !!completionOf(r);
       const bg = isDone ? '#059669' : isSelected ? '#fff' : driverColor;
       const fg = isDone ? '#fff' : isSelected ? driverColor : '#fff';
       const size = isSelected ? 30 : 22;
@@ -1229,7 +1242,7 @@ export default function ShareRouteView({ shareId, driverId }) {
             const isSelected = r._uid === selectedId;
             const qty = parseInt(r.포수) || 1;
             const isMultiQty = qty > 1;
-            const doneInfo = shareData?.completions?.[r._uid];
+            const doneInfo = completionOf(r);
             const done = !!doneInfo;
             return (
               <div key={r._uid} id={`share-rec-${r._uid}`} onClick={() => handleRecordClick(r)}

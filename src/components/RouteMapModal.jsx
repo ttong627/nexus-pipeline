@@ -2352,15 +2352,17 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
       for (const docSnap of snap.docs) {
         const data = docSnap.data();
         const driversArr = data.drivers || [];
-        const entries = Object.entries(data.completions || {}).filter(([, c]) => !!c);
-        if (!entries.length) continue;
-        // ★이름·배송지 좌표는 부모 문서에 없다(같은 공유의 다른 기사에게 읽히므로 2026-08-23 부터 안 쓴다).
-        //   담당자(생성자·관리자)는 건별 문서를 읽을 수 있으니 여기서 이어 붙인다. 옛 기록(c.name/dongLat)은 그대로 읽는다.
+        // ★완료 기록은 이제 **건별 문서**에 산다(2026-08-23 Phase 2). 옛 공유는 부모 문서에 쌓여 있으므로
+        //   둘을 합쳐 읽는다 — 이행기(옛 공유 만료 ≤30일)가 지나면 부모 쪽은 자연히 사라진다.
         const byId = new Map();
         try {
           const recSnap = await getDocs(collection(db, 'route_shares', docSnap.id, 'records'));
           recSnap.forEach(rs => byId.set(rs.id, rs.data()));
         } catch { /* 권한·네트워크 실패면 부모 기록만으로 표시(이름 없음) */ }
+        const merged = new Map(Object.entries(data.completions || {}).filter(([, c]) => !!c));
+        byId.forEach((rec, id) => { if (rec?.completion) merged.set(id, rec.completion); });
+        const entries = [...merged.entries()];
+        if (!entries.length) continue;
         for (const [key, c] of entries) {
           const driver = driversArr.find(d => d.id === c.driverId);
           const rec = byId.get(key) || {};
@@ -2414,7 +2416,13 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
     completionOverlaysRef.current.forEach(o => { try { o.setMap(null); } catch {} });
     completionOverlaysRef.current = [];
     if (!map || !showCompletionCompare || !window.kakao?.maps) return;
-    completionData.forEach(c => {
+    // ★건당 오버레이 3개(선+점+라벨)라 상한이 없으면 월말에 지도가 통째로 느려진다(2026-08-23 점검).
+    const COMPLETION_OVERLAY_MAX = 500;
+    const completionForMap = completionData.slice(0, COMPLETION_OVERLAY_MAX);
+    if (completionData.length > COMPLETION_OVERLAY_MAX) {
+      console.warn(`[완료비교] ${completionData.length}건 중 ${COMPLETION_OVERLAY_MAX}건만 지도에 표시합니다(성능 상한).`);
+    }
+    completionForMap.forEach(c => {
       if (c.lat == null || c.lng == null || c.dongLat == null || c.dongLng == null) return;
       const color = c.errM != null && c.errM > 100 ? '#ef4444'
         : (c.errM != null && c.errM > 50 ? '#f59e0b' : '#22c55e');

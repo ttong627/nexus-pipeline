@@ -79,6 +79,15 @@ await run('토큰 남 레코드 목록(where d2)', 'tokA1', 'DENY', (db) => list
 await run('토큰 전체 목록(where 없음)', 'tokA1', 'DENY', (db) => listAll(db, 'sr_A'));
 await run('토큰 다른 공유 읽기', 'tokA1', 'DENY', (db) => getDoc(doc(db, 'route_shares/sr_B')));
 await run('토큰 자기 레코드 received 수정', 'tokA1', 'ALLOW', (db) => updateDoc(doc(db, 'route_shares/sr_A/records/r1'), { received: true }));
+// ── 완료기록 건별 문서 이전(2026-08-23 Phase 2) — 기사가 자기 건에 completion 을 쓴다 ──
+await run('★토큰 자기 레코드 completion 기록', 'tokA1', 'ALLOW', (db) => updateDoc(doc(db, 'route_shares/sr_A/records/r1'), {
+  completion: { at: new Date().toISOString(), driverId: 'd1', lat: 37.5, lng: 127.0, errM: 12, verdict: 'ok' },
+  received: true, receivedAt: new Date().toISOString(),
+}));
+await run('★토큰이 남의 레코드에 completion 기록', 'tokA1', 'DENY', (db) => updateDoc(doc(db, 'route_shares/sr_A/records/r2'), {
+  completion: { at: new Date().toISOString(), driverId: 'd1' }, received: true,
+}));
+await run('★생성자는 건별 completion 을 읽는다(정확도 화면)', 'owner', 'ALLOW', (db) => getDoc(doc(db, 'route_shares/sr_A/records/r1')));
 await run('토큰 자기 레코드 driverId 변경', 'tokA1', 'DENY', (db) => updateDoc(doc(db, 'route_shares/sr_A/records/r1'), { driverId: 'd2' }));
 await run('토큰 자기 레코드 주소 변경', 'tokA1', 'DENY', (db) => updateDoc(doc(db, 'route_shares/sr_A/records/r1'), { 주소: 'x' }));
 await run('토큰 남 레코드 수정', 'tokA1', 'DENY', (db) => updateDoc(doc(db, 'route_shares/sr_A/records/r2'), { received: true }));
