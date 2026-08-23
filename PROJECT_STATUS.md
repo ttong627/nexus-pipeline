@@ -14,7 +14,7 @@
 | 동기화 | 🟢 | `main` = `origin/main` = **`c3bded2`** · behind 0 / ahead 0 · 추적파일 clean. untracked `.serena/` 1건(아래) |
 | 계정·식별 | 🟡 | repo owner **ttong627** / gh active **ttong0627**(불일치 — 전역 전환 안 함, 토큰 주입으로 fetch 성공) · gcloud active **ttong627@gmail.com** ✅ · firebase **ttong627@gmail.com** ✅ · ⚠️gcloud 기본 project = `wssc-nutrition`(타 프로젝트) → **`--project logis-op` 매 명령 필수** |
 | 환경 | 🟢 | node **v24.15.0** / npm **11.12.1** · gh·gcloud·firebase OK · node_modules 루트 439·functions 182·services/address-service 172 **전부 설치** · `.env` `VITE_*` **16키**(값 비노출) · `src/version.js` **V7.5** = package.json **7.5.0** 일치 |
-| 배포 | 🟢 | Hosting **200 0.05s** · 라이브 엔트리 **`assets/index-DH7D9nRu.js`**(= HANDOFF 08-13 배포본 그대로, 그 뒤 코드 변경 없음) · Cloud Run `nexus-address-api` **`00074-v4m` 100%**(= HANDOFF 기록과 일치) · `/v1/address/db-status` **200 0.13s** · `/v1/coords/status` **200** |
+| 배포 | 🟢 | Hosting **200 0.05s** · 라이브 엔트리 **`assets/index-CvVAke84.js`**(V7.10 · 08-23 19:3x 비밀번호 입장 배포 · 롤백 `index-BNZ1YBN7.js`) · Cloud Run `nexus-address-api` **`00074-v4m` 100%**(= HANDOFF 기록과 일치) · `/v1/address/db-status` **200 0.13s** · `/v1/coords/status` **200** |
 | 정기배치 | 🟢 | `nexus-address-sync` **08-18~08-23 매일 04:23 KST 5회 연속 exit 0**(오늘 `9569l`: 채움 대상 0 · 이상치 후보 0 → 표시 0 · 해제후보 0) · `nexus-address-listfill` **08-17(월) 05:10 KST exit 0** · 스케줄러 3개 ENABLED(`23 4 * * *` / `0 5 * * 1` / geocodeAuto 3분, 마지막 10:51) |
 | 좌표 저장소 | 🟢 | `total` **37,142**(08-13 37,070 → +72) · 입구 **37,106** · 중심 37,040 · `outlier` 4(변동 없음) · `no_point` 24 · 동 4,873행/2,478건물 |
 | 앱구성 | 🟢 | 루트(React 19.2+Vite 8) · `functions`(CJS) · `services/address-service`(운영 API) · `address-service/`(레거시, node_modules 없음 = 미사용 그대로) |
@@ -25,7 +25,7 @@
 1. **개인정보보호 Phase 2 = 휴대폰 인증 대신 "지도 비밀번호(숫자 6자리)"로 확정(형 결정 2026-08-23) — 코드 완성·검사 반영, 배포 대기.**
    - 담당자가 지도(공유링크) 생성 시 6자리 번호를 넣고, 기사는 링크를 열 때 그 번호를 넣어야 명단이 보인다. 검증은 서버(`openShare` Function → 커스텀 토큰) + Firestore 규칙(토큰 없으면 읽기 거부, 토큰은 **자기 기사 건만**). 옛 링크(비밀번호 없음)는 이행기 동안 그대로 열린다.
    - 근거·절차: CLAUDE.md §14-1 **SH-1~SH-6**, HANDOFF.md「공유링크 비밀번호」(배포 순서 IAM → functions → rules → hosting → 실호출+브라우저 검증).
-   - 실측: 회귀 6/6 · share-records-view 13/13 · 루트 446/446 · eslint 0 errors/tsc/build 0 · Functions 로드 OK · Rules API 문법 0 · **규칙 회귀 `npm run test:rules` 47/47**(에뮬레이터 · 리포 수록). 독립 검사 2종(보안·기능) 1차 FAIL 12항목 + 2차 보충필요(🚨2 · DUAL_WRITE 배열 PII · createdBy 빈 문자열 동치) 전부 반영 → 3차 기능 **PASS** · 보안 3차 🚨1(`completions` 이름·좌표 재집적) 반영 → 4차 확인 **PASS**. 커밋·푸시 완료(`git log -1`) · **운영 배포 대기**.
+   - 실측: 회귀 6/6 · share-records-view 13/13 · 루트 446/446 · eslint 0 errors/tsc/build 0 · Functions 로드 OK · Rules API 문법 0 · **규칙 회귀 `npm run test:rules` 47/47**(에뮬레이터 · 리포 수록). 독립 검사 2종(보안·기능) 1차 FAIL 12항목 + 2차 보충필요(🚨2 · DUAL_WRITE 배열 PII · createdBy 빈 문자열 동치) 전부 반영 → 3차 기능 **PASS** · 보안 3차 🚨1(`completions` 이름·좌표 재집적) 반영 → 4차 확인 **PASS**. 커밋 `c61246d` → **운영 배포 완료(2026-08-23 19:46 KST)**: Functions openShare·api / Hosting `index-CvVAke84.js`(V7.10) / 규칙 릴리스 · 실호출 **17/17** · 살아 있는 공유 0. 남은 건 형의 실제 폰 확인(공유 생성 → 링크 → 비밀번호 입장).
    - 배포 전제 1줄(IAM `serviceAccountTokenCreator`)은 **아직 미부여** — 형 "배포" 후 1단계에서 실행. `SHARE_TRANSITION_DUAL_WRITE` 는 비밀번호 배포 뒤 별도 판단.
    - 법 시행 2026-09-11까지 18일. 동대문 공유링크 마감(08-18)은 이미 지났다.
 2. **주소품질 모니터 08-17 `⚠️ 악화` 판정 — 텔레그램으로 이미 발송됨, 리포엔 미조치.**

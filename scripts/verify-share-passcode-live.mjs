@@ -29,12 +29,12 @@ const app = initializeApp({
 const cauth = getAuth(app); const cdb = getFirestore(app);
 
 const rid = () => `sr_test_${crypto.randomUUID().replace(/-/g, '')}`;
-const SHARE = rid(), LEGACY = rid(), OTHER = rid();
+const SHARE = rid(), LEGACY = rid(), OTHER = rid(), XFF = rid();
 const PASS = '482917', WRONG = '000000';
 const results = []; const ok = (name, cond, extra = '') => { results.push([cond ? '✅' : '🚨', name, extra]); };
 
-const callOpen = async (shareId, passcode, driverId = 'd1') => {
-  const res = await fetch(FN_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: { shareId, passcode, driverId } }) });
+const callOpen = async (shareId, passcode, driverId = 'd1', extraHeaders = {}) => {
+  const res = await fetch(FN_URL, { method: 'POST', headers: { 'Content-Type': 'application/json', ...extraHeaders }, body: JSON.stringify({ data: { shareId, passcode, driverId } }) });
   const j = await res.json().catch(() => ({}));
   return { status: res.status, result: j.result, error: j.error };
 };
@@ -58,7 +58,7 @@ const mkShare = async (id) => {
   await b.commit();
 };
 const cleanup = async () => {
-  for (const id of [SHARE, LEGACY, OTHER]) {
+  for (const id of [SHARE, LEGACY, OTHER, XFF]) {
     await adb.recursiveDelete(adb.collection('route_shares').doc(id)).catch(() => {});
     await adb.collection('route_share_secrets').doc(id).delete().catch(() => {});
     // 잠금 테스트가 남긴 시도 문서(route_share_attempts/{id}_{ipHash})도 지운다 — 안 지우면 TTL 없이 쌓인다(검사 지적)
@@ -72,7 +72,7 @@ const cleanup = async () => {
 
 try {
   console.log(`대상 ${FN_URL}`);
-  await mkShare(SHARE); await mkShare(LEGACY); await mkShare(OTHER);
+  await mkShare(SHARE); await mkShare(LEGACY); await mkShare(OTHER); await mkShare(XFF);
   const salt = newSalt();
   await adb.collection('route_share_secrets').doc(SHARE).set({ passcodeHash: await hashPasscode(PASS, salt), passcodeSalt: salt, createdBy: 'script:verify', createdAt: admin.firestore.FieldValue.serverTimestamp() });
   const salt2 = newSalt();
@@ -107,6 +107,13 @@ try {
   for (let i = 0; i < 5; i++) await callOpen(OTHER, WRONG);
   const locked = await callOpen(OTHER, PASS);
   ok('오답 5회 후 정답도 잠금(resource-exhausted)', locked.error?.status === 'RESOURCE_EXHAUSTED', JSON.stringify(locked.error || locked.result).slice(0, 100));
+  // 위조 XFF — 요청마다 다른 X-Forwarded-For 를 앞에 붙여도 잠금 키는 실제 접속 IP(마지막 원소)라 5회면 잠겨야 한다.
+  //   (첫 원소를 쓰면 요청마다 새 키가 생겨 영영 안 잠긴다 — 검사 지적. 이 관측이 "위조값이 무시됐다"는 증거)
+  const salt3 = newSalt();
+  await adb.collection('route_share_secrets').doc(XFF).set({ passcodeHash: await hashPasscode(PASS, salt3), passcodeSalt: salt3, createdBy: 'script:verify', createdAt: admin.firestore.FieldValue.serverTimestamp() });
+  for (let i = 0; i < 5; i++) await callOpen(XFF, WRONG, 'd1', { 'X-Forwarded-For': `203.0.113.${i + 1}` });
+  const xffLocked = await callOpen(XFF, PASS, 'd1', { 'X-Forwarded-For': '198.51.100.7' });
+  ok('위조 XFF 5회 오답 후 잠금(위조 헤더 무시 = 실제 IP 키)', xffLocked.error?.status === 'RESOURCE_EXHAUSTED', JSON.stringify(xffLocked.error || xffLocked.result).slice(0, 100));
   // 옛 링크(secrets 없음) → 빈 비밀번호로 토큰(legacy)
   const l = await callOpen(LEGACY, '');
   ok('secrets 없는 옛 공유 → 빈 비밀번호로 토큰(legacy=true)', typeof l.result?.token === 'string' && l.result.legacy === true, JSON.stringify(l.error || '').slice(0, 120));
