@@ -5,12 +5,20 @@
 > `HANDOFF.md` → `prompt_plan.md`(접근통제 계획) → `좌표관리_설계.md` 가 SSOT 다. 여기는 프로젝트 전반의 스냅샷이다.
 > **아래 「이전 작업」 블록들은 그 시점 기록이다 — 현재 상태로 읽지 말 것.**
 
+## 🔐 암호 입력 방식 변경 — V7.11 배포 완료 (2026-08-23 20:22 KST · 형 지시)
+
+- 형 지시 3줄: "암호는 담당자가 지도 배포할때마다 받아줘" / "똑같은 암호라도 상관없이" / "미리 생성하는 방식이 아니라 지도마다 암호를 넣는 방식으로".
+- 반영: [기사 공유 링크] 클릭 → 기사·마감일 검증 → **암호창(`SharePasscodePrompt.jsx`)** 이 떠서 그 지도의 6자리를 받는다 → 생성.
+  내보내기 메뉴의 **미리 넣어두던 비밀번호 칸·`sharePasscode` 상태는 제거**(미리 넣은 값이 다음 지도에 딸려가거나 안 넣은 채 배포되는 경로를 구조적으로 차단 — 암호는 `runCreateShare(passcode)` 인자로만 흐른다). 같은 번호 재사용 허용(중복 검사 없음). 재설정 창도 무작위 미리채움 제거.
+- 배포: 커밋 `e355c78` → Hosting **`index-B2hn2HNO.js`**(V7.11 · 200 0.06s · 롤백 `index-CvVAke84.js`). Functions·규칙 변경 없음(클라 전용).
+- 검증: 루트 **446/446** · eslint 0 errors · tsc 0 · vite build 0. 규칙 문서 **CLAUDE.md SH-1** 갱신.
+
 ## 🚀 배포 현황 확인 (2026-08-23 20:07 KST · 형 "커밋 푸시 배포 저장")
 
 | 항목 | 실측 |
 |---|---|
 | 리포 | `main` = `origin/main` · 추적파일 clean(미커밋 0) |
-| Hosting | 로컬 빌드 `index-CvVAke84.js` **= 라이브 번들 동일**(V7.10 · 재배포 불필요) |
+| Hosting | (V7.10 시점) `index-CvVAke84.js` — **현재 운영은 V7.11 `index-B2hn2HNO.js`**(위 섹션) |
 | Functions | `openShare` **ACTIVE** 10:44:11Z(`openshare-h7dfwrm3rq-du.a.run.app`) · `api` ACTIVE 10:44:18Z |
 | Firestore 규칙 | 릴리스 **10:45:40Z**(ruleset `1c4e5b2e…`) — 함수 배포 뒤 = 순서 정상 |
 | Cloud Run·Job | `services/` 변경 **0**(4c92965..HEAD) → 재배포 불필요 |
