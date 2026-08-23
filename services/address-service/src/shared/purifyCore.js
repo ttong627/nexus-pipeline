@@ -617,7 +617,10 @@ export const createProcessAddress = (deps) => async (inputAddr, inputName = '', 
   // ── finalDetail 전처리 (A-18 → A-19 → A-17 → A-10 순서) ─────────
 
   // A-18: 제(第) 접두어 제거 — 제101동 → 101동, 제205호 → 205호, 제3층 → 3층
-  finalDetail = finalDetail.replace(/제\s*(\d+)\s*(동|호|층)\b/g, '$1$2');
+  // ★`\b`는 한글 뒤에서 경계를 잡지 못한다(ASCII 단어문자 기준) — `제101동 205호`의 `제`가 지워지지 않았다.
+  //   예전엔 splitInlineBuildingTail이 `제`를 건물명 슬롯으로 빼돌려 숨어 있던 결함(골든 A18 buildingName:"제").
+  //   A-38(2026-08-23)로 `제`가 상세에 남자 드러났다 → 뒤 경계 대신 **앞 경계**(한글·영문에 붙은 `제`는 제외: 국제101호)로 판정.
+  finalDetail = finalDetail.replace(/(?<![가-힣A-Za-z])제\s*(\d+)\s*(동|호|층)/g, '$1$2');
 
   // A-19: 동호 붙여쓰기 분리 — 101동205호 → 101동 205호 (A-10에서 대시로 변환)
   finalDetail = finalDetail

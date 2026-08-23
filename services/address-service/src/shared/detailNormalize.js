@@ -76,7 +76,12 @@ export const splitInlineBuildingTail = (tail) => {
   const comma = cleanTail.indexOf(',');
   const slash = cleanTail.indexOf('/');
   const stops = [marker, comma, slash].filter(v => v >= 0);
-  const cut = stops.length ? Math.min(...stops) : -1;
+  let cut = stops.length ? Math.min(...stops) : -1;
+  // A-38(2026-08-23 · 동대문구 2026-08 실측 19건): 마커 바로 앞에 **붙어 있는 한 글자 한글 토큰**은 건물명이 아니라
+  //   상세주소의 일부다 — `반|지층 1호`·`비|02호`·`지|01호`·`나|1호`·`좌|1층`·`행복빌라 반|지하 102호`.
+  //   안 막으면 괄호가 `(제기동, 반)`·`(회기동, 비)`가 되고 반지층·B호 정보가 상세에서 사라진다.
+  //   공백으로 떨어진 한 글자(`신 101호`)는 건드리지 않는다(마커에 붙은 경우만).
+  if (cut > 0 && cut === marker && /(^|\s)[가-힣]$/.test(cleanTail.slice(0, cut))) cut -= 1;
   const inlineBuildingName = stripAddressDelimiters(cut >= 0 ? cleanTail.slice(0, cut) : cleanTail);
   const detail = normalizeAddressDetail(cut >= 0 ? cleanTail.slice(cut) : '');
   return { inlineBuildingName, detail };
