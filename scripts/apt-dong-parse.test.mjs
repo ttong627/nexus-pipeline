@@ -21,7 +21,7 @@
  * 실행: node --test scripts/apt-dong-parse.test.mjs
  */
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -31,6 +31,22 @@ import {
 } from '../services/address-service/src/routing/routeSequenceEngine.js';
 
 const ROOT = path.resolve(fileURLToPath(new URL('../', import.meta.url)));
+
+// 루트맵 관련 파일 전수 — 분할해도 가드가 따라간다(경로를 하드코딩하면 떼어낸 조각이 검사에서 빠진다)
+const collectRouteMapFiles = async () => {
+  const out = [path.join(ROOT, 'src/components/RouteMapModal.jsx')];
+  const walk = async (d) => {
+    let entries = [];
+    try { entries = await readdir(d, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      const full = path.join(d, e.name);
+      if (e.isDirectory()) await walk(full);
+      else if (/\.(js|jsx)$/.test(e.name)) out.push(full);
+    }
+  };
+  await walk(path.join(ROOT, 'src/components/routeMap'));
+  return out;
+};
 
 describe('오탐 — 동이 아닌 숫자쌍을 동으로 읽지 않는다', () => {
   /** 설계서 §5-3-A 실측 5건. 전부 상세주소가 없는 단독·전원주택이고 숫자는 **도로명 부번**이다. */
@@ -112,30 +128,40 @@ describe('순번 그룹핑 — 오탐이 배송 단위를 뭉개던 자리', () 
 });
 
 describe('복제 금지 — 규칙은 SSOT 한 곳에만 산다', () => {
-  test('RouteMapModal 이 엔진에서 parseAptDong 을 가져온다', async () => {
-    // 이 파일에 **문자 단위로 동일한 복제본**이 있었다(2026-08-11 제거).
-    // 복제가 부활하면 오탐 수정이 한쪽에만 적용된다 — 워커 복제(routing-worker-parity)와 같은 함정.
-    const modal = await readFile(path.join(ROOT, 'src/components/RouteMapModal.jsx'), 'utf8');
-    assert.ok(/import\s*\{[^}]*\bparseAptDong\b[^}]*\}\s*from\s*['"][^'"]*routeSequenceEngine\.js['"]/.test(modal),
-      'RouteMapModal 이 parseAptDong 을 import 하지 않는다');
-    assert.ok(!/^\s*const\s+parseAptDong\s*=/m.test(modal),
-      'RouteMapModal 에 parseAptDong 재정의가 생겼다 — 복제가 부활했다');
+  // 순번 엔진 규칙은 `services/address-service/src/routing/routeSequenceEngine.js` 한 곳에만 산다.
+  //   2026-08-11 에 `parseAptDong` 복제본을, 2026-08-23 에 **41개 심볼 복제본**을 제거했다.
+  //   복제는 드리프트가 생기기 전엔 무증상이다 — 다음 수정이 한쪽에만 들어가는 순간 화면과 서버 순번이 갈라진다.
+  //   ★검사 대상은 파일 하나가 아니라 **루트맵 관련 파일 전체**다(Phase 0-2).
+  //     경로를 하나로 박아 두면 파일을 쪼갠 순간 떼어낸 조각이 검사에서 조용히 빠진다.
+  const ENGINE_PATH = 'services/address-service/src/routing/routeSequenceEngine.js';
+
+  test('루트맵이 엔진에서 parseAptDong 을 가져온다(재정의 아님)', async () => {
+    const targets = await collectRouteMapFiles();
+    assert.ok(targets.length >= 2, `검사 대상 파일을 못 찾았다(${targets.length}개) — 가드가 헛돈다`);
+    const sources = await Promise.all(targets.map((f) => readFile(f, 'utf8')));
+    const importsIt = sources.some((src) =>
+      /import\s*\{[^}]*\bparseAptDong\b[^}]*\}\s*from\s*['"][^'"]*routeSequenceEngine\.js['"]/.test(src));
+    assert.ok(importsIt, '루트맵 어디에서도 엔진의 parseAptDong 을 import 하지 않는다');
+    const redefined = targets.filter((f, i) => /^\s*(?:const|function|let)\s+parseAptDong\s*[=(]/m.test(sources[i]));
+    assert.deepEqual(redefined.map((f) => path.relative(ROOT, f)), [], 'parseAptDong 재정의가 생겼다 — 복제가 부활했다');
   });
 
-  test('★RouteMapModal 이 엔진 심볼을 재정의하지 않는다(전 심볼 가드)', async () => {
-    // 예전엔 `parseAptDong` 하나만 지켰는데, 실제로는 순번 엔진 심볼 41개가 문자 단위로 복제돼 있었다(2026-08-23 점검).
-    // 복제는 드리프트가 생기기 전엔 아무 증상이 없다 — 다음 수정이 한쪽에만 들어가는 순간 화면과 서버 순번이 갈라진다.
-    // → 엔진의 export 목록을 읽어 **RouteMapModal 안의 동명 재정의**를 전수 차단한다.
-    const enginePath = path.join(ROOT, 'services/address-service/src/routing/routeSequenceEngine.js');
-    const engine = await readFile(enginePath, 'utf8');
-    const modal = await readFile(path.join(ROOT, 'src/components/RouteMapModal.jsx'), 'utf8');
-    const exported = [...engine.matchAll(/^export\s+(?:const|function)\s+([A-Za-z_$][\w$]*)/gm)].map(m => m[1]);
+  test('★엔진 심볼을 어디서도 재정의하지 않는다(전 심볼 가드)', async () => {
+    const engineSrc = await readFile(path.join(ROOT, ENGINE_PATH), 'utf8');
+    const exported = [...engineSrc.matchAll(/^export\s+(?:const|function)\s+([A-Za-z_$][\w$]*)/gm)].map((m) => m[1]);
     assert.ok(exported.length > 30, `엔진 export 를 못 읽었다(${exported.length}개) — 가드가 헛돈다`);
-    const dup = exported.filter(name =>
-      new RegExp(`^\\s*(?:const|function|let)\\s+${name}\\s*[=(]`, 'm').test(modal));
+    const targets = await collectRouteMapFiles();
+    const dup = [];
+    for (const file of targets) {
+      const src = await readFile(file, 'utf8');
+      for (const name of exported) {
+        if (new RegExp(`^\\s*(?:const|function|let)\\s+${name}\\s*[=(]`, 'm').test(src)) {
+          dup.push(`${path.relative(ROOT, file)}:${name}`);
+        }
+      }
+    }
     assert.deepEqual(dup, [],
-      `RouteMapModal 에 엔진 심볼 재정의가 생겼다(복제 부활): ${dup.join(', ')}\n` +
-      `→ services/.../routeSequenceEngine.js 에서 import 해서 쓰세요(SSOT).`);
+      `엔진 심볼 재정의가 생겼다(복제 부활): ${dup.join(', ')}` + '\n→ 엔진에서 import 해서 쓰세요(SSOT).');
   });
 
   test('엔진 정규식의 `호` 가 필수로 유지된다', async () => {
