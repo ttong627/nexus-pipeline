@@ -1243,7 +1243,8 @@ ${e.message}`);
         const token = await u.getIdToken();
         const res = await fetch(GEOCODE_FN_URL, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          // ★`X-Id-Token` — Cloud Run 이 Authorization 을 IAM 토큰으로 가로채 함수에 닿기 전에 401 을 낸다(2026-08-23 실측)
+          headers: { 'Content-Type': 'application/json', 'X-Id-Token': token },
           body: JSON.stringify({ city, monthId: month, limit: 200 }),
         });
         if (!res.ok) {

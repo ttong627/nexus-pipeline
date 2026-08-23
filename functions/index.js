@@ -98,13 +98,67 @@ const kakaoKey = () => {
 };
 const KAKAO_REST_KEY = process.env.KAKAO_REST_KEY || '';
 
+const TELEGRAM_BOT_TOKEN = defineSecret('TELEGRAM_BOT_TOKEN');
+const TELEGRAM_CHAT_ID = defineSecret('TELEGRAM_CHAT_ID');
+
+const sendTelegram = async (text) => {
+  const tok = process.env.TELEGRAM_BOT_TOKEN || '';
+  const chat = process.env.TELEGRAM_CHAT_ID || '';
+  if (!tok || !chat) return false;
+  try {
+    const res = await fetch(`https://api.telegram.org/bot${tok}/sendMessage`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ chat_id: chat, text }),
+    });
+    return res.ok;
+  } catch (e) {
+    // ★발송 실패가 감시를 멈추면 안 된다. 조용히 넘기되 로그엔 남긴다.
+    console.warn('[leakAlert] 텔레그램 발송 실패:', e?.message);
+    return false;
+  }
+};
+
+// ★카카오 키 보호(2026-08-23 · 형 지시 "키는 그대로 쓰되 문제 없게") ─────────────────────
+//   키는 이제 번들에 없지만(옛 배포본도 더는 서빙되지 않는다), **예전에 받아 간 사본**은 세상에 남아 있다.
+//   그래서 두 겹을 둔다: ①우리 프록시로 들어오는 사용량 상한(폭주·내부 남용 차단)
+//                    ②카카오가 429(쿼터)로 막기 시작하면 **즉시 형에게 알린다**(모르고 배송 당일 멈추는 게 최악).
+const KAKAO_INSTANCE_HOUR_CAP = 3000;      // 인스턴스당 시간당 호출 상한(정상 대량정제 3천건도 통과하는 넉넉한 값)
+let kakaoHourKey = '';
+let kakaoHourCount = 0;
+let kakaoAlertHour = '';                   // 같은 시간대엔 경보 1회만
+const kakaoQuotaOk = () => {
+  const hour = new Date().toISOString().slice(0, 13);
+  if (hour !== kakaoHourKey) { kakaoHourKey = hour; kakaoHourCount = 0; }
+  kakaoHourCount += 1;
+  return kakaoHourCount <= KAKAO_INSTANCE_HOUR_CAP;
+};
+const kakaoAlert429 = async (op) => {
+  const hour = new Date().toISOString().slice(0, 13);
+  if (hour === kakaoAlertHour) return;
+  kakaoAlertHour = hour;
+  await sendTelegram(
+    `[nexus] 카카오 API 429(쿼터 초과) 감지 — ${op}\n`
+    + `지도 좌표매칭이 멈출 수 있습니다. 카카오 개발자센터에서 사용량을 확인하세요.\n`
+    + `(키가 남용되는 정황이면 재발급 후 Secret Manager ADDRESS_KAKAO_REST_KEY 만 갱신하면 됩니다)`,
+  );
+};
+
+// ★앱 토큰은 `X-Id-Token` 헤더로 받는다 — Cloud Run 이 `Authorization: Bearer` 를 IAM 토큰으로 가로채
+//   Firebase ID 토큰을 컨테이너에 닿기 전에 401 로 막기 때문이다(2026-08-23 배포 검증에서 실측).
+//   ※08-08부터 사용기록 전송이 죽어 있던 진짜 이유 중 하나다.
+const appToken = (req) => String(
+  req.headers['x-id-token'] || req.headers['X-Id-Token'] || req.headers.authorization || '',
+).replace(/^Bearer\s+/i, '').trim();
+
 exports.api = onRequest(
   {
     cors: true,
     region: 'asia-northeast3',
     timeoutSeconds: 30,
     memory: '256MiB',
-    secrets: [KAKAO_SECRET],   // /api/kakao 프록시가 서버 키로 대신 호출한다(클라 번들에서 REST 키 제거)
+    maxInstances: 10,          // ★사용량 상한과 짝 — 인스턴스가 무한정 늘면 시간당 상한이 무의미해진다
+    secrets: [KAKAO_SECRET, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID],   // 프록시가 서버 키로 대신 호출 + 429 경보
   },
   async (req, res) => {
     const path = req.path || '';
@@ -113,10 +167,10 @@ exports.api = onRequest(
     //   이제 openShare 가 발급한 공유 토큰(ID 토큰 · claims.shareId)을 Bearer 로 요구한다. 클라에서 부르는 곳은 없다(grep 0).
     //   ★토큰의 driverId 도 대조한다 — 같은 공유의 기사 A 토큰으로 `?driverId=B` 의 주소·좌표를 받던 구멍(2차 검사 지적).
     const requireShareToken = async (shareId, driverId) => {
-      const m = String(req.headers.authorization || '').match(/^Bearer\s+(.+)$/i);
-      if (!m) return false;
+      const tok = appToken(req);
+      if (!tok) return false;
       try {
-        const t = await admin.auth().verifyIdToken(m[1]);
+        const t = await admin.auth().verifyIdToken(tok);
         return t.shareId === shareId && String(t.driverId || '') === String(driverId || '');
       } catch { return false; }
     };
@@ -133,7 +187,7 @@ exports.api = onRequest(
     //    여기서는 **로그인한 담당자**만, **정해진 4종 질의**만 통과시킨다(공유 토큰은 거부 — 기사에겐 필요 없다).
     if (path.includes('/kakao')) {
       if (req.method !== 'POST') return res.status(405).json({ error: 'POST만 허용' });
-      const bearer = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+      const bearer = appToken(req);
       if (!bearer) return res.status(401).json({ error: '인증이 필요합니다.' });
       let dec;
       try { dec = await admin.auth().verifyIdToken(bearer); }
@@ -141,6 +195,10 @@ exports.api = onRequest(
       if (dec.shareId) return res.status(403).json({ error: '공유 토큰으로는 사용할 수 없습니다.' });
       if (!kakaoKey()) return res.status(500).json({ error: '서버에 카카오 키가 설정되지 않았습니다.' });
 
+      if (!kakaoQuotaOk()) {
+        console.warn('[kakao proxy] 시간당 상한 초과 — 잠시 차단');
+        return res.status(429).json({ error: '지도 조회가 잠시 많습니다. 잠시 후 다시 시도해 주세요.' });
+      }
       const { op, params } = req.body || {};
       const P = params || {};
       const clamp = (v, lo, hi, dflt) => {
@@ -155,6 +213,7 @@ exports.api = onRequest(
           const url = `https://dapi.kakao.com/v2/local/search/${op === 'address' ? 'address' : 'keyword'}.json`
             + `?query=${encodeURIComponent(q)}&size=${size}`;
           const r = await fetch(url, { headers: { Authorization: `KakaoAK ${kakaoKey()}` } });
+          if (r.status === 429) await kakaoAlert429('search');
           if (!r.ok) return res.status(502).json({ error: '카카오 조회 실패', status: r.status });
           const j = await r.json();
           return res.json({ documents: j.documents || [], meta: j.meta || null });
@@ -168,6 +227,7 @@ exports.api = onRequest(
             + `&center=${lng},${lat}&level=${level}&w=${w}&h=${h}`
             + (markers ? `&markers=${encodeURIComponent(markers)}` : '');
           const r = await fetch(url, { headers: { Authorization: `KakaoAK ${kakaoKey()}` } });
+          if (r.status === 429) await kakaoAlert429('staticmap');
           if (!r.ok) return res.status(502).json({ error: '지도 이미지 생성 실패', status: r.status });
           const buf = Buffer.from(await r.arrayBuffer());
           if (buf.length > 8 * 1024 * 1024) return res.status(413).json({ error: '이미지가 너무 큽니다.' });
@@ -290,7 +350,7 @@ exports.api = onRequest(
     //  ★기록 실패가 정제를 막으면 안 되므로 클라는 fire-and-forget 으로 호출한다.
     if (path.includes('/usage')) {
       if (req.method !== 'POST') return res.status(405).json({ error: 'POST만 허용' });
-      const token = (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+      const token = appToken(req);
       if (!token) return res.status(401).json({ error: '인증 토큰이 필요합니다.' });
       let decoded;
       try { decoded = await admin.auth().verifyIdToken(token); }
@@ -515,7 +575,7 @@ exports.geocode = onRequest(
     cors: true, region: 'asia-northeast3', timeoutSeconds: 300, memory: '512MiB' },
   async (req, res) => {
     if (req.method !== 'POST') return res.status(405).json({ error: 'POST만 허용' });
-    const token = (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+    const token = String(req.headers['x-id-token'] || req.headers.authorization || '').replace(/^Bearer\s+/i, '').trim();
     if (!token) return res.status(401).json({ error: '인증 토큰이 필요합니다.' });
     let decoded;
     try { decoded = await admin.auth().verifyIdToken(token); }
@@ -719,26 +779,7 @@ const { detectAnomalies, formatAlert, DEFAULTS } = require('./leakWatch');
 // ★v2 는 `secrets:` 로 선언한 것만 process.env 에 주입한다.
 //   선언 없이 시크릿만 설정하면 값이 영영 안 들어와 계속 `(미발송)` 이 찍힌다 —
 //   배포는 성공하고 로그도 남으니 "됐다"고 착각하기 딱 좋은 자리다.
-const TELEGRAM_BOT_TOKEN = defineSecret('TELEGRAM_BOT_TOKEN');
-const TELEGRAM_CHAT_ID = defineSecret('TELEGRAM_CHAT_ID');
 
-const sendTelegram = async (text) => {
-  const tok = process.env.TELEGRAM_BOT_TOKEN || '';
-  const chat = process.env.TELEGRAM_CHAT_ID || '';
-  if (!tok || !chat) return false;
-  try {
-    const res = await fetch(`https://api.telegram.org/bot${tok}/sendMessage`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ chat_id: chat, text }),
-    });
-    return res.ok;
-  } catch (e) {
-    // ★발송 실패가 감시를 멈추면 안 된다. 조용히 넘기되 로그엔 남긴다.
-    console.warn('[leakAlert] 텔레그램 발송 실패:', e?.message);
-    return false;
-  }
-};
 
 exports.leakAlert = onDocumentCreated(
   {

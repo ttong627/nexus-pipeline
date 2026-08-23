@@ -19,7 +19,9 @@ const call = async (op, params, { signal } = {}) => {
   try { token = await user.getIdToken(); } catch { return null; }
   const res = await fetch(`${FN_BASE}/kakao`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    // ★`Authorization` 이 아니라 `X-Id-Token` — Cloud Run 이 Authorization 을 IAM 토큰으로 가로채
+    //   Firebase ID 토큰을 함수에 닿기 전에 401 로 막는다(2026-08-23 배포 검증에서 실측).
+    headers: { 'Content-Type': 'application/json', 'X-Id-Token': token },
     body: JSON.stringify({ op, params }),
     signal,
   });

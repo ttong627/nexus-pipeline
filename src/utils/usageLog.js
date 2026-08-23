@@ -19,7 +19,7 @@ export function logUsageEvent(payload) {
     user.getIdToken()
       .then(token => fetch(USAGE_URL, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        headers: { 'Content-Type': 'application/json', 'X-Id-Token': token },
         body: JSON.stringify({ ...payload, appVersion: APP_VERSION }),
         keepalive: true, // 정제 직후 페이지를 닫아도 전송이 끊기지 않게
       }))
