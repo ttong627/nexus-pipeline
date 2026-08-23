@@ -2,7 +2,7 @@
 //   UtilsModal 은 11개 독립 도구의 상자이고 **탭끼리 상태를 공유하지 않는다**(점검 실측) — 그래서 화면부터 뗐다.
 //   ★상태·핸들러는 UtilsModal 에 그대로 있다. 여기는 받아서 그리기만 한다 —
 //     워커·컬럼정의·미리보기 계산까지 옮기면 되돌리기가 어려워지고, 지금 목적은 '읽을 수 있게' 이지 재설계가 아니다.
-import { ArrowRight, CheckCircle2, ChevronRight, Combine, Download, Eye, FileSpreadsheet, Loader2, RefreshCw, Upload } from 'lucide-react';
+import { ArrowRight, Combine, Download, Eye, RefreshCw, Upload } from 'lucide-react';
 
 export default function FileMergeTab({
   mergeStep,

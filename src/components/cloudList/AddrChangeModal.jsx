@@ -1,7 +1,7 @@
 // 주소변경 확인 모달(CL-5~CL-8) — CloudListManager(2,500줄)에서 분리(2026-08-23 Phase 4-3).
 //   이 모달은 명단 데이터(`records`·`dirtyRecords`)를 직접 건드리지 않는다 — 변경 목록을 보여주고
 //   되돌리기/재적용/유형변경을 **콜백으로 넘길 뿐**이다. 그래서 가장 먼저 뗄 수 있었다.
-import { X, MapPin, AlertTriangle, RotateCcw, Check, Building2, List } from 'lucide-react';
+import { X, AlertTriangle, Building2, List } from 'lucide-react';
 
 export default function AddrChangeModal({
   addrChanges, dongAddrWarnings, addrChangeTab, setAddrChangeTab, onClose,
