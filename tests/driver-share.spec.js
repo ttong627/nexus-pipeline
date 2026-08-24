@@ -65,8 +65,13 @@ test.afterAll(async () => {
   await db.recursiveDelete(db.collection('route_shares').doc(SHARE)).catch(() => {});
   await db.collection('route_share_secrets').doc(SHARE).delete().catch(() => {});
   await admin.auth().deleteUser(`share_${SHARE}_${DRIVER}`).catch(() => {});
-  const logs = await db.collection('share_access_logs').where('shareId', '==', SHARE).get().catch(() => null);
-  if (logs) await Promise.all(logs.docs.map((d) => d.ref.delete().catch(() => {})));
+  // ★열람기록은 화면이 뜬 **뒤에** 쓰인다 — 바로 지우면 마지막 한 건이 뒤늦게 남는다(실측 3건).
+  //   잠깐 기다렸다가 두 번 훑는다. 남겨두면 실행할 때마다 운영 로그에 테스트 흔적이 쌓인다.
+  for (let i = 0; i < 2; i++) {
+    await new Promise((r) => setTimeout(r, 2500));
+    const logs = await db.collection('share_access_logs').where('shareId', '==', SHARE).get().catch(() => null);
+    if (logs) await Promise.all(logs.docs.map((d) => d.ref.delete().catch(() => {})));
+  }
 });
 
 test('① 기사 링크를 열면 비밀번호 창이 뜬다 (흰 화면이 아니다)', async ({ page }) => {
