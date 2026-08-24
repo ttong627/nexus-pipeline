@@ -37,7 +37,7 @@ export default function Step2_SheetSelect({ step, setStep, fileInfo, setFileInfo
         return;
       }
     }
-  }, []);
+  }, []);   // eslint-disable-line react-hooks/exhaustive-deps -- 마운트 때 한 번만 — 넣으면 담당자가 고른 값을 덮어쓴다
 
   // fileInfo.month 자동 감지값 → selectedMonth 초기화
   useEffect(() => {
@@ -53,13 +53,13 @@ export default function Step2_SheetSelect({ step, setStep, fileInfo, setFileInfo
         setSelectedMonth(`${yr}-${mo}`);
       }
     }
-  }, []);
+  }, []);   // eslint-disable-line react-hooks/exhaustive-deps -- 마운트 때 한 번만 — 넣으면 담당자가 고른 값을 덮어쓴다
 
   // 지자체·월 변경 시 fileInfo 동기화
   useEffect(() => {
     const city = selectedSido && selectedSigungu ? `${selectedSido} ${selectedSigungu}` : (selectedSigungu || selectedSido || '');
     setFileInfo(prev => ({ ...(prev || {}), city, month: selectedMonth }));
-  }, [selectedSido, selectedSigungu, selectedMonth]);
+  }, [selectedSido, selectedSigungu, selectedMonth]);   // eslint-disable-line react-hooks/exhaustive-deps -- 의도적 생략 — 넣으면 불필요하게 다시 실행된다
   const secondFileInputRef = useRef(null);
 
   if (step !== 2) return null;

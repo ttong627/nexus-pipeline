@@ -1,5 +1,5 @@
 import { useRef } from 'react';
-import { X, Upload, FileSpreadsheet, SkipForward, Loader2, CheckCircle, AlertTriangle, Users } from 'lucide-react';
+import { X, Upload, FileSpreadsheet, SkipForward, Loader2, CheckCircle, Users } from 'lucide-react';
 
 // 쉬운 정제 자동저장 직전 1단계 — 기초명단(특이사항 파일)을 선택(선택사항)
 //  · 건너뛰기 → 단순 정제 엑셀만 다운로드

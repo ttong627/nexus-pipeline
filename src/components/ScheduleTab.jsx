@@ -418,7 +418,7 @@ export default function ScheduleTab({ user, onBack }) {
   }, [saveSchedule]);
 
   useEffect(() => { loadDrivers(); }, [loadDrivers]);
-  useEffect(() => { if (uid) loadSchedule(); }, [loadSchedule]);
+  useEffect(() => { if (uid) loadSchedule(); }, [loadSchedule]);   // eslint-disable-line react-hooks/exhaustive-deps -- loadSchedule 이 uid 에 의존한다 — 신원이 바뀌면 어차피 다시 돈다
 
   // ─── Row CRUD ──────────────────────────────────────────────────────────────
   const updateRowText = (id, field, value) => {

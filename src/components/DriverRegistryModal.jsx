@@ -156,7 +156,7 @@ export default function DriverRegistryModal({ user, onClose }) {
       : (user?.citiesApproved || []);
     setStatsCities(cities);
     if (!statsCity && cities.length) setStatsCity(cities[0]);
-  }, [drivers, isAdmin, user?.citiesApproved]);
+  }, [drivers, isAdmin, user?.citiesApproved]);   // eslint-disable-line react-hooks/exhaustive-deps -- 이미 !statsCity 로 막혀 있다
 
   // ── 실적 데이터 로드
   const loadStats = useCallback(async (city, month) => {

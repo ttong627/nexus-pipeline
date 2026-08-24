@@ -21,6 +21,9 @@
  *   `_lat`·`_lng`·`좌표검증상태`·`포수` 등. 코어 API 는 `recordSchema.js` 로 정규화한 뒤 넘긴다.
  */
 import {
+  // ★아래 5개는 지금 이 파일에서 쓰지 않아도 **일부러 남긴다**(2026-08-24).
+  //   `scripts/routing-worker-parity.test.mjs` 가 "엔진에서 가져온다"는 상태를 이 import 목록으로 확인한다 —
+  //   복제가 부활하는 것을 막는 닻이다. 린트의 unused 경고보다 이 안전장치가 우선이다.
   APT_LIKE_RE,
   HEAVY_NOTE_KW,
   MEDIUM_NOTE_KW,

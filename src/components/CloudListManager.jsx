@@ -10,7 +10,7 @@ import {
   Cloud, Trash2, ArrowLeft, Download, Calendar, FileSpreadsheet,
   AlertCircle, Search, Save, RotateCcw, X, CheckCircle, MapPin,
   Building2, DatabaseZap, Ghost, BookOpen, Phone, LayoutGrid,
-  Wand2, AlertTriangle, List, Eraser, Columns, History, User,
+  Wand2, AlertTriangle, Eraser, Columns, History, User,
 } from 'lucide-react';
 import OrgPresetModal from './OrgPresetModal.jsx';
 import CoordBrushModal from './CoordBrushModal.jsx';
@@ -270,7 +270,7 @@ const VirtualTable = memo(function VirtualTable({ fields, exportColOrder, onColR
 
 export default function CloudListManager({ user, onBack, initialCity = '', onOpenRouteMap, onOpenInResultGrid, exportColOrder = [], setExportColOrder, defaultExportCols = [] }) {
   const isAdmin = user?.role === 'admin';
-  const approvedCities = user?.citiesApproved || [];
+  const approvedCities = user?.citiesApproved || [];   // eslint-disable-line react-hooks/exhaustive-deps -- 최초 진입 시 한 번만 초기화한다
   // 월별 명단 삭제 권한: 관리자 또는 본인 승인 지자체 담당자 (CLAUDE.md 권한규칙 — base_lists 제외)
   const canDeleteCity = (cityId) => isAdmin || approvedCities.includes(cityId);
   const confirmDelete = useConfirmDelete();
@@ -437,24 +437,24 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
       const idx = first.indexOf(' ');
       if (idx > 0) { setSelectedSido(first.slice(0, idx)); setSelectedSigungu(first.slice(idx + 1)); }
     }
-  }, []);
+  }, []);   // eslint-disable-line react-hooks/exhaustive-deps -- 최초 진입 시 한 번만 초기화한다
 
   // ── Effects ──────────────────────────────────────────────────────
   useEffect(() => {
     fetchAllCities();
-  }, []);
+  }, []);   // eslint-disable-line react-hooks/exhaustive-deps -- 함수 신원이 매 렌더 바뀐다 — 넣으면 계속 다시 실행된다
 
   useEffect(() => {
     if (!selectedCity) { setMonths([]); setSelectedMonth(null); setRecords([]); return; }
     fetchMonths();
-  }, [selectedCity]);
+  }, [selectedCity]);   // eslint-disable-line react-hooks/exhaustive-deps -- 함수 신원이 매 렌더 바뀐다 — 넣으면 계속 다시 실행된다
 
   // 월이 1개뿐이면 자동 선택 (관리 모드 진입 시)
   useEffect(() => {
     if (months.length === 1 && !selectedMonth) {
       handleSelectMonth(months[0]);
     }
-  }, [months]);
+  }, [months]);   // eslint-disable-line react-hooks/exhaustive-deps -- 함수 신원이 매 렌더 바뀐다 — 넣으면 계속 다시 실행된다
 
   // ⑥ 전월 작업내역 승계 매칭 — 선택 월의 "전월" delivery_history 로드 → 강키(이름+생년월일)+양측유일만 승계 표시
   // 저장 스키마는 건드리지 않고 화면 표시용 carryMap(id→승계정보)만 계산. 동명이인 안전은 annotateCarryover가 보장.
@@ -485,7 +485,7 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
       }
     })();
     return () => { cancelled = true; };
-  }, [selectedCity, selectedMonth?.id, records.length]);
+  }, [selectedCity, selectedMonth?.id, records.length]);   // eslint-disable-line react-hooks/exhaustive-deps -- records.length 로만 다시 계산한다(행 편집마다 재계산 방지)
 
   useEffect(() => {
     setDirtyRecords({});

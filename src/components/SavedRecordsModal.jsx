@@ -1,6 +1,6 @@
 // 저장 내역 — 지도가 저장된 명단(route_sessions) 목록을 자기 소속 지자체 기준으로 보여준다.
 // 항목 클릭 → 해당 지자체·월을 루트맵으로 열어 확인·편집(기존 루트맵 플로우 재사용).
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { db } from '../config/firebase.js';
 import { collection, getDocsFromServer } from 'firebase/firestore';
 import { HardDrive, X, RefreshCw, Edit3, MapPin } from 'lucide-react';

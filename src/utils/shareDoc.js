@@ -105,7 +105,7 @@ export function buildShareRecords(records = [], drivers = [], roster = []) {
  * @param {Date} p.deadline 담당자가 정한 마감(이 날짜를 **넘겨 갱신되지 않는다**, 형 확정 C)
  * @param {number} p.ttlDays 접속 시 갱신 폭(기본 7)
  */
-export function buildShareMeta({ city = '', monthId = '', drivers = [], roster = [],
+export function buildShareMeta({ city = '', monthId = '', drivers = [],
   now = new Date(), deadline = null, ttlDays = 7, createdBy = '' } = {}) {
   const base = new Date(now.getTime() + Math.max(1, ttlDays) * 24 * 60 * 60 * 1000);
   // 만료는 마감을 넘지 않는다. 마감이 이미 지났으면 마감이 곧 만료다.

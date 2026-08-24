@@ -96,7 +96,7 @@ const kakaoKey = () => {
   try { return KAKAO_SECRET.value() || process.env.ADDRESS_KAKAO_REST_KEY || process.env.KAKAO_REST_KEY || ''; }
   catch { return process.env.ADDRESS_KAKAO_REST_KEY || process.env.KAKAO_REST_KEY || ''; }
 };
-const KAKAO_REST_KEY = process.env.KAKAO_REST_KEY || '';
+// (옛 전역 키 변수 제거 2026-08-24 — 키는 `kakaoKey()`/Secret Manager 로만 읽는다)
 
 const TELEGRAM_BOT_TOKEN = defineSecret('TELEGRAM_BOT_TOKEN');
 const TELEGRAM_CHAT_ID = defineSecret('TELEGRAM_CHAT_ID');

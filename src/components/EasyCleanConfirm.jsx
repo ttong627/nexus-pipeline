@@ -22,7 +22,7 @@ export default function EasyCleanConfirm({ city, month, sheets = [], allSheets =
   const [draft, setDraft] = useState(() => JSON.parse(JSON.stringify(mapDefs || {})));
 
   // 동일 명단 중복 시트군 — 그룹별로 1개만 사용(기본 추천). 같은 사람이 여러 시트(수급자/차상위/명단/읍면)에 있을 때.
-  const overlapGroups = analysis?.overlapGroups || [];
+  const overlapGroups = analysis?.overlapGroups || [];   // eslint-disable-line react-hooks/exhaustive-deps -- 의도적 생략 — 넣으면 불필요하게 다시 실행된다
   const [chosen, setChosen] = useState(() => overlapGroups.map(g => g.recommended));
   const groupNames = useMemo(() => new Set(overlapGroups.flatMap(g => g.sheets.map(s => s.name))), [overlapGroups]);
   const effSheets = useMemo(() => {

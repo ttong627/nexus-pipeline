@@ -1,8 +1,12 @@
-export const APP_VERSION = 'V7.18';
+export const APP_VERSION = 'V7.18.1';
 export const APP_BUILD = '2026.08.24';
-export const APP_BUILD_TIME = '2026.08.24 10:43';
+export const APP_BUILD_TIME = '2026.08.24 11:24';
 
 export const CHANGELOG = [
+  { v: "V7.18.1", date: "2026.08.24", items: [
+    "기사 화면이 열리자마자 죽던 문제 해결 (8월 13일부터 발생)",
+    "내보내기 파일 이름에 옛 달이 찍히던 문제 해결",
+  ]},
   { v: "V7.18", date: "2026.08.24", items: [
     "만료된 공유에 남아 있던 명단 기록을 전부 정리했습니다 (개인정보 최소보관)",
     "주소 재정제 중 오류가 나도 나머지가 계속 진행되고, 실패 건수를 알려줍니다",

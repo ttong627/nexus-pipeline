@@ -394,7 +394,7 @@ export default function Dashboard({ user, onStart, onCloudCard, onBaseCard, grid
   const totalRows = getProcessedRows(user);
   const totalFiles = getProcessedFiles(user);
   const isAdmin = user?.role === 'admin';
-  const approvedCities = user?.citiesApproved || [];
+  const approvedCities = user?.citiesApproved || [];   // eslint-disable-line react-hooks/exhaustive-deps -- 최초 진입 시 한 번만 초기화한다
   const uid = user?.uid || 'guest';
 
   const [cityItems, setCityItems] = useState([]);

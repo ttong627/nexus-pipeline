@@ -183,7 +183,7 @@ export default function Vworld3DView({ target = null, active = false, onExit = n
       if (typeof mapRef.current.setCameraPosition === 'function') mapRef.current.setCameraPosition(pos);
       else if (typeof mapRef.current.moveTo === 'function') mapRef.current.moveTo(pos);
     } catch { /* 카메라 이동 실패는 무시 — 주행은 계속된다 */ }
-  }, [active, ready, drive]);
+  }, [active, ready, drive]);   // eslint-disable-line react-hooks/exhaustive-deps -- 의도적 생략 — 넣으면 불필요하게 다시 실행된다
 
   // 지도 생성 + 대상 좌표로 이동.
   //   🔴**생성과 이동을 분리한다** — 예전엔 `drive` 가 있으면 통째로 return 해서

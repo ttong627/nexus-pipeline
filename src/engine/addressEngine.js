@@ -7,9 +7,7 @@ import { buildVariantIndex } from '../learn/normalizeVariant.js';
 //   ※ 여기 남은 3개는 **이 파일의 IO 계층**(fetchKakaoLegalDong·lookupAddr)이 쓰는 것뿐이다.
 //     규격화 본체가 쓰던 나머지 심볼은 전부 purifyCore.js로 함께 옮겨갔다.
 import {
-  extractSigungu,
   isCandidateInSelectedMunicipality,
-  LEGAL_DONG_RE,
 } from '../../services/address-service/src/shared/purifyHelpers.js';
 // 학습사전 → 정규식 조립 규칙도 서버(dictStore)와 공유한다 — 복제하면 A-2·A-9가 갈라진다.
 import {

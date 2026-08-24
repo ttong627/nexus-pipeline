@@ -300,29 +300,6 @@ export default function ShareRouteView({ shareId, driverId }) {
     return () => unsub();
   }, [shareId, gate, driverId]);
 
-  // ── 열람 기록 (계획 Phase 5) ────────────────────────────────────────────
-  //  ★개정 개인정보보호법(2026-09-11)의 72시간 통지는 **'인지'가 전제**다.
-  //    누가 언제 어느 공유를 몇 건 열었는지 안 남기면 유출을 알아챌 수단이 없다.
-  //  ★한 번 열 때 한 줄만 남긴다(건별로 남기면 로그가 명단을 복제하는 꼴이 된다).
-  //  ★기록 실패가 배송을 막지 않는다 — 조용히 넘기되 콘솔엔 남긴다.
-  const loggedRef = useRef(false);
-  useEffect(() => {
-    if (loggedRef.current) return;
-    const n = allRecords.length;
-    if (!n) return;                       // 아직 안 왔으면 나중에
-    loggedRef.current = true;
-    addDoc(collection(db, 'share_access_logs'), {
-      at: new Date().toISOString(),
-      shareId,
-      count: n,
-      driverId: driver?.id || '',
-      driverName: driver?.name || '',
-      // 인증이 붙기 전(Phase 2 이전)에는 비어 있다 — 그래도 '몇 건 열렸는지'는 남는다.
-      phone: auth?.currentUser?.phoneNumber || '',
-      uid: auth?.currentUser?.uid || '',
-      source: usingSub ? 'subcollection' : 'legacy_array',
-    }).catch((e) => { console.warn('[share_access_logs] 기록 실패(무시하고 계속):', e?.message); });
-  }, [allRecords.length, shareId, driver?.id, driver?.name, usingSub]);
 
   // ── Kakao Maps SDK ──────────────────────────────────────────────────
   useEffect(() => {
@@ -502,7 +479,7 @@ export default function ShareRouteView({ shareId, driverId }) {
         driverGpsOverlayRef.current.setMap(kakaoMapRef.current);
       }
     }
-  }, [isMapCreated, shareData?.liveGps, driverId]);
+  }, [isMapCreated, shareData?.liveGps, driverId]);   // eslint-disable-line react-hooks/exhaustive-deps -- 내 위치 표시용 — 공유 데이터가 바뀐다고 다시 그릴 필요가 없다
 
   // ── GPS 마커 실시간 업데이트 ─────────────────────────────────────────
   useEffect(() => {
@@ -547,6 +524,36 @@ export default function ShareRouteView({ shareId, driverId }) {
   // ★목록 표시 순서만 바꾼다 — 순번 배지(_displaySeq)·지도 경로선(mapRecords)·다음 배송지는
   //   언제나 배송순번 기준을 유지한다. 보기 정렬이 동선 정보를 덮어쓰면 안 된다.
   const listRecords = sortMode === 'road' ? sortByRoadAddress(allRecords) : allRecords;
+
+  // ★2026-08-24 정밀점검: 이 블록은 원래 여기(구독부 바로 뒤)에 있었는데,
+  //   의존성 배열이 **아래에서 선언되는** `allRecords`·`driver`·`usingSub` 를 읽고 있었다.
+  //   의존성 배열은 **렌더 중에 평가된다** → `ReferenceError: Cannot access 'allRecords' before initialization`.
+  //   즉 기사 화면이 2026-08-13(이 기능 도입) 이후로 **열자마자 죽어 있었다**.
+  //   열람기록이 운영에 0건이던 진짜 이유가 이것이다(경로가 막힌 게 아니라 화면이 안 떴다).
+  //   → 선언 **뒤로** 옮겼다. 회귀 `scripts/hook-dep-tdz.test.mjs` 가 같은 실수를 전 파일에서 막는다.
+  // ── 열람 기록 (계획 Phase 5) ────────────────────────────────────────────
+  //  ★개정 개인정보보호법(2026-09-11)의 72시간 통지는 **'인지'가 전제**다.
+  //    누가 언제 어느 공유를 몇 건 열었는지 안 남기면 유출을 알아챌 수단이 없다.
+  //  ★한 번 열 때 한 줄만 남긴다(건별로 남기면 로그가 명단을 복제하는 꼴이 된다).
+  //  ★기록 실패가 배송을 막지 않는다 — 조용히 넘기되 콘솔엔 남긴다.
+  const loggedRef = useRef(false);
+  useEffect(() => {
+    if (loggedRef.current) return;
+    const n = allRecords.length;
+    if (!n) return;                       // 아직 안 왔으면 나중에
+    loggedRef.current = true;
+    addDoc(collection(db, 'share_access_logs'), {
+      at: new Date().toISOString(),
+      shareId,
+      count: n,
+      driverId: driver?.id || '',
+      driverName: driver?.name || '',
+      // 인증이 붙기 전(Phase 2 이전)에는 비어 있다 — 그래도 '몇 건 열렸는지'는 남는다.
+      phone: auth?.currentUser?.phoneNumber || '',
+      uid: auth?.currentUser?.uid || '',
+      source: usingSub ? 'subcollection' : 'legacy_array',
+    }).catch((e) => { console.warn('[share_access_logs] 기록 실패(무시하고 계속):', e?.message); });
+  }, [allRecords.length, shareId, driver?.id, driver?.name, usingSub]);
 
   useEffect(() => {
     if (!driver?.id) return;
@@ -723,7 +730,7 @@ export default function ShareRouteView({ shareId, driverId }) {
     } finally {
       setSavingDoneId(null);
     }
-  }, [shareData, shareId, driver, driverId, savingDoneId, completionOf]);
+  }, [shareData, shareId, driver, driverId, savingDoneId, completionOf]);   // eslint-disable-line react-hooks/exhaustive-deps -- 내 위치 표시용 — 공유 데이터가 바뀐다고 다시 그릴 필요가 없다
 
   // ── 링크 복사 ────────────────────────────────────────────────────────
   const handleCopyLink = useCallback(async () => {

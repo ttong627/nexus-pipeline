@@ -203,7 +203,7 @@ export default function BaseListManager({ user, onBack, initialCity = '', export
   useEffect(() => {
     loadUserRequests();
     fetchStoredCities();
-  }, []);
+  }, []);   // eslint-disable-line react-hooks/exhaustive-deps -- 함수 신원이 매 렌더 바뀐다 — 넣으면 계속 다시 실행된다
 
   useEffect(() => {
     setDirtyMap({});
@@ -214,7 +214,7 @@ export default function BaseListManager({ user, onBack, initialCity = '', export
     if (!selectedCity) { setRecords([]); setLastUpdatedAt(''); return; }
     if (hasCityAccess) fetchRecords(selectedCity);
     else setRecords([]);
-  }, [selectedCity]);
+  }, [selectedCity]);   // eslint-disable-line react-hooks/exhaustive-deps -- 의도적 생략 — 넣으면 불필요하게 다시 실행된다
 
   const fetchStoredCities = async () => {
     setLoadingCities(true);

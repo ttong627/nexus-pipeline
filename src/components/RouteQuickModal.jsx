@@ -55,7 +55,7 @@ export default function RouteQuickModal({ user, onClose, onConfirm, onOpenSessio
         setLoading(false);
       }
     })();
-  }, []);
+  }, []);   // eslint-disable-line react-hooks/exhaustive-deps -- 최초 진입 시 한 번만 초기화한다
 
   // 저장된 내역: route_sessions 기준
   const loadSessions = async () => {
@@ -97,7 +97,7 @@ export default function RouteQuickModal({ user, onClose, onConfirm, onOpenSessio
   useEffect(() => {
     if (activeTab !== 'saved') return;
     loadSessions();
-  }, [activeTab]);
+  }, [activeTab]);   // eslint-disable-line react-hooks/exhaustive-deps -- 함수 신원이 매 렌더 바뀐다 — 넣으면 계속 다시 실행된다
 
   // 세션 삭제
   const handleDeleteSession = async (e, session) => {

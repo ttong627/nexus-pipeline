@@ -29,12 +29,10 @@ import {
   extractRoadAddress,
   getAptGroupMeta,
   getSequenceAddress,
-  getSideLabel,
   haversine,
   isApartmentLike,
   isRentalLike,
   nearestNeighborTSP,
-  normalizeAptGroupPart,
   parseFloorHo,
   parseRoadInfo,
   roadAwareTSP,
@@ -42,7 +40,7 @@ import {
 
 // ★순수 헬퍼·상수는 `routeMap/mapHelpers.js` 로 옮겼다(2026-08-23 Phase 4-1) — 이 파일이 5,850줄이라
 //   읽기도 고치기도 어려웠고, 순수함수는 모듈에 있어야 회귀 테스트로 잠글 수 있다.
-import { loadCityCoordCache, lookupCoordInCache, saveCoordCache } from '../utils/coordCache.js';   // ★좌표 캐시 SSOT(2026-08-23 Phase 1)
+import { loadCityCoordCache, lookupCoordInCache } from '../utils/coordCache.js';   // ★좌표 캐시 SSOT(2026-08-23 Phase 1)
 import {
   CULL_MIN_RECORDS,
   PIN_COMPACT_LEVEL,
@@ -627,7 +625,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
       };
     routeWorkerRef.current = worker;
     return () => { worker.terminate(); routeWorkerRef.current = null; };
-  }, []);
+  }, []);   // eslint-disable-line react-hooks/exhaustive-deps -- 워커는 한 번만 만든다 — 넣으면 워커가 재생성된다
 
   // ── 클라우드 명단에서 자동 로드 (CloudListManager에서 열린 경우) ──────
   useEffect(() => {
@@ -743,7 +741,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
       }
     }, 200);
     return () => clearTimeout(timer);
-  }, [initialCloudCity, initialCloudMonthId]);
+  }, [initialCloudCity, initialCloudMonthId]);   // eslint-disable-line react-hooks/exhaustive-deps -- 워커는 한 번만 만든다 — 넣으면 워커가 재생성된다
 
   // ── activeDongIndex 변경 시 동별 임시 상태 초기화 + 지도 자동 이동 ────────
   useEffect(() => {
@@ -968,7 +966,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
       }
     })();
     return () => { cancelled = true; };
-  }, [cloudCity, cloudMonthId, records.length]);
+  }, [cloudCity, cloudMonthId, records.length]);   // eslint-disable-line react-hooks/exhaustive-deps -- records.length 로만 다시 계산한다(행 편집마다 재계산 방지)
 
   // ── 변경 감지 ─────────────────────────────────────────────────────
   useEffect(() => { setHasUnsaved(true); }, [records, drivers]);
@@ -1010,7 +1008,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
       }
     }, 5 * 60 * 1000);
     return () => clearInterval(saveTimerRef.current);
-  }, [isCloudMode, cloudCity, cloudMonthId]); // records·drivers는 autoSaveDataRef로 참조
+  }, [isCloudMode, cloudCity, cloudMonthId]); // records·drivers는 autoSaveDataRef로 참조   // eslint-disable-line react-hooks/exhaustive-deps -- 열릴 때 설정값으로 한 번만 잡는다
 
   // ── 마커 렌더링 (성능 최적화: 핀 데이터 시그니처 기반 갱신) ────────
   const mapPinSignature = useMemo(
@@ -1929,7 +1927,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
     } finally {
       setIsSavingSession(false);
     }
-  }, [isCloudMode, cloudCity, cloudMonthId, drivers, records, filteredRecords, showToast, overlapCount, activeDong, completedDongs, resolveMissingCloudDocIds]);
+  }, [isCloudMode, cloudCity, cloudMonthId, drivers, records, filteredRecords, showToast, overlapCount, activeDong, completedDongs, resolveMissingCloudDocIds]);   // eslint-disable-line react-hooks/exhaustive-deps -- 열릴 때 설정값으로 한 번만 잡는다
 
   // ── 1단계: 세션 불러오기 (이어서 작업) ──────────────────────────────
   const handleLoadSession = useCallback(async () => {
@@ -2812,7 +2810,7 @@ ${folders}
 
     const fileName = `[담당자용]${city}-${month}-기사별배정-${ts}.xlsx`;
     XLSX.writeFile(wb, fileName);
-  }, [records, drivers, fileInfo]);
+  }, [records, drivers, fileInfo, cloudCity, cloudMonthId]);   // ★도시·월은 파일 이름에 들어간다 — 모달 안에서 월을 바꾸면(2103행) 옛 달 이름으로 나갔다(2026-08-24)
 
   // ── 배송루트 번들 다운로드 (엑셀 + 기사별 지도 이미지) ─────────────────
   const handleDownloadRouteBundle = useCallback(async () => {
@@ -2853,7 +2851,7 @@ ${folders}
         console.warn(`${driver.name} 지도 이미지 실패:`, e);
       }
     }
-  }, [drivers, records, fileInfo, handleExportDriverExcel]);
+  }, [drivers, records, fileInfo, cloudCity, cloudMonthId, handleExportDriverExcel]);   // ★위와 같은 이유(파일 이름의 도시·월)
 
   // ── 그리드 업데이트 (공통) ───────────────────────────────────────────
   const buildUpdatedGrid = useCallback(() => {

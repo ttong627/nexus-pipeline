@@ -370,7 +370,7 @@ export default function UtilsModal({ onClose, user }) {
     finally { setLoadingLogs(false); }
   };
 
-  useEffect(() => { if (activeTab === 'audit') fetchLogs(); }, [activeTab]);
+  useEffect(() => { if (activeTab === 'audit') fetchLogs(); }, [activeTab]);   // eslint-disable-line react-hooks/exhaustive-deps -- 함수 신원이 매 렌더 바뀐다 — 넣으면 계속 다시 실행된다
 
   const handleSendNotification = async (log) => {
     try {
@@ -1286,7 +1286,7 @@ export default function UtilsModal({ onClose, user }) {
     if (activeTab === 'driverReport' && driverRptCities.length === 0 && !driverRptLoadingCities) {
       loadDriverRptCities();
     }
-  }, [activeTab]);
+  }, [activeTab]);   // eslint-disable-line react-hooks/exhaustive-deps -- 함수 신원이 매 렌더 바뀐다 — 넣으면 계속 다시 실행된다
 
   const loadRegisteredDriversForReport = async () => {
     const sources = [];

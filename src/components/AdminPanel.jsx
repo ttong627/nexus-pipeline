@@ -7,7 +7,6 @@ import { REGIONS, getSigunguOptions } from '../utils/regions.js';
 import { getDriversCollection, getDriverScopeLabel } from '../utils/company.js';
 import { summarizeCandidates } from '../analysis/learnStats.js';
 import AdminLearnTab from './admin/AdminLearnTab.jsx';   // 자가학습 검토 탭(2026-08-23 Phase 4-4 분리)
-import { TYPE_LABELS } from './admin/learnLabels.js';
 import AdminOpsTab from './admin/AdminOpsTab.jsx';
 import { fmt, TIERS, TIER_DEFAULT_CITIES } from './admin/adminShared.js';
 import TierBadge from './admin/TierBadge.jsx';
@@ -835,7 +834,7 @@ export default function AdminPanel({ onClose, user }) {
     loadGlobalOrgs();
     loadAllCompanies();
 
-  }, []);
+  }, []);   // eslint-disable-line react-hooks/exhaustive-deps -- 함수 신원이 매 렌더 바뀐다 — 넣으면 계속 다시 실행된다
 
   const fetchInquiries = () => {
     getDocs(collection(db, 'inquiries')).then(snap => {

@@ -442,7 +442,7 @@ export default function App() {
     lastSyncedColsRef.current = remoteJson;
     // 라벨·메타는 DEFAULT 기준 최신화, on·width·순서는 원격값 유지(새 키 append)
     setExportColOrder(refreshSavedCols(remote, DEFAULT_EXPORT_COLS));
-  }, [user?.exportColOrder, user?.exportColsVer]);
+  }, [user?.exportColOrder, user?.exportColsVer]);   // eslint-disable-line react-hooks/exhaustive-deps -- 모듈 상수라 바뀌지 않는다
   const [showUpgrade, setShowUpgrade] = useState(false);
   const [upgradeReason, setUpgradeReason] = useState('city_limit');
   const [showUtils, setShowUtils] = useState(false);
@@ -977,7 +977,7 @@ export default function App() {
         setImporting(false);
       }
     })();
-  }, [importParams, user, guestMode]);
+  }, [importParams, user, guestMode]);   // eslint-disable-line react-hooks/exhaustive-deps -- 함수 신원이 매 렌더 바뀐다 — 넣으면 계속 다시 실행된다
 
   // 2번째 가져오기 파일 자동 합치기 — Step2(고급 매핑 화면) 진입 시 1회 소비.
   useEffect(() => {
@@ -986,7 +986,7 @@ export default function App() {
       pendingSecondImportRef.current = null;
       handleSecondFileUpload(file2);
     }
-  }, [step]);
+  }, [step]);   // eslint-disable-line react-hooks/exhaustive-deps -- 함수 신원이 매 렌더 바뀐다 — 넣으면 계속 다시 실행된다
 
   const handleCityMonthConfirm = (city, monthYYYYMM) => {
     const { sheetsData, initialSel, analysisSummary: summary } = pendingSetup || {};
