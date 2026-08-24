@@ -16,8 +16,9 @@
     "deploy:rules": "firebase deploy --only firestore:rules --account ttong627@gmail.com",
     "deploy:functions": "firebase deploy --only functions:openShare,functions:api,functions:geocode,functions:geocodeAuto,functions:leakAlert --account ttong627@gmail.com",
     "lint": "eslint .",
-    "test:e2e": "playwright test",
-    "preview": "vite preview"
+    "test:e2e": "playwright test --workers=1",
+    "preview": "vite preview",
+    "test:all": "node --test scripts/*.test.mjs && eslint . --max-warnings 120 && tsc --noEmit && vite build && playwright test --workers=1"
   },
   "dependencies": {
     "@tanstack/react-virtual": "^3.13.24",
