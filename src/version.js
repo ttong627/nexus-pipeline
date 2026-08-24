@@ -1,8 +1,12 @@
-export const APP_VERSION = 'V7.15';
+export const APP_VERSION = 'V7.16';
 export const APP_BUILD = '2026.08.24';
-export const APP_BUILD_TIME = '2026.08.24 08:53';
+export const APP_BUILD_TIME = '2026.08.24 09:09';
 
 export const CHANGELOG = [
+  { v: "V7.16", date: "2026.08.24", items: [
+    "기사 비밀번호를 바꾸면 기사 화면에 새 번호 입력창이 바로 뜹니다",
+    "새 번호로 다시 들어갈 때 목록이 비어 보이던 문제 해결",
+  ]},
   { v: "V7.15", date: "2026.08.24", items: [
     "지도 비밀번호를 바꾸면 이미 열어둔 기사 화면도 즉시 끊깁니다(번호가 샜을 때 바로 막을 수 있습니다)",
     "담당자 화면에서 배송완료 기록 조회가 되지 않던 문제를 고쳤습니다",

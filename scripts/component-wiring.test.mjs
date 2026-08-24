@@ -59,3 +59,18 @@ describe('분리한 화면 컴포넌트 배선 — prop 을 빠뜨리면 그 기
     });
   }
 });
+
+describe('비밀번호 변경 후 기사 재입장 — 끊긴 화면을 되살리는 두 갈래', () => {
+  // 2026-08-24 실측: 담당자가 번호를 바꾸면 세대(ver) 대조로 기사의 옛 토큰이 끊긴다. 그 뒤가 문제였다.
+  //   ① 이미 세션이 있는 기사는 "만료됐거나 권한이 없습니다 … 시크릿 창으로 여세요" 라는 **엉뚱한 안내**만 보고 막혔다.
+  //   ② 새 번호를 넣어도 같은 탭이라 Firestore 가 옛 토큰을 붙들어 계속 거부됐다(운영 실호출로 재현·확인).
+  //   두 경로가 다시 빠지면 현장에서만 드러나므로 여기서 잠근다.
+  test('ShareRouteView: 권한오류 → 번호 입력창 / 토큰 교체 → 새로고침', async () => {
+    const src = await readFile(path.join(ROOT, 'src/components/ShareRouteView.jsx'), 'utf8');
+    assert.match(src, /shareTokenRef\s*=\s*useRef\(false\)/, '공유 토큰 보유 표시가 없다 — 담당자 미리보기와 구분이 안 된다');
+    assert.match(src, /if \(perm && shareTokenRef\.current\)[\s\S]{0,200}setGate\('need'\)/,
+      '공유 토큰으로 열린 화면의 권한오류를 **새 번호 입력창**으로 되돌리지 않는다');
+    assert.match(src, /const hadOldSession = shareTokenRef\.current;[\s\S]{0,600}if \(hadOldSession\) window\.location\.reload\(\)/,
+      '같은 탭에서 토큰을 갈아끼운 뒤 새로고침하지 않는다 — 옛 토큰을 붙든 채 전부 거부된다');
+  });
+});

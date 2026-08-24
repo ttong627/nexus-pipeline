@@ -209,6 +209,7 @@ export default function ShareRouteView({ shareId, driverId }) {
   const latestLocRef    = useRef(null);
   const followMyLocationRef = useRef(true);
   const lastBoundsKeyRef = useRef('');
+  const shareTokenRef   = useRef(false);   // 지금 이 화면이 **공유 토큰**으로 열려 있는가(담당자 미리보기와 구분)
   const isMobile        = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
 
   useEffect(() => {
@@ -219,7 +220,13 @@ export default function ShareRouteView({ shareId, driverId }) {
   const requestToken = useCallback(async (passcode) => {
     const call = httpsCallable(functions, 'openShare');
     const res = await call({ shareId, driverId: driverId || '', passcode: passcode || '' });
+    const hadOldSession = shareTokenRef.current;     // 이미 옛 토큰으로 들어와 있다가 다시 받는 경우
     await signInWithCustomToken(auth, res.data.token);
+    shareTokenRef.current = true;
+    // ★같은 탭에서 토큰만 갈아끼우면 Firestore 가 **옛 토큰을 붙든 채** 질의해 전부 거부된다(2026-08-24 실측).
+    //   담당자가 비밀번호를 바꿔 기사가 새 번호로 다시 들어오는 순간이 정확히 이 상황이라,
+    //   새로고침으로 깨끗한 클라이언트를 만든다(처음 입장은 갈아끼울 옛 토큰이 없어 그대로 진행).
+    if (hadOldSession) window.location.reload();
   }, [shareId, driverId]);
 
   useEffect(() => {
@@ -228,7 +235,9 @@ export default function ShareRouteView({ shareId, driverId }) {
       if (handled) return; handled = true;   // 최초 상태 한 번만 본다(토큰 로그인으로 바뀌는 건 여기서 다시 안 탄다)
       try {
         const claims = user ? (await user.getIdTokenResult()).claims : null;
-        if (decideGate(user, claims, shareId) !== 'probe') { if (!cancelled) setGate('ok'); return; }
+        const decided = decideGate(user, claims, shareId);
+        shareTokenRef.current = decided === 'token';
+        if (decided !== 'probe') { if (!cancelled) setGate('ok'); return; }
         await requestToken('');                 // 옛 링크(비밀번호 없음)면 여기서 바로 열린다
         if (!cancelled) setGate('ok');
       } catch (e) {
@@ -258,6 +267,13 @@ export default function ShareRouteView({ shareId, driverId }) {
     }, (err) => {
       // 권한 오류 = 공유 만료(부모 TTL) 또는 생성자·관리자가 아닌 담당자 세션(미리보기는 생성자·관리자만).
       const perm = /permission|insufficient/i.test(String(err?.message || ''));
+      // ★공유 토큰으로 들어와 있는데 권한이 막혔다 = 담당자가 **비밀번호를 바꿨다**(세대 대조로 옛 토큰이 끊긴다).
+      //   이때 필요한 건 오류 문구가 아니라 **새 번호 입력창**이다 — 예전엔 "시크릿 창으로 여세요" 라는
+      //   엉뚱한 안내가 떠서 기사가 현장에서 막혔다(2026-08-24).
+      if (perm && shareTokenRef.current) {
+        setGateMsg('비밀번호가 변경되었습니다. 담당자에게 받은 새 숫자 6자리를 입력해 주세요.');
+        setGate('need'); setLoading(false); return;
+      }
       setError(perm
         ? '이 공유를 열 수 없습니다 — 만료됐거나 권한이 없습니다. 담당자 미리보기는 공유를 만든 담당자·관리자만 가능하고, 기사 화면으로 보려면 로그아웃된 브라우저(또는 시크릿 창)에서 링크를 여세요.'
         : '데이터 로드 실패: ' + err.message);
