@@ -1,8 +1,12 @@
-export const APP_VERSION = 'V7.16';
+export const APP_VERSION = 'V7.17';
 export const APP_BUILD = '2026.08.24';
-export const APP_BUILD_TIME = '2026.08.24 09:09';
+export const APP_BUILD_TIME = '2026.08.24 09:57';
 
 export const CHANGELOG = [
+  { v: "V7.17", date: "2026.08.24", items: [
+    "지도를 넓게 축소했을 때 핀이 가벼워져 덜 버벅입니다 (핀 위치·색·순번은 그대로)",
+    "정제 결과 표가 불필요하게 다시 그려지던 문제 해결",
+  ]},
   { v: "V7.16", date: "2026.08.24", items: [
     "기사 비밀번호를 바꾸면 기사 화면에 새 번호 입력창이 바로 뜹니다",
     "새 번호로 다시 들어갈 때 목록이 비어 보이던 문제 해결",

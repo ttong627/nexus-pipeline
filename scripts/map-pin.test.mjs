@@ -7,7 +7,9 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildPinInnerHtml, pinZIndex, pinSizeOf, pinQtyLevel, isWithinPaddedBounds, CULL_MIN_RECORDS } from '../src/components/routeMap/mapHelpers.js';
+import { buildPinInnerHtml, pinZIndex, pinSizeOf, pinQtyLevel, isWithinPaddedBounds, CULL_MIN_RECORDS,
+  PIN_COMPACT_LEVEL, PIN_LABEL_BLOCK_PX, PIN_DONG_BLOCK_PX } from '../src/components/routeMap/mapHelpers.js';
+import { readFile } from 'node:fs/promises';
 
 describe('포수 강조 — 많이 지고 가는 집이 눈에 띄어야 한다', () => {
   test('레벨 경계 (1 / 2 / 3~4 / 5~9 / 10+)', () => {
@@ -94,5 +96,50 @@ describe('뷰포트 컬링 판정 — 화면 근처만 붙인다(2026-08-23 Phas
 
   test('임계값 — 평소 경로(수백 건)에서는 컬링이 아예 켜지지 않는다', () => {
     assert.ok(CULL_MIN_RECORDS >= 1000, `임계값이 너무 낮다(${CULL_MIN_RECORDS}) — 동 큐 경로까지 컬링에 걸린다`);
+  });
+});
+
+describe('저줌 간이표시(Phase 3-5) — 축소하면 라벨만 빼고 판단 근거는 남긴다', () => {
+  // 컬링(3-4)은 확대했을 때만 듣는다. 축소하면 전건이 화면 안이라 라벨 7,400줄이 그대로 그려진다.
+  // 그 구간에서 이름·동은 서로 겹쳐 못 읽으므로 빼되, **혼재와 순번을 보는 근거는 그대로** 둔다.
+  const P = { color: '#22c55e', seq: '12', name: '홍길동', dong: '전농', qtyNum: 7, sameCount: 3 };
+
+  test('라벨은 빠지고 색·순번·×N·포수뱃지는 남는다', () => {
+    const c = buildPinInnerHtml({ ...P, compact: true });
+    assert.equal(c.includes('홍길동'), false, '이름 라벨이 남았다 — 간이표시의 의미가 없다');
+    assert.equal(c.includes('전농'), false, '동 라벨이 남았다');
+    assert.ok(c.includes('>12<'), '순번이 사라지면 순번 확인이 불가능하다');
+    assert.ok(c.includes('×3'), '같은좌표 ×N 이 사라지면 안 된다');
+    assert.ok(c.includes(P.color), '기사 색이 사라지면 혼재 확인이 불가능하다');
+    assert.ok(/#f97316/.test(c), '포수 뱃지(5포↑)가 사라졌다');
+  });
+
+  test('★높이가 같다 — 라벨을 그냥 빼면 핀이 아래로 밀린다', () => {
+    // CustomOverlay 는 yAnchor 를 **높이의 비율**로 잡는다. 콘텐츠가 짧아지면 핀이 제자리를 벗어나
+    // 저줌에서 위치가 어긋난 것처럼 보인다 → 같은 높이의 빈 칸으로 자리를 지킨다.
+    const withDong = buildPinInnerHtml({ ...P, compact: true });
+    const noDong = buildPinInnerHtml({ ...P, dong: '', compact: true });
+    assert.ok(withDong.includes(`height:${PIN_LABEL_BLOCK_PX + PIN_DONG_BLOCK_PX}px`), '동이 있을 때 빈 칸 높이가 다르다');
+    assert.ok(noDong.includes(`height:${PIN_LABEL_BLOCK_PX}px`), '동이 없을 때 빈 칸 높이가 다르다');
+  });
+
+  test('기본(고줌)은 예전 그대로 — 모드를 안 주면 아무것도 안 바뀐다', () => {
+    assert.equal(buildPinInnerHtml(P), buildPinInnerHtml({ ...P, compact: false }));
+    assert.ok(buildPinInnerHtml(P).includes('홍길동'), '평소 핀에서 이름이 사라지면 안 된다');
+  });
+
+  test('전환 기준 레벨은 상수로만 관리', () => {
+    assert.equal(typeof PIN_COMPACT_LEVEL, 'number');
+    assert.ok(PIN_COMPACT_LEVEL >= 4, '너무 확대된 구간에서 라벨이 사라지면 담당자가 못 읽는다');
+  });
+
+  test('★핀 템플릿은 한 벌 — 화면 쪽에 마크업 사본이 없다(불변식 7)', async () => {
+    // 이 프로젝트가 반복해서 당한 함정: 사본이 생기면 한쪽만 고쳐지고 "고쳤는데 안 바뀐다"가 된다.
+    const src = await readFile(new URL('../src/components/RouteMapModal.jsx', import.meta.url), 'utf8');
+    // ★기록 핀의 서명으로만 본다 — 완료비교 점(14px)·기사 거점 핀은 성격이 다른 마커라 사본이 아니다.
+    assert.equal(/\$\{pinSize\}px;border-radius:50%/.test(src), false, '원형 핀 마크업 사본이 다시 생겼다');
+    assert.equal(/box-shadow:\$\{glowStyle\}/.test(src), false, '포수 glow 마크업 사본이 다시 생겼다');
+    assert.equal(/>×\$\{sameCount\}</.test(src), false, '×N 뱃지 마크업 사본이 다시 생겼다');
+    assert.ok(src.includes('buildPinInnerHtml('), '핀은 SSOT 함수로만 그린다');
   });
 });

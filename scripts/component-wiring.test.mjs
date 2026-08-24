@@ -74,3 +74,30 @@ describe('비밀번호 변경 후 기사 재입장 — 끊긴 화면을 되살�
       '같은 탭에서 토큰을 갈아끼운 뒤 새로고침하지 않는다 — 옛 토큰을 붙든 채 전부 거부된다');
   });
 });
+
+describe('ResultGrid memo 무력화 방지 — 핸들러 신원 고정', () => {
+  // 2026-08-24 실측: ResultGrid 는 memo() 인데 App 의 핸들러 21개가 매 렌더 새 함수라 memo 가 **한 번도 듣지 않았다**
+  //   (나머지 prop 은 전부 useMemo/useState 라 신원이 안정적이었다 — 핸들러만이 원인).
+  //   고친 방식은 useCallback 21개가 아니라 **최신 ref + 신원 고정 껍데기**다(호출 시점에 ref 를 읽어 stale 이 불가능).
+  //   핸들러를 한 곳에만 추가하면 그 버튼만 조용히 죽으므로(껍데기가 undefined) 세 곳의 일치를 여기서 잠근다.
+  test('키 목록 · ref 담기 · JSX 전달 세 곳이 일치한다', async () => {
+    const src = await readFile(path.join(ROOT, 'src/App.jsx'), 'utf8');
+    const keysBlock = src.match(/const GRID_HANDLER_KEYS = \[([\s\S]*?)\];/);
+    assert.ok(keysBlock, 'GRID_HANDLER_KEYS 가 없다 — 렌더 중 ref 를 읽는 옛 방식으로 되돌아갔다');
+    const keys = [...keysBlock[1].matchAll(/'(\w+)'/g)].map((m) => m[1]);
+    assert.ok(keys.length >= 20, `키가 ${keys.length}개뿐 — 핸들러가 빠졌다`);
+
+    const refBlock = src.match(/gridHandlersRef\.current = \{([\s\S]*?)\};/);
+    assert.ok(refBlock, 'gridHandlersRef 에 핸들러를 담는 곳이 없다');
+    const refKeys = [...refBlock[1].matchAll(/(\w+),/g)].map((m) => m[1]);
+    assert.deepEqual(refKeys.slice().sort(), keys.slice().sort(), '키 목록과 ref 에 담는 핸들러가 어긋났다 — 빠진 쪽 버튼이 조용히 죽는다');
+
+    const usage = src.match(/<ResultGrid[\s\S]*?\/>/);
+    assert.ok(usage, 'ResultGrid 사용처가 없다');
+    const missing = keys.filter((k) => !usage[0].includes(`{gridHandlers.${k}}`));
+    assert.deepEqual(missing, [], `고정 껍데기로 넘기지 않는 핸들러: ${missing.join(', ')} — memo 가 다시 무력화된다`);
+
+    const grid = await readFile(path.join(ROOT, 'src/components/ResultGrid.jsx'), 'utf8');
+    assert.match(grid, /memo\(function ResultGrid/, 'ResultGrid 가 memo 가 아니면 이 고정 작업이 무의미하다');
+  });
+});

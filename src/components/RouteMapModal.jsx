@@ -45,6 +45,7 @@ import {
 import { loadCityCoordCache, lookupCoordInCache, saveCoordCache } from '../utils/coordCache.js';   // ★좌표 캐시 SSOT(2026-08-23 Phase 1)
 import {
   CULL_MIN_RECORDS,
+  PIN_COMPACT_LEVEL,
   buildPinInnerHtml,
   isWithinPaddedBounds,
   pinZIndex,
@@ -254,6 +255,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
   const overlayByIdRef = useRef(new Map());     // 레코드 id → { overlay, el, rec, sameCount, coordKey } — 변경분만 갱신하려고 둔 색인
   const coordRecsMapRef = useRef(new Map());    // 같은 좌표 그룹(팝업용) — 리스너가 **최신** 목록을 보게 한다
   const structuralSigRef = useRef('');          // 구조(누가·어디에·몇 포)가 바뀌었는지
+  const compactPinsRef  = useRef(false);        // 저줌 간이표시 중인가(Phase 3-5)
   const cullBoxRef = useRef(null);              // 마지막으로 붙일 때 쓴 화면 범위(컬링용)
   const polylinesRef = useRef([]);
   const driverPinOverlaysRef = useRef([]);
@@ -1044,9 +1046,16 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
       const box = readMapBox();
       if (!box) return;
       cullBoxRef.current = box;
+      // 저줌 간이표시(Phase 3-5) — 화면에 붙어 있는 핀만 다시 그린다(떨어진 핀은 붙을 때 그려진다).
+      const nextCompact = map.getLevel?.() >= PIN_COMPACT_LEVEL;
+      compactPinsRef.current = nextCompact;
       overlayByIdRef.current.forEach((entry) => {
         const r = entry.rec;
         const want = isWithinPaddedBounds(r?._lat, r?._lng, box);
+        if (want && entry.pin && entry.compact !== nextCompact) {
+          entry.el.innerHTML = buildPinInnerHtml({ ...entry.pin, compact: nextCompact });
+          entry.compact = nextCompact;
+        }
         if (want === entry.attached) return;
         entry.overlay?.setMap(want ? map : null);
         entry.attached = want;
@@ -1094,6 +1103,9 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
     const cullActive = mapRecords.length >= CULL_MIN_RECORDS;
     const cullBox = cullActive ? readMapBox() : null;
     cullBoxRef.current = cullBox;
+    // 저줌 간이표시(Phase 3-5) — 대량일 때만, 그리고 축소했을 때만. 평소 경로는 예전과 완전히 같다.
+    const compactNow = cullActive && (kakaoMapRef.current?.getLevel?.() || 0) >= PIN_COMPACT_LEVEL;
+    compactPinsRef.current = compactNow;
 
     if (canPatch) {
       // 변경분만 DOM 갱신 — 오버레이 객체는 그대로 두고 내용과 겹침순서만 바꾼다.
@@ -1107,12 +1119,13 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
         entry.rec = r;                                   // 리스너가 최신 레코드를 보게 한다(stale 방지)
         const prevColor = prev?._에러 ? '#ef4444' : (driverColorById.get(prev?._driverId) || '#6b7280');
         if (prevColor === color && String(prev?.배송순번 || '') === String(seq) && !!prev?._에러 === !!r._에러) return;
-        entry.el.innerHTML = buildPinInnerHtml({
+        entry.pin = {
           color, seq,
           name: escHtml((r.이름 || '').slice(0, 5)),
           dong: escHtml((r.행정동 || '').replace(/동$/, '').slice(0, 5)),
           qtyNum, sameCount: entry.sameCount,
-        });
+        };
+        entry.el.innerHTML = buildPinInnerHtml({ ...entry.pin, compact: entry.compact });
         entry.overlay?.setZIndex?.(pinZIndex({ isError: !!r._에러, sameCount: entry.sameCount, qtyNum, seq }));
       });
     }
@@ -1126,17 +1139,16 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
 
       const coordKey = `${r._lat.toFixed(5)},${r._lng.toFixed(5)}`;
       const sameCount = coordCountMap.get(coordKey) || 1;
-      const samePointBadgeHtml = sameCount > 1
-        ? `<div style="position:absolute;bottom:-7px;left:50%;transform:translateX(-50%);background:#1e293b;color:#f97316;font-size:8px;font-weight:900;padding:1px 5px;border-radius:6px;border:1.5px solid #f97316;line-height:1.5;white-space:nowrap;z-index:2;">×${sameCount}</div>`
-        : '';
-
       // 핀 시각 규칙은 `routeMap/mapHelpers.js` 로 뺐다(2026-08-23 Phase 3-3) — 순수함수라 회귀로 잠긴다.
-      const qtyNumSafe = qtyNum;
+      //   ★여기에 핀 마크업을 다시 쓰지 말 것(불변식 7 · 템플릿 1벌). 3-3 추출 때 남아 있던
+      //     ×N 배지 사본을 2026-08-24 에 제거했다 — 쓰이지도 않으면서 "고쳤는데 안 바뀐다"의 씨앗이었다.
       const pinEl = document.createElement('div');
       pinEl.setAttribute('data-record-id', r.id);
       pinEl.style.cssText = 'display:flex;flex-direction:column;align-items:center;cursor:pointer;user-select:none;';
-      pinEl.innerHTML = buildPinInnerHtml({ color, seq, name, dong, qtyNum: qtyNumSafe, sameCount });
-      const entry = { el: pinEl, rec: r, sameCount, coordKey };
+      const pinParams = { color, seq, name, dong, qtyNum, sameCount };
+      pinEl.innerHTML = buildPinInnerHtml({ ...pinParams, compact: compactNow });
+      // ★`pin` 을 남겨두는 이유: 줌이 바뀌어 표시 모드가 바뀔 때 **레코드를 다시 훑지 않고** 이 핀만 다시 그린다.
+      const entry = { el: pinEl, rec: r, sameCount, coordKey, pin: pinParams, compact: compactNow };
       pinEl.addEventListener('click', (e) => {
         e.stopPropagation();
         if (entry.sameCount > 1) {

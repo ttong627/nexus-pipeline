@@ -47,6 +47,31 @@ import IntroScreen from "./components/IntroScreen.jsx";
 import WhatsNewModal from "./components/WhatsNewModal.jsx";
 import ShareRouteView from "./components/ShareRouteView.jsx";
 
+// ResultGrid 로 넘기는 핸들러 목록 — 렌더 중 ref 를 읽지 않으려고 키를 밖에 둔다(신원 고정 껍데기 생성용).
+const GRID_HANDLER_KEYS = [
+  'handleCellEdit',
+  'handleAddressKeyDown',
+  'handleUpdateBaseList',
+  'handleBatchSaveBaseList',
+  'handleSaveMonthlyList',
+  'handleExport',
+  'handleExportErrors',
+  'handleExportDongSummary',
+  'handleExportByDriver',
+  'handleDeleteRows',
+  'handleBatchSetNote',
+  'onHelp',
+  'handleMovePhones',
+  'handleRepurifyErrors',
+  'handleReapplyFormat',
+  'handleConfirmAddress',
+  'handleMarkPhoneCheck',
+  'openRouteFlow',
+  'handleFetchBaseNotes',
+  'changeWorkflowMode',
+  'handleToggleAddressDisplayMode',
+];
+
 const isChunkLoadError = (error) => {
   const message = String(error?.message || error || '');
   return /Failed to fetch dynamically imported module|dynamically imported module|Importing a module script failed|Loading chunk|ChunkLoadError/i.test(message);
@@ -3090,6 +3115,42 @@ export default function App() {
     });
   };
   const onHelp = () => setShowHelp(true);
+
+  // ── 결과 그리드 핸들러 신원 고정 (2026-08-24) ─────────────────────────────
+  //   `ResultGrid` 는 memo() 인데, 매 렌더 새로 만들어지는 핸들러들이 그걸 **완전히 무력화**하고 있었다
+  //   (나머지 prop 은 전부 useMemo·useState 라 신원이 안정적이다 — 핸들러만이 원인이었다).
+  //   ★useCallback 을 21곳에 다는 방식은 쓰지 않는다: 이 파일엔 억제된 deps 경고가 여럿이라
+  //     의존성을 잘못 적으면 **옛 값을 붙든 채 도는 stale closure** 가 조용히 생긴다(테스트로 못 잡는 종류).
+  //   대신 최신 핸들러를 ref 에 담고, 자식에는 **신원만 고정된 껍데기**를 넘긴다 —
+  //   호출하는 순간 ref 를 읽으므로 stale 이 원리적으로 생길 수 없다.
+  const gridHandlersRef = useRef({});
+  gridHandlersRef.current = {
+    handleCellEdit,
+    handleAddressKeyDown,
+    handleUpdateBaseList,
+    handleBatchSaveBaseList,
+    handleSaveMonthlyList,
+    handleExport,
+    handleExportErrors,
+    handleExportDongSummary,
+    handleExportByDriver,
+    handleDeleteRows,
+    handleBatchSetNote,
+    onHelp,
+    handleMovePhones,
+    handleRepurifyErrors,
+    handleReapplyFormat,
+    handleConfirmAddress,
+    handleMarkPhoneCheck,
+    openRouteFlow,
+    handleFetchBaseNotes,
+    changeWorkflowMode,
+    handleToggleAddressDisplayMode,
+  };
+  const gridHandlers = useMemo(() => Object.fromEntries(
+    GRID_HANDLER_KEYS.map((k) => [k, (...args) => gridHandlersRef.current[k]?.(...args)]),
+  ), []);
+
   const enterGuest = () => {
     guestModeRef.current = true;
     setGuestMode(true);
@@ -3416,7 +3477,7 @@ export default function App() {
           {step === 2 && <Step2_SheetSelect step={step} setStep={setStep} fileInfo={fileInfo} setFileInfo={setFileInfo} worksheets={worksheets} setWorksheets={setWorksheets} setSelectedSheets={setSelectedSheets} onHelp={onHelp} handleSecondFileUpload={handleSecondFileUpload} userCities={user?.citiesApproved || []} isAdmin={user?.role === 'admin'} />}
           {step === 3 && <Step3_Mapping step={step} setStep={setStep} selectedSheets={selectedSheets} worksheets={worksheets} mapDefs={mapDefs} setMapDefs={setMapDefs} startProcessing={handleAnalyzeAll} onHelp={onHelp} isBasePurifyMode={isBasePurifyMode} setIsBasePurifyMode={setIsBasePurifyMode} onOpenDbImport={() => setShowDbImport(true)} dbImportReady={dbImportReady} onUserMapping={handleUserMapping} city={fileInfo?.city || ''} />}
           {step === 4 && <LoadingScreen progress={engineProgress} logs={progressLogs} />}
-          {step === 5 && <ResultGrid step={step} setStep={setStep} fileInfo={fileInfo} filter={filter} setFilter={setFilter} dongList={gridDongList} driverList={gridDriverList} gridData={gridData} filteredData={filteredData} paginatedData={paginatedData} currentPage={currentPage} setCurrentPage={setCurrentPage} itemsPerPage={itemsPerPage} setItemsPerPage={setItemsPerPage} sortConfig={sortConfig} setSortConfig={setSortConfig} handleCellEdit={handleCellEdit} handleAddressKeyDown={handleAddressKeyDown} handleUpdateBaseList={handleUpdateBaseList} handleBatchSaveBaseList={handleBatchSaveBaseList} isSavingBaseList={isSavingBaseList} handleSaveMonthlyList={handleSaveMonthlyList} setShowExportSetting={setShowExportSetting} handleExport={handleExport} handleExportErrors={handleExportErrors} handleExportDongSummary={handleExportDongSummary} handleExportByDriver={handleExportByDriver} handleDeleteRows={handleDeleteRows} handleBatchSetNote={handleBatchSetNote} onHelp={onHelp} purifyResult={purifyResult} onClosePurifyResult={closePurifyResult} onMovePhones={handleMovePhones} onRepurifyErrors={handleRepurifyErrors} onReapplyFormat={handleReapplyFormat} onConfirmAddress={handleConfirmAddress} onMarkPhoneCheck={handleMarkPhoneCheck} onOpenRouteMap={openRouteFlow} onFetchBaseNotes={handleFetchBaseNotes} isFetchingNotes={isFetchingNotes} workflowMode={workflowMode} onWorkflowModeChange={changeWorkflowMode} stepStatus={stepStatus} addressDisplayMode={addressDisplayMode} onToggleAddressDisplayMode={handleToggleAddressDisplayMode} exportColOrder={exportColOrder} setExportColOrder={setExportColOrder} defaultExportCols={DEFAULT_EXPORT_COLS} />}
+          {step === 5 && <ResultGrid step={step} setStep={setStep} fileInfo={fileInfo} filter={filter} setFilter={setFilter} dongList={gridDongList} driverList={gridDriverList} gridData={gridData} filteredData={filteredData} paginatedData={paginatedData} currentPage={currentPage} setCurrentPage={setCurrentPage} itemsPerPage={itemsPerPage} setItemsPerPage={setItemsPerPage} sortConfig={sortConfig} setSortConfig={setSortConfig} handleCellEdit={gridHandlers.handleCellEdit} handleAddressKeyDown={gridHandlers.handleAddressKeyDown} handleUpdateBaseList={gridHandlers.handleUpdateBaseList} handleBatchSaveBaseList={gridHandlers.handleBatchSaveBaseList} isSavingBaseList={isSavingBaseList} handleSaveMonthlyList={gridHandlers.handleSaveMonthlyList} setShowExportSetting={setShowExportSetting} handleExport={gridHandlers.handleExport} handleExportErrors={gridHandlers.handleExportErrors} handleExportDongSummary={gridHandlers.handleExportDongSummary} handleExportByDriver={gridHandlers.handleExportByDriver} handleDeleteRows={gridHandlers.handleDeleteRows} handleBatchSetNote={gridHandlers.handleBatchSetNote} onHelp={gridHandlers.onHelp} purifyResult={purifyResult} onClosePurifyResult={closePurifyResult} onMovePhones={gridHandlers.handleMovePhones} onRepurifyErrors={gridHandlers.handleRepurifyErrors} onReapplyFormat={gridHandlers.handleReapplyFormat} onConfirmAddress={gridHandlers.handleConfirmAddress} onMarkPhoneCheck={gridHandlers.handleMarkPhoneCheck} onOpenRouteMap={gridHandlers.openRouteFlow} onFetchBaseNotes={gridHandlers.handleFetchBaseNotes} isFetchingNotes={isFetchingNotes} workflowMode={workflowMode} onWorkflowModeChange={gridHandlers.changeWorkflowMode} stepStatus={stepStatus} addressDisplayMode={addressDisplayMode} onToggleAddressDisplayMode={gridHandlers.handleToggleAddressDisplayMode} exportColOrder={exportColOrder} setExportColOrder={setExportColOrder} defaultExportCols={DEFAULT_EXPORT_COLS} />}
           {step === 10 && <ErrorListManager gridData={gridData} onBack={() => setStep(gridData.length ? 5 : 0)} handleCellEdit={handleCellEdit} handleAddressKeyDown={handleAddressKeyDown} handleExportErrors={handleExportErrors} onRepurifyErrors={handleRepurifyErrors} exportColOrder={exportColOrder} setExportColOrder={setExportColOrder} defaultExportCols={DEFAULT_EXPORT_COLS} />}
           {step === 11 && <ScheduleTab user={user} onBack={() => setStep(0)} />}
           {step === 6 && <BaseListManager user={user} initialCity={dbNavCity} onBack={() => { setStep(0); setDbNavCity(''); }} exportColOrder={exportColOrder} setExportColOrder={setExportColOrder} defaultExportCols={DEFAULT_EXPORT_COLS} />}

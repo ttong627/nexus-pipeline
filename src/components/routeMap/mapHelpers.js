@@ -374,7 +374,18 @@ export const pinZIndex = ({ isError, sameCount = 1, qtyNum = 1, seq = '' }) =>
   (isError ? 10 : sameCount > 1 ? 9 : qtyNum >= 5 ? 8 : qtyNum >= 2 ? 6 : seq ? 5 : 1);
 
 /** 핀 내부 HTML — 색·순번·포수·같은좌표·이름·동 라벨. (문자열만 만든다: DOM 을 만들지 않는다) */
-export const buildPinInnerHtml = ({ color, seq = '', name = '', dong = '', qtyNum = 1, sameCount = 1 }) => {
+// ── 저줌 간이표시(Phase 3-5) ────────────────────────────────────────────────
+//   컬링(3-4)은 **확대했을 때만** 듣는다 — 축소하면 전건이 화면 안이라 7,400개 라벨이 그대로 그려진다.
+//   그 구간에서 이름·동 라벨은 서로 겹쳐 어차피 못 읽는다. 그래서 저줌에서는 라벨만 빼고
+//   색·크기·순번·×N·포수뱃지(= 혼재와 순번을 눈으로 보는 수단)는 그대로 둔다.
+//   ★핀 템플릿은 여전히 **한 벌**이다(불변식 7) — 아래 함수에 모드만 하나 붙였다.
+export const PIN_COMPACT_LEVEL = 6;      // 카카오 지도 레벨(클수록 축소) — 이 이상이면 간이표시
+// 라벨 두 줄이 차지하던 높이. 빼기만 하면 콘텐츠가 짧아져 **핀이 아래로 밀린다**
+// (CustomOverlay 는 yAnchor 를 높이의 비율로 잡는다). 같은 높이의 빈 칸을 남겨 자리를 지킨다.
+export const PIN_LABEL_BLOCK_PX = 21;    // 이름·포수 줄(11px + padding 2·2 + border 1·1 + margin 2)
+export const PIN_DONG_BLOCK_PX  = 14;    // 동 줄(9px + padding 1·1 + margin 1)
+
+export const buildPinInnerHtml = ({ color, seq = '', name = '', dong = '', qtyNum = 1, sameCount = 1, compact = false }) => {
   const qtyLv = pinQtyLevel(qtyNum);
   const pinSize = pinSizeOf(qtyNum);
   const glowStyle = [
@@ -399,6 +410,11 @@ export const buildPinInnerHtml = ({ color, seq = '', name = '', dong = '', qtyNu
   const qtyColor = qtyNum >= 10 ? '#fbbf24' : qtyNum >= 5 ? '#fb923c' : qtyNum >= 3 ? '#fde047' : qtyNum >= 2 ? '#facc15' : color;
   const arrowPx = Math.round(pinSize / 5.3);
   const dotPx = Math.round(pinSize * 0.28);
+  const circleHtml = `<div style="width:${pinSize}px;height:${pinSize}px;border-radius:50%;background:${color};display:flex;align-items:center;justify-content:center;border:3px solid rgba(255,255,255,0.9);box-shadow:${glowStyle};flex-shrink:0;position:relative;">${seq ? `<span style="font-size:${pinSize >= 40 ? 9 : 10}px;font-weight:900;color:white;line-height:1;">${seq}</span>` : `<div style="width:${dotPx}px;height:${dotPx}px;border-radius:50%;background:rgba(255,255,255,0.35);"></div>`}${qtyBadgeHtml}${samePointBadgeHtml}</div><div style="width:0;height:0;border-left:${arrowPx}px solid transparent;border-right:${arrowPx}px solid transparent;border-top:${arrowPx * 2}px solid ${color};margin-top:-1px;flex-shrink:0;"></div>`;
+  if (compact) {
+    // 라벨 자리를 빈 칸으로 남긴다 → 전체 높이가 같아 **핀이 제자리에 그대로 있다**(자리 이동은 혼재 판단을 흔든다).
+    return `${circleHtml}<div style="height:${PIN_LABEL_BLOCK_PX + (dong ? PIN_DONG_BLOCK_PX : 0)}px;"></div>`;
+  }
   return `<div style="width:${pinSize}px;height:${pinSize}px;border-radius:50%;background:${color};display:flex;align-items:center;justify-content:center;border:3px solid rgba(255,255,255,0.9);box-shadow:${glowStyle};flex-shrink:0;position:relative;">${seq ? `<span style="font-size:${pinSize >= 40 ? 9 : 10}px;font-weight:900;color:white;line-height:1;">${seq}</span>` : `<div style="width:${dotPx}px;height:${dotPx}px;border-radius:50%;background:rgba(255,255,255,0.35);"></div>`}${qtyBadgeHtml}${samePointBadgeHtml}</div><div style="width:0;height:0;border-left:${arrowPx}px solid transparent;border-right:${arrowPx}px solid transparent;border-top:${arrowPx * 2}px solid ${color};margin-top:-1px;flex-shrink:0;"></div><div style="background:${qtyNum >= 5 ? 'rgba(20,10,5,0.95)' : 'rgba(8,8,8,0.88)'};color:white;font-size:11px;font-weight:800;padding:2px 6px;border-radius:4px;margin-top:2px;white-space:nowrap;max-width:92px;overflow:hidden;text-overflow:ellipsis;border:1px solid ${color}${qtyNum >= 5 ? '88' : '45'};">${name}·<span style="color:${qtyColor};font-weight:900;">${qtyNum}포</span></div>${dong ? `<div style="background:rgba(0,0,0,0.72);color:#94a3b8;font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;margin-top:1px;white-space:nowrap;max-width:80px;overflow:hidden;text-overflow:ellipsis;">${dong}</div>` : ''}`;
 };
 
