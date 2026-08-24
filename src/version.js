@@ -1,8 +1,13 @@
-export const APP_VERSION = 'V7.17';
+export const APP_VERSION = 'V7.18';
 export const APP_BUILD = '2026.08.24';
-export const APP_BUILD_TIME = '2026.08.24 09:57';
+export const APP_BUILD_TIME = '2026.08.24 10:43';
 
 export const CHANGELOG = [
+  { v: "V7.18", date: "2026.08.24", items: [
+    "만료된 공유에 남아 있던 명단 기록을 전부 정리했습니다 (개인정보 최소보관)",
+    "주소 재정제 중 오류가 나도 나머지가 계속 진행되고, 실패 건수를 알려줍니다",
+    "관리자 운영현황 화면 정리 · 보안 설정 강화",
+  ]},
   { v: "V7.17", date: "2026.08.24", items: [
     "지도를 넓게 축소했을 때 핀이 가벼워져 덜 버벅입니다 (핀 위치·색·순번은 그대로)",
     "정제 결과 표가 불필요하게 다시 그려지던 문제 해결",

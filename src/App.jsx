@@ -1727,7 +1727,16 @@ export default function App() {
 
   const handleAddressKeyDown = async (e, row) => {
     if (e.key === "Enter") {
-      const res = await processAddress(row.주소, row.이름, row.행정동 || "", fileInfo?.city || "", row.특이사항 || "", { includeCoords: false });
+      // ★정제 엔진(purifyCore)에는 try/catch 가 없다 — 런타임 예외가 그대로 올라온다.
+      //   막지 않으면 Enter 를 눌러도 **아무 일도 안 일어난 것처럼** 보인다(2026-08-24 점검).
+      let res;
+      try {
+        res = await processAddress(row.주소, row.이름, row.행정동 || "", fileInfo?.city || "", row.특이사항 || "", { includeCoords: false });
+      } catch (err) {
+        console.error('[재정제] 실패:', row?.이름, err);
+        alert('주소 정제 중 오류가 발생했습니다. 주소를 확인하고 다시 시도해 주세요.');
+        return;
+      }
       const updatedRow = {
         ...row,
         주소: res.주소,
@@ -1776,8 +1785,19 @@ export default function App() {
     gStart('오류 재정제 중...', `0 / ${errorRows.length}건`, 0);
     let done = 0;
 
+    const failed = [];
     const repurified = await asyncPool(10, errorRows, async (row) => {
-      const res = await processAddress(row.주소, row.이름, row.행정동 || '', fileInfo?.city || '', row.특이사항 || '', { includeCoords: false });
+      // ★한 건이 터졌다고 배치 전체를 버리지 않는다(M-1) — 그 행은 **원본 그대로** 두고 계속 간다.
+      let res;
+      try {
+        res = await processAddress(row.주소, row.이름, row.행정동 || '', fileInfo?.city || '', row.특이사항 || '', { includeCoords: false });
+      } catch (err) {
+        console.error('[일괄 재정제] 실패:', row?.이름, err);
+        failed.push(row?.이름 || row?.id);
+        done++;
+        gUpdate(Math.round(done / errorRows.length * 100), `${done} / ${errorRows.length}건`);
+        return row;
+      }
       done++;
       gUpdate(Math.round(done / errorRows.length * 100), `${done} / ${errorRows.length}건`);
       const updatedRow = {
@@ -1821,7 +1841,9 @@ export default function App() {
 
     const remaining = repurified.filter(r => r._에러).length;
     const fixed = errorRows.length - remaining;
-    gDone(`재정제 완료 — ${fixed}건 해결 / ${remaining}건 남음`);
+    gDone(`재정제 완료 — ${fixed}건 해결 / ${remaining}건 남음${failed.length ? ` · 오류 ${failed.length}건(원본 유지)` : ''}`);
+    if (failed.length) alert(`${failed.length}건은 정제 중 오류가 나서 원본 그대로 두었습니다.
+(${failed.slice(0, 5).join(', ')}${failed.length > 5 ? ' 외' : ''})`);
   };
 
   // 도로명주소 규칙 재적용 — 전국 DB 조회로 (법정동, 건물명) 채우고 형식 통일(정렬 획일화).
@@ -1889,7 +1911,14 @@ export default function App() {
 
   // ── 주소 없음 → 담당자 확인: 담당자가 입력한 이번달 실제 주소로 단건 재정제 ──
   const handleConfirmAddress = async (row, newAddress) => {
-    const res = await processAddress(newAddress, row.이름, row.행정동 || '', fileInfo?.city || '', row.특이사항 || '', { includeCoords: false });
+    let res;
+    try {
+      res = await processAddress(newAddress, row.이름, row.행정동 || '', fileInfo?.city || '', row.특이사항 || '', { includeCoords: false });
+    } catch (err) {
+      console.error('[주소확인] 정제 실패:', row?.이름, err);
+      alert('주소 정제 중 오류가 발생했습니다. 입력한 주소를 확인해 주세요.');
+      return;
+    }
     let updated = {
       ...row,
       주소: res.주소,

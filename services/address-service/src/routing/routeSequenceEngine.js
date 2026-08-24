@@ -2,10 +2,16 @@
 // 함수 본문은 한 글자도 변경하지 않았다(현재 운영 알고리즘 100% 재현 목적).
 // Node/브라우저 양쪽에서 import 가능한 자족적 ESM 모듈.
 
-// Node/브라우저 양쪽 안전한 KAKAO_REST_KEY (시뮬은 useApi=false라 미사용)
-const KAKAO_REST_KEY = (typeof import.meta !== 'undefined' && import.meta.env)
-  ? import.meta.env.VITE_KAKAO_REST_KEY
-  : (typeof globalThis !== 'undefined' && globalThis.process ? (globalThis.process.env.VITE_KAKAO_REST_KEY || '') : '');
+// KAKAO_REST_KEY — **Node 에서만** 값을 갖는다(서버·스크립트 경로).
+//   ★2026-08-24 점검: 예전엔 `import.meta.env.VITE_KAKAO_REST_KEY` 를 읽었다.
+//     이 파일은 `src/engine/routeSequenceEngine.js` 재수출을 통해 **클라이언트 모듈 그래프 안**에 있어서,
+//     아래 카카오 함수를 클라가 하나라도 import 하는 순간 Vite 가 REST 키를 번들에 **문자 그대로 박는다**
+//     (당시엔 트리셰이킹 덕에 우연히 안 실렸을 뿐 — 실측으로 확인했지만 우연에 기대는 구조였다).
+//     REST 키는 도메인 제한이 안 되므로 새는 순간 누구나 쓴다(G-5) → 브라우저는 Functions `/api/kakao` 프록시만 쓴다.
+//   회귀: `scripts/client-secret-guard.test.mjs`
+const KAKAO_REST_KEY = (typeof globalThis !== 'undefined' && globalThis.process?.env)
+  ? (globalThis.process.env.KAKAO_REST_KEY || globalThis.process.env.VITE_KAKAO_REST_KEY || '')
+  : '';
 
 // DS-14: 배송 예상속도 (정차·엘리베이터·인터폰 포함 도심 평균)
 export const SEQUENCE_ESTIMATED_SPEED_KMH = 10;

@@ -768,7 +768,8 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
     setDeleteMonthConfirm(null);
     setIsDeletingMonth(true);
     try {
-      const rSnap = await getDocs(collection(db, 'cloud_lists', city, 'months', month.id, 'records'));
+      // ★삭제 대상 조회는 서버에서 — 캐시가 최신이 아니면 **지우다 만다**(고아 레코드가 남는다 · §19).
+      const rSnap = await getDocsFromServer(collection(db, 'cloud_lists', city, 'months', month.id, 'records'));
       for (let i = 0; i < rSnap.docs.length; i += 499) {   // ★499 — B-6/§19(500 절대 초과 금지). 여유 0이면 필드 하나만 늘어도 터진다
         const batch = writeBatch(db);
         rSnap.docs.slice(i, i + 499).forEach(d => batch.delete(d.ref));
@@ -778,7 +779,7 @@ export default function CloudListManager({ user, onBack, initialCity = '', onOpe
       try { await deleteObject(ref(storage, `cloud_uploads/${city}/${month.id}/original.xlsx`)); } catch { /* 없어도 무시 */ }
       if (selectedMonth?.id === month.id) { setSelectedMonth(null); setRecords([]); }
       // 도시 상위 문서도 최신 월로 갱신
-      const remainingSnap = await getDocs(collection(db, 'cloud_lists', city, 'months'));
+      const remainingSnap = await getDocsFromServer(collection(db, 'cloud_lists', city, 'months'));   // 방금 지운 월이 캐시에 남아 lastMonthId 가 어긋나는 것을 막는다
       const remaining = remainingSnap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => b.id.localeCompare(a.id));
       const newLatest = remaining[0] || null;
       await setDoc(doc(db, 'cloud_lists', city), {
@@ -1286,7 +1287,8 @@ ${e.message}`);
     if (!(await confirmDelete({ target: `${selectedCity} ${selectedMonth.id} 월 레코드`, count, note: '월 항목은 유지되며 재업로드 가능합니다.', dangerous: true }))) return;
     setIsClearing(true);
     try {
-      const snap = await getDocs(collection(db, 'cloud_lists', selectedCity, 'months', selectedMonth.id, 'records'));
+      // ★월 초기화도 서버 조회 — 캐시 누락분이 그대로 남으면 '비웠는데 남아 있는' 상태가 된다.
+      const snap = await getDocsFromServer(collection(db, 'cloud_lists', selectedCity, 'months', selectedMonth.id, 'records'));
       for (let i = 0; i < snap.docs.length; i += 499) {
         const batch = writeBatch(db);
         snap.docs.slice(i, i + 499).forEach(d => batch.delete(d.ref));

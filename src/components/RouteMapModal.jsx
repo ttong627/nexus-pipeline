@@ -1004,7 +1004,10 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
         setLastAutoSave(new Date());
         setHasUnsaved(false);
         setSessionStatus('draft');
-      } catch {}
+      } catch (err) {
+        // 자동저장 실패는 배송을 막지 않는다(미저장 표시는 그대로 남는다) — 다만 **조용히** 넘기지는 않는다.
+        console.warn('[자동저장] 실패 — 미저장 상태 유지:', err);
+      }
     }, 5 * 60 * 1000);
     return () => clearInterval(saveTimerRef.current);
   }, [isCloudMode, cloudCity, cloudMonthId]); // records·drivers는 autoSaveDataRef로 참조
