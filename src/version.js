@@ -1,8 +1,11 @@
-export const APP_VERSION = 'V7.20.1';
+export const APP_VERSION = 'V7.21';
 export const APP_BUILD = '2026.08.27';
-export const APP_BUILD_TIME = '2026.08.27 19:29';
+export const APP_BUILD_TIME = '2026.08.27 19:39';
 
 export const CHANGELOG = [
+  { v: "V7.21", date: "2026.08.27", items: [
+    "행정동에 기사가 2명 이상이면 자동으로 나누지 않고 브러쉬로 배정합니다 (기사 1명인 동은 전체 자동 배정 그대로)",
+  ]},
   { v: "V7.20.1", date: "2026.08.27", items: [
     "3D 지도에서 좌표 핀이 항상 보이고, 작고 잘 보이게 바뀌었습니다",
   ]},

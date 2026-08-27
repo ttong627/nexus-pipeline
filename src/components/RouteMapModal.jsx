@@ -238,6 +238,11 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
 
   // ── 페인트 브러시 모드 (2차 보정)
   const [isPaintMode, setIsPaintMode] = useState(false);
+  // ★기사가 2명 이상인 행정동은 **자동으로 나누지 않는다**(형 지시 2026-08-27).
+  //   "행정동에 2명 이상의 기사가 있는 경우는 기사들을 브러쉬로 배정할 수 있게" —
+  //   예전엔 진입하자마자 자동 N등분이 돌아서 담당자가 손대기 전에 이미 갈라져 있었다.
+  //   이제 안내만 띄우고, 브러쉬로 칠할지 자동으로 나눌지는 담당자가 고른다.
+  const [brushPrompt, setBrushPrompt] = useState(null); // { dong, driverIds }
   const [paintDriverId, setPaintDriverId] = useState(null);
   const [paintRadiusPx, setPaintRadiusPx] = useState(50);
   const paintCursorRef = useRef(null);   // 브러시 커서 원 — state 없이 DOM 직접 이동 (전체 리렌더 차단)
@@ -1363,9 +1368,10 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
       autoSplitAppliedRef.current.add(dong);
       return;
     } // 다기사 동이 실제 여러 기사로 나뉘어 있을 때만 이미 분할됨으로 인정
-    if (autoSplitAppliedRef.current.has(dong)) return; // 이 동은 이미 1회 자동분할 시도함
+    if (autoSplitAppliedRef.current.has(dong)) return; // 이 동은 이미 1회 안내함
     autoSplitAppliedRef.current.add(dong);
-    handleAutoSplit(); // Part B로 그 동 매핑 기사로만 분할됨
+    // ★자동으로 나누지 않는다 — 담당자가 브러쉬로 칠하거나, 원하면 자동 N등분을 직접 누른다.
+    setBrushPrompt({ dong, driverIds: mapped });
   }, [activeDongIndex, dongQueue, records, drivers, hasDongSetupMapping, resolveDongMappedIds, isAssignmentLocked, handleAutoSplit]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── 핀 DOM 색상 직접 업데이트 (React re-render 없이 즉시 시각 반영)
@@ -4390,6 +4396,36 @@ ${folders}
             </div>
 
             {/* ── 같은 좌표 팝업 ─────────────────────────────────────── */}
+            {/* ★기사가 2명 이상인 동 — 자동으로 나누지 않고 담당자가 고르게 한다(형 지시 2026-08-27) */}
+            {brushPrompt && (
+              <div className="absolute top-3 left-1/2 -translate-x-1/2 z-[330] pointer-events-auto">
+                <div className="bg-[#0e0e0e] border border-amber-500/50 rounded-xl shadow-2xl px-3 py-2 flex items-center gap-2 max-w-[92vw]">
+                  <span className="text-[11px] font-black text-amber-300 whitespace-nowrap">
+                    {brushPrompt.dong} · 기사 {brushPrompt.driverIds.length}명
+                  </span>
+                  <span className="text-[10px] text-gray-400 whitespace-nowrap">브러쉬로 나눠 주세요</span>
+                  <button type="button"
+                    onClick={() => {
+                      const first = brushPrompt.driverIds.find(id => drivers.some(d => d.id === id)) || null;
+                      setPaintDriverId(first);
+                      setIsPaintMode(true);
+                      if (kakaoMapRef.current) kakaoMapRef.current.setDraggable(false);   // 브러시 중엔 지도 드래그 잠금
+                      setBrushPrompt(null);
+                    }}
+                    className="px-2 py-1 rounded-lg bg-amber-500 hover:bg-amber-400 text-[11px] font-black text-black whitespace-nowrap">
+                    브러쉬 시작
+                  </button>
+                  <button type="button"
+                    onClick={() => { setBrushPrompt(null); handleAutoSplit(); }}
+                    className="px-2 py-1 rounded-lg border border-[#2a2a2a] text-[11px] font-bold text-gray-300 hover:text-white whitespace-nowrap">
+                    자동으로 나누기
+                  </button>
+                  <button type="button" onClick={() => setBrushPrompt(null)}
+                    className="text-gray-500 hover:text-white text-[11px] px-1">✕</button>
+                </div>
+              </div>
+            )}
+
             {/* ★핀에서 바로 순번 입력 — 숫자 넣고 Enter 면 그 집의 배송순번이 된다(비우고 Enter 면 지운다). */}
             {seqPin && (
               <div className="absolute z-[320] pointer-events-auto"
