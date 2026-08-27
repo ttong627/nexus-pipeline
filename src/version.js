@@ -1,8 +1,14 @@
-export const APP_VERSION = 'V7.28';
+export const APP_VERSION = 'V7.29';
 export const APP_BUILD = '2026.08.27';
-export const APP_BUILD_TIME = '2026.08.27 22:37';
+export const APP_BUILD_TIME = '2026.08.27 23:35';
 
 export const CHANGELOG = [
+  { v: "V7.29", date: "2026.08.27", items: [
+    "행정동 카드마다 [저장] 버튼 · 여러 동을 한 번에 [전체 저장]",
+    "저장하면 기사 선택이 자동으로 풀립니다 — 바로 다음 기사 배정으로",
+    "배정이 저장 전에 사라지던 경로를 막았습니다 (명부 대조·소속사 자동선택·로딩 중 정리)",
+    "저장 안 된 배정이 있으면 창을 닫을 때 알려줍니다",
+  ]},
   { v: "V7.28", date: "2026.08.27", items: [
     "지도가 안 뜨던 문제 해결 — 회사 주소(narami.wssc.kr·wr.wslos.com)에서도 지도가 나옵니다",
     "동별 배송지도에서 저장된 지자체를 목록에서 고르게",

@@ -9,7 +9,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   normalizeDriver, validateDriver, resolveDriverByPhone, activePhones, DENY_MESSAGE,
-  reconcileDriversWithRoster, isActiveDriver, resolveRosterSource,
+  reconcileDriversWithRoster, isActiveDriver, resolveRosterSource, remapDongDriverMap, dongsLosingDrivers,
 } from '../src/utils/driverRoster.js';
 
 const 홍 = { id: 'd1', name: '홍길동', phone: '+821012345678', active: true };
@@ -196,3 +196,70 @@ describe('명부를 어디서 읽는가 — 화면에서 고른 소속사가 1�
     assert.equal(resolveRosterSource({ orgs, selectedOrgId: '(주)한울' }).name, '(주)한울');
   })
 })
+
+// ── 명부 대조가 동별 배정을 지우던 결함 (형 실측 2026-08-27) ────────────────────
+//   증상: 작업 설정을 열기만 해도 전농1동·휘경1동 배정이 사라지고, 그대로 저장까지 됐다.
+//   원인: 대조가 기사 id 를 명부 id 로 갈아끼우는데 배정(dongDriverMap)은 옛 id 를 들고 있어
+//         '없는 기사'로 판정돼 조용히 삭제됐다. → 대응표(idMap)로 배정을 함께 옮긴다.
+describe('명부 대조 — 배정을 잃지 않는다', () => {
+  const roster = [
+    { id: 'new-A', name: '박진성', phone: '010-5634-0784', active: true },
+    { id: 'new-B', name: '가명현', phone: '010-5688-8861', active: true },
+  ];
+
+  test('id 가 바뀌면 대응표를 돌려준다', () => {
+    const r = reconcileDriversWithRoster(
+      [{ id: 'old-A', name: '박진성', phone: '010-5634-0784' }], roster,
+    );
+    assert.equal(r.drivers[0].id, 'new-A');
+    assert.deepEqual(r.idMap, { 'old-A': 'new-A' }, '대응표가 없으면 배정을 옮길 수 없다');
+  });
+
+  test('id 가 그대로면 대응표는 비어 있다(불필요한 재작성 없음)', () => {
+    const r = reconcileDriversWithRoster([{ id: 'new-A', name: '박진성', phone: '010-5634-0784' }], roster);
+    assert.deepEqual(r.idMap, {});
+  });
+
+  test('배정이 새 id 로 따라간다 — 이게 없어서 전농1동이 사라졌다', () => {
+    const r = reconcileDriversWithRoster(
+      [{ id: 'old-A', name: '박진성', phone: '010-5634-0784' }], roster,
+    );
+    const moved = remapDongDriverMap({ 전농1동: ['old-A'], 답십리1동: ['old-A', 'new-B'] }, r.idMap);
+    assert.deepEqual(moved, { 전농1동: ['new-A'], 답십리1동: ['new-A', 'new-B'] });
+  });
+
+  test('대응표에 없는 id 는 함부로 지우지 않는다(무손실)', () => {
+    assert.deepEqual(remapDongDriverMap({ 휘경1동: ['unknown'] }, { a: 'b' }), { 휘경1동: ['unknown'] });
+  });
+
+  test('대응표가 비면 원본을 그대로 돌려준다', () => {
+    const src = { 전농1동: ['x'] };
+    assert.equal(remapDongDriverMap(src, {}), src);
+    assert.equal(remapDongDriverMap(src, null), src);
+  });
+
+  test('중복 id 는 합친다(같은 기사가 두 번 들어가지 않게)', () => {
+    assert.deepEqual(remapDongDriverMap({ 전농1동: ['old-A', 'new-A'] }, { 'old-A': 'new-A' }), { 전농1동: ['new-A'] });
+  });
+
+  test('담당 기사가 통째로 빠진 동을 찾아낸다(조용히 지우지 않고 알리려고)', () => {
+    const map = { 휘경1동: ['gone'], 전농1동: ['new-A'], 답십리1동: ['gone', 'new-B'] };
+    assert.deepEqual(dongsLosingDrivers(map, new Set(['new-A', 'new-B'])), ['휘경1동']);
+  });
+
+  test('빈 배정은 잃은 동으로 세지 않는다', () => {
+    assert.deepEqual(dongsLosingDrivers({ 전농1동: [] }, new Set(['new-A'])), []);
+  });
+
+  test('비활성 기사가 빠져도 나머지 배정은 그대로 남는다', () => {
+    const withInactive = [...roster, { id: 'new-C', name: '윤찬용', phone: '010-1111-2222', active: false }];
+    const r = reconcileDriversWithRoster(
+      [{ id: 'old-A', name: '박진성', phone: '010-5634-0784' }, { id: 'old-C', name: '윤찬용', phone: '010-1111-2222' }],
+      withInactive,
+    );
+    const moved = remapDongDriverMap({ 전농1동: ['old-A'], 휘경1동: ['old-C'] }, r.idMap);
+    assert.deepEqual(moved.전농1동, ['new-A'], '살아 있는 기사의 배정까지 잃으면 안 된다');
+    const kept = new Set(r.drivers.map((d) => d.id));
+    assert.deepEqual(dongsLosingDrivers(moved, kept), ['휘경1동'], '빠진 기사의 동은 알려야 한다');
+  });
+});

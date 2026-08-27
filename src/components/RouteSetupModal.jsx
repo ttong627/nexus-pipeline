@@ -1,10 +1,10 @@
 ﻿import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { X, MapPin, Play, ChevronRight, Truck, Building2, ChevronLeft, Plus, Trash2, Users, LayoutGrid, Navigation2, Crosshair, Loader2, CheckCircle, RefreshCw, CloudDownload } from 'lucide-react';
+import { X, MapPin, Play, ChevronRight, Truck, Building2, ChevronLeft, Plus, Trash2, Users, LayoutGrid, Navigation2, Crosshair, Loader2, CheckCircle, RefreshCw, CloudDownload, Save } from 'lucide-react';
 import { db, writeBatch } from '../config/firebase.js';
 import { getDocs, collection, getDoc, doc, setDoc, serverTimestamp } from 'firebase/firestore';
 // 배송지도 접근 인증의 열쇠 — 저장·비교 양쪽 모두 이 함수를 통과시킨다(계획 Phase 0).
 import { toE164Mobile } from '../utils/phone.js';
-import { reconcileDriversWithRoster, resolveRosterSource } from '../utils/driverRoster.js';   // 복원한 기사 목록을 현재 명부와 대조
+import { reconcileDriversWithRoster, remapDongDriverMap, dongsLosingDrivers, resolveRosterSource } from '../utils/driverRoster.js';   // 복원한 기사 목록을 현재 명부와 대조
 import { kakaoCoordOf } from '../utils/kakaoApi.js';   // ★REST 키는 서버에만 있다(2026-08-23 점검)
 
 
@@ -92,6 +92,12 @@ export default function RouteSetupModal({
   const [selectedOrgId, setSelectedOrgId] = useState(null);
   const [selectedOrgDongs, setSelectedOrgDongs] = useState(null);
 
+  // ── 스코프(담당 행정동)의 **내용 기반** 키 ────────────────────────────────
+  //   Set 은 내용이 같아도 매번 새 객체다. 이걸 effect 의존성에 그대로 쓰면 화면이 수시로
+  //   다시 읽히면서 손으로 한 배정이 지워졌다(형 실측 2026-08-27). 키로 고정한다.
+  const orgDongsKey = useMemo(() => (orgDongs ? [...orgDongs].sort().join('|') : ''), [orgDongs]);
+  const selectedOrgDongsKey = useMemo(() => (selectedOrgDongs ? [...selectedOrgDongs].sort().join('|') : ''), [selectedOrgDongs]);
+
   // ── 소속사 안정 키: driver_assignments를 소속사 '이름'으로 통일(id 변경/재생성에도 안 깨짐). 개인은 __personal__.
   const getOrgStableKey = () => selectedOrgId === '__personal__' ? '__personal__'
     : ((orgs.find(o => o.id === selectedOrgId)?.name) || selectedOrgId || 'all');
@@ -120,6 +126,11 @@ export default function RouteSetupModal({
   const [recordRefs, setRecordRefs] = useState([]); // cloud 모드용 [{id, dong, 주소, lat, lng}]
   const [isSavingAssignment, setIsSavingAssignment] = useState(false);
   const [saveError, setSaveError] = useState(''); // 저장 실패 메시지
+  // ── 배정 저장 상태 (형 지시 2026-08-27 "지금은 저장 버튼이 없네") ─────────────────
+  //   예전엔 [다음]을 눌러야만 저장됐다 → 배정만 해 두고 창을 닫으면 그대로 사라졌다.
+  const [lastSavedAt, setLastSavedAt] = useState(null);        // Date | null
+  const [savedSignature, setSavedSignature] = useState(null);  // 저장 시점의 배정 내용(변경 감지)
+  const [savedDongMap, setSavedDongMap] = useState(null);      // 저장 시점의 동별 배정(동 카드 저장 표시)
   const [isFetchingCoords, setIsFetchingCoords] = useState(false);
   const [coordProgress, setCoordProgress] = useState(null); // { done, total, round }
 
@@ -168,16 +179,33 @@ export default function RouteSetupModal({
       const r = reconcileDriversWithRoster(drivers, roster);
       if (r.skipped || (!r.removed.length && !r.added.length)) return;
       setDrivers(r.drivers);
-      setRosterNotice({ removed: r.removed, added: r.added });
+      // ★여기가 형이 실제로 걸린 자리다(2026-08-27) — 기사 id 만 바꾸고 동별 배정을 두면
+      //   배정이 옛 id 를 가리켜 '없는 기사'가 되고 화면·저장에서 통째로 사라졌다.
+      const keptIds = new Set(r.drivers.filter(d => (d.name || '').trim()).map(d => d.id));
+      const lostDongs = dongsLosingDrivers(remapDongDriverMap(dongDriverMap, r.idMap), keptIds);
+      setDongDriverMap((prev) => remapDongDriverMap(prev, r.idMap));   // 갱신은 함수형(경합 차단)
+      setRosterNotice({ removed: r.removed, added: r.added, lostDongs });
     })();
     return () => { alive = false; };
   }, [selectedOrgId, orgs, drivers]);   // eslint-disable-line react-hooks/exhaustive-deps -- ensureRoster 는 매 렌더 새 함수라 넣으면 계속 다시 실행된다
 
-  const applyRestoredDrivers = async (list) => {
+  // ★동별 배정을 **같이** 넘겨야 한다 — 명부 대조로 기사 id 가 바뀌면 배정이 옛 id 를 가리켜
+  //   '없는 기사'로 판정되고 조용히 삭제된다(형 실측 2026-08-27: 전농1동·휘경1동 소멸 후 저장).
+  //   여기서 대응표(idMap)로 배정을 옮기고, 그래도 담당이 사라진 동은 알린다(말없이 지우지 않는다).
+  const applyRestoredDrivers = async (list, map = null) => {
     const roster = await ensureRoster();
     const r = reconcileDriversWithRoster(list, roster);
     setDrivers(r.drivers);
-    setRosterNotice(!r.skipped && (r.removed.length || r.added.length) ? { removed: r.removed, added: r.added } : null);
+    let lostDongs = [];
+    if (map && Object.keys(map).length) {
+      const remapped = remapDongDriverMap(map, r.idMap);
+      const keptIds = new Set(r.drivers.filter(d => (d.name || '').trim()).map(d => d.id));
+      lostDongs = dongsLosingDrivers(remapped, keptIds);
+      setDongDriverMap(remapped);
+    }
+    setRosterNotice(!r.skipped && (r.removed.length || r.added.length || lostDongs.length)
+      ? { removed: r.removed, added: r.added, lostDongs }
+      : null);
     return r;
   };
 
@@ -300,8 +328,7 @@ export default function RouteSetupModal({
           const hasUsefulDrivers = snap?.exists() && snap.data().drivers?.some(d => d.name?.trim());
           if (hasUsefulDrivers) {
             const d = snap.data();
-            await applyRestoredDrivers(d.drivers);
-            if (d.dongDriverMap && Object.keys(d.dongDriverMap).length) setDongDriverMap(d.dongDriverMap);
+            await applyRestoredDrivers(d.drivers, d.dongDriverMap || null);
             if (d.baseDailyQty) setBaseDailyQty(d.baseDailyQty);
             setSavedAssignmentLoaded(true);
           }
@@ -334,8 +361,8 @@ export default function RouteSetupModal({
         // 이게 단일 소스 오브 트루스. 휘경1동 누락·기사 왜곡의 근본 원인 제거.
         if (restoreState?.dongDriverMap && Object.keys(restoreState.dongDriverMap).length) {
           const restoreDrivers = restoreState.companyDrivers?.length ? restoreState.companyDrivers : restoreState.drivers;
-          if (restoreDrivers?.length) await applyRestoredDrivers(restoreDrivers);
-          setDongDriverMap(restoreState.dongDriverMap);
+          if (restoreDrivers?.length) await applyRestoredDrivers(restoreDrivers, restoreState.dongDriverMap);
+          else setDongDriverMap(restoreState.dongDriverMap);
           if (restoreState.baseDailyQty) setBaseDailyQty(restoreState.baseDailyQty);
           if (restoreState.orgId && restoreState.orgId !== 'all') setSelectedOrgId(restoreState.orgId); // 소속사 보존
           const restoreScopeDongs = restoreState.scopeDongs || restoreState.orgDongs || null;
@@ -358,8 +385,7 @@ export default function RouteSetupModal({
           if (hasUsefulDrivers) {
             // 정상 경로: driver_assignments 에 이름 있는 기사 데이터 존재
             const d = presetSnap.data();
-            await applyRestoredDrivers(d.drivers);
-            if (d.dongDriverMap && Object.keys(d.dongDriverMap).length) setDongDriverMap(d.dongDriverMap);
+            await applyRestoredDrivers(d.drivers, d.dongDriverMap || null);
             if (d.baseDailyQty) setBaseDailyQty(d.baseDailyQty);
             setSavedAssignmentLoaded(true);
           } else {
@@ -393,7 +419,13 @@ export default function RouteSetupModal({
       } catch (e) { console.error('행정동 로드 실패:', e); }
       finally { setIsLoading(false); }
     })();
-  }, [mode, cloudCity, cloudMonthId, orgDongs, selectedOrgDongs]); // eslint-disable-line react-hooks/exhaustive-deps
+    // ★의존성에 Set 객체를 그대로 두면 안 된다 (형 실측 2026-08-27 · 절대 되돌리지 말 것).
+    //   `orgDongs`·`selectedOrgDongs` 는 `new Set(...)` 이라 **내용이 같아도 매번 다른 객체**다.
+    //   그래서 이 effect 가 수시로 다시 돌았고, 맨 위의 `setDongDriverMap({})` 가
+    //   **방금 손으로 한 배정을 지우고** DB 의 옛 내용으로 되돌렸다 —
+    //   형이 전농1동·휘경1동을 배정해도 저장되기 전에 사라지던 진짜 이유.
+    //   내용 기반 문자열 키로 바꿔, 스코프가 **정말 달라졌을 때만** 다시 읽는다.
+  }, [mode, cloudCity, cloudMonthId, orgDongsKey, selectedOrgDongsKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const dongList = useMemo(
     () => Object.keys(dongCounts).sort((a, b) => a.localeCompare(b, 'ko')),
@@ -428,6 +460,9 @@ export default function RouteSetupModal({
   );
 
   useEffect(() => {
+    // ★행정동 건수가 아직 없으면(로딩 중) 정리하지 않는다 — `!dongCounts[dong]` 조건 때문에
+    //   그 순간 배정이 통째로 '없는 동'으로 판정돼 **영구 삭제**된다(되돌릴 방법이 없다).
+    if (isLoading || Object.keys(dongCounts).length === 0) return;
     const prevJson = JSON.stringify(Object.keys(dongDriverMap).sort().reduce((acc, dong) => {
       acc[dong] = [...(dongDriverMap[dong] || [])].sort();
       return acc;
@@ -437,12 +472,42 @@ export default function RouteSetupModal({
       return acc;
     }, {}));
     if (prevJson !== nextJson) setDongDriverMap(sanitizedDongDriverMap);
-  }, [dongDriverMap, sanitizedDongDriverMap]);
+  }, [dongDriverMap, sanitizedDongDriverMap, isLoading, dongCounts]);
 
   const assignedDongs = useMemo(() =>
     new Set(Object.entries(sanitizedDongDriverMap).filter(([, ids]) => ids.length > 0).map(([d]) => d)),
     [sanitizedDongDriverMap]
   );
+
+  // ── 저장 대상 내용의 지문 — 저장 이후 바뀐 게 있는지 판단한다 ─────────────────
+  //   기사 이름·연락처·업무능력 + 동별 배정 + 1인 하루 배송량. 이 셋이 저장되는 전부다.
+  const assignmentSignature = useMemo(() => JSON.stringify({
+    d: drivers.filter(d => d.name?.trim()).map(d => [d.id, d.name.trim(), d.phone || '', d.capacity ?? 100]),
+    m: Object.keys(sanitizedDongDriverMap).sort().map(k => [k, [...(sanitizedDongDriverMap[k] || [])].sort()]),
+    q: baseDailyQty,
+  }), [drivers, sanitizedDongDriverMap, baseDailyQty]);
+
+  // 자동로드 직후 상태는 곧 DB 에 있는 내용이다 → '저장됨'으로 표시(헛경고 방지)
+  useEffect(() => {
+    if (isLoading || savedSignature !== null || !savedAssignmentLoaded) return;
+    setSavedSignature(assignmentSignature);
+    setSavedDongMap(sanitizedDongDriverMap);
+  }, [isLoading, savedAssignmentLoaded, assignmentSignature, savedSignature, sanitizedDongDriverMap]);
+
+  // 동 카드별 저장 상태 — 'none'(배정없음) | 'saved' | 'dirty'
+  const dongSaveState = useCallback((dong) => {
+    const cur = [...(sanitizedDongDriverMap[dong] || [])].sort().join(',');
+    if (!cur) return 'none';
+    if (!savedDongMap) return 'dirty';
+    return cur === [...(savedDongMap[dong] || [])].sort().join(',') ? 'saved' : 'dirty';
+  }, [sanitizedDongDriverMap, savedDongMap]);
+
+  const unsavedDongCount = useMemo(
+    () => [...assignedDongs].filter(d => dongSaveState(d) === 'dirty').length,
+    [assignedDongs, dongSaveState]
+  );
+
+  const hasUnsavedAssignment = assignedDongs.size > 0 && assignmentSignature !== savedSignature;
 
   const totalSelected = useMemo(() =>
     [...assignedDongs].reduce((s, d) => s + (dongCounts[d] || 0), 0),
@@ -505,9 +570,12 @@ export default function RouteSetupModal({
 
   // 소속사 선택
   const handleSelectOrg = (org) => {
+    // ★같은 소속사를 다시 고르는 것은 아무 일도 아니다 — 예전엔 이때도 배정을 지웠다.
+    //   소속사 자동선택이 형이 배정을 마친 뒤에 도착하면 그대로 다 날아갔다(실측 2026-08-27).
+    if ((org?.id || null) === selectedOrgId) { setStep('setup'); return; }
     setSelectedOrgId(org?.id || null);
     setSelectedOrgDongs(org ? new Set(org.dongs || []) : null);
-    setDongDriverMap({});
+    // 배정은 비우지 않는다 — 스코프 밖 동은 sanitizeDongDriverMap 이 알아서 걸러낸다(무손실).
     setSavedAssignmentLoaded(false);
     setStep('setup');
   };
@@ -650,8 +718,12 @@ export default function RouteSetupModal({
     }
   };
 
-  // ── "다음" 버튼 핸들러 — 배정 저장 후 매칭 단계 이동
-  const handleNextStep = async () => {
+  // ── 배정 저장 (동 카드 · 전체 저장 · 다음 버튼 공용) ────────────────────────
+  //   형 지시 2026-08-27: "행정동 카드에 기사가 추가되면 저장을 할 수 있게, 여러 동 전체 저장도,
+  //   기사 선택 동 선택 저장하면 기사는 자동으로 해제되도록."
+  //   ★저장 내용은 지자체 단위(월과 무관) — 다음 달 명단을 올려도 이 배정이 그대로 적용된다.
+  const runSave = async ({ clearActive = true } = {}) => {
+    if (isSavingAssignment) return false;
     setIsSavingAssignment(true);
     setSaveError('');
     try {
@@ -659,13 +731,31 @@ export default function RouteSetupModal({
         await saveDriverAssignment();
       }
       await saveDriverAssignmentPreset();
+      setLastSavedAt(new Date());
+      setSavedSignature(assignmentSignature);
+      setSavedDongMap(sanitizedDongDriverMap);
+      if (clearActive) setActiveDriverIds(new Set());   // 저장하면 기사 선택 해제 → 바로 다음 기사 배정
+      return true;
     } catch (e) {
       console.error('기사 배정 저장 실패:', e);
       setSaveError(`저장 실패: ${e.code === 'permission-denied' ? '권한 없음 — 관리자에게 문의하세요' : e.message}`);
+      return false;
+    } finally {
       setIsSavingAssignment(false);
-      return; // 저장 실패 시 다음 단계로 넘어가지 않음
     }
-    setIsSavingAssignment(false);
+  };
+
+  // ── 닫기 — 저장하지 않은 배정이 있으면 물어본다(형이 한 작업이 조용히 사라지지 않게)
+  const handleCloseStep2 = () => {
+    if (hasUnsavedAssignment
+      && !window.confirm('저장하지 않은 배정이 있습니다. 저장하지 않고 닫으면 사라집니다. 그냥 닫을까요?')) return;
+    onClose?.();
+  };
+
+  // ── "다음" 버튼 핸들러 — 배정 저장 후 매칭 단계 이동
+  const handleNextStep = async () => {
+    const ok = await runSave({ clearActive: false });   // 다음 단계로 가므로 선택은 그대로 둔다
+    if (!ok) return;                                    // 저장 실패 시 다음 단계로 넘어가지 않음
     setMatchMode(null);
     setStep('match');
   };
@@ -953,8 +1043,8 @@ export default function RouteSetupModal({
           onBack={() => setStep('org')}
           title="작업 설정"
           badge={orgBadge}
-          subtitle={`${headerSubtitle} · 기사 카드 클릭(활성화) → 행정동 클릭(배정) → 다음`}
-          onClose={onClose}
+          subtitle={`${headerSubtitle} · 기사 카드 클릭(활성화) → 행정동 클릭(배정) → 저장`}
+          onClose={handleCloseStep2}
           stepLabel="2 / 3 기사·행정동 배정"
         />
 
@@ -996,6 +1086,7 @@ export default function RouteSetupModal({
                     .filter(([, ids]) => ids.includes(driver.id)).map(([d]) => d);
                   return (
                     <div key={driver.id} onClick={() => toggleDriverActive(driver.id)}
+                      data-testid="driver-card" data-driver-name={driver.name}
                       className="rounded-xl border p-2 cursor-pointer transition-all select-none"
                       style={{
                         background: isActive ? driver.color + '18' : '#0d0d0d',
@@ -1112,6 +1203,9 @@ export default function RouteSetupModal({
                   {rosterNotice.added.length > 0 && (
                     <> · 추가 {rosterNotice.added.length}명(<span className="text-emerald-300">{rosterNotice.added.map(r => r.name).join(', ')}</span>)</>
                   )}
+                  {rosterNotice.lostDongs?.length > 0 && (
+                    <> · <span className="text-amber-300">담당 기사가 빠져 배정이 풀린 동: {rosterNotice.lostDongs.join(', ')}</span> — 다시 배정해 주세요</>
+                  )}
                 </span>
                 <button type="button" onClick={() => setRosterNotice(null)}
                   className="ml-auto text-[10px] text-gray-500 hover:text-white transition-colors shrink-0">닫기</button>
@@ -1161,6 +1255,19 @@ export default function RouteSetupModal({
                 )}
               </div>
               <div className="flex items-center gap-2">
+                {/* 여러 동을 한 번에 저장 (형 지시 2026-08-27) */}
+                <button onClick={() => runSave()} disabled={assignedDongs.size === 0 || isSavingAssignment}
+                  title="배정된 행정동을 모두 저장합니다 · 다음 달 명단에도 그대로 적용됩니다"
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-black border transition-colors disabled:opacity-30 disabled:cursor-not-allowed ${
+                    unsavedDongCount > 0
+                      ? 'bg-emerald-800/40 hover:bg-emerald-700/50 text-emerald-300 border-emerald-600/40'
+                      : 'bg-gray-800/60 hover:bg-gray-700/60 text-gray-400 border-[#333]'
+                  }`}>
+                  {isSavingAssignment
+                    ? <><span className="animate-spin inline-block w-3 h-3 border-2 border-emerald-300/30 border-t-emerald-300 rounded-full" /> 저장 중...</>
+                    : <><Save size={11} /> 전체 저장{unsavedDongCount > 0 ? ` (${unsavedDongCount})` : ''}</>
+                  }
+                </button>
                 <button onClick={handleSelectAll} disabled={activeDriverIds.size === 0}
                   className="px-3 py-1.5 rounded-lg bg-blue-900/30 hover:bg-blue-700/40 text-blue-400 text-[11px] font-bold border border-blue-800/30 transition-colors disabled:opacity-30 disabled:cursor-not-allowed">
                   전체 선택
@@ -1184,9 +1291,13 @@ export default function RouteSetupModal({
                     const hasAssignment = assignedIds.length > 0;
                     const activeAssignedCount = assignedIds.filter(id => activeDriverIds.has(id)).length;
                     const isActiveAll = activeDriverIds.size > 0 && activeAssignedCount === activeDriverIds.size;
+                    const saveState = dongSaveState(dong);
                     return (
-                      <button key={dong} onClick={() => handleDongClick(dong)}
-                        disabled={activeDriverIds.size === 0}
+                      // ★버튼 안에 버튼을 넣을 수 없어 카드를 div 로 둔다(동 카드마다 [저장]이 필요하다)
+                      <div key={dong} role="button" tabIndex={activeDriverIds.size === 0 ? -1 : 0}
+                        data-testid="dong-card" data-dong={dong} data-assigned={assignedIds.length}
+                        onClick={() => { if (activeDriverIds.size > 0) handleDongClick(dong); }}
+                        onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && activeDriverIds.size > 0) { e.preventDefault(); handleDongClick(dong); } }}
                         className={`flex flex-col px-3 py-2.5 rounded-xl border text-left transition-all ${
                           hasAssignment
                             ? isActiveAll ? 'border-blue-500/60 bg-blue-900/20 hover:bg-blue-900/30' : 'border-[#2a4a2a] bg-blue-900/10 hover:bg-blue-900/15'
@@ -1216,7 +1327,20 @@ export default function RouteSetupModal({
                             })}
                           </div>
                         )}
-                      </button>
+                        {/* 이 동의 배정을 바로 저장 — 저장하면 기사 선택이 풀려 다음 기사로 넘어간다 */}
+                        {hasAssignment && (
+                          <button type="button" disabled={isSavingAssignment}
+                            onClick={(e) => { e.stopPropagation(); runSave(); }}
+                            title={saveState === 'saved' ? '저장된 배정입니다 (다음 달에도 적용)' : '이 배정을 저장합니다 (다음 달에도 적용)'}
+                            className={`mt-2 w-full flex items-center justify-center gap-1 px-2 py-1 rounded-lg text-[10px] font-black border transition-colors disabled:opacity-40 ${
+                              saveState === 'saved'
+                                ? 'bg-transparent text-emerald-600/70 border-emerald-900/40 cursor-default'
+                                : 'bg-emerald-800/40 hover:bg-emerald-700/50 text-emerald-300 border-emerald-600/40'
+                            }`}>
+                            {saveState === 'saved' ? <><CheckCircle size={9} /> 저장됨</> : <><Save size={9} /> 저장</>}
+                          </button>
+                        )}
+                      </div>
                     );
                   })}
                 </div>
@@ -1239,6 +1363,18 @@ export default function RouteSetupModal({
               {assignedDongs.size > 0 ? (
                 <span className="ml-3">· 행정동 <span className="text-blue-400/80 font-bold">{assignedDongs.size}개</span> (<span className="text-blue-400/80">{totalSelected.toLocaleString()}</span>건)</span>
               ) : <span className="ml-3 text-amber-500/80 font-bold animate-pulse">← 기사 선택 후 행정동을 배정해주세요</span>}
+              {/* 저장 상태 — 저장된 배정은 다음 달 명단에도 그대로 적용된다 */}
+              {assignedDongs.size > 0 && (
+                <div className="mt-1 text-[10px]">
+                  {hasUnsavedAssignment ? (
+                    <span className="text-amber-400/90 font-bold">● 저장 안 된 배정 {unsavedDongCount > 0 ? `${unsavedDongCount}개 동` : ''} — [전체 저장] 또는 동 카드의 [저장]</span>
+                  ) : (
+                    <span className="text-emerald-600/80 font-bold">
+                      ✓ 저장됨{lastSavedAt ? ` · ${lastSavedAt.toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}` : ''} · 다음 달 명단에도 적용됩니다
+                    </span>
+                  )}
+                </div>
+              )}
             </div>
             <button onClick={handleNextStep} disabled={assignedDongs.size === 0 || isLoading || isSavingAssignment}
               className={`flex items-center gap-2 px-6 py-3 rounded-xl font-black text-[13px] transition-all shrink-0 ${

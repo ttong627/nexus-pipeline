@@ -137,13 +137,21 @@ export function reconcileDriversWithRoster(restored = [], roster = []) {
 
   const kept = [];
   const removed = [];
+  // ★id 를 명부 id 로 갈아끼우면 **동별 배정(dongDriverMap)이 통째로 무효가 된다** —
+  //   배정은 옛 id 를 들고 있는데 기사 목록엔 새 id 만 남아 '없는 기사'로 판정돼 조용히 삭제됐다
+  //   (형 실측 2026-08-27: 전농1동·휘경1동 배정이 화면을 여는 것만으로 사라지고 그대로 저장됨).
+  //   그래서 **바뀐 id 의 대응표를 같이 돌려준다** — 호출부가 배정을 함께 옮긴다.
+  const idMap = {};
   for (const d of list) {
     const match = pool.find((r) => sameDriver(d, r));
-    if (!match) { removed.push({ name: d.name || '', reason: '명부에 없음' }); continue; }
-    if (!isActiveDriver(match)) { removed.push({ name: match.name || d.name || '', reason: '비활성' }); continue; }
+    if (!match) { removed.push({ name: d.name || '', reason: '명부에 없음', id: String(d.id ?? '') }); continue; }
+    if (!isActiveDriver(match)) { removed.push({ name: match.name || d.name || '', reason: '비활성', id: String(d.id ?? '') }); continue; }
+    const oldId = String(d.id ?? '');
+    const newId = String(match.id ?? match._docId ?? d.id ?? '');
+    if (oldId && newId && oldId !== newId) idMap[oldId] = newId;
     kept.push({
       ...d,
-      id: String(match.id ?? match._docId ?? d.id ?? ''),
+      id: newId,
       name: match.name ?? d.name ?? '',
       phone: match.phone ?? d.phone ?? '',
     });
@@ -161,7 +169,34 @@ export function reconcileDriversWithRoster(restored = [], roster = []) {
       color: r.color || '',
     });
   }
-  return { drivers: [...kept, ...added], removed, added, skipped: false };
+  return { drivers: [...kept, ...added], removed, added, skipped: false, idMap };
+}
+
+/**
+ * 동별 배정의 기사 id 를 새 id 로 옮긴다 (`reconcileDriversWithRoster` 의 `idMap` 사용).
+ *   ★배정을 잃지 않는 것이 목적이다 — 대응표에 없는 id 는 **그대로 둔다**(함부로 지우지 않는다).
+ */
+export function remapDongDriverMap(map = {}, idMap = {}) {
+  const src = map || {};
+  if (!idMap || !Object.keys(idMap).length) return src;
+  const out = {};
+  Object.entries(src).forEach(([dong, ids]) => {
+    const next = [...new Set((Array.isArray(ids) ? ids : []).map((id) => idMap[id] || id))];
+    if (next.length) out[dong] = next;
+  });
+  return out;
+}
+
+/**
+ * 담당 기사가 모두 사라져 배정이 풀리는 행정동을 찾는다(조용히 지우지 않고 알리기 위해).
+ * @param {object} map 동별 배정 (이미 remap 을 거친 것)
+ * @param {Set<string>|string[]} keptIds 현재 유효한 기사 id
+ */
+export function dongsLosingDrivers(map = {}, keptIds = []) {
+  const kept = keptIds instanceof Set ? keptIds : new Set(keptIds || []);
+  return Object.entries(map || {})
+    .filter(([, ids]) => Array.isArray(ids) && ids.length > 0 && !ids.some((id) => kept.has(id)))
+    .map(([dong]) => dong);
 }
 
 /**
