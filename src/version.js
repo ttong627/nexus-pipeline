@@ -1,8 +1,11 @@
-export const APP_VERSION = 'V7.22';
+export const APP_VERSION = 'V7.23';
 export const APP_BUILD = '2026.08.27';
-export const APP_BUILD_TIME = '2026.08.27 19:54';
+export const APP_BUILD_TIME = '2026.08.27 20:10';
 
 export const CHANGELOG = [
+  { v: "V7.23", date: "2026.08.27", items: [
+    "명단을 저장하면 기사 폰의 지도가 자동으로 최신이 됩니다 (링크·비밀번호는 그대로)",
+  ]},
   { v: "V7.22", date: "2026.08.27", items: [
     "기사배정·좌표·순번을 3개월 보관합니다 — 새 명단을 열면 지난 배정이 자동으로 이어집니다 (명단 자체는 1개월)",
   ]},

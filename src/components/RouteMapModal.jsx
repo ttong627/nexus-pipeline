@@ -1,7 +1,7 @@
 ﻿import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { X, MapPin, Navigation2, Plus, Minus, RefreshCw, Save, AlertTriangle, Map as MapIcon, List, Building2, Clock, FileSpreadsheet, Download, HardDrive, Maximize2, Minimize2, Columns, AlertCircle, Search, Crosshair, Share2, Link, Eraser, ArrowLeftRight, ChevronLeft, User, Satellite, Grid3x3, Target, Box } from 'lucide-react';
 import { db, auth } from '../config/firebase.js';
-import { collection, serverTimestamp, Timestamp, getDocs, getDoc, setDoc, updateDoc, doc, writeBatch, query, where, limit, increment } from 'firebase/firestore';
+import { collection, serverTimestamp, Timestamp, getDocs, getDoc, setDoc, updateDoc, doc, writeBatch, query, where, limit, increment, arrayUnion } from 'firebase/firestore';
 import * as XLSX from 'xlsx';
 import CoordBrushModal from './CoordBrushModal.jsx';
 import DriverSequenceView from './DriverSequenceView.jsx';
@@ -2282,6 +2282,50 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
         console.warn('[배정 보관] 실패(본 저장에는 영향 없음):', bkErr);
       }
 
+      // 1-3단계: **이미 나간 기사 지도(공유 링크)를 최신으로 갱신**한다(형 지시 2026-08-27).
+      //   기사는 링크와 번호를 한 번만 받는다 — 배정·순번을 고칠 때마다 새 링크를 뿌릴 수는 없다.
+      //   그래서 유효기간이 남은 그 달 공유를 찾아 건별 문서를 다시 쓴다(링크·비밀번호는 그대로).
+      //   ⚠️만료된 공유는 건드리지 않는다(끝난 배송에 명단을 되살리지 않는다 · G-10).
+      try {
+        // ★목록 질의를 쓰지 않는다 — 보안규칙이 route_shares 목록을 막는다(단일 문서 읽기만 통과 · 2026-08-27 실측).
+        //   그래서 공유를 만들 때 세션 문서에 남겨 둔 `shareIds` 를 이정표로 쓴다.
+        const sessSnap = await getDoc(doc(db, 'route_sessions', cloudCity, 'months', cloudMonthId));
+        const shareIds = Array.isArray(sessSnap.data()?.shareIds) ? sessSnap.data().shareIds : [];
+        const liveDocs = [];
+        for (const sid of shareIds.slice(-20)) {
+          const sd = await getDoc(doc(db, 'route_shares', sid));
+          const exp = sd.exists() ? sd.data()?.expiresAt?.toMillis?.() : 0;
+          if (exp && exp > Date.now()) liveDocs.push(sd);   // 만료된 공유는 건드리지 않는다(G-10)
+        }
+        if (liveDocs.length) {
+          const assigned = drivers.filter(d => records.some(r => r._driverId === d.id));
+          const { docs: freshRecords } = buildShareRecords(records, assigned, allKnownDrivers);
+          const freshIds = new Set(freshRecords.map(r => String(r.id)));
+          let refreshed = 0;
+          for (const sdoc of liveDocs) {
+            for (let i = 0; i < freshRecords.length; i += 499) {
+              const rb = writeBatch(db);
+              freshRecords.slice(i, i + 499).forEach(rec => {
+                rb.set(doc(db, 'route_shares', sdoc.id, 'records', String(rec.id)), rec);
+              });
+              await rb.commit();
+            }
+            // 이번 저장에서 빠진 건(다른 기사에게 갔거나 명단에서 사라진 건)은 지운다 — 기사 화면에 남으면 헛걸음한다.
+            const oldSnap = await getDocs(collection(db, 'route_shares', sdoc.id, 'records'));
+            const stale = oldSnap.docs.filter(d2 => !freshIds.has(String(d2.id)));
+            for (let i = 0; i < stale.length; i += 499) {
+              const db2 = writeBatch(db);
+              stale.slice(i, i + 499).forEach(d2 => db2.delete(d2.ref));
+              await db2.commit();
+            }
+            refreshed += 1;
+          }
+          if (refreshed) showToast('success', `기사 지도 ${refreshed}개를 최신으로 갱신했습니다 (링크·번호 그대로)`);
+        }
+      } catch (shErr) {
+        console.warn('[기사 지도 갱신] 실패(본 저장에는 영향 없음):', shErr);
+      }
+
       // 2단계: route_sessions도 갱신 — "이어서 작업" 복원이 DB 저장 이후 상태를 반영하도록
       await setDoc(
         doc(db, 'route_sessions', cloudCity, 'months', cloudMonthId),
@@ -2417,6 +2461,14 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
         }
         await batch.commit();
       }
+      // ★그 달 세션 문서에 공유 id 를 남긴다 — 나중에 "살아 있는 공유"를 찾을 때 **목록 질의를 쓰지 않기 위해서**다.
+      //   보안규칙이 route_shares 목록 질의를 막는다(단일 문서 읽기만 통과 — 2026-08-27 실측).
+      try {
+        await setDoc(doc(db, 'route_sessions', cloudCity, 'months', cloudMonthId),
+          { shareIds: arrayUnion(shareId) }, { merge: true });
+      } catch (pErr) { console.warn('[공유 이정표] 기록 실패:', pErr); }
+      {
+      }
       const base = window.location.origin;
       setShareModal({
         shareId,
@@ -2452,21 +2504,18 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
     }
     setIsLoadingOrderRequests(true);
     try {
-      // ★규칙은 비관리자에게 **자기가 만든 · 기간 내** 공유만 허용한다(`isRouteOwner()` + `isShareWithinTTL()`).
-      //   목록 질의는 그 조건을 **질의로 증명**해야 통과한다 — 안 그러면 담당자 화면엔 늘 "완료 기록 조회 실패"만 떴다(2026-08-24).
-      //   관리자는 규칙이 먼저 통과시키므로 조건 없이 전부(만료분 포함) 본다.
-      const _uid = auth.currentUser?.uid || '';
-      const _isAdmin = isAdminEmail(auth.currentUser?.email);
-      const _base = [
-        collection(db, 'route_shares'),
-        where('city', '==', cloudCity),
-        where('monthId', '==', cloudMonthId),
-      ];
-      const snap = await getDocs(_isAdmin
-        ? query(..._base, limit(30))
-        : query(..._base, where('createdByUid', '==', _uid), where('expiresAt', '>', new Date()), limit(30)));
+      // ★`route_shares` **목록 질의는 보안규칙이 막는다**(단일 문서 읽기만 통과 — 2026-08-27 실측으로 확인).
+      //   2026-08-24 에 소유자·기간 조건을 질의로 붙여 고쳤다고 봤지만, 실제로는 그때도 막혀 있었다.
+      //   그래서 공유를 만들 때 세션 문서에 남긴 `shareIds` 이정표로 하나씩 읽는다.
+      const sessSnap0 = await getDoc(doc(db, 'route_sessions', cloudCity, 'months', cloudMonthId));
+      const shareIds0 = Array.isArray(sessSnap0.data()?.shareIds) ? sessSnap0.data().shareIds : [];
+      const shareDocs = [];
+      for (const sid of shareIds0.slice(-30)) {
+        const sd = await getDoc(doc(db, 'route_shares', sid)).catch(() => null);
+        if (sd?.exists()) shareDocs.push(sd);
+      }
       const requests = [];
-      snap.forEach(docSnap => {
+      shareDocs.forEach(docSnap => {
         const data = docSnap.data();
         Object.entries(data.orderApplyRequests || {}).forEach(([driverId, req]) => {
           if (req?.status !== 'requested') return;
