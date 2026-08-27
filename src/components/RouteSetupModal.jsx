@@ -1,9 +1,10 @@
-﻿import { useState, useEffect, useMemo, useCallback } from 'react';
+﻿import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { X, MapPin, Play, ChevronRight, Truck, Building2, ChevronLeft, Plus, Trash2, Users, LayoutGrid, Navigation2, Crosshair, Loader2, CheckCircle, RefreshCw, CloudDownload } from 'lucide-react';
 import { db, writeBatch } from '../config/firebase.js';
 import { getDocs, collection, getDoc, doc, setDoc, serverTimestamp } from 'firebase/firestore';
 // 배송지도 접근 인증의 열쇠 — 저장·비교 양쪽 모두 이 함수를 통과시킨다(계획 Phase 0).
 import { toE164Mobile } from '../utils/phone.js';
+import { reconcileDriversWithRoster } from '../utils/driverRoster.js';   // 복원한 기사 목록을 현재 명부와 대조
 import { kakaoCoordOf } from '../utils/kakaoApi.js';   // ★REST 키는 서버에만 있다(2026-08-23 점검)
 
 
@@ -128,6 +129,36 @@ export default function RouteSetupModal({
 
   // ── 기사매칭 프리셋 자동로드 여부
   const [savedAssignmentLoaded, setSavedAssignmentLoaded] = useState(false);
+  // ★복원한 기사 목록을 **현재 기사 명부**와 대조한다(2026-08-27 형 지적).
+  //   이어서작업·프리셋·저장세션에서 되살린 목록은 **그때의 명부**다. 그 사이 담당자가 기사를
+  //   비활성화하거나 새로 넣으면 화면과 명부가 어긋난다 — 실제로 비활성 기사가 뜨고 신규 기사가 안 떴다.
+  const [rosterNotice, setRosterNotice] = useState(null);
+  const rosterRef = useRef(null);
+  const ensureRoster = async () => {
+    if (rosterRef.current) return rosterRef.current;
+    try {
+      const orgName = user?.orgId || '';
+      const colRef = orgName
+        ? collection(db, 'org_drivers', orgName, 'drivers')
+        : (user?.companyCode
+          ? collection(db, 'user_companies', user.companyCode, 'drivers')
+          : (user?.uid ? collection(db, 'user_drivers', user.uid, 'drivers') : null));
+      if (!colRef) { rosterRef.current = []; return rosterRef.current; }
+      const snap = await getDocs(colRef);
+      rosterRef.current = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    } catch {
+      // ★명부를 못 읽으면 **아무것도 하지 않는다** — 조회 실패로 기사가 사라지면 안 된다.
+      rosterRef.current = [];
+    }
+    return rosterRef.current;
+  };
+  const applyRestoredDrivers = async (list) => {
+    const roster = await ensureRoster();
+    const r = reconcileDriversWithRoster(list, roster);
+    setDrivers(r.drivers);
+    setRosterNotice(!r.skipped && (r.removed.length || r.added.length) ? { removed: r.removed, added: r.added } : null);
+    return r;
+  };
 
   // ── 소속사 기사 불러오기
   const [isLoadingOrgDrivers, setIsLoadingOrgDrivers] = useState(false);
@@ -230,7 +261,7 @@ export default function RouteSetupModal({
           const hasUsefulDrivers = snap?.exists() && snap.data().drivers?.some(d => d.name?.trim());
           if (hasUsefulDrivers) {
             const d = snap.data();
-            setDrivers(d.drivers);
+            await applyRestoredDrivers(d.drivers);
             if (d.dongDriverMap && Object.keys(d.dongDriverMap).length) setDongDriverMap(d.dongDriverMap);
             if (d.baseDailyQty) setBaseDailyQty(d.baseDailyQty);
             setSavedAssignmentLoaded(true);
@@ -264,7 +295,7 @@ export default function RouteSetupModal({
         // 이게 단일 소스 오브 트루스. 휘경1동 누락·기사 왜곡의 근본 원인 제거.
         if (restoreState?.dongDriverMap && Object.keys(restoreState.dongDriverMap).length) {
           const restoreDrivers = restoreState.companyDrivers?.length ? restoreState.companyDrivers : restoreState.drivers;
-          if (restoreDrivers?.length) setDrivers(restoreDrivers);
+          if (restoreDrivers?.length) await applyRestoredDrivers(restoreDrivers);
           setDongDriverMap(restoreState.dongDriverMap);
           if (restoreState.baseDailyQty) setBaseDailyQty(restoreState.baseDailyQty);
           if (restoreState.orgId && restoreState.orgId !== 'all') setSelectedOrgId(restoreState.orgId); // 소속사 보존
@@ -288,7 +319,7 @@ export default function RouteSetupModal({
           if (hasUsefulDrivers) {
             // 정상 경로: driver_assignments 에 이름 있는 기사 데이터 존재
             const d = presetSnap.data();
-            setDrivers(d.drivers);
+            await applyRestoredDrivers(d.drivers);
             if (d.dongDriverMap && Object.keys(d.dongDriverMap).length) setDongDriverMap(d.dongDriverMap);
             if (d.baseDailyQty) setBaseDailyQty(d.baseDailyQty);
             setSavedAssignmentLoaded(true);
@@ -298,7 +329,7 @@ export default function RouteSetupModal({
             if (sessionSnap.exists() && sessionSnap.data().drivers?.some(d => d.name?.trim())) {
               const sessionData = sessionSnap.data();
               const loadedDrivers = sessionData.drivers;
-              setDrivers(loadedDrivers);
+              await applyRestoredDrivers(loadedDrivers);
               // 기사명 → driverId 역맵
               const nameToId = {};
               loadedDrivers.forEach(d => { if (d.name) nameToId[d.name] = d.id; });
@@ -1029,6 +1060,24 @@ export default function RouteSetupModal({
                 )}
               </div>
             </div>
+
+            {/* ★명부 대조 결과 — 무엇이 빠지고 무엇이 들어왔는지 담당자가 바로 알아야 한다(2026-08-27) */}
+            {rosterNotice && (
+              <div className="mb-3 shrink-0 px-3 py-2 rounded-xl bg-emerald-900/15 border border-emerald-700/30 text-[11px] text-emerald-200 flex items-start gap-2">
+                <CheckCircle size={12} className="text-emerald-400 shrink-0 mt-0.5" />
+                <span className="leading-relaxed">
+                  <b>기사 명부 기준으로 정리했습니다.</b>
+                  {rosterNotice.removed.length > 0 && (
+                    <> · 제외 {rosterNotice.removed.length}명(<span className="text-amber-300">{rosterNotice.removed.map(r => `${r.name}${r.reason ? `·${r.reason}` : ''}`).join(', ')}</span>)</>
+                  )}
+                  {rosterNotice.added.length > 0 && (
+                    <> · 추가 {rosterNotice.added.length}명(<span className="text-emerald-300">{rosterNotice.added.map(r => r.name).join(', ')}</span>)</>
+                  )}
+                </span>
+                <button type="button" onClick={() => setRosterNotice(null)}
+                  className="ml-auto text-[10px] text-gray-500 hover:text-white transition-colors shrink-0">닫기</button>
+              </div>
+            )}
 
             {/* 이전 배정 자동로드 알림 */}
             {savedAssignmentLoaded && (

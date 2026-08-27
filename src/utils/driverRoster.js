@@ -94,9 +94,72 @@ export const DENY_MESSAGE = {
 export function activePhones(roster = []) {
   const out = [];
   for (const d of roster || []) {
-    if (!d || d.active === false) continue;
+    if (!isActiveDriver(d)) continue;   // ★`status:'inactive'` 도 걸러야 한다(같은 뿌리의 결함)
     const p = toE164Mobile(d.phone);
     if (p && !out.includes(p)) out.push(p);
   }
   return out;
+}
+
+// ── 기사 활성 판정 (SSOT) ───────────────────────────────────────────────────
+//   ★명부는 `status: 'active' | 'inactive'` 로 저장한다. 옛 데이터엔 `active: false` 도 있다.
+//   한쪽만 보면 비활성 기사가 살아 있는 것처럼 보인다 — 실제로 그랬다(2026-08-27 형 지적:
+//   "윤찬용은 비활성화 했는데 보이고 안광호는 안 보여").
+export const isActiveDriver = (d) => !!d && d.active !== false && d.status !== 'inactive' && d.status !== 'deleted';
+
+const sameDriver = (a, b) => {
+  if (!a || !b) return false;
+  const ida = String(a.id ?? a._docId ?? '');
+  const idb = String(b.id ?? b._docId ?? '');
+  if (ida && idb && ida === idb) return true;
+  const digits = (v) => String(v ?? '').replace(/[^0-9]/g, '');
+  const na = String(a.name ?? '').trim();
+  const nb = String(b.name ?? '').trim();
+  if (!na || na !== nb) return false;
+  const pa = digits(a.phone);
+  const pb = digits(b.phone);
+  return !pa || !pb || pa === pb;   // 이름이 같고 번호가 없거나 같으면 같은 사람
+};
+
+/**
+ * 복원한 기사 목록을 **현재 명부 기준**으로 정리한다.
+ *   왜: 이어서 작업·프리셋·저장세션에서 되살린 목록은 **그때의 명부**다. 그 사이에 담당자가
+ *   기사를 비활성화하거나 새로 넣으면 화면과 명부가 어긋난다(비활성이 보이고 신규가 안 보인다).
+ *   - 명부에서 비활성이거나 사라진 기사 → 뺀다
+ *   - 명부에 있는 활성 기사인데 목록에 없으면 → 뒤에 붙인다
+ *   - 유지되는 기사의 이름·전화는 명부값으로 맞추되, 담당자가 화면에서 조정한 capacity·color 는 보존한다
+ *   ★명부를 못 읽었으면(roster 비어 있음) **아무것도 하지 않는다** — 명부 조회 실패로 기사가 사라지면 안 된다.
+ */
+export function reconcileDriversWithRoster(restored = [], roster = []) {
+  const list = Array.isArray(restored) ? restored.filter(Boolean) : [];
+  const pool = Array.isArray(roster) ? roster.filter(Boolean) : [];
+  if (!pool.length) return { drivers: list, removed: [], added: [], skipped: true };
+
+  const kept = [];
+  const removed = [];
+  for (const d of list) {
+    const match = pool.find((r) => sameDriver(d, r));
+    if (!match) { removed.push({ name: d.name || '', reason: '명부에 없음' }); continue; }
+    if (!isActiveDriver(match)) { removed.push({ name: match.name || d.name || '', reason: '비활성' }); continue; }
+    kept.push({
+      ...d,
+      id: String(match.id ?? match._docId ?? d.id ?? ''),
+      name: match.name ?? d.name ?? '',
+      phone: match.phone ?? d.phone ?? '',
+    });
+  }
+
+  const added = [];
+  for (const r of pool) {
+    if (!isActiveDriver(r)) continue;
+    if (kept.some((d) => sameDriver(d, r))) continue;
+    added.push({
+      id: String(r.id ?? r._docId ?? ''),
+      name: r.name || '',
+      phone: r.phone || '',
+      capacity: r.capacity ?? 100,
+      color: r.color || '',
+    });
+  }
+  return { drivers: [...kept, ...added], removed, added, skipped: false };
 }

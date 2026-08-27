@@ -5,10 +5,11 @@
 //    느슨하면 남이 배송 명단(이름·주소·전화)을 보고, 빡빡하면 기사가 현장에서 막힌다.
 //    둘 다 사고라서 경계를 테스트로 못 박는다.
 // ══════════════════════════════════════════════════════════════════
-import { test } from 'node:test';
+import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   normalizeDriver, validateDriver, resolveDriverByPhone, activePhones, DENY_MESSAGE,
+  reconcileDriversWithRoster, isActiveDriver,
 } from '../src/utils/driverRoster.js';
 
 const 홍 = { id: 'd1', name: '홍길동', phone: '+821012345678', active: true };
@@ -118,3 +119,47 @@ test('활성 기사 번호만, 중복 없이 뽑는다', () => {
 test('읽을 수 없는 번호는 목록에 넣지 않는다 — 규칙 비교가 헛돈다', () => {
   assert.deepEqual(activePhones([{ id: 'z', name: '오류', phone: '없음', active: true }]), []);
 });
+
+describe('기사 명부 대조 — 비활성이 남고 신규가 빠지던 결함(2026-08-27 형 지적)', () => {
+  // 실제 사례: 웰쉐어 사회적협동조합에서 윤찬용을 비활성화하고 안광호를 새로 넣었는데,
+  //   작업 설정 화면에는 **윤찬용이 뜨고 안광호가 안 떴다**. 복원한 목록을 명부와 대조하지 않아서다.
+  const roster = [
+    { id: 'a', name: '가명현', phone: '010-5688-8861', status: 'active', capacity: 100 },
+    { id: 'b', name: '안광호', phone: '010-3704-5579', status: 'active', capacity: 100 },
+    { id: 'c', name: '윤찬용', phone: '010-5176-8621', status: 'inactive', capacity: 100 },
+  ];
+
+  test('활성 판정은 status 와 active 를 모두 본다', () => {
+    assert.equal(isActiveDriver({ status: 'active' }), true);
+    assert.equal(isActiveDriver({ status: 'inactive' }), false, 'status 기반 비활성을 놓치면 안 된다');
+    assert.equal(isActiveDriver({ active: false }), false, '옛 데이터의 active:false 도 비활성이다');
+    assert.equal(isActiveDriver({}), true, '표시가 없으면 활성으로 본다(기존 데이터 보호)');
+  })
+
+  test('비활성은 빠지고, 명부의 신규 활성 기사는 들어온다', () => {
+    const restored = [{ id: 'a', name: '가명현', capacity: 85 }, { id: 'c', name: '윤찬용', capacity: 110 }];
+    const r = reconcileDriversWithRoster(restored, roster);
+    assert.deepEqual(r.drivers.map((d) => d.name), ['가명현', '안광호']);
+    assert.deepEqual(r.removed.map((x) => x.name), ['윤찬용']);
+    assert.deepEqual(r.added.map((x) => x.name), ['안광호']);
+  })
+
+  test('담당자가 화면에서 조정한 업무능력(capacity)은 보존한다', () => {
+    const r = reconcileDriversWithRoster([{ id: 'a', name: '가명현', capacity: 85, color: '#f0f' }], roster);
+    const kept = r.drivers.find((d) => d.name === '가명현');
+    assert.equal(kept.capacity, 85, '명부값 100 으로 덮어쓰면 담당자가 맞춰 둔 값이 날아간다');
+    assert.equal(kept.color, '#f0f');
+  })
+
+  test('★명부를 못 읽으면 아무것도 하지 않는다 — 조회 실패로 기사가 사라지면 안 된다', () => {
+    const restored = [{ id: 'c', name: '윤찬용' }];
+    const r = reconcileDriversWithRoster(restored, []);
+    assert.equal(r.skipped, true);
+    assert.deepEqual(r.drivers.map((d) => d.name), ['윤찬용']);
+  })
+
+  test('id 가 달라도 이름+번호가 같으면 같은 사람으로 본다(옛 저장본 호환)', () => {
+    const r = reconcileDriversWithRoster([{ id: 'old-1', name: '가명현', phone: '010-5688-8861' }], roster);
+    assert.equal(r.drivers.find((d) => d.name === '가명현').id, 'a', '명부의 실제 id 로 맞춰져야 배정이 이어진다');
+  })
+})

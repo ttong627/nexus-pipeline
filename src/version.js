@@ -1,8 +1,11 @@
-export const APP_VERSION = 'V7.19';
+export const APP_VERSION = 'V7.19.1';
 export const APP_BUILD = '2026.08.27';
-export const APP_BUILD_TIME = '2026.08.27 13:48';
+export const APP_BUILD_TIME = '2026.08.27 17:26';
 
 export const CHANGELOG = [
+  { v: "V7.19.1", date: "2026.08.27", items: [
+    "작업 설정의 기사 목록이 현재 기사 명부를 따라갑니다 (비활성 기사 제외 · 새로 넣은 기사 자동 추가)",
+  ]},
   { v: "V7.19", date: "2026.08.27", items: [
     "지도 비밀번호를 안 정하면 기본번호 181111 로 발행됩니다",
     "비밀번호가 없던 기존 지도도 181111 로 열립니다",
