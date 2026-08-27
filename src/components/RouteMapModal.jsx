@@ -19,6 +19,7 @@ import { buildShareMeta, buildShareRecords, chunk, normalizeDeadline, MAX_DEADLI
 import { hashPasscode, newSalt, isValidPasscode } from '../utils/sharePasscode.js';
 import { getDriversCollection } from '../utils/company.js';
 import SharePasscodePrompt from './SharePasscodePrompt.jsx';
+import { suggestNearbyAssignments, applyNearbySuggestions } from '../utils/nearbyDongAssign.js';   // 인근 동 패턴 배정(제안만)
 import { buildAssignmentBatch, applyCarriedAssignments, RETENTION_MONTHS } from '../utils/assignmentStore.js';   // 배정만 따로 3개월 보관(명단과 분리)
 // ★순번 엔진은 SSOT 한 곳에만 산다 — 예전엔 이 파일에 41개 심볼이 문자 단위로 복제돼 있었다(2026-08-23 점검에서 제거).
 //   복제는 드리프트 전엔 증상이 없다가, 다음 수정이 한쪽에만 들어가는 순간 화면과 서버 순번이 갈라진다.
@@ -244,6 +245,15 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
   //   예전엔 진입하자마자 자동 N등분이 돌아서 담당자가 손대기 전에 이미 갈라져 있었다.
   //   이제 안내만 띄우고, 브러쉬로 칠할지 자동으로 나눌지는 담당자가 고른다.
   const [brushPrompt, setBrushPrompt] = useState(null); // { dong, driverIds }
+  // ★미배정 행정동을 인근 기사에게 **제안**한다(형 지시 2026-08-27 "배정 패턴에 따라 인근 지역도").
+  //   적용은 담당자가 누를 때만 — 임의 배정은 하지 않는다(S-5).
+  const [nearbyDismissed, setNearbyDismissed] = useState(false);
+  const nearbySuggestions = useMemo(() => {
+    if (nearbyDismissed || !records.length) return [];
+    try {
+      return suggestNearbyAssignments(records, { getDong: getRouteDong }).slice(0, 20);
+    } catch { return []; }
+  }, [records, nearbyDismissed]);
   const [paintDriverId, setPaintDriverId] = useState(null);
   const [paintRadiusPx, setPaintRadiusPx] = useState(50);
   const paintCursorRef = useRef(null);   // 브러시 커서 원 — state 없이 DOM 직접 이동 (전체 리렌더 차단)
@@ -4498,6 +4508,35 @@ ${folders}
             </div>
 
             {/* ── 같은 좌표 팝업 ─────────────────────────────────────── */}
+            {/* ★미배정 동 — 인근 기사로 배정 제안(적용은 담당자가 누를 때만) */}
+            {nearbySuggestions.length > 0 && !brushPrompt && (
+              <div className="absolute top-3 left-1/2 -translate-x-1/2 z-[325] pointer-events-auto">
+                <div className="bg-[#0e0e0e] border border-sky-500/50 rounded-xl shadow-2xl px-3 py-2 flex items-center gap-2 max-w-[92vw]">
+                  <span className="text-[11px] font-black text-sky-300 whitespace-nowrap">
+                    미배정 {nearbySuggestions.length}개 동
+                  </span>
+                  <span className="text-[10px] text-gray-400 truncate max-w-[38vw]">
+                    {nearbySuggestions.slice(0, 3).map(x => `${x.dong}→${drivers.find(d => d.id === x.driverId)?.name || '?'}`).join(' · ')}
+                    {nearbySuggestions.length > 3 ? ' …' : ''}
+                  </span>
+                  <button type="button"
+                    onClick={() => {
+                      const r = applyNearbySuggestions(records, nearbySuggestions, { getDong: getRouteDong });
+                      if (!r.applied) { showToast('warning', '적용할 건이 없습니다.'); return; }
+                      setRecords(r.records);
+                      setIsDirty(true);
+                      setNearbyDismissed(true);
+                      showToast('success', `인근 기사로 ${r.applied}건 배정했습니다 (저장해야 반영됩니다)`);
+                    }}
+                    className="px-2 py-1 rounded-lg bg-sky-500 hover:bg-sky-400 text-[11px] font-black text-black whitespace-nowrap">
+                    인근 기사로 배정
+                  </button>
+                  <button type="button" onClick={() => setNearbyDismissed(true)}
+                    className="text-gray-500 hover:text-white text-[11px] px-1">✕</button>
+                </div>
+              </div>
+            )}
+
             {/* ★기사가 2명 이상인 동 — 자동으로 나누지 않고 담당자가 고르게 한다(형 지시 2026-08-27) */}
             {brushPrompt && (
               <div className="absolute top-3 left-1/2 -translate-x-1/2 z-[330] pointer-events-auto">
