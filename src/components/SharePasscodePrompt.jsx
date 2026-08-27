@@ -9,7 +9,7 @@
 //   ※같은 번호를 다시 써도 된다(중복 검사 없음 — 형 지시 "똑같은 암호라도 상관없이").
 import { useState, useEffect, useRef } from 'react';
 import { X, Lock } from 'lucide-react';
-import { randomPasscode, isValidPasscode } from '../utils/sharePasscode.js';
+import { randomPasscode, isValidPasscode, DEFAULT_SHARE_PASSCODE } from '../utils/sharePasscode.js';
 
 export default function SharePasscodePrompt({ open, busy = false, driverCount = 0, onCancel, onConfirm }) {
   const [value, setValue] = useState('');
@@ -30,8 +30,11 @@ export default function SharePasscodePrompt({ open, busy = false, driverCount = 
   const submit = (e) => {
     e?.preventDefault?.();
     if (busy) return;
-    if (!isValidPasscode(value)) { setErr('숫자 6자리를 입력해 주세요.'); return; }
-    onConfirm(value);
+    // ★비워 두면 기본번호로 발행한다(형 지시 2026-08-25 "안 정하거나 없는 경우는 181111").
+    //   담당자가 넣으면 그 번호가 그 지도의 번호다 — 기존 동작 그대로.
+    const passcode = value.trim() === '' ? DEFAULT_SHARE_PASSCODE : value;
+    if (!isValidPasscode(passcode)) { setErr('숫자 6자리를 입력하거나, 비워 두면 기본번호로 만듭니다.'); return; }
+    onConfirm(passcode);
   };
 
   return (
@@ -71,6 +74,10 @@ export default function SharePasscodePrompt({ open, busy = false, driverCount = 
               className="px-3 rounded-lg border border-[#2a2a2a] text-sm text-gray-300 hover:text-white hover:border-green-500/40 transition-colors disabled:opacity-40">🎲</button>
           </div>
 
+          <p className="text-[11px] text-gray-400 leading-relaxed">
+            비워 두고 만들면 <span className="text-green-300 font-black">기본번호 {DEFAULT_SHARE_PASSCODE}</span> 으로 발행됩니다.
+          </p>
+
           {err && <p className="text-[11px] text-amber-300 font-bold">{err}</p>}
 
           <p className="text-[10px] text-gray-600 leading-relaxed">
@@ -84,9 +91,9 @@ export default function SharePasscodePrompt({ open, busy = false, driverCount = 
             className="flex-1 px-3 py-2 rounded-lg border border-[#2a2a2a] text-[12px] font-bold text-gray-300 hover:text-white transition-colors disabled:opacity-40">
             취소
           </button>
-          <button type="submit" disabled={busy || value.length !== 6}
+          <button type="submit" disabled={busy || (value.length !== 0 && value.length !== 6)}
             className="flex-[2] px-3 py-2 rounded-lg bg-green-600 hover:bg-green-500 text-[12px] font-black text-black transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
-            {busy ? '만드는 중…' : '이 번호로 공유 링크 만들기'}
+            {busy ? '만드는 중…' : (value.length === 6 ? '이 번호로 공유 링크 만들기' : `기본번호 ${DEFAULT_SHARE_PASSCODE} 으로 만들기`)}
           </button>
         </div>
       </form>

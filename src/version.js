@@ -1,8 +1,12 @@
-export const APP_VERSION = 'V7.18.1';
-export const APP_BUILD = '2026.08.24';
-export const APP_BUILD_TIME = '2026.08.24 11:24';
+export const APP_VERSION = 'V7.19';
+export const APP_BUILD = '2026.08.27';
+export const APP_BUILD_TIME = '2026.08.27 13:48';
 
 export const CHANGELOG = [
+  { v: "V7.19", date: "2026.08.27", items: [
+    "지도 비밀번호를 안 정하면 기본번호 181111 로 발행됩니다",
+    "비밀번호가 없던 기존 지도도 181111 로 열립니다",
+  ]},
   { v: "V7.18.1", date: "2026.08.24", items: [
     "기사 화면이 열리자마자 죽던 문제 해결 (8월 13일부터 발생)",
     "내보내기 파일 이름에 옛 달이 찍히던 문제 해결",

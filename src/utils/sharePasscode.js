@@ -4,6 +4,13 @@
 //   Function(`openShare`)에 맡기고 토큰만 받는다 — 해시가 클라에 내려오면 6자리는 즉시 뚫린다.
 //   회귀 scripts/share-passcode.test.mjs (서버 구현과 해시 일치).
 
+// ★기본 비밀번호(형 지시 2026-08-25): *"담당자가 비밀번호를 정하면 그 번호고,
+//   비밀번호를 안 정하거나 없는 경우는 181111 로 기본 디폴트 비번 정해줘."*
+//   - 담당자가 발행 창에서 번호를 넣으면 그 번호가 그 지도의 비밀번호다(기존과 동일).
+//   - 비워 두면 이 번호로 발행된다. 비밀번호 문서가 아예 없는 옛 지도도 이 번호로 열린다.
+//   ⚠️모든 지도가 같은 번호가 되면 한 번 새는 순간 전부 열린다 — 중요한 명단은 발행할 때 따로 정할 것.
+export const DEFAULT_SHARE_PASSCODE = '181111';
+
 export const PASSCODE_RE = /^\d{6}$/;
 export const isValidPasscode = (v) => PASSCODE_RE.test(String(v ?? ''));
 

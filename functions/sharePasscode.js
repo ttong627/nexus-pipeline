@@ -4,6 +4,10 @@
 'use strict';
 const crypto = require('crypto');
 
+// ★기본 비밀번호 — 클라(src/utils/sharePasscode.js)와 **같은 값이어야 한다**.
+//   회귀 scripts/share-passcode.test.mjs 가 두 값이 같은지 잠근다(한쪽만 고치면 기사가 못 들어온다).
+const DEFAULT_SHARE_PASSCODE = '181111';
+
 const PASSCODE_RE = /^\d{6}$/;
 const isValidPasscode = (v) => PASSCODE_RE.test(String(v ?? ''));
 const newSalt = () => crypto.randomBytes(16).toString('hex');
@@ -17,4 +21,4 @@ const verifyPasscode = (passcode, salt, hash) => {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 };
 
-module.exports = { PASSCODE_RE, isValidPasscode, newSalt, hashPasscode, verifyPasscode };
+module.exports = { PASSCODE_RE, DEFAULT_SHARE_PASSCODE, isValidPasscode, newSalt, hashPasscode, verifyPasscode };

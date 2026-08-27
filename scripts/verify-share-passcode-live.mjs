@@ -5,7 +5,7 @@
 //     1. admin 으로 테스트 공유 `route_shares/sr_test…`(만료 +1h) + 레코드 2건 + secrets(비밀번호 해시) 생성
 //     2. openShare 호출: 빈 비밀번호 → PASSCODE_REQUIRED / 오답 → permission-denied / 정답 → 토큰
 //     3. 클라 SDK 로 토큰 로그인 → 공유·레코드 읽기 성공 / 로그아웃 후 무토큰 읽기 → 거부 / 다른 공유 토큰 → 거부
-//     4. 오답 5회 → resource-exhausted(잠금) · secrets 없는 옛 공유 → 빈 비밀번호로 토큰(이행기)
+//     4. 오답 5회 → resource-exhausted(잠금) · secrets 없는 공유 → **기본번호(181111)로만** 열림(2026-08-25 개정)
 //     5. 테스트 문서 전부 삭제
 //   사용: node scripts/verify-share-passcode-live.mjs
 import admin from 'firebase-admin';
@@ -13,7 +13,7 @@ import { readFileSync } from 'fs';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInWithCustomToken, signOut } from 'firebase/auth';
 import { getFirestore, doc, getDoc, getDocs, collection, query, where } from 'firebase/firestore';
-import { hashPasscode, newSalt } from '../src/utils/sharePasscode.js';
+import { hashPasscode, newSalt, DEFAULT_SHARE_PASSCODE } from '../src/utils/sharePasscode.js';
 
 const env = readFileSync(new URL('../.env', import.meta.url), 'utf8');
 const E = (k) => (env.match(new RegExp(`^${k}=(.*)$`, 'm'))?.[1] || '').trim().replace(/^['"]|['"]$/g, '');
@@ -114,9 +114,14 @@ try {
   for (let i = 0; i < 5; i++) await callOpen(XFF, WRONG, 'd1', { 'X-Forwarded-For': `203.0.113.${i + 1}` });
   const xffLocked = await callOpen(XFF, PASS, 'd1', { 'X-Forwarded-For': '198.51.100.7' });
   ok('위조 XFF 5회 오답 후 잠금(위조 헤더 무시 = 실제 IP 키)', xffLocked.error?.status === 'RESOURCE_EXHAUSTED', JSON.stringify(xffLocked.error || xffLocked.result).slice(0, 100));
-  // 옛 링크(secrets 없음) → 빈 비밀번호로 토큰(legacy)
-  const l = await callOpen(LEGACY, '');
-  ok('secrets 없는 옛 공유 → 빈 비밀번호로 토큰(legacy=true)', typeof l.result?.token === 'string' && l.result.legacy === true, JSON.stringify(l.error || '').slice(0, 120));
+  // ★비밀번호 문서가 없는 공유 — 예전엔 빈 비밀번호로 그냥 열렸다(SH-5 이행기).
+  //   2026-08-25 부터 **기본번호(181111)** 를 요구한다(형 지시). 빈 값이면 입력창을 띄우라는 신호만 준다.
+  const empty = await callOpen(LEGACY, '');
+  ok('비번문서 없는 공유 — 빈 비밀번호는 입장 불가(입력창 신호)', empty.error?.status === 'FAILED_PRECONDITION');
+  const wrongDef = await callOpen(LEGACY, '999999');
+  ok('비번문서 없는 공유 — 아무 번호로나 열리지 않는다', !wrongDef.result?.token);
+  const l = await callOpen(LEGACY, DEFAULT_SHARE_PASSCODE);
+  ok('★비번문서 없는 공유 → 기본번호(181111)로 입장', typeof l.result?.token === 'string', JSON.stringify(l.error || '').slice(0, 120));
   if (l.result?.token) { await signInWithCustomToken(cauth, l.result.token); ok('옛 공유 토큰으로 읽기 OK', await canRead(LEGACY)); await signOut(cauth); }
   // 형식 불량
   const bad = await callOpen('not-a-share', PASS);

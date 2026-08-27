@@ -4,8 +4,9 @@
 //   ★한쪽만 고치면 기사가 영영 못 연다 — 두 구현의 해시가 같은지 여기서 잠근다.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
-import { hashPasscode, newSalt, randomPasscode, isValidPasscode } from '../src/utils/sharePasscode.js';
+import { hashPasscode, newSalt, randomPasscode, isValidPasscode, DEFAULT_SHARE_PASSCODE } from '../src/utils/sharePasscode.js';
 import { decideGate, gateMessage } from '../src/utils/shareGate.js';
 
 const require = createRequire(import.meta.url);
@@ -64,4 +65,19 @@ test('gateMessage — 코드별 문장, 비밀번호 필요(failed-precondition)
   assert.match(gateMessage('functions/resource-exhausted', { minutes: 10 }), /10분/);
   assert.match(gateMessage('functions/not-found'), /만료/);
   assert.match(gateMessage('anything-else'), /다시 시도/);
+});
+
+test('기본 비밀번호 — 클라·서버 값이 같아야 한다(어긋나면 기사가 못 들어온다)', () => {
+  // 형 지시 2026-08-25: "담당자가 비밀번호를 정하면 그 번호고, 안 정하거나 없는 경우는 181111".
+  // 이 값이 두 곳에 나뉘어 있으므로(클라 발행 · 서버 검증) 한쪽만 고치면 조용히 안 열린다.
+  assert.equal(DEFAULT_SHARE_PASSCODE, '181111');
+  assert.equal(server.DEFAULT_SHARE_PASSCODE, DEFAULT_SHARE_PASSCODE, '클라·서버 기본번호가 다르다');
+  assert.equal(isValidPasscode(DEFAULT_SHARE_PASSCODE), true, '기본번호가 6자리 규격을 벗어났다');
+});
+
+test('비밀번호 문서가 없는 공유는 기본번호로만 열린다 — 옛 자동통과 경로가 부활하면 안 된다', async () => {
+  const src = await readFile(new URL('../functions/index.js', import.meta.url), 'utf8');
+  assert.equal(/case 'legacy': return mint\(/.test(src), false, '비밀번호 없이 그냥 열어 주던 경로가 되살아났다');
+  assert.match(src, /usingDefault/, '기본번호 경로가 사라졌다');
+  assert.match(src, /if \(usingDefault\) Object\.assign\(secPatch/, '틀린 시도로 해시 없는 반쪽 문서가 생기는 것을 막는 코드가 없다');
 });

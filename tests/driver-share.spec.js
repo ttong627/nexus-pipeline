@@ -9,7 +9,7 @@
 import { test, expect } from '@playwright/test';
 import admin from 'firebase-admin';
 import { readFileSync } from 'fs';
-import { hashPasscode, newSalt } from '../src/utils/sharePasscode.js';
+import { hashPasscode, newSalt, DEFAULT_SHARE_PASSCODE } from '../src/utils/sharePasscode.js';
 
 const BASE = (process.env.E2E_BASE || 'https://logis-op.web.app').replace(/\/+$/, '');
 const PASS = '135790';
@@ -17,6 +17,7 @@ const WRONG = '246800';
 const DRIVER = 'd1';
 const NAMES = ['홍길동테스트', '김철수테스트', '이영희테스트'];
 let SHARE = '';
+let SHARE_NOSEC = '';   // 비밀번호 문서가 아예 없는 지도(옛 링크 · 담당자가 안 정한 경우)
 
 // 화면을 죽이는 신호만 모은다(네트워크·firebase 경고는 정상 동작에도 나온다).
 const watchFatal = (page) => {
@@ -57,6 +58,20 @@ test.beforeAll(async () => {
     passcodeHash: await hashPasscode(PASS, salt), passcodeSalt: salt, ver: 0,
     createdBy: 'e2e:playwright', createdAt: admin.firestore.FieldValue.serverTimestamp(),
   });
+
+  // ★비밀번호 문서를 **일부러 만들지 않는** 지도 — 형이 겪은 "기존 발행한 지도가 비밀번호를 묻는" 상황 그대로.
+  //   기본번호(181111)로 열려야 한다(형 지시 2026-08-25).
+  SHARE_NOSEC = `sr_e2e_${Date.now().toString(36)}nosec`;
+  await db.collection('route_shares').doc(SHARE_NOSEC).set({
+    city: 'E2E테스트시', monthId: '0000-00', createdBy: 'e2e:playwright',
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    expiresAt: admin.firestore.Timestamp.fromMillis(Date.now() + 3600_000),
+    drivers: [{ id: DRIVER, name: '테스트기사', color: '#22c55e' }], _test: true,
+  });
+  await db.collection('route_shares').doc(SHARE_NOSEC).collection('records').doc('r1').set({
+    id: 'r1', driverId: DRIVER, 이름: NAMES[0], 주소: '서울특별시 동대문구 왕산로 70',
+    포수: 1, 배송순번: '1', 행정동: '전농동', lat: 37.5794, lng: 127.0499,
+  });
 });
 
 test.afterAll(async () => {
@@ -65,6 +80,14 @@ test.afterAll(async () => {
   await db.recursiveDelete(db.collection('route_shares').doc(SHARE)).catch(() => {});
   await db.collection('route_share_secrets').doc(SHARE).delete().catch(() => {});
   await admin.auth().deleteUser(`share_${SHARE}_${DRIVER}`).catch(() => {});
+  if (SHARE_NOSEC) {
+    await db.recursiveDelete(db.collection('route_shares').doc(SHARE_NOSEC)).catch(() => {});
+    // 기본번호로 열리면 서버가 비밀번호 문서를 만들어 굳힌다 — 그것도 지운다.
+    await db.collection('route_share_secrets').doc(SHARE_NOSEC).delete().catch(() => {});
+    await admin.auth().deleteUser(`share_${SHARE_NOSEC}_${DRIVER}`).catch(() => {});
+    const l2 = await db.collection('share_access_logs').where('shareId', '==', SHARE_NOSEC).get().catch(() => null);
+    if (l2) await Promise.all(l2.docs.map((d) => d.ref.delete().catch(() => {})));
+  }
   // ★열람기록은 화면이 뜬 **뒤에** 쓰인다 — 바로 지우면 마지막 한 건이 뒤늦게 남는다(실측 3건).
   //   잠깐 기다렸다가 두 번 훑는다. 남겨두면 실행할 때마다 운영 로그에 테스트 흔적이 쌓인다.
   for (let i = 0; i < 2; i++) {
@@ -118,6 +141,27 @@ test('④ 틀린 비밀번호는 들어가지 못한다', async ({ page }) => {
   const input = page.locator('input[inputmode="numeric"], input[type="password"], input[type="tel"]').first();
   await input.waitFor({ timeout: 20000 });
   await input.fill(WRONG);
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(4000);
+  await expect(page.getByText(NAMES[0], { exact: false })).toHaveCount(0);
+});
+
+test('⑤ 비밀번호를 안 정한 지도는 기본번호로 열린다 (형 지시 2026-08-25)', async ({ page }) => {
+  const fatal = watchFatal(page);
+  await page.goto(`${BASE}/?r=${SHARE_NOSEC}&d=${DRIVER}`, { waitUntil: 'domcontentloaded' });
+  const input = page.locator('input[inputmode="numeric"], input[type="password"], input[type="tel"]').first();
+  await input.waitFor({ timeout: 20000 });
+  await input.fill(DEFAULT_SHARE_PASSCODE);
+  await page.keyboard.press('Enter');
+  await expect(page.getByText(NAMES[0], { exact: false }).first()).toBeVisible({ timeout: 30000 });
+  expect(fatal, `화면을 죽이는 오류: ${fatal.join(' / ')}`).toEqual([]);
+});
+
+test('⑥ 비밀번호를 안 정한 지도도 아무 번호로나 열리지는 않는다', async ({ page }) => {
+  await page.goto(`${BASE}/?r=${SHARE_NOSEC}&d=${DRIVER}`, { waitUntil: 'domcontentloaded' });
+  const input = page.locator('input[inputmode="numeric"], input[type="password"], input[type="tel"]').first();
+  await input.waitFor({ timeout: 20000 });
+  await input.fill('999999');
   await page.keyboard.press('Enter');
   await page.waitForTimeout(4000);
   await expect(page.getByText(NAMES[0], { exact: false })).toHaveCount(0);

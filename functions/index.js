@@ -828,7 +828,12 @@ exports.leakAlert = onDocumentCreated(
 //     없으면 배포는 되고 **호출만 죽는다** — 배포 절차에 IAM 1줄이 들어가는 이유. 배포 후 반드시 실호출로 확인할 것.
 const { onCall, HttpsError } = require('firebase-functions/v2/https');
 const nodeCrypto = require('crypto');
-const { verifyPasscode, isValidPasscode } = require('./sharePasscode');
+const { verifyPasscode, isValidPasscode, hashPasscode, DEFAULT_SHARE_PASSCODE } = require('./sharePasscode');
+// ★비밀번호 문서가 없는 공유(옛 링크 · 담당자가 안 정한 경우)는 **기본번호로 연다**(형 지시 2026-08-25).
+//   예전엔 빈 비밀번호로 그냥 열렸다(SH-5 이행기) — 링크만 알면 누구나 들어왔다는 뜻이다.
+//   저장된 솔트가 없으니 여기서 고정 솔트로 같은 규격의 해시를 만들어, 아래 검증·잠금 코드를 **그대로** 태운다.
+const DEFAULT_SECRET_SALT = 'nexus-default-share-salt';
+const DEFAULT_SECRET_HASH = hashPasscode(DEFAULT_SHARE_PASSCODE, DEFAULT_SECRET_SALT);
 const SHARE_ID_RE = /^sr_[A-Za-z0-9_-]{8,64}$/;     // 옛 형식(접두사 뒤 14자)도 받는다 · 길이 상한
 const DRIVER_ID_RE = /^[A-Za-z0-9_-]{0,40}$/;
 // 잠금 정책(검사 지적 반영): ① 공유+IP 단위 5회 → 10분(틀린 사람만 잠긴다 — 링크 아는 사람이 전 기사를 잠그지 못하게)
@@ -878,8 +883,11 @@ exports.openShare = onCall(
     // ★검증·실패 집계·잠금을 **한 트랜잭션**에서 — 동시요청이 같은 카운트를 읽고 지나가는 경합을 막는다(검사 지적)
     const outcome = await db.runTransaction(async (tx) => {
       const [secSnap, attSnap] = await Promise.all([tx.get(secretRef), tx.get(attemptRef)]);
-      if (!secSnap.exists) return { kind: 'legacy' };
-      const sec = secSnap.data() || {};
+      // 문서가 없으면 기본번호를 쓴다 — 아래 로직은 있을 때와 완전히 같은 길을 탄다.
+      const usingDefault = !secSnap.exists || !secSnap.get('passcodeHash');
+      const sec = usingDefault
+        ? { ...(secSnap.data() || {}), passcodeSalt: DEFAULT_SECRET_SALT, passcodeHash: DEFAULT_SECRET_HASH, ver: 0 }
+        : (secSnap.data() || {});
       const att = attSnap.exists ? (attSnap.data() || {}) : {};
       const ipLock = toMs(att.lockUntil), shareLock = toMs(sec.lockUntil);
       if (ipLock > nowMs) return { kind: 'locked', minutes: Math.ceil((ipLock - nowMs) / 60000) };
@@ -888,6 +896,16 @@ exports.openShare = onCall(
       if (!isValidPasscode(passcode)) return { kind: 'invalid' };
       if (verifyPasscode(passcode, sec.passcodeSalt, sec.passcodeHash)) {
         if (attSnap.exists) tx.delete(attemptRef);
+        // ★기본번호로 열렸으면 그 자리에서 문서로 굳힌다 — 상태가 데이터에 드러나야
+        //   담당자가 [변경]으로 바꿀 수 있고, 규칙의 세대(ver) 대조도 어긋나지 않는다.
+        if (usingDefault) {
+          tx.set(secretRef, {
+            passcodeSalt: DEFAULT_SECRET_SALT, passcodeHash: DEFAULT_SECRET_HASH, ver: 0,
+            // ⛔`isDefault` 같은 표식은 두지 않는다 — 담당자가 [변경]으로 번호를 바꿔도
+            //   규칙이 그 키의 수정을 막아 **거짓으로 남는다**(허용 키는 hash·salt·updatedAt·ver 뿐).
+            createdBy: 'system:default', updatedAt: admin.firestore.Timestamp.fromMillis(nowMs),
+          }, { merge: true });
+        }
         // ★비밀번호 세대(ver) — 담당자가 번호를 바꾸면 이 값이 오르고, 규칙이 옛 토큰을 끊는다.
         return { kind: 'ok', ver: Number(sec.ver || 0) };
       }
@@ -905,6 +923,9 @@ exports.openShare = onCall(
       const inWindow = hourStart > 0 && nowMs - hourStart < 3600000;
       const hourFails = (inWindow ? (sec.hourFails || 0) : 0) + 1;
       const secPatch = { hourFails, hourStart: inWindow ? sec.hourStart : admin.firestore.Timestamp.fromMillis(nowMs) };
+      // ★틀린 시도로 문서가 처음 만들어질 때 해시를 같이 넣는다 — 안 넣으면 `passcodeHash` 없는
+      //   반쪽 문서가 남아 그 지도는 **아무 번호로도 못 열린다**(기본번호 경로까지 막힌다).
+      if (usingDefault) Object.assign(secPatch, { passcodeSalt: DEFAULT_SECRET_SALT, passcodeHash: DEFAULT_SECRET_HASH, ver: 0 });
       if (hourFails >= SHARE_HOUR_CAP) {
         secPatch.lockUntil = admin.firestore.Timestamp.fromMillis(nowMs + SHARE_CAP_LOCK_MINUTES * 60000);
         secPatch.hourFails = 0;
@@ -922,7 +943,7 @@ exports.openShare = onCall(
       return { token, legacy, expiresAt: toMs(share.expiresAt) };
     };
     switch (outcome.kind) {
-      case 'legacy': return mint(true, 0);                 // 비밀번호 없이 만든 옛 링크(이행기)
+      // ⛔`legacy`(비밀번호 없이 그냥 열어 주던 옛 경로)는 2026-08-25 에 없앴다 — 이제 비밀번호 문서가 없으면 기본번호를 요구한다.
       case 'ok': return mint(false, outcome.ver || 0);
       case 'locked': throw new HttpsError('resource-exhausted', '여러 번 틀려 잠시 잠겼습니다.', { minutes: outcome.minutes });
       case 'required': throw new HttpsError('failed-precondition', 'PASSCODE_REQUIRED');
