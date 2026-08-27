@@ -197,6 +197,9 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
 
   // ── 같은 좌표 팝업
   const [samePointPopup, setSamePointPopup] = useState(null); // { recs, x, y }
+  // ★핀을 누르면 그 자리에서 순번을 바로 넣는다(형 지시 2026-08-27 "좌표 클릭하고 바로 순번을 입력").
+  //   목록으로 눈을 옮기지 않고 지도만 보며 순서를 매길 수 있어야 현장 감각대로 찍을 수 있다.
+  const [seqPin, setSeqPin] = useState(null); // { id, name, x, y }
 
   // ── 좌표 삭제 브러시 모달
   const [showCoordBrush, setShowCoordBrush] = useState(false);
@@ -1160,7 +1163,13 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
           const oy = rect ? e.clientY - (mapCont?.top  || 0) : e.clientY;
           setSamePointPopup({ recs: coordRecsMapRef.current.get(entry.coordKey) || [], x: ox, y: oy });
         } else {
-          setLayoutMode(prev => (prev === 'map' || prev === 'mapfull') ? 'split' : prev);
+          const rect = mapRef.current?.parentElement?.getBoundingClientRect();
+          setSeqPin({
+            id: entry.rec.id,
+            name: entry.rec.이름 || '',
+            x: e.clientX - (rect?.left || 0),
+            y: e.clientY - (rect?.top || 0),
+          });
           handleSelectRecord(entry.rec);
         }
       });
@@ -4304,7 +4313,7 @@ ${folders}
             )}
             <div ref={mapRef} className="flex-1 relative"
               onDoubleClick={() => { if (!isPaintMode) setLayoutMode('mapfull'); }}
-              onClick={() => samePointPopup && setSamePointPopup(null)}
+              onClick={() => { if (samePointPopup) setSamePointPopup(null); if (seqPin) setSeqPin(null); }}
               style={{ cursor: placingPinForDriver ? 'crosshair' : undefined }}
             >
               {/* ── V월드 3D 조망 — 카카오 지도 위에 덮는다(끄면 그대로 2D 로 돌아온다).
@@ -4381,6 +4390,50 @@ ${folders}
             </div>
 
             {/* ── 같은 좌표 팝업 ─────────────────────────────────────── */}
+            {/* ★핀에서 바로 순번 입력 — 숫자 넣고 Enter 면 그 집의 배송순번이 된다(비우고 Enter 면 지운다). */}
+            {seqPin && (
+              <div className="absolute z-[320] pointer-events-auto"
+                style={{ left: seqPin.x, top: seqPin.y, transform: 'translate(-50%, -130%)' }}>
+                <form
+                  onSubmit={async (ev) => {
+                    ev.preventDefault();
+                    const raw = String(new FormData(ev.currentTarget).get('seq') ?? '').replace(/[^0-9]/g, '');
+                    const target = records.find(r => r.id === seqPin.id);
+                    const before = target?.배송순번 ?? '';
+                    // ★화면부터 바꾸고(기다림 없이) 저장한다 — 실패하면 되돌리고 알린다(UI-1 ④ 낙관적 갱신).
+                    setRecords(prev => prev.map(r => (r.id === seqPin.id ? { ...r, 배송순번: raw } : r)));
+                    setSeqPin(null);
+                    const docId = target?._cloudDocId || target?.id;
+                    if (!isCloudMode || !cloudCity || !cloudMonthId || !docId) return;   // 로컬 명단은 기존처럼 저장 버튼으로
+                    try {
+                      await setDoc(
+                        doc(db, 'cloud_lists', cloudCity, 'months', cloudMonthId, 'records', docId),
+                        { 배송순번: raw, 배송순번수정일시: serverTimestamp() },
+                        { merge: true },
+                      );
+                    } catch (err) {
+                      console.error('[핀 순번 저장] 실패:', err);
+                      setRecords(prev => prev.map(r => (r.id === seqPin.id ? { ...r, 배송순번: before } : r)));
+                      alert('순번 저장에 실패했습니다. 잠시 후 다시 시도해 주세요.');
+                    }
+                  }}
+                  className="bg-[#0e0e0e] border border-emerald-500/50 rounded-xl shadow-2xl px-3 py-2 flex items-center gap-2"
+                  onClick={(ev) => ev.stopPropagation()}
+                >
+                  <span className="text-[10px] font-black text-emerald-300 whitespace-nowrap max-w-[90px] overflow-hidden text-ellipsis">{seqPin.name || '순번'}</span>
+                  <input
+                    name="seq" autoFocus type="text" inputMode="numeric" maxLength={4}
+                    defaultValue={records.find(r => r.id === seqPin.id)?.배송순번 || ''}
+                    onKeyDown={(ev) => { if (ev.key === 'Escape') { ev.preventDefault(); setSeqPin(null); } }}
+                    className="w-16 bg-black/60 border border-[#2a2a2a] focus:border-emerald-500/70 rounded-lg px-2 py-1 text-center text-[13px] font-black text-white outline-none"
+                    placeholder="순번"
+                  />
+                  <button type="submit" className="px-2 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-[11px] font-black text-black">확인</button>
+                  <button type="button" onClick={() => setSeqPin(null)} className="text-gray-500 hover:text-white text-[11px]">✕</button>
+                </form>
+              </div>
+            )}
+
             {samePointPopup && (
               <div
                 className="absolute z-[300] pointer-events-auto"

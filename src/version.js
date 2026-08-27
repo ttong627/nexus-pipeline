@@ -1,8 +1,11 @@
-export const APP_VERSION = 'V7.19.2';
+export const APP_VERSION = 'V7.20';
 export const APP_BUILD = '2026.08.27';
-export const APP_BUILD_TIME = '2026.08.27 17:32';
+export const APP_BUILD_TIME = '2026.08.27 17:39';
 
 export const CHANGELOG = [
+  { v: "V7.20", date: "2026.08.27", items: [
+    "지도 핀을 누르면 그 자리에서 순번을 입력하고 바로 저장됩니다",
+  ]},
   { v: "V7.19.2", date: "2026.08.27", items: [
     "기사배정 루트맵에서 소속사를 고르는 단계를 없앴습니다 — 내 소속의 행정동으로 바로 들어갑니다",
   ]},
