@@ -420,7 +420,14 @@ gcloud도 `--account ttong627@gmail.com`을 매 명령에 붙인다.
 - 브랜치: **main** (★2026-08-06 `d216186`에서 `feat/juso-entrc-loader` **병합 완료** → 두 ref가 동일 커밋 `54355d9`. 08-06 기록의 "main 정지" 상태는 **해소됨**)
 
 ## 배포 환경
-- 접속 URL: https://logis-op.web.app · https://logis-op.firebaseapp.com
+- 접속 URL(**커스텀 도메인 2개 · 2026-08-19 연결 · 실측 2026-08-27**):
+  - **https://narami.wssc.kr** — HOST_ACTIVE · 인증서 CERT_ACTIVE(만료 2026-11-18) · DNS_MATCH(A 199.36.158.100)
+  - **https://wr.wslos.com** — HOST_ACTIVE · 인증서 CERT_ACTIVE(만료 2026-11-18) · DNS_MATCH(A 199.36.158.100)
+  - 기본 도메인: https://logis-op.web.app · https://logis-op.firebaseapp.com
+  - 네 도메인 모두 **같은 사이트(logis-op)** 를 서비스한다 — 배포 한 번이면 전부 갱신된다(실측: 4곳 다 같은 번들).
+  - Firebase Auth **승인된 도메인**에 두 커스텀 도메인이 모두 등록돼 있다 → 담당자 구글 로그인 정상.
+    (기사 링크는 커스텀 토큰이라 승인 도메인과 무관하게 어느 주소로도 열린다)
+  - ⚠️인증서 만료 **2026-11-18** — Firebase 가 자동 갱신하지만, 그 무렵 한 번 확인할 것.
 - 호스팅: Firebase Hosting (public=`dist`)
 - 빌드: `npm run build` (vite build) · 게이트: `prebuild`=eslint --quiet && tsc --noEmit
 - 릴리스: `node scripts/bump-version.cjs [minor|patch|major] "항목..."` → 버전+CHANGELOG 단일 관리
