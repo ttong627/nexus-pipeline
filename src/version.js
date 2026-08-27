@@ -1,8 +1,11 @@
-export const APP_VERSION = 'V7.20';
+export const APP_VERSION = 'V7.20.1';
 export const APP_BUILD = '2026.08.27';
-export const APP_BUILD_TIME = '2026.08.27 17:39';
+export const APP_BUILD_TIME = '2026.08.27 19:29';
 
 export const CHANGELOG = [
+  { v: "V7.20.1", date: "2026.08.27", items: [
+    "3D 지도에서 좌표 핀이 항상 보이고, 작고 잘 보이게 바뀌었습니다",
+  ]},
   { v: "V7.20", date: "2026.08.27", items: [
     "지도 핀을 누르면 그 자리에서 순번을 입력하고 바로 저장됩니다",
   ]},

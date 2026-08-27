@@ -95,6 +95,35 @@ export default function Vworld3DView({ target = null, active = false, onExit = n
   const cesRef = useRef(null);      // 카메라에서 거꾸로 캔 Cesium 생성자들
   const altRef = useRef(null);      // 완만하게 만든 카메라 고도(산을 타넘는 출렁임 방지)
   const [camNow, setCamNow] = useState(null);   // 지금 카메라 — 3D 위에 핀을 얹는 데 쓴다
+
+  // ★주행 중이 아니어도 3D 위에 대상자 핀을 띄운다(형 지시 2026-08-27 "좌표는 3D로 표시").
+  //   예전엔 `drive` 가 있을 때만 카메라 값을 만들어서, 그냥 3D 로 둘러볼 땐 핀이 하나도 없었다.
+  //   여기서는 **실제 Cesium 카메라**를 읽는다 — 담당자가 돌려 본 각도 그대로여야 핀이 제자리에 얹힌다.
+  //   (라디안 → 도. tilt 는 내려다볼 때 음수 — projectToScreen 이 그 규격을 쓴다)
+  useEffect(() => {
+    if (!active || drive) return undefined;
+    let alive = true;
+    const tick = () => {
+      if (!alive) return;
+      try {
+        if (!camRef.current) camRef.current = findViewer(mapRef.current)?.camera || null;
+        const cam = camRef.current;
+        const pos = cam?.positionCartographic;
+        if (pos && Number.isFinite(pos.latitude)) {
+          const deg = 180 / Math.PI;
+          setCamNow({
+            lat: pos.latitude * deg,
+            lng: pos.longitude * deg,
+            heading: ((cam.heading || 0) * deg + 360) % 360,
+            tilt: (cam.pitch || 0) * deg,
+          });
+        }
+      } catch { /* 뷰어 준비 전 — 다음 차례에 다시 본다 */ }
+    };
+    tick();
+    const t = setInterval(tick, 200);   // 매 프레임은 과하다 — 눈으로는 차이가 없다
+    return () => { alive = false; clearInterval(t); };
+  }, [active, drive, ready]);   // eslint-disable-line react-hooks/exhaustive-deps -- 카메라 참조는 ref 라 의존성이 아니다
   const [box, setBox] = useState({ w: 1200, h: 700 });   // 화면 크기(투영에 필요)
   // 다음에 갈 집 — 지금 카메라 **앞쪽**에서 가장 가까운 정차점(형 지시 *"어디로 가는지"*)
   const next = (() => {
@@ -288,28 +317,33 @@ export default function Vworld3DView({ target = null, active = false, onExit = n
           「저쪽에 3번 집이 있다」는 우리가 셀 수 있다(utils/driveSim.projectToScreen).
           ⛔정밀 투영이 아니라 **눈대중**이다 — 방향과 거리를 알려 주는 용도. 가까운 8곳만.
           ⚠️뒤에 있는 집은 그리지 않는다(화면 밖인데 그리면 거짓말이 된다). */}
-      {drive && camNow && !notice && (
+      {camNow && !notice && (
         <div className="absolute inset-0 z-[5] pointer-events-none overflow-hidden">
           {stops
             .map((st2) => ({ st2, p: projectToScreen(camNow, st2, { w: box.w, h: box.h, fov: 74 }) }))
-            .filter((x) => x.p?.ahead && x.p.dist < 900)
+            // 둘러볼 땐 넓게·많이, 주행 중엔 가까운 것만(앞이 복잡하면 오히려 안 보인다)
+            .filter((x) => x.p?.ahead && x.p.dist < (drive ? 900 : 4000))
             .sort((a, b) => b.p.dist - a.p.dist)
-            .slice(-8)
+            .slice(drive ? -10 : -60)
             .map(({ st2, p }) => {
               const near = p.dist < 120;
               return (
                 <div key={st2.idx ?? `${st2.lat},${st2.lng}`}
                   className="absolute -translate-x-1/2 -translate-y-full transition-opacity duration-200"
                   style={{ left: p.x, top: p.y, opacity: Math.max(0.45, 1 - p.dist / 1100) }}>
-                  <div className={`flex flex-col items-center ${near ? 'drop-shadow-[0_4px_10px_rgba(0,0,0,.5)]' : ''}`}>
-                    <div className={`flex items-center gap-1 rounded-lg px-2 py-0.5 whitespace-nowrap border-2 border-white font-black text-white ${
-                      near ? 'bg-amber-500 text-[12px]' : 'bg-slate-900/95 text-[11px]'}`}>
-                      <span className="tabular-nums">{st2.seqLabel || (st2.seq != null ? `${st2.seq}번` : '')}</span>
-                      <span className="font-extrabold">{st2.who || st2.name}</span>
-                      <span className="text-white/60 tabular-nums">{p.dist}m</span>
+                  {/* ★작게, 대신 잘 보이게(형 지시 2026-08-27) — 순번 동그라미가 본체다.
+                      거리(m)는 뺐다: 핀이 커지는 주범인데 3D 에서 굳이 읽지 않는다.
+                      이름은 가까울 때만 아주 작게 — 멀리 있는 것까지 이름을 달면 글자가 서로 겹쳐 못 읽는다. */}
+                  <div className="flex flex-col items-center">
+                    <div className={`flex items-center justify-center rounded-full border-2 border-white font-black tabular-nums leading-none shadow-[0_2px_6px_rgba(0,0,0,.6)] ${
+                      near ? 'bg-amber-400 text-black w-[22px] h-[22px] text-[11px]' : 'bg-sky-500 text-white w-[18px] h-[18px] text-[10px]'}`}>
+                      {st2.seq != null ? st2.seq : '·'}
                     </div>
-                    <div className="w-0.5 h-3 bg-white/80" />
-                    <div className={`w-2.5 h-2.5 rounded-full border-2 border-white ${near ? 'bg-amber-400' : 'bg-sky-400'}`} />
+                    {near && (
+                      <div className="mt-0.5 px-1 rounded bg-black/80 text-white text-[9px] font-bold leading-tight whitespace-nowrap max-w-[72px] overflow-hidden text-ellipsis">
+                        {st2.who || st2.name}
+                      </div>
+                    )}
                   </div>
                 </div>
               );
