@@ -10,6 +10,7 @@ import { haversineKm } from '../engine/coordValidator.js';
 import { sortByRoadAddress } from '../utils/sortRecords.js';
 // 파생 계산(정렬·순번배지·지도대상) — 회귀 scripts/share-records-view.test.mjs 로 잠겨 있다.
 import { deriveDriverRecords } from '../utils/shareRecordsView.js';
+import { loadKakaoMapsSdk } from '../utils/kakaoSdk.js';   // 지도 SDK 로더 SSOT
 
 const KAKAO_JS_KEY = import.meta.env.VITE_KAKAO_JS_KEY;
 
@@ -303,16 +304,11 @@ export default function ShareRouteView({ shareId, driverId }) {
 
   // ── Kakao Maps SDK ──────────────────────────────────────────────────
   useEffect(() => {
-    if (window.kakao?.maps?.Map) { setIsMapReady(true); return; }
-    const existing = document.getElementById('kakao-map-sdk');
-    if (existing) { existing.onload = () => window.kakao.maps.load(() => setIsMapReady(true)); return; }
-    const script = document.createElement('script');
-    script.id = 'kakao-map-sdk';
-    script.src = `//dapi.kakao.com/v2/maps/sdk.js?appkey=${KAKAO_JS_KEY}&autoload=false`;
-    script.async = true;
-    script.onload = () => window.kakao.maps.load(() => setIsMapReady(true));
-    script.onerror = () => console.warn('Kakao Maps SDK load failed');
-    document.head.appendChild(script);
+    let alive = true;
+    loadKakaoMapsSdk(KAKAO_JS_KEY, [])
+      .then(() => { if (alive) setIsMapReady(true); })
+      .catch((e) => console.warn('[지도 SDK]', e));
+    return () => { alive = false; };
   }, []);
 
   // ── GPS 추적 ────────────────────────────────────────────────────────

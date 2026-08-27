@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { X, Eraser, Search } from 'lucide-react';
+import { loadKakaoMapsSdk } from '../utils/kakaoSdk.js';   // 지도 SDK 로더 SSOT
 
 const KAKAO_JS_KEY = import.meta.env.VITE_KAKAO_JS_KEY;
 
@@ -44,22 +45,11 @@ export default function CoordBrushModal({ records, selectedCity, onClose, onAppl
 
   // ── Kakao SDK ────────────────────────────────────────────────────────────
   useEffect(() => {
-    if (window.kakao?.maps?.Map) { setIsMapReady(true); return; }
-    const existing = document.getElementById('kakao-map-sdk');
-    if (existing) {
-      if (window.kakao?.maps) {
-        window.kakao.maps.load(() => setIsMapReady(true));
-      } else {
-        existing.addEventListener('load', () => window.kakao.maps.load(() => setIsMapReady(true)), { once: true });
-      }
-      return;
-    }
-    const script = document.createElement('script');
-    script.id = 'kakao-map-sdk';
-    script.src = `//dapi.kakao.com/v2/maps/sdk.js?appkey=${KAKAO_JS_KEY}&libraries=clusterer&autoload=false`;
-    script.async = true;
-    script.onload = () => window.kakao.maps.load(() => setIsMapReady(true));
-    document.head.appendChild(script);
+    let alive = true;
+    loadKakaoMapsSdk(KAKAO_JS_KEY, ['clusterer'])
+      .then(() => { if (alive) setIsMapReady(true); })
+      .catch((e) => console.warn('[지도 SDK]', e));
+    return () => { alive = false; };
   }, []);
 
   // ── 지도 초기화 ──────────────────────────────────────────────────────────

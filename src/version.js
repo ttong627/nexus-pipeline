@@ -1,8 +1,11 @@
-export const APP_VERSION = 'V7.27.2';
+export const APP_VERSION = 'V7.27.3';
 export const APP_BUILD = '2026.08.27';
-export const APP_BUILD_TIME = '2026.08.27 22:03';
+export const APP_BUILD_TIME = '2026.08.27 22:16';
 
 export const CHANGELOG = [
+  { v: "V7.27.3", date: "2026.08.27", items: [
+    "지도가 안 뜨던 문제와 배정된 동을 미배정으로 잘못 알리던 문제를 고쳤습니다",
+  ]},
   { v: "V7.27.2", date: "2026.08.27", items: [
     "고른 소속사의 기사 명부를 불러오도록 고쳤습니다 (관리자 계정에서 반영이 안 되던 원인)",
   ]},

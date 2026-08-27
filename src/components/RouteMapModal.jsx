@@ -19,6 +19,7 @@ import { buildShareMeta, buildShareRecords, chunk, normalizeDeadline, MAX_DEADLI
 import { hashPasscode, newSalt, isValidPasscode } from '../utils/sharePasscode.js';
 import { getDriversCollection } from '../utils/company.js';
 import SharePasscodePrompt from './SharePasscodePrompt.jsx';
+import { loadKakaoMapsSdk } from '../utils/kakaoSdk.js';   // 지도 SDK 로더 SSOT(중복 로드·이미 로드됨 처리)
 import { suggestNearbyAssignments, applyNearbySuggestions } from '../utils/nearbyDongAssign.js';   // 인근 동 패턴 배정(제안만)
 import { buildAssignmentBatch, applyCarriedAssignments, RETENTION_MONTHS } from '../utils/assignmentStore.js';   // 배정만 따로 3개월 보관(명단과 분리)
 // ★순번 엔진은 SSOT 한 곳에만 산다 — 예전엔 이 파일에 41개 심볼이 문자 단위로 복제돼 있었다(2026-08-23 점검에서 제거).
@@ -276,15 +277,6 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
   }, [orgIdProp]);
 
   const [brushPrompt, setBrushPrompt] = useState(null); // { dong, driverIds }
-  // ★미배정 행정동을 인근 기사에게 **제안**한다(형 지시 2026-08-27 "배정 패턴에 따라 인근 지역도").
-  //   적용은 담당자가 누를 때만 — 임의 배정은 하지 않는다(S-5).
-  const [nearbyDismissed, setNearbyDismissed] = useState(false);
-  const nearbySuggestions = useMemo(() => {
-    if (nearbyDismissed || !records.length) return [];
-    try {
-      return suggestNearbyAssignments(records, { getDong: getRouteDong }).slice(0, 20);
-    } catch { return []; }
-  }, [records, nearbyDismissed]);
   const [paintDriverId, setPaintDriverId] = useState(null);
   const [paintRadiusPx, setPaintRadiusPx] = useState(50);
   const paintCursorRef = useRef(null);   // 브러시 커서 원 — state 없이 DOM 직접 이동 (전체 리렌더 차단)
@@ -330,6 +322,24 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
   }, [baseForFilter]);
   // 작업 큐 기반 — activeDong이 있으면 해당 동만, 없으면 전체
   const activeDong = dongQueue[activeDongIndex] ?? null;
+
+  // ★미배정 행정동을 인근 기사에게 **제안**한다(형 지시 2026-08-27 "배정 패턴에 따라 인근 지역도").
+  //   적용은 담당자가 누를 때만 — 임의 배정은 하지 않는다(S-5).
+  const [nearbyDismissed, setNearbyDismissed] = useState(false);
+  const nearbySuggestions = useMemo(() => {
+    if (nearbyDismissed || !records.length) return [];
+    try {
+      // ★아직 **작업 순서에 남아 있는 동**은 제외한다(형 지적 2026-08-27 "기사가 배정됐는데 인근동 미배정이라 뜬다").
+      //   큐에 있는 동은 곧 담당자가 직접 배정할 차례지 남겨진 동이 아니다 — 그걸 미배정이라 부르면 헛경고다.
+      //   이 기능은 **작업이 끝난 뒤 남은 동**을 위한 것이다.
+      const queued = new Set((dongQueue || []).filter(d => d && d !== activeDong));
+      return suggestNearbyAssignments(records, { getDong: getRouteDong })
+        .filter(x => !queued.has(x.dong))
+        // ★기사 이름을 못 찾으면 보여주지 않는다 — 화면에 '→?' 로 떠서 무슨 말인지 알 수 없었다.
+        .filter(x => drivers.some(d => d.id === x.driverId && String(d.name || '').trim()))
+        .slice(0, 20);
+    } catch { return []; }
+  }, [records, nearbyDismissed, drivers, dongQueue, activeDong]);
   const selectedDong = activeDong ?? '전체'; // 기존 코드 호환 alias (setSelectedDong 없음)
   // ★`useMemo` 필수(2026-08-23 Phase 3-1) — 예전엔 매 렌더 새 배열이라, 이걸 deps 로 쓰는 `displayRecords`·
   //   `mapRecords` 의 메모가 **동 큐가 잡힌 상시 경로에서 전부 무력화**됐다(전건 정렬이 렌더마다 다시 돌았다).
@@ -892,16 +902,12 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
 
   // ── Kakao Maps SDK 로딩 ─────────────────────────────────────────────
   useEffect(() => {
-    if (window.kakao?.maps?.Map) { setIsMapReady(true); return; }
-    const existing = document.getElementById('kakao-map-sdk');
-    if (existing) { existing.onload = () => window.kakao.maps.load(() => setIsMapReady(true)); return; }
-    const script = document.createElement('script');
-    script.id = 'kakao-map-sdk';
-    script.src = `//dapi.kakao.com/v2/maps/sdk.js?appkey=${KAKAO_JS_KEY}&libraries=clusterer&autoload=false`;
-    script.async = true;
-    script.onload = () => window.kakao.maps.load(() => setIsMapReady(true));
-    document.head.appendChild(script);
-  }, []);
+    let alive = true;
+    loadKakaoMapsSdk(KAKAO_JS_KEY, ['clusterer'])
+      .then(() => { if (alive) setIsMapReady(true); })
+      .catch((e) => { console.error('[지도 SDK]', e); if (alive) showToast?.('error', '지도를 불러오지 못했습니다. 새로고침 후 다시 시도해 주세요.'); });
+    return () => { alive = false; };
+  }, []);   // eslint-disable-line react-hooks/exhaustive-deps -- showToast 는 매 렌더 새 함수라 넣으면 SDK 를 계속 다시 부른다
 
   // ── 지도 초기화 ─────────────────────────────────────────────────────
   useEffect(() => {
