@@ -451,12 +451,28 @@ service cloud.firestore {
       }
     }
 
+    // ★저장한 지도를 **같은 소속사** 담당자가 열람한다(형 지시 2026-08-27).
+    //   지자체 승인 축은 그대로 두고 소속사 축을 **더한다** — 빼면 지금 보던 사람이 못 보게 된다(퇴행).
+    //   ⚠️읽기만 넓힌다. 쓰기는 그대로 지자체 승인·관리자 — 남의 소속사 배정을 고칠 수 있으면 안 된다.
+    //   ⚠️`all`·`__personal__` 같은 값은 소속이 아니다. 저장할 때 빈 값으로 만들지만, 규칙에서도 한 번 더 막는다
+    //     (그런 값이 들어 있는 옛 문서가 실제로 있다 — 시흥 `all`, 미추홀 `__personal__`).
+    function myOrgId() {
+      return exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('orgId', '')
+        : '';
+    }
+    function sameOrgSession(cityId, monthId) {
+      let p = /databases/$(database)/documents/route_sessions/$(cityId)/months/$(monthId);
+      let sOrg = exists(p) ? get(p).data.get('orgId', '') : '';
+      return sOrg != '' && sOrg != 'all' && sOrg != '__personal__' && sOrg == myOrgId();
+    }
+
     match /route_sessions/{cityId} {
       allow read: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin());
       allow write: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin());
 
       match /months/{monthId} {
-        allow read: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin());
+        allow read: if isAuthenticated() && (hasCityAccess(cityId) || sameOrgSession(cityId, monthId) || isAdmin());
         allow write: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin());
       }
     }

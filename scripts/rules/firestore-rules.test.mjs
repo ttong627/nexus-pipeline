@@ -25,7 +25,8 @@ await env.withSecurityRulesDisabled(async (ctx) => {
     ['sr_exp', { expiresAt: past, createdBy: 'owner@x.com', createdByUid: 'owneruid' }],
     ['sr_sso', { expiresAt: fut, createdBy: '', createdByUid: 'ssouid' }],   // SSO 담당자(email 없음)가 만든 공유
   ];
-  for (const [id, extra] of shares) {
+  
+for (const [id, extra] of shares) {
     await setDoc(doc(db, `route_shares/${id}`), { createdAt: new Date(now), city: 'c', monthId: 'm', drivers: [{ id: 'd1' }, { id: 'd2' }], driverPhones: ['+821011112222'], liveGps: {}, ...extra });
     await setDoc(doc(db, `route_shares/${id}/records/r1`), { driverId: 'd1', driverPhone: '+821011112222', name: 'A', received: false });
     await setDoc(doc(db, `route_shares/${id}/records/r2`), { driverId: 'd2', driverPhone: '+821033334444', name: 'B', received: false });
@@ -36,6 +37,12 @@ await env.withSecurityRulesDisabled(async (ctx) => {
   await setDoc(doc(db, 'user_companies/CO_THEIRS'), { ownerUid: 'someoneelse', name: '남의 회사' });
   await setDoc(doc(db, 'user_companies/CO_THEIRS/drivers/d9'), { name: '남의기사', phone: '010-0000-0000' });
   await setDoc(doc(db, 'users/otheruid'), { email: 'other@x.com', role: 'user', tier: 'basic' });
+  // ★같은 소속사 열람(2026-08-27) — 저장한 지도를 같은 소속사 담당자가 본다. 다른 소속사는 못 본다.
+  await setDoc(doc(db, 'users/orgMine'), { email: 'mine@x.com', role: 'user', orgId: '웰쉐어' });
+  await setDoc(doc(db, 'users/orgOther'), { email: 'them@x.com', role: 'user', orgId: '한울' });
+  await setDoc(doc(db, 'users/orgNone'), { email: 'none@x.com', role: 'user' });
+  await setDoc(doc(db, 'route_sessions/cityX/months/2026-08'), { city: 'cityX', monthId: '2026-08', orgId: '웰쉐어', drivers: [] });
+  await setDoc(doc(db, 'route_sessions/cityY/months/2026-08'), { city: 'cityY', monthId: '2026-08', orgId: 'all', drivers: [] });   // 특수값 — 소속이 아니다
 });
 
 const C = {
@@ -49,6 +56,9 @@ const C = {
   ssoOther: env.authenticatedContext('ssoother', { firebase: { sign_in_provider: 'custom' } }),
   other: env.authenticatedContext('otheruid', { email: 'other@x.com' }),
   admin: env.authenticatedContext('admin1', { email: 'admin@x.com' }),
+  orgMine: env.authenticatedContext('orgMine', { email: 'mine@x.com' }),
+  orgOther: env.authenticatedContext('orgOther', { email: 'them@x.com' }),
+  orgNone: env.authenticatedContext('orgNone', { email: 'none@x.com' }),
   phoneD1: env.authenticatedContext('phone1', { phone_number: '+821011112222' }),
 };
 
@@ -151,6 +161,20 @@ await run('★남의 기업 기사명부 읽기', 'other', 'DENY', (db) => getDo
 await run('★무인증 열람기록 생성', 'unauth', 'DENY', (db) => setDoc(doc(db, 'share_access_logs/l1'), { shareId: 'sr_A', at: new Date().toISOString(), count: 1 }));
 await run('공유 토큰으로 열람기록 생성', 'tokA1', 'ALLOW', (db) => setDoc(doc(db, 'share_access_logs/l2'), { shareId: 'sr_A', at: new Date().toISOString(), count: 1, driverId: 'd1' }));
 await run('담당자 세션으로 열람기록 생성', 'owner', 'ALLOW', (db) => setDoc(doc(db, 'share_access_logs/l3'), { shareId: 'sr_A', at: new Date().toISOString(), count: 1 }));
+
+// ── 저장한 지도의 소속사 열람 (2026-08-27 형 지시) ─────────────────────────────
+//   지자체 승인이 없어도 **같은 소속사**면 본다. 다른 소속사는 못 본다.
+//   쓰기는 넓히지 않았다 — 남의 소속사 배정을 고칠 수 있으면 안 된다.
+await run('★같은 소속사 담당자는 저장된 지도를 읽는다', 'orgMine', 'ALLOW',
+  (db) => getDoc(doc(db, 'route_sessions/cityX/months/2026-08')));
+await run('★다른 소속사는 못 읽는다', 'orgOther', 'DENY',
+  (db) => getDoc(doc(db, 'route_sessions/cityX/months/2026-08')));
+await run('소속이 없는 담당자도 못 읽는다', 'orgNone', 'DENY',
+  (db) => getDoc(doc(db, 'route_sessions/cityX/months/2026-08')));
+await run("★orgId 가 'all' 인 옛 문서는 소속으로 치지 않는다(모두에게 열리면 안 된다)", 'orgMine', 'DENY',
+  (db) => getDoc(doc(db, 'route_sessions/cityY/months/2026-08')));
+await run('같은 소속사라도 쓰기는 안 된다 — 남의 배정을 고칠 수 없다', 'orgMine', 'DENY',
+  (db) => setDoc(doc(db, 'route_sessions/cityX/months/2026-08'), { hacked: true }, { merge: true }));
 
 for (const r of rows) console.log(r);
 console.log(`\n규칙 실측: ${rows.length}건 중 불일치 ${bad}`);

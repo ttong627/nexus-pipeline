@@ -1,8 +1,11 @@
-export const APP_VERSION = 'V7.24';
+export const APP_VERSION = 'V7.25';
 export const APP_BUILD = '2026.08.27';
-export const APP_BUILD_TIME = '2026.08.27 20:36';
+export const APP_BUILD_TIME = '2026.08.27 20:50';
 
 export const CHANGELOG = [
+  { v: "V7.25", date: "2026.08.27", items: [
+    "저장한 지도를 같은 소속사 담당자도 볼 수 있습니다 (수정은 기존 권한 그대로)",
+  ]},
   { v: "V7.24", date: "2026.08.27", items: [
     "아직 기사가 없는 행정동을 인근 기사에게 배정하도록 제안합니다 (누를 때만 적용)",
   ]},

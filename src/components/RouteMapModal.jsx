@@ -244,6 +244,13 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
   //   "행정동에 2명 이상의 기사가 있는 경우는 기사들을 브러쉬로 배정할 수 있게" —
   //   예전엔 진입하자마자 자동 N등분이 돌아서 담당자가 손대기 전에 이미 갈라져 있었다.
   //   이제 안내만 띄우고, 브러쉬로 칠할지 자동으로 나눌지는 담당자가 고른다.
+  // ★저장한 지도를 **같은 소속사** 담당자가 열람하려면 문서에 소속사가 적혀 있어야 한다(형 지시 2026-08-27).
+  //   `all`·`__personal__` 같은 특수값은 소속이 아니다 — 그대로 두면 모두에게 열리는 셈이라 빈 값으로 만든다.
+  const sessionOrgId = useMemo(() => {
+    const v = String(orgIdProp || '').trim();
+    return (!v || v === 'all' || v === '__personal__') ? '' : v;
+  }, [orgIdProp]);
+
   const [brushPrompt, setBrushPrompt] = useState(null); // { dong, driverIds }
   // ★미배정 행정동을 인근 기사에게 **제안**한다(형 지시 2026-08-27 "배정 패턴에 따라 인근 지역도").
   //   적용은 담당자가 누를 때만 — 임의 배정은 하지 않는다(S-5).
@@ -1038,6 +1045,8 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
             city: cloudCity, monthId: cloudMonthId,
             savedAt: serverTimestamp(),
             savedBy: auth.currentUser?.email || '',
+            savedByUid: auth.currentUser?.uid || '',
+            orgId: sessionOrgId,   // ★같은 소속사 담당자가 열람하는 근거(규칙이 이 값을 본다)
             // ★DS-9-5: 출발지(startAddr/startLat/startLng)는 세션 저장에 넣지 않는다 — 기사 집주소일 수 있다(2026-08-23 점검)
             drivers: d.map(dr => ({ id: dr.id, name: dr.name, color: dr.color, capacity: dr.capacity || 100, deliveryDate: dr.deliveryDate || '' })),
             status: 'draft',
@@ -1581,6 +1590,8 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
             monthId: cloudMonthId,
             savedAt: serverTimestamp(),
             savedBy: auth.currentUser?.email || '',
+            savedByUid: auth.currentUser?.uid || '',
+            orgId: sessionOrgId,   // ★같은 소속사 담당자가 열람하는 근거(규칙이 이 값을 본다)
             drivers: drivers.map(d => ({ id: d.id, name: d.name, color: d.color, capacity: d.capacity || 100, deliveryDate: d.deliveryDate || '' })),   // DS-9-5
             status: 'draft',
             totalRecords: resetRecords.length,
@@ -1868,9 +1879,10 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
         doc(db, 'route_sessions', cloudCity, 'months', cloudMonthId),
         {
           city: cloudCity, monthId: cloudMonthId,
-          orgId: orgIdProp || 'all',
           savedAt: serverTimestamp(),
           savedBy: auth.currentUser?.email || '',
+          savedByUid: auth.currentUser?.uid || '',
+          orgId: sessionOrgId,   // ★같은 소속사 담당자가 열람하는 근거(규칙이 이 값을 본다)
           drivers: drivers.map(d => ({ id: d.id, name: d.name, color: d.color, capacity: d.capacity || 100, deliveryDate: d.deliveryDate || '' })),
           status: isFinal ? 'final' : 'draft',
           totalRecords: saveRecs.length,
@@ -2343,6 +2355,8 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
           city: cloudCity, monthId: cloudMonthId,
           savedAt: serverTimestamp(),
           savedBy: auth.currentUser?.email || '',
+          savedByUid: auth.currentUser?.uid || '',
+          orgId: sessionOrgId,   // ★같은 소속사 담당자가 열람하는 근거(규칙이 이 값을 본다)
           drivers: drivers.map(d => ({ id: d.id, name: d.name, color: d.color, capacity: d.capacity || 100, deliveryDate: d.deliveryDate || '' })),
           status: 'draft',
           totalRecords: saveRecs.length,
@@ -2477,8 +2491,6 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
         await setDoc(doc(db, 'route_sessions', cloudCity, 'months', cloudMonthId),
           { shareIds: arrayUnion(shareId) }, { merge: true });
       } catch (pErr) { console.warn('[공유 이정표] 기록 실패:', pErr); }
-      {
-      }
       const base = window.location.origin;
       setShareModal({
         shareId,
