@@ -23,11 +23,16 @@ export { normalizeCityList, mergeCityLists, splitCityName } from './cityName.js'
 export async function fetchSavedCities({ user, isAdmin = false } = {}) {
   const approved = user?.citiesApproved || [];
   let saved = [];
-  try {
-    const snap = await getDocsFromServer(collection(db, 'cloud_lists'));
-    saved = snap.docs.map((d) => d.id);
-  } catch {
-    // 권한 없음·오프라인 — 승인 목록만으로 진행한다
+  // ★관리자일 때만 서버에 묻는다(2026-08-27 점검) — `cloud_lists` 목록 조회는 규칙상 관리자만 통과하므로
+  //   일반 담당자에게는 **매번 permission-denied 왕복 1회**가 생기고 콘솔에 오류가 쌓였다.
+  //   일반 담당자는 자기 승인 지자체가 곧 목록이라 서버에 물을 이유도 없다.
+  if (isAdmin) {
+    try {
+      const snap = await getDocsFromServer(collection(db, 'cloud_lists'));
+      saved = snap.docs.map((d) => d.id);
+    } catch {
+      // 오프라인·권한 변경 — 승인 목록만으로 진행한다
+    }
   }
   return mergeCityLists(approved, saved, isAdmin);
 }

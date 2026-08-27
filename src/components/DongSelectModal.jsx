@@ -80,8 +80,10 @@ export default function DongSelectModal({
       if (cancelled) return;
       setCityOptions(list);
       setCitiesLoading(false);
-      // 아직 아무것도 안 고른 상태면 첫 지자체를 자동 선택한다(형이 바로 월만 확인하면 되게)
-      setCity(prev => (prev ? prev : (list[0] || '')));
+      // ★목록이 **하나뿐일 때만** 자동 선택한다(2026-08-27 점검).
+      //   관리자는 승인 지자체가 비어 있어 목록 첫 번째(가나다순 맨 앞)가 자동으로 잡혔고,
+      //   그 지자체 명단 전체를 곧바로 조회했다 — 형이 원한 건 '고를 수 있게'이지 아무거나 여는 게 아니다.
+      if (list.length === 1) setCity(prev => (prev ? prev : list[0]));
     })();
     return () => { cancelled = true; };
   }, [isAdmin, userCitiesKey]);

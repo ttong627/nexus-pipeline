@@ -305,7 +305,7 @@ export default function ShareRouteView({ shareId, driverId }) {
   // ── Kakao Maps SDK ──────────────────────────────────────────────────
   useEffect(() => {
     let alive = true;
-    loadKakaoMapsSdk(KAKAO_JS_KEY, [])
+    loadKakaoMapsSdk(KAKAO_JS_KEY, ['clusterer'])   // ★다른 화면과 같은 세트로 통일 — 다르면 SDK 재주입이 일어난다(K-2)
       .then(() => { if (alive) setIsMapReady(true); })
       .catch((e) => console.warn('[지도 SDK]', e));
     return () => { alive = false; };

@@ -4,6 +4,7 @@ import { db, writeBatch } from '../config/firebase.js';
 import { getDocs, collection, getDoc, doc, setDoc, serverTimestamp } from 'firebase/firestore';
 // 배송지도 접근 인증의 열쇠 — 저장·비교 양쪽 모두 이 함수를 통과시킨다(계획 Phase 0).
 import { toE164Mobile } from '../utils/phone.js';
+import { assignmentWriteDongs } from '../utils/assignmentWriteScope.js';
 import { reconcileDriversWithRoster, remapDongDriverMap, dongsLosingDrivers, resolveRosterSource } from '../utils/driverRoster.js';   // 복원한 기사 목록을 현재 명부와 대조
 import { kakaoCoordOf } from '../utils/kakaoApi.js';   // ★REST 키는 서버에만 있다(2026-08-23 점검)
 
@@ -507,7 +508,11 @@ export default function RouteSetupModal({
     [assignedDongs, dongSaveState]
   );
 
-  const hasUnsavedAssignment = assignedDongs.size > 0 && assignmentSignature !== savedSignature;
+  // ★`assignedDongs.size > 0` 조건을 두면 안 된다(2026-08-27 점검) — 배정을 **전부 해제**한 것도
+  //   저장해야 할 변경이다. 예전엔 다 지우고 닫으면 경고도 없고 저장도 못 해, 다시 열면 옛 배정이 되살아났다.
+  const hasUnsavedAssignment = savedSignature === null
+    ? assignedDongs.size > 0                        // 저장된 적이 없으면 배정이 있는 것 자체가 미저장
+    : assignmentSignature !== savedSignature;       // 전부 해제한 것도 '바뀐 것'이다
 
   const totalSelected = useMemo(() =>
     [...assignedDongs].reduce((s, d) => s + (dongCounts[d] || 0), 0),
@@ -665,6 +670,13 @@ export default function RouteSetupModal({
   };
 
   // ── cloud 기사 배정 일괄 저장 (행정동 → 기사명 매핑 후 records 업데이트)
+  //
+  //   ★건드리는 동만 쓴다 (2026-08-27 점검 · 절대 되돌리지 말 것).
+  //     예전엔 **스코프 전체 레코드**를 `기사: dongToName[dong] || ''` 로 덮어썼다.
+  //     동 카드마다 [저장]을 누르는 흐름(형 지시로 새로 만든 버튼)에서는
+  //     답십리1동만 배정하고 저장하면 **전농1동·휘경1동 1,140건의 기사 칸이 빈값으로 지워졌다**
+  //     — 규칙 G-4(빈값이 기존 값을 덮지 않는다)·M-1(무손실) 위반이고, 저장 1회에 1,530 writes 였다.
+  //     이제 ①지금 배정된 동 ②직전 저장에는 있었는데 지금 풀린 동(=지워야 하는 동)만 쓴다.
   const saveDriverAssignment = async () => {
     if (mode !== 'cloud' || !cloudCity || !cloudMonthId || recordRefs.length === 0) return;
     const dongToName = {};
@@ -675,10 +687,14 @@ export default function RouteSetupModal({
       //   (이전엔 names.join('/')로 '가명현/이진만'을 모든 레코드에 저장해 2명 묶음값이 명단에 남던 버그)
       dongToName[dong] = names.length === 1 ? names[0] : '';
     });
+    // 이번에 쓸 동 = 배정된 동 + 배정이 풀린 동. 그 밖의 동은 손대지 않는다(SSOT + 회귀).
+    const targetDongs = assignmentWriteDongs(sanitizedDongDriverMap, savedDongMap);
+    const targets = recordRefs.filter(({ dong }) => targetDongs.has(dong));
+    if (targets.length === 0) return;
     const CHUNK = 499;
-    for (let i = 0; i < recordRefs.length; i += CHUNK) {
+    for (let i = 0; i < targets.length; i += CHUNK) {
       const batch = writeBatch(db);
-      recordRefs.slice(i, i + CHUNK).forEach(({ id, dong }) => {
+      targets.slice(i, i + CHUNK).forEach(({ id, dong }) => {
         batch.update(doc(db, 'cloud_lists', cloudCity, 'months', cloudMonthId, 'records', id), { 기사: dongToName[dong] || '' });
       });
       await batch.commit();
@@ -727,8 +743,8 @@ export default function RouteSetupModal({
     setIsSavingAssignment(true);
     setSaveError('');
     try {
-      if (mode === 'cloud' && cloudCity && cloudMonthId && assignedDongs.size > 0) {
-        await saveDriverAssignment();
+      if (mode === 'cloud' && cloudCity && cloudMonthId) {
+        await saveDriverAssignment();   // 배정 0개여도 '풀린 동' 정리가 필요하다
       }
       await saveDriverAssignmentPreset();
       setLastSavedAt(new Date());
@@ -746,11 +762,13 @@ export default function RouteSetupModal({
   };
 
   // ── 닫기 — 저장하지 않은 배정이 있으면 물어본다(형이 한 작업이 조용히 사라지지 않게)
-  const handleCloseStep2 = () => {
-    if (hasUnsavedAssignment
-      && !window.confirm('저장하지 않은 배정이 있습니다. 저장하지 않고 닫으면 사라집니다. 그냥 닫을까요?')) return;
-    onClose?.();
-  };
+  const confirmLeaveUnsaved = () =>
+    !hasUnsavedAssignment
+    || window.confirm('저장하지 않은 배정이 있습니다. 저장하지 않고 나가면 사라집니다. 그냥 나갈까요?');
+
+  const handleCloseStep2 = () => { if (confirmLeaveUnsaved()) onClose?.(); };
+  // ★뒤로가기도 같은 가드 — 소속사 화면으로 돌아가 다른 소속사를 고르면 배정이 조용히 사라진다
+  const handleBackFromStep2 = () => { if (confirmLeaveUnsaved()) setStep('org'); };
 
   // ── "다음" 버튼 핸들러 — 배정 저장 후 매칭 단계 이동
   const handleNextStep = async () => {
@@ -1040,7 +1058,7 @@ export default function RouteSetupModal({
     return (
       <div className="fixed inset-0 z-[800] flex flex-col bg-[#060606]">
         <ModalHeader
-          onBack={() => setStep('org')}
+          onBack={handleBackFromStep2}
           title="작업 설정"
           badge={orgBadge}
           subtitle={`${headerSubtitle} · 기사 카드 클릭(활성화) → 행정동 클릭(배정) → 저장`}
@@ -1085,6 +1103,8 @@ export default function RouteSetupModal({
                   const assignedDongNames = Object.entries(sanitizedDongDriverMap)
                     .filter(([, ids]) => ids.includes(driver.id)).map(([d]) => d);
                   return (
+                    // ★`data-testid`/`data-*` 는 운영 번들에 그대로 둔다 — E2E 는 **운영**을 대상으로 돌기 때문에
+                    //   빌드에서 제거하면 배정 저장 회귀(route-assignment.spec.js)가 통째로 눈이 먼다.
                     <div key={driver.id} onClick={() => toggleDriverActive(driver.id)}
                       data-testid="driver-card" data-driver-name={driver.name}
                       className="rounded-xl border p-2 cursor-pointer transition-all select-none"
@@ -1256,7 +1276,7 @@ export default function RouteSetupModal({
               </div>
               <div className="flex items-center gap-2">
                 {/* 여러 동을 한 번에 저장 (형 지시 2026-08-27) */}
-                <button onClick={() => runSave()} disabled={assignedDongs.size === 0 || isSavingAssignment}
+                <button onClick={() => runSave()} disabled={isSavingAssignment || (!hasUnsavedAssignment && assignedDongs.size === 0)}
                   title="배정된 행정동을 모두 저장합니다 · 다음 달 명단에도 그대로 적용됩니다"
                   className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-black border transition-colors disabled:opacity-30 disabled:cursor-not-allowed ${
                     unsavedDongCount > 0
@@ -1295,6 +1315,7 @@ export default function RouteSetupModal({
                     return (
                       // ★버튼 안에 버튼을 넣을 수 없어 카드를 div 로 둔다(동 카드마다 [저장]이 필요하다)
                       <div key={dong} role="button" tabIndex={activeDriverIds.size === 0 ? -1 : 0}
+                        aria-disabled={activeDriverIds.size === 0} aria-label={`${dong} ${dongCounts[dong] || 0}건`}
                         data-testid="dong-card" data-dong={dong} data-assigned={assignedIds.length}
                         onClick={() => { if (activeDriverIds.size > 0) handleDongClick(dong); }}
                         onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && activeDriverIds.size > 0) { e.preventDefault(); handleDongClick(dong); } }}

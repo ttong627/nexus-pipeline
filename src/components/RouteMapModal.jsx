@@ -2335,7 +2335,10 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
         }
         if (skippedDup) console.warn(`[배정 보관] 같은 키 중복 ${skippedDup}건은 보관하지 않았다(누구 것인지 모호 · S-2)`);
       } catch (bkErr) {
+        // ★조용히 넘기지 않는다(2026-08-27 점검) — 콘솔에만 남기면 3개월 보관이 깨진 걸 아무도 모른다.
+        //   보관은 "명단이 지워져도 기사·순번·좌표는 남는다"는 약속이라 실패를 담당자가 알아야 한다.
         console.warn('[배정 보관] 실패(본 저장에는 영향 없음):', bkErr);
+        showToast?.('error', '배정 보관(3개월)에 실패했습니다 — 저장 자체는 완료됐습니다', 6000);
       }
 
       // 1-3단계: **이미 나간 기사 지도(공유 링크)를 최신으로 갱신**한다(형 지시 2026-08-27).

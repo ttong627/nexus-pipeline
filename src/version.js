@@ -1,8 +1,14 @@
-export const APP_VERSION = 'V7.29';
-export const APP_BUILD = '2026.08.27';
-export const APP_BUILD_TIME = '2026.08.27 23:35';
+export const APP_VERSION = 'V7.30';
+export const APP_BUILD = '2026.08.28';
+export const APP_BUILD_TIME = '2026.08.28 00:03';
 
 export const CHANGELOG = [
+  { v: "V7.30", date: "2026.08.28", items: [
+    "저장할 때 배정하지 않은 동의 기사 칸이 지워지던 문제 해결 (중요)",
+    "배정을 전부 해제한 것도 저장됩니다 · 뒤로가기에도 미저장 알림",
+    "동별 배송지도가 엉뚱한 지자체를 자동으로 열지 않습니다",
+    "테스트 흔적 정리 · 3개월 보관 정리 명령 등록",
+  ]},
   { v: "V7.29", date: "2026.08.27", items: [
     "행정동 카드마다 [저장] 버튼 · 여러 동을 한 번에 [전체 저장]",
     "저장하면 기사 선택이 자동으로 풀립니다 — 바로 다음 기사 배정으로",

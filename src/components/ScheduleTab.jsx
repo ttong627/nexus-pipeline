@@ -361,7 +361,7 @@ export default function ScheduleTab({ user, onBack }) {
       if (!cancelled) setSavedCities(list);
     })();
     return () => { cancelled = true; };
-  }, [uid, isAdmin]);   // eslint-disable-line react-hooks/exhaustive-deps -- user 객체는 매 렌더 새로 올 수 있어 uid 로 고정
+  }, [uid, isAdmin, (user?.citiesApproved || []).join('|')]);   // eslint-disable-line react-hooks/exhaustive-deps -- user 객체는 매 렌더 새로 오므로 내용 키로 고정
 
   const handlePickSavedCity = useCallback((picked) => {
     const { sido: s, sigungu: sg } = splitCityName(picked);

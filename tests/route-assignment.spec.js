@@ -31,10 +31,26 @@ const db = () => admin.firestore();
 const monthRef = () => db().collection('cloud_lists').doc(CITY).collection('months').doc(MONTH);
 const presetRef = () => db().collection('driver_assignments').doc(CITY).collection('orgs').doc(ORG_NAME);
 
+/** 테스트가 만든 것을 남김없이 지운다 — 시작 전에도 부른다(지난 실행이 중간에 죽었을 수 있다) */
+const cleanupAll = async () => {
+  await db().recursiveDelete(db().collection('cloud_lists').doc(CITY)).catch(() => {});
+  await db().recursiveDelete(db().collection('driver_assignments').doc(CITY)).catch(() => {});
+  await db().recursiveDelete(db().collection('org_drivers').doc(ORG_NAME)).catch(() => {});
+  await db().recursiveDelete(db().collection('route_sessions').doc(CITY)).catch(() => {});
+  await db().recursiveDelete(db().collection('route_assignments').doc(CITY)).catch(() => {});
+  await db().collection('org_presets').doc(CITY).delete().catch(() => {});
+  await admin.auth().deleteUser(UID).catch(() => {});
+  await db().collection('users').doc(UID).delete().catch(() => {});
+};
+
 test.beforeAll(async () => {
   if (!admin.apps.length) {
     admin.initializeApp({ credential: admin.credential.cert(JSON.parse(readFileSync(new URL('../serviceAccountKey.json', import.meta.url), 'utf8'))) });
   }
+  // ★실제 지자체에는 절대 쓰지 않는다(2026-08-27 점검 — 옛 버전이 동대문구에 9999-02 를 남겼다)
+  const real = (await db().collection('cloud_lists').listDocuments()).map((d) => d.id);
+  expect(real, `테스트 지자체명이 실제 지자체와 겹친다: ${CITY}`).not.toContain(CITY);
+  await cleanupAll();   // 지난 실행 잔류물 제거
   try { await admin.auth().getUser(UID); } catch { await admin.auth().createUser({ uid: UID, email: 'e2e-assign@example.com', displayName: 'E2E 배정담당자' }); }
   await db().collection('users').doc(UID).set({
     email: 'e2e-assign@example.com', name: 'E2E 배정담당자', role: 'user', tier: 'sapphire',
@@ -74,13 +90,7 @@ test.beforeAll(async () => {
 
 test.afterAll(async () => {
   if (!admin.apps.length) return;
-  await db().recursiveDelete(db().collection('cloud_lists').doc(CITY)).catch(() => {});
-  await db().recursiveDelete(db().collection('driver_assignments').doc(CITY)).catch(() => {});
-  await db().recursiveDelete(db().collection('org_drivers').doc(ORG_NAME)).catch(() => {});
-  await db().recursiveDelete(db().collection('route_sessions').doc(CITY)).catch(() => {});
-  await db().collection('org_presets').doc(CITY).delete().catch(() => {});
-  await admin.auth().deleteUser(UID).catch(() => {});
-  await db().collection('users').doc(UID).delete().catch(() => {});
+  await cleanupAll();
 });
 
 const seedPreset = async () => {
@@ -249,4 +259,38 @@ test('다시 열어도 배정이 그대로다 — 다음 달 명단에도 이 �
     await card.waitFor({ timeout: 20000 });
     await expect(card, `${dong} 배정이 사라졌다`).toHaveAttribute('data-assigned', '1', { timeout: 20000 });
   }
+});
+
+// ── 저장이 '배정 안 한 동'의 기사 칸을 지우지 않는다 (2026-08-27 점검 · 긴급 1) ──────────
+//   예전엔 저장할 때마다 스코프 전체 레코드를 `기사: ''` 로 덮어썼다. 동 카드마다 [저장]을 누르는
+//   흐름에서는 답십리1동만 배정하고 저장하면 전농1동·휘경1동 1,140건의 기사 칸이 지워졌다(G-4·M-1 위반).
+test('저장해도 다른 동의 기사 칸은 그대로다 (긴급 1 재발방지)', async ({ page }) => {
+  test.slow();
+  page.on('dialog', (d) => d.dismiss().catch(() => {}));
+  await page.setViewportSize({ width: 1920, height: 1080 });
+
+  // 다른 동(DONGS[1])의 레코드에 기사 이름을 미리 넣어 둔다 — 이게 지워지면 안 된다
+  const KEEP = '보존확인기사';
+  const others = await monthRef().collection('records').where('행정동', '==', DONGS[1]).get();
+  const pre = db().batch();
+  others.docs.forEach((d) => pre.update(d.ref, { 기사: KEEP }));
+  await pre.commit();
+  expect(others.size, '대조할 레코드가 없다').toBeGreaterThan(0);
+
+  await signIn(page);
+  await openStep2(page);
+  await activateDriver(page);
+  // DONGS[1] 은 건드리지 않고 DONGS[2] 만 배정해 저장한다
+  const card = dongCard(page, DONGS[2]);
+  await card.waitFor({ timeout: 20000 });
+  await card.click({ timeout: 15000 });
+  await expect(card).toHaveAttribute('data-assigned', '1', { timeout: 10000 });
+  await page.getByRole('button', { name: /전체 저장/ }).first().click({ timeout: 15000 });
+  await expect(page.getByText(/저장됨/).first()).toBeVisible({ timeout: 30000 });
+
+  // 저장이 끝난 뒤에도 다른 동의 기사 칸이 살아 있어야 한다
+  await page.waitForTimeout(3000);
+  const after = await monthRef().collection('records').where('행정동', '==', DONGS[1]).get();
+  const wiped = after.docs.filter((d) => String(d.data().기사 || '').trim() !== KEEP);
+  expect(wiped.length, `배정하지 않은 ${DONGS[1]} 의 기사 칸이 ${wiped.length}건 지워졌다`).toBe(0);
 });
