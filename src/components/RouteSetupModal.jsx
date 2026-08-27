@@ -237,6 +237,24 @@ export default function RouteSetupModal({
     })();
   }, [effectiveCity]);
 
+  // ★내 소속사는 고르게 하지 않는다 — 바로 내 구역(행정동)만 보여 준다 (형 지시 2026-08-27).
+  //   "지자체가 여러 소속사인 경우(동대문처럼 행복나눔·한울·웰쉐어) 선택하게 하지 말고
+  //    자기 구역의 행정동만 확인할 수 있게 해줘."
+  //   ※규칙은 하나뿐이다: **내 소속사가 이 지자체에 있으면 그걸로 바로 들어간다.**
+  //     소속이 없는 계정(관리자 등)이나 이 지자체에 내 소속사가 없으면 기존 선택 화면을 그대로 보여 준다.
+  //     다른 소속사를 봐야 하면 화면 왼쪽 위 ← 로 돌아가 고르면 된다.
+  const autoOrgPickedRef = useRef(false);
+  useEffect(() => {
+    if (autoOrgPickedRef.current) return;
+    if (step !== 'org' || isLoadingOrgs || !orgs.length) return;
+    const myOrgName = String(user?.orgId || '').trim();
+    if (!myOrgName) return;
+    const mine = orgs.find((o) => String(o?.name || '').trim() === myOrgName || String(o?.id || '') === myOrgName);
+    if (!mine) return;
+    autoOrgPickedRef.current = true;
+    handleSelectOrg(mine);
+  }, [step, isLoadingOrgs, orgs, user?.orgId]);   // eslint-disable-line react-hooks/exhaustive-deps -- handleSelectOrg 는 매 렌더 새 함수라 넣으면 계속 다시 실행된다
+
   // 로컬 행정동 건수
   useEffect(() => {
     if (mode !== 'local') return;

@@ -1,8 +1,11 @@
-export const APP_VERSION = 'V7.19.1';
+export const APP_VERSION = 'V7.19.2';
 export const APP_BUILD = '2026.08.27';
-export const APP_BUILD_TIME = '2026.08.27 17:26';
+export const APP_BUILD_TIME = '2026.08.27 17:32';
 
 export const CHANGELOG = [
+  { v: "V7.19.2", date: "2026.08.27", items: [
+    "기사배정 루트맵에서 소속사를 고르는 단계를 없앴습니다 — 내 소속의 행정동으로 바로 들어갑니다",
+  ]},
   { v: "V7.19.1", date: "2026.08.27", items: [
     "작업 설정의 기사 목록이 현재 기사 명부를 따라갑니다 (비활성 기사 제외 · 새로 넣은 기사 자동 추가)",
   ]},
