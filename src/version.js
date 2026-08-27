@@ -1,8 +1,11 @@
-export const APP_VERSION = 'V7.25';
+export const APP_VERSION = 'V7.26';
 export const APP_BUILD = '2026.08.27';
-export const APP_BUILD_TIME = '2026.08.27 20:50';
+export const APP_BUILD_TIME = '2026.08.27 21:01';
 
 export const CHANGELOG = [
+  { v: "V7.26", date: "2026.08.27", items: [
+    "지도 경로선이 같은 건물 안 이동으로 겹쳐 보이던 문제를 줄였습니다 (교차 표시 52% 감소)",
+  ]},
   { v: "V7.25", date: "2026.08.27", items: [
     "저장한 지도를 같은 소속사 담당자도 볼 수 있습니다 (수정은 기존 권한 그대로)",
   ]},

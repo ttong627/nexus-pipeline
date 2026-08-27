@@ -46,6 +46,7 @@ import { loadCityCoordCache, lookupCoordInCache } from '../utils/coordCache.js';
 import {
   CULL_MIN_RECORDS,
   PIN_COMPACT_LEVEL,
+  collapseRoutePath,
   buildPinInnerHtml,
   isWithinPaddedBounds,
   pinZIndex,
@@ -1254,15 +1255,19 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
         .sort((a, b) => parseInt(a.배송순번) - parseInt(b.배송순번));
       if (dRecs.length < 2) return;
       // 메인 경로선 (solid)
+      // ★같은 자리 연속 점은 선에서 한 점으로 접는다 — 길이 0m 선이 절반을 넘어 화면이 스파게티로 보였다.
+      //   순번·핀·건수는 그대로다. 그리는 점만 줄인다.
+      const pathPts = collapseRoutePath(dRecs.map(r => ({ lat: r._lat, lng: r._lng })))
+        .map(p => new window.kakao.maps.LatLng(p.lat, p.lng));
       const polyline = new window.kakao.maps.Polyline({
-        path: dRecs.map(r => new window.kakao.maps.LatLng(r._lat, r._lng)),
+        path: pathPts,
         strokeWeight: 3, strokeColor: driver.color, strokeOpacity: 0.7, strokeStyle: 'solid',
       });
       polyline.setMap(kakaoMapRef.current);
       polylinesRef.current.push(polyline);
       // 애니메이션 점선 (offset 효과)
       const dashed = new window.kakao.maps.Polyline({
-        path: dRecs.map(r => new window.kakao.maps.LatLng(r._lat, r._lng)),
+        path: pathPts,
         strokeWeight: 2, strokeColor: '#ffffff', strokeOpacity: 0.35, strokeStyle: 'shortdash',
       });
       dashed.setMap(kakaoMapRef.current);

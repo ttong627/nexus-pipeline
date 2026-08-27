@@ -10,24 +10,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
-import {
-  mergeReason,
-  strongMatchKey,
-  escHtml,
-  getRouteDong,
-  getRouteUnitKey,
-  buildAssignedRouteUnits,
-  getMajorityDriverId,
-  isAptRouteUnitKey,
-  getMixedRouteUnitIssues,
-  getRecordQty,
-  buildMapInsights,
-  assessKakaoAreaMatch,
-  isCoordAssignable,
-  DRIVER_COLORS,
-  SHARE_LINK_TTL_DAYS,
-  SHARE_TRANSITION_DUAL_WRITE,
-} from '../src/components/routeMap/mapHelpers.js';
+import { mergeReason, strongMatchKey, escHtml, getRouteDong, getRouteUnitKey, buildAssignedRouteUnits, getMajorityDriverId, isAptRouteUnitKey, getMixedRouteUnitIssues, getRecordQty, buildMapInsights, assessKakaoAreaMatch, isCoordAssignable, DRIVER_COLORS, SHARE_LINK_TTL_DAYS, SHARE_TRANSITION_DUAL_WRITE, collapseRoutePath, ROUTE_PATH_MIN_GAP_M } from '../src/components/routeMap/mapHelpers.js';
 
 const R = (over = {}) => ({ id: over.id || 'r1', 이름: '홍길동', 주소: '서울특별시 동대문구 왕산로 72, 101- 203호 (전농동, 래미안)', 행정동: '전농동', 포수: 1, ...over });
 
@@ -162,3 +145,41 @@ describe('상수 — 눈에 안 보이게 바뀌면 큰일 나는 값들', () =>
     assert.equal(SHARE_TRANSITION_DUAL_WRITE, false);
   });
 });
+
+describe('경로선 접기 — 같은 자리 연속 점을 하나로(2026-08-27 형 지적 "교차가 엄청 많다")', () => {
+  // 실측: 671개 구간 중 376개가 길이 0m 였다. 그 선까지 다 그리니 화면이 스파게티로 보였다.
+  // ⛔순번은 바꾸지 않는다. 그리는 점만 접는다 — 핀·건수·배송 순서는 그대로다.
+  const P = (lat, lng) => ({ lat, lng });
+
+  test('같은 좌표가 연속되면 하나로 접힌다', () => {
+    const r = collapseRoutePath([P(37.5, 127), P(37.5, 127), P(37.5, 127), P(37.51, 127)]);
+    assert.equal(r.length, 2);
+  })
+
+  test('★처음과 마지막 집은 반드시 남는다 — 선이 중간에서 끊기면 안 된다', () => {
+    const pts = [P(37.5, 127), P(37.5001, 127), P(37.5002, 127)];
+    const r = collapseRoutePath(pts);
+    assert.deepEqual(r[0], pts[0]);
+    assert.deepEqual(r[r.length - 1], pts[pts.length - 1]);
+  })
+
+  test('충분히 떨어진 점은 그대로 남는다 — 실제 동선을 지우지 않는다', () => {
+    const pts = [P(37.500, 127), P(37.505, 127), P(37.510, 127)];
+    assert.equal(collapseRoutePath(pts).length, 3);
+  })
+
+  test('점이 2개 이하면 손대지 않는다', () => {
+    assert.equal(collapseRoutePath([P(37.5, 127)]).length, 1);
+    assert.equal(collapseRoutePath([P(37.5, 127), P(37.5, 127)]).length, 2);
+  })
+
+  test('좌표가 없는 점은 걸러낸다(선이 엉뚱한 곳으로 튀지 않게)', () => {
+    const r = collapseRoutePath([P(37.5, 127), { lat: null, lng: 127 }, P(37.51, 127)]);
+    assert.equal(r.length, 2);
+  })
+
+  test('임계값은 상수로만 관리한다', () => {
+    assert.equal(typeof ROUTE_PATH_MIN_GAP_M, 'number');
+    assert.ok(ROUTE_PATH_MIN_GAP_M > 0 && ROUTE_PATH_MIN_GAP_M <= 50, '너무 크면 선이 실제 동선에서 멀어진다');
+  })
+})

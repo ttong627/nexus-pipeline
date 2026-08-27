@@ -429,3 +429,34 @@ export const isWithinPaddedBounds = (lat, lng, box, padRatio = 0.4) => {
   const padLng = Math.abs(east - west) * padRatio;
   return lat >= south - padLat && lat <= north + padLat && lng >= west - padLng && lng <= east + padLng;
 };
+
+// ── 경로선에서 **같은 자리 연속 점**을 접는다 (2026-08-27 형 지적 "교차가 엄청 많다") ──────
+//   실측(인천 미추홀 2026-07 · 672집): 경로 구간 671개 중 **376개가 길이 0m**(같은 건물).
+//   중앙값도 0m 였다. 그 0m 선까지 전부 그리니 화면이 스파게티로 보인다 —
+//   세어 보니 교차 153건 중 **128건(84%)이 30~100m 이하의 미세 이동**이었다.
+//   ⛔순번을 바꾸지 않는다. **그리는 점만** 접는다 — 배송 순서·건수·핀은 그대로다(불변식 2).
+//   ★실측으로 고른 값(같은 명단 672집 기준 · 교차 원본 153건):
+//       10m → 90건(41%↓) · 15m → 88건(42%↓) · **25m → 74건(52%↓)** · 40m → 51건(67%↓)
+//     크게 잡을수록 교차는 줄지만 선이 실제 동선에서 멀어진다(모퉁이를 잘라 먹는다).
+//     핀은 모든 집을 그대로 찍으므로 선은 '흐름'만 보여 주면 된다 — 그 균형에서 25m 를 골랐다.
+//     ⛔값을 여기서만 고친다(하드코딩 금지 — SEQUENCE_ESTIMATED_SPEED_KMH 와 같은 원칙).
+export const ROUTE_PATH_MIN_GAP_M = 25;   // 이보다 가까운 연속 점은 선에서 한 점으로 본다
+
+const routeDistM = (a, b) => {
+  const R = 6371000, rad = (d) => (d * Math.PI) / 180;
+  const dLat = rad(b.lat - a.lat), dLng = rad(b.lng - a.lng);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
+};
+
+/** @param pts [{lat,lng}] 순번 순서 그대로 · @returns 접힌 점 배열(처음·마지막은 반드시 남는다) */
+export const collapseRoutePath = (pts = [], minGapM = ROUTE_PATH_MIN_GAP_M) => {
+  const src = (pts || []).filter((p) => Number.isFinite(p?.lat) && Number.isFinite(p?.lng));
+  if (src.length <= 2) return src;
+  const out = [src[0]];
+  for (let i = 1; i < src.length - 1; i += 1) {
+    if (routeDistM(out[out.length - 1], src[i]) >= minGapM) out.push(src[i]);
+  }
+  out.push(src[src.length - 1]);   // 마지막 집은 항상 남긴다 — 선이 중간에서 끊기면 안 된다
+  return out;
+};
