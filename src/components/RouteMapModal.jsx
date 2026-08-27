@@ -19,6 +19,7 @@ import { buildShareMeta, buildShareRecords, chunk, normalizeDeadline, MAX_DEADLI
 import { hashPasscode, newSalt, isValidPasscode } from '../utils/sharePasscode.js';
 import { getDriversCollection } from '../utils/company.js';
 import SharePasscodePrompt from './SharePasscodePrompt.jsx';
+import { buildAssignmentBatch, applyCarriedAssignments, RETENTION_MONTHS } from '../utils/assignmentStore.js';   // 배정만 따로 3개월 보관(명단과 분리)
 // ★순번 엔진은 SSOT 한 곳에만 산다 — 예전엔 이 파일에 41개 심볼이 문자 단위로 복제돼 있었다(2026-08-23 점검에서 제거).
 //   복제는 드리프트 전엔 증상이 없다가, 다음 수정이 한쪽에만 들어가는 순간 화면과 서버 순번이 갈라진다.
 //   회귀 `scripts/apt-dong-parse.test.mjs` 의 '전 심볼 가드'가 재정의를 막는다.
@@ -715,6 +716,35 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
           setIsCloudMode(true);
           setCloudCity(initialCloudCity);
           setCloudMonthId(initialCloudMonthId);
+
+          // ★새 명단이어도 지난 배정을 이어 붙인다(형 지시 2026-08-27 "새로운 명단이 저장되어도 안정적으로 매칭").
+          //   명단은 1개월치만 남지만 배정은 `route_assignments` 에 3개월치가 있다 — 거기서 끌어온다.
+          //   ⚠️이번 달에 이미 정해진 기사·순번은 **덮지 않는다**. 매칭 못 한 건은 손대지 않는다(S-5).
+          (async () => {
+            try {
+              const need = loaded.some(r => !String(r.기사 || '').trim() || !String(r.배송순번 || '').trim());
+              if (!need) return;
+              const [y, mo] = String(initialCloudMonthId).split('-').map(Number);
+              const prevMonths = [];
+              for (let i = 1; i < RETENTION_MONTHS; i += 1) {
+                const d = new Date(y, (mo - 1) - i, 1);
+                prevMonths.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+              }
+              const carried = [];
+              for (const mid of prevMonths) {
+                const snapA = await getDocs(collection(db, 'route_assignments', initialCloudCity, 'months', mid, 'records'));
+                snapA.forEach(d2 => carried.push(d2.data()));
+                if (carried.length) break;   // 가장 최근 달 것부터 쓴다 — 오래된 배정이 최신을 덮으면 안 된다
+              }
+              if (!carried.length) return;
+              const res = await applyCarriedAssignments(loaded, carried);
+              if (!res.carried) return;
+              setRecords(res.records);
+              showToast('success', `지난 배정 ${res.carried}건을 이어 붙였습니다 (매칭 실패 ${res.missed}건은 그대로)`);
+            } catch (e) {
+              console.warn('[배정 승계] 실패(명단은 정상):', e);
+            }
+          })();
           // ★ 재진입 자동복원(이슈①): route_sessions에 저장된 기사구성을 로드해
           //   저장본의 기사·배송순번이 지도에 자동으로 복원되게 한다.
           //   (loaded records엔 이미 기사·배송순번 문자열이 있으나, 그 기사명을
@@ -2228,6 +2258,29 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
       if (_u2) showToast('warning', `⚠️ 배정 ${_u2}건이 클라우드 명단과 매칭되지 않아 저장에서 제외됐습니다 — 클라우드 명단을 불러온 뒤 작업하세요(신규 문서는 만들지 않음)`);
       // 1단계: cloud_lists에 기사/배송순번/좌표 저장
       await patchCloudRecords(saveRecs);
+
+      // 1-2단계: 배정만 따로 3개월 보관(형 지시 2026-08-27) — 명단(1개월)이 지워져도 기사·순번·좌표는 남는다.
+      //   ★이름·주소·전화는 담지 않는다. 매칭키 해시만 남긴다(`assignmentStore`).
+      //   ★실패해도 본 저장을 막지 않는다 — 보관은 부가 기능이고, 배정 저장이 우선이다.
+      try {
+        const { rows, skippedDup } = await buildAssignmentBatch(
+          saveRecs.map(r => ({
+            이름: r.이름, 생년월일: r.생년월일, 휴대폰: r.휴대폰 || r.연락처,
+            기사: drivers.find(d => d.id === r._driverId)?.name || r.기사 || '',
+            배송순번: r.배송순번, 행정동: getRouteDong(r), lat: r._lat ?? r.lat, lng: r._lng ?? r.lng,
+          })),
+        );
+        for (let i = 0; i < rows.length; i += 499) {
+          const ab = writeBatch(db);
+          rows.slice(i, i + 499).forEach(row => {
+            ab.set(doc(db, 'route_assignments', cloudCity, 'months', cloudMonthId, 'records', row.k), row, { merge: true });
+          });
+          await ab.commit();
+        }
+        if (skippedDup) console.warn(`[배정 보관] 같은 키 중복 ${skippedDup}건은 보관하지 않았다(누구 것인지 모호 · S-2)`);
+      } catch (bkErr) {
+        console.warn('[배정 보관] 실패(본 저장에는 영향 없음):', bkErr);
+      }
 
       // 2단계: route_sessions도 갱신 — "이어서 작업" 복원이 DB 저장 이후 상태를 반영하도록
       await setDoc(

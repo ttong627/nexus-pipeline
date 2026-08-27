@@ -438,6 +438,19 @@ service cloud.firestore {
     }
 
     // ── 배송 세션: 기사구성·구역배정 영구저장 (승인 사용자) ─────────────────────
+    // ── 배정 보관(3개월) — 명단(1개월)과 분리해서 기사·순번·좌표만 남긴다 (형 지시 2026-08-27)
+    //   ★개인정보(이름·주소·전화)는 담기지 않는다. 매칭키는 해시로만 저장한다.
+    //   권한은 `route_sessions` 와 같은 기준 — 그 지자체를 승인받은 담당자·관리자.
+    match /route_assignments/{cityId} {
+      allow read, write: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin());
+      match /months/{monthId} {
+        allow read, write: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin());
+        match /records/{keyHash} {
+          allow read, write: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin());
+        }
+      }
+    }
+
     match /route_sessions/{cityId} {
       allow read: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin());
       allow write: if isAuthenticated() && (hasCityAccess(cityId) || isAdmin());

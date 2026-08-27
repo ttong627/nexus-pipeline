@@ -1,8 +1,11 @@
-export const APP_VERSION = 'V7.21';
+export const APP_VERSION = 'V7.22';
 export const APP_BUILD = '2026.08.27';
-export const APP_BUILD_TIME = '2026.08.27 19:39';
+export const APP_BUILD_TIME = '2026.08.27 19:54';
 
 export const CHANGELOG = [
+  { v: "V7.22", date: "2026.08.27", items: [
+    "기사배정·좌표·순번을 3개월 보관합니다 — 새 명단을 열면 지난 배정이 자동으로 이어집니다 (명단 자체는 1개월)",
+  ]},
   { v: "V7.21", date: "2026.08.27", items: [
     "행정동에 기사가 2명 이상이면 자동으로 나누지 않고 브러쉬로 배정합니다 (기사 1명인 동은 전체 자동 배정 그대로)",
   ]},
