@@ -9,7 +9,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   normalizeDriver, validateDriver, resolveDriverByPhone, activePhones, DENY_MESSAGE,
-  reconcileDriversWithRoster, isActiveDriver,
+  reconcileDriversWithRoster, isActiveDriver, resolveRosterSource,
 } from '../src/utils/driverRoster.js';
 
 const 홍 = { id: 'd1', name: '홍길동', phone: '+821012345678', active: true };
@@ -161,5 +161,38 @@ describe('기사 명부 대조 — 비활성이 남고 신규가 빠지던 결�
   test('id 가 달라도 이름+번호가 같으면 같은 사람으로 본다(옛 저장본 호환)', () => {
     const r = reconcileDriversWithRoster([{ id: 'old-1', name: '가명현', phone: '010-5688-8861' }], roster);
     assert.equal(r.drivers.find((d) => d.name === '가명현').id, 'a', '명부의 실제 id 로 맞춰져야 배정이 이어진다');
+  })
+})
+
+describe('명부를 어디서 읽는가 — 화면에서 고른 소속사가 1순위 (형 지시 2026-08-27)', () => {
+  // 형 지적 원문: "지자체 선택 후 소속사를 선택하면 그 소속사의 해당 정보를 불러오는 게 맞다.
+  //   소속사가 없다고 적용하지 않으면 안 되지."
+  // 실제 사고: 로그인 사용자의 orgId 만 봤더니 **관리자 계정은 소속이 비어** 명부를 못 읽었고,
+  //   '명부를 못 읽으면 아무것도 하지 않는다' 안전장치에 걸려 대조가 통째로 건너뛰어졌다.
+  //   그래서 비활성 기사가 계속 뜨고 새 기사가 안 떴다 — 두 번 헛걸음했다.
+  const orgs = [{ id: 'o1', name: '웰쉐어 사회적협동조합' }, { id: 'o2', name: '(주)한울' }];
+
+  test('★고른 소속사가 사용자 소속보다 우선 — 관리자(소속 없음)도 명부를 읽는다', () => {
+    const r = resolveRosterSource({ orgs, selectedOrgId: 'o1', user: { uid: 'admin1', role: 'admin' } });
+    assert.deepEqual(r, { kind: 'org', name: '웰쉐어 사회적협동조합' });
+  })
+
+  test('소속이 있는 사용자라도 화면에서 고른 소속사를 따른다', () => {
+    const r = resolveRosterSource({ orgs, selectedOrgId: 'o2', user: { orgId: '웰쉐어 사회적협동조합' } });
+    assert.equal(r.name, '(주)한울', '고른 소속사를 무시하면 남의 명부를 보게 된다');
+  })
+
+  test('안 골랐으면 내 소속 → 기업 → 개인 순으로 내려간다', () => {
+    assert.deepEqual(resolveRosterSource({ orgs, selectedOrgId: null, user: { orgId: 'A' } }), { kind: 'org', name: 'A' });
+    assert.deepEqual(resolveRosterSource({ orgs: [], user: { companyCode: 'NX-1' } }), { kind: 'company', name: 'NX-1' });
+    assert.deepEqual(resolveRosterSource({ orgs: [], user: { uid: 'u1' } }), { kind: 'personal', name: 'u1' });
+  })
+
+  test('아무 단서도 없으면 none — 이때만 대조를 건너뛴다', () => {
+    assert.deepEqual(resolveRosterSource({ orgs: [], user: {} }), { kind: 'none', name: '' });
+  })
+
+  test('소속사 id 대신 이름으로 골라도 찾는다(저장본 호환)', () => {
+    assert.equal(resolveRosterSource({ orgs, selectedOrgId: '(주)한울' }).name, '(주)한울');
   })
 })

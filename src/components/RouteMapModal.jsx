@@ -203,6 +203,29 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
   // ★핀을 누르면 그 자리에서 순번을 바로 넣는다(형 지시 2026-08-27 "좌표 클릭하고 바로 순번을 입력").
   //   목록으로 눈을 옮기지 않고 지도만 보며 순서를 매길 수 있어야 현장 감각대로 찍을 수 있다.
   const [seqPin, setSeqPin] = useState(null); // { id, name, x, y }
+  // ★핀에서 담당 기사도 바로 고른다(형 지시 2026-08-27 "좌표에 배송 순번과 담당 기사 설정").
+  //   순번과 같은 규격: 화면부터 바꾸고 저장, 실패하면 되돌리고 알린다.
+  const assignDriverAtPin = async (recId, driverId) => {
+    const target = records.find(r => r.id === recId);
+    if (!target) return;
+    const before = target._driverId || null;
+    if (before === driverId) return;
+    setRecords(prev => prev.map(r => (r.id === recId ? { ...r, _driverId: driverId } : r)));
+    setIsDirty(true);
+    const docId = target._cloudDocId || target.id;
+    if (!isCloudMode || !cloudCity || !cloudMonthId || !docId) return;   // 로컬 명단은 저장 버튼으로
+    try {
+      await setDoc(
+        doc(db, 'cloud_lists', cloudCity, 'months', cloudMonthId, 'records', docId),
+        { 기사: drivers.find(d => d.id === driverId)?.name || '', 기사수정일시: serverTimestamp() },
+        { merge: true },
+      );
+    } catch (err) {
+      console.error('[핀 기사 저장] 실패:', err);
+      setRecords(prev => prev.map(r => (r.id === recId ? { ...r, _driverId: before } : r)));
+      alert('기사 저장에 실패했습니다. 권한이 있는지 확인해 주세요.');
+    }
+  };
 
   // ── 좌표 삭제 브러시 모달
   const [showCoordBrush, setShowCoordBrush] = useState(false);
@@ -4625,6 +4648,27 @@ ${folders}
                   <button type="submit" className="px-2 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-[11px] font-black text-black">확인</button>
                   <button type="button" onClick={() => setSeqPin(null)} className="text-gray-500 hover:text-white text-[11px]">✕</button>
                 </form>
+                {/* ★담당 기사도 여기서 고른다 — 이름을 누르면 바로 배정되고 저장된다(누구나 쓸 수 있게 한 번의 클릭). */}
+                {drivers.length > 0 && (
+                  <div className="mt-1 bg-[#0e0e0e] border border-[#232323] rounded-xl shadow-2xl px-2 py-1.5 flex flex-wrap gap-1 max-w-[260px]">
+                    <span className="text-[9px] text-gray-500 self-center mr-0.5">담당</span>
+                    {drivers.map(d => {
+                      const cur = records.find(r => r.id === seqPin.id)?._driverId === d.id;
+                      return (
+                        <button key={d.id} type="button"
+                          onClick={() => assignDriverAtPin(seqPin.id, d.id)}
+                          className={`px-1.5 py-0.5 rounded-md text-[10px] font-black border transition-all ${cur ? 'text-black' : 'text-gray-200 border-[#2a2a2a] hover:border-white/40'}`}
+                          style={cur ? { background: d.color, borderColor: d.color } : { borderLeft: `3px solid ${d.color}` }}
+                          title={cur ? '지금 담당' : `${d.name} 에게 배정`}>
+                          {d.name || '이름없음'}
+                        </button>
+                      );
+                    })}
+                    <button type="button" onClick={() => assignDriverAtPin(seqPin.id, null)}
+                      className="px-1.5 py-0.5 rounded-md text-[10px] font-bold text-gray-400 border border-[#2a2a2a] hover:text-white"
+                      title="배정 취소">해제</button>
+                  </div>
+                )}
               </div>
             )}
 

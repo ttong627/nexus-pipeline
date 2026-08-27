@@ -1,8 +1,17 @@
-export const APP_VERSION = 'V7.26';
+export const APP_VERSION = 'V7.27.2';
 export const APP_BUILD = '2026.08.27';
-export const APP_BUILD_TIME = '2026.08.27 21:01';
+export const APP_BUILD_TIME = '2026.08.27 22:03';
 
 export const CHANGELOG = [
+  { v: "V7.27.2", date: "2026.08.27", items: [
+    "고른 소속사의 기사 명부를 불러오도록 고쳤습니다 (관리자 계정에서 반영이 안 되던 원인)",
+  ]},
+  { v: "V7.27.1", date: "2026.08.27", items: [
+    "기사 명부 변경이 작업 설정에 확실히 반영되도록 고쳤습니다 (관리자 계정에서 반영이 안 되던 문제)",
+  ]},
+  { v: "V7.27", date: "2026.08.27", items: [
+    "지도 핀에서 담당 기사도 바로 고를 수 있습니다 — 이름을 누르면 배정되고 즉시 저장됩니다",
+  ]},
   { v: "V7.26", date: "2026.08.27", items: [
     "지도 경로선이 같은 건물 안 이동으로 겹쳐 보이던 문제를 줄였습니다 (교차 표시 52% 감소)",
   ]},

@@ -4,7 +4,7 @@ import { db, writeBatch } from '../config/firebase.js';
 import { getDocs, collection, getDoc, doc, setDoc, serverTimestamp } from 'firebase/firestore';
 // 배송지도 접근 인증의 열쇠 — 저장·비교 양쪽 모두 이 함수를 통과시킨다(계획 Phase 0).
 import { toE164Mobile } from '../utils/phone.js';
-import { reconcileDriversWithRoster } from '../utils/driverRoster.js';   // 복원한 기사 목록을 현재 명부와 대조
+import { reconcileDriversWithRoster, resolveRosterSource } from '../utils/driverRoster.js';   // 복원한 기사 목록을 현재 명부와 대조
 import { kakaoCoordOf } from '../utils/kakaoApi.js';   // ★REST 키는 서버에만 있다(2026-08-23 점검)
 
 
@@ -135,14 +135,17 @@ export default function RouteSetupModal({
   const [rosterNotice, setRosterNotice] = useState(null);
   const rosterRef = useRef(null);
   const ensureRoster = async () => {
-    if (rosterRef.current) return rosterRef.current;
+    // ★명부는 **화면에서 고른 소속사** 기준으로 읽는다(2026-08-27 재수정).
+    //   예전엔 `user.orgId` 만 봤는데, 관리자 계정은 소속이 비어 있어서 명부를 못 읽었고
+    //   그러면 "명부를 못 읽으면 아무것도 하지 않는다" 규칙에 걸려 **대조가 통째로 건너뛰어졌다**.
+    //   그래서 형 화면에서는 비활성 기사가 계속 뜨고 새 기사가 안 떴다(실측).
+    const src = resolveRosterSource({ orgs, selectedOrgId, user });
+    if (rosterRef.current && rosterRef.currentKey === `${src.kind}:${src.name}`) return rosterRef.current;
+    rosterRef.currentKey = `${src.kind}:${src.name}`;   // 소속사를 바꾸면 다시 읽는다
     try {
-      const orgName = user?.orgId || '';
-      const colRef = orgName
-        ? collection(db, 'org_drivers', orgName, 'drivers')
-        : (user?.companyCode
-          ? collection(db, 'user_companies', user.companyCode, 'drivers')
-          : (user?.uid ? collection(db, 'user_drivers', user.uid, 'drivers') : null));
+      const colRef = src.kind === 'org' ? collection(db, 'org_drivers', src.name, 'drivers')
+        : src.kind === 'company' ? collection(db, 'user_companies', src.name, 'drivers')
+          : src.kind === 'personal' ? collection(db, 'user_drivers', src.name, 'drivers') : null;
       if (!colRef) { rosterRef.current = []; return rosterRef.current; }
       const snap = await getDocs(colRef);
       rosterRef.current = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
@@ -152,6 +155,24 @@ export default function RouteSetupModal({
     }
     return rosterRef.current;
   };
+  // ★소속사가 정해진 **뒤에** 한 번 더 맞춘다(2026-08-27 재수정).
+  //   복원은 모달이 열릴 때 돌지만, 소속사는 그 뒤에 골라진다(관리자는 자동선택도 안 된다).
+  //   그 사이에 대조가 지나가 버려서 비활성 기사가 그대로 남아 있었다 — 그래서 여기서 다시 맞춘다.
+  //   ⚠️바뀔 게 없으면 setDrivers 를 부르지 않는다(다시 렌더 → 또 실행되는 되돌이 차단).
+  useEffect(() => {
+    if (!drivers.length) return;
+    let alive = true;
+    (async () => {
+      const roster = await ensureRoster();
+      if (!alive || !roster.length) return;
+      const r = reconcileDriversWithRoster(drivers, roster);
+      if (r.skipped || (!r.removed.length && !r.added.length)) return;
+      setDrivers(r.drivers);
+      setRosterNotice({ removed: r.removed, added: r.added });
+    })();
+    return () => { alive = false; };
+  }, [selectedOrgId, orgs, drivers]);   // eslint-disable-line react-hooks/exhaustive-deps -- ensureRoster 는 매 렌더 새 함수라 넣으면 계속 다시 실행된다
+
   const applyRestoredDrivers = async (list) => {
     const roster = await ensureRoster();
     const r = reconcileDriversWithRoster(list, roster);

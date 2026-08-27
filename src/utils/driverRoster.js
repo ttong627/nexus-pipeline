@@ -163,3 +163,26 @@ export function reconcileDriversWithRoster(restored = [], roster = []) {
   }
   return { drivers: [...kept, ...added], removed, added, skipped: false };
 }
+
+/**
+ * 기사 명부를 **어느 소속사에서** 읽을지 정한다.
+ *   ★화면에서 고른 소속사가 1순위다(형 지시 2026-08-27:
+ *     "지자체 선택 후 소속사를 선택하면 그 소속사의 해당 정보를 불러오는 게 맞다.
+ *      소속사가 없다고 적용하지 않으면 안 되지").
+ *   ⚠️예전엔 로그인 사용자의 `orgId` 만 봤다. **관리자 계정은 소속이 비어 있어서** 명부를 못 읽었고,
+ *     "명부를 못 읽으면 아무것도 하지 않는다" 안전장치에 걸려 대조가 통째로 건너뛰어졌다 —
+ *     그래서 화면에는 비활성 기사가 계속 뜨고 새로 넣은 기사가 안 떴다(실측 2회).
+ *   @returns {{ kind:'org'|'company'|'personal'|'none', name:string }}
+ */
+export function resolveRosterSource({ orgs = [], selectedOrgId = null, user = {} } = {}) {
+  const picked = (orgs || []).find((o) => o && (o.id === selectedOrgId || o.name === selectedOrgId));
+  const pickedName = String(picked?.name || '').trim();
+  if (pickedName) return { kind: 'org', name: pickedName };
+  const myOrg = String(user?.orgId || '').trim();
+  if (myOrg) return { kind: 'org', name: myOrg };
+  const code = String(user?.companyCode || '').trim();
+  if (code) return { kind: 'company', name: code };
+  const uid = String(user?.uid || '').trim();
+  if (uid) return { kind: 'personal', name: uid };
+  return { kind: 'none', name: '' };
+}
