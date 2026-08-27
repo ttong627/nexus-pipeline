@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { db } from '../config/firebase.js';
 import { collection, getDocs } from 'firebase/firestore';
+import { fetchSavedCities } from '../utils/savedCities.js';   // 저장된 지자체 목록 SSOT
 import {
   MapPin, Calendar, X, Loader2, ChevronRight, AlertCircle, CheckCircle,
   Clock, Database, RefreshCw, Layers, Users, Package, Globe,
@@ -61,6 +62,29 @@ export default function DongSelectModal({
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState('');
   const [dongStats, setDongStats] = useState(null); // [{dong, count, assigned, unassigned}] | null
+
+  // ── 저장된 지자체 목록 (형 지시 2026-08-27 "저장된 지자체 중에 고를 수 있게") ──────────
+  //   예전엔 관리자에게 자유 입력창 + datalist 만 줬는데, 관리자 계정은 `citiesApproved` 가 비어 있어
+  //   **고를 것이 하나도 없었다**(형 화면 실측). 실제로 명단이 저장된 지자체를 불러와 고르게 한다.
+  const [cityOptions, setCityOptions] = useState(() => (userCities || []).filter(Boolean));
+  const [citiesLoading, setCitiesLoading] = useState(true);
+  const [manualCity, setManualCity] = useState(false);   // 관리자 전용 — 목록에 없는 곳 직접 입력
+
+  // ★배열을 그대로 의존성에 넣으면 안 된다 — 부모가 `user?.citiesApproved || []` 로 매 렌더 새 배열을
+  //   넘기므로 목록을 무한히 다시 불러온다. 문자열 키로 고정한다.
+  const userCitiesKey = (userCities || []).join('|');
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const list = await fetchSavedCities({ user: { citiesApproved: userCitiesKey ? userCitiesKey.split('|') : [] }, isAdmin });
+      if (cancelled) return;
+      setCityOptions(list);
+      setCitiesLoading(false);
+      // 아직 아무것도 안 고른 상태면 첫 지자체를 자동 선택한다(형이 바로 월만 확인하면 되게)
+      setCity(prev => (prev ? prev : (list[0] || '')));
+    })();
+    return () => { cancelled = true; };
+  }, [isAdmin, userCitiesKey]);
 
   const cityIsValid = city.trim().length >= 2;
   const monthIsValid = /^\d{4}-\d{2}$/.test(month);
@@ -159,18 +183,18 @@ export default function DongSelectModal({
             <label className="text-[11px] font-black text-gray-400 uppercase tracking-wider flex items-center gap-1.5">
               <MapPin size={11} className="text-[#3b82f6]" />지자체
             </label>
-            {isAdmin ? (
+            {manualCity ? (
               <>
                 <input
                   type="text"
                   value={city}
                   onChange={e => setCity(e.target.value)}
                   list="dong-city-datalist"
-                  placeholder="지자체명 입력 또는 선택"
+                  placeholder="지자체명 입력 (예: 서울특별시 동대문구)"
                   className="w-full bg-[#060a0e] border border-[#1e2d3d] focus:border-[#3b82f6]/60 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none transition-colors"
                 />
                 <datalist id="dong-city-datalist">
-                  {userCities.map(c => <option key={c} value={c} />)}
+                  {cityOptions.map(c => <option key={c} value={c} />)}
                 </datalist>
               </>
             ) : (
@@ -178,13 +202,29 @@ export default function DongSelectModal({
                 <select
                   value={city}
                   onChange={e => setCity(e.target.value)}
-                  className="w-full bg-[#060a0e] border border-[#1e2d3d] focus:border-[#3b82f6]/60 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none appearance-none transition-colors pr-8"
+                  disabled={citiesLoading && cityOptions.length === 0}
+                  className="w-full bg-[#060a0e] border border-[#1e2d3d] focus:border-[#3b82f6]/60 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none appearance-none transition-colors pr-8 disabled:opacity-50"
                 >
-                  {!initCity && <option value="">-- 지자체 선택 --</option>}
-                  {userCities.map(c => <option key={c} value={c}>{c}</option>)}
+                  <option value="">
+                    {citiesLoading && cityOptions.length === 0
+                      ? '지자체 불러오는 중…'
+                      : cityOptions.length ? '-- 지자체 선택 --' : '저장된 지자체가 없습니다'}
+                  </option>
+                  {/* 목록에 없는 값이 이미 들어 있으면(직접 입력 후 전환) 사라지지 않게 같이 넣는다 */}
+                  {city && !cityOptions.includes(city) && <option value={city}>{city}</option>}
+                  {cityOptions.map(c => <option key={c} value={c}>{c}</option>)}
                 </select>
                 <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-gray-500 text-xs">▾</div>
               </div>
+            )}
+            {isAdmin && (
+              <button
+                type="button"
+                onClick={() => setManualCity(v => !v)}
+                className="text-[10px] text-gray-500 hover:text-gray-300 underline underline-offset-2 transition-colors"
+              >
+                {manualCity ? '목록에서 선택' : '목록에 없으면 직접 입력'}
+              </button>
             )}
             {savedPref && lastUsedLabel && (
               <p className="flex items-center gap-1 text-[11px] text-gray-500">

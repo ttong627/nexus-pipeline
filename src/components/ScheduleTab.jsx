@@ -4,6 +4,7 @@ import { db } from '../config/firebase.js';
 import { doc, getDoc, setDoc, collection, getDocs, serverTimestamp } from 'firebase/firestore';
 import { Calendar, Plus, Trash2, ChevronLeft, ChevronRight, Check, Printer, FileSpreadsheet, FileText, SortAsc, Copy, Wand2, RefreshCw, Loader2 } from 'lucide-react';
 import { REGIONS, getSigunguOptions } from '../utils/regions.js';
+import { fetchSavedCities, splitCityName } from '../utils/savedCities.js';   // 저장된 지자체 목록 SSOT
 
 // ★보고서 HTML 은 innerHTML 로 렌더된다 — 이름·전화·비고를 그대로 넣으면 저장형 XSS 가 된다
 //   (CSP 가 'unsafe-inline' 이라 실행된다 · 2026-08-23 점검). 같은 리포 RouteMapModal 의 escHtml 과 같은 규격.
@@ -342,7 +343,31 @@ export default function ScheduleTab({ user, onBack }) {
   const city = [sido, sigungu].filter(Boolean).join(' ');
 
   const sidoOptions = useMemo(() => Object.keys(REGIONS), []);
-  const sigunguOptions = useMemo(() => getSigunguOptions(sido), [sido]);
+  // ★고른 시/군/구가 전국 표에 없어도 선택이 풀리지 않게 앞에 끼워 넣는다
+  //   (저장된 지자체명은 `천안시 동남구`처럼 표의 항목과 표기가 다를 수 있다)
+  const sigunguOptions = useMemo(() => {
+    const base = getSigunguOptions(sido);
+    return sigungu && !base.includes(sigungu) ? [sigungu, ...base] : base;
+  }, [sido, sigungu]);
+
+  // ── 저장된 지자체 (형 지시 2026-08-27 "여기도 저장된 지자체를 선택할수있게") ──────────
+  //   전국 시/도 표에서 두 번 골라 조립하던 것을, 실제로 명단이 저장된 지자체에서 한 번에 고르게 한다.
+  //   (시/도·시/군/구 선택은 그대로 남겨 둔다 — 아직 명단이 없는 곳을 미리 짤 때 필요하다)
+  const [savedCities, setSavedCities] = useState([]);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const list = await fetchSavedCities({ user, isAdmin });
+      if (!cancelled) setSavedCities(list);
+    })();
+    return () => { cancelled = true; };
+  }, [uid, isAdmin]);   // eslint-disable-line react-hooks/exhaustive-deps -- user 객체는 매 렌더 새로 올 수 있어 uid 로 고정
+
+  const handlePickSavedCity = useCallback((picked) => {
+    const { sido: s, sigungu: sg } = splitCityName(picked);
+    setSido(s);
+    setSigungu(sg);
+  }, []);
 
   // ─── Load Drivers ──────────────────────────────────────────────────────────
   const loadDrivers = useCallback(async () => {
@@ -810,6 +835,16 @@ ${rows.map((r, i) => `<tr>
           className="bg-[#111] border border-[#2a2a2a] text-white text-xs rounded-lg px-2.5 py-1.5 outline-none focus:border-[#3b82f6]"
         >
           {Array.from({ length: 12 }, (_, i) => i + 1).map(m => <option key={m} value={m}>{m}월</option>)}
+        </select>
+        <div className="h-4 w-px bg-[#2a2a2a]" />
+        {/* 저장된 지자체 — 한 번에 고르기 */}
+        <select
+          value={savedCities.includes(city) ? city : ''}
+          onChange={e => { if (e.target.value) handlePickSavedCity(e.target.value); }}
+          className="bg-[#111] border border-[#3b82f6]/40 text-white text-xs rounded-lg px-2.5 py-1.5 outline-none focus:border-[#3b82f6]"
+        >
+          <option value="">{savedCities.length ? '저장된 지자체' : '저장된 지자체 없음'}</option>
+          {savedCities.map(c => <option key={c} value={c}>{c}</option>)}
         </select>
         <div className="h-4 w-px bg-[#2a2a2a]" />
         <select

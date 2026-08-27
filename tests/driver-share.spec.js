@@ -122,19 +122,31 @@ test('② 올바른 비밀번호로 들어가면 내 배송 목록이 보인다'
 // ★HTTPS 에서만 의미가 있다: `vite preview`(http://localhost) 로 열면 지도 SDK 주소가 `http://dapi.kakao.com` 이 되고
 //   카카오가 ORB 로 막는다(실측 `ERR_BLOCKED_BY_ORB`). 앱 결함이 아니라 환경 차이라 그때는 건너뛴다.
 //   운영(https)에서는 200 으로 받고 `kakao.maps.Map` 까지 준비되는 것을 확인했다.
-test('③ 지도(카카오 SDK)가 CSP 에 막히지 않고 실제로 뜬다', async ({ page }) => {
-  test.skip(!BASE.startsWith('https://'), 'HTTP 로컬 미리보기에서는 카카오가 SDK 를 막는다(환경 차이)');
-  const fatal = watchFatal(page);
-  await page.goto(`${BASE}/?r=${SHARE}&d=${DRIVER}`, { waitUntil: 'domcontentloaded' });
-  const input = page.locator('input[inputmode="numeric"], input[type="password"], input[type="tel"]').first();
-  await input.waitFor({ timeout: 20000 });
-  await input.fill(PASS);
-  await page.keyboard.press('Enter');
-  await expect(page.getByText(NAMES[0], { exact: false }).first()).toBeVisible({ timeout: 30000 });
-  // ★CSP 에서 script-src 'unsafe-inline' 을 뺐다(2026-08-24). 지도 SDK 가 막히면 여기서 걸린다.
-  await expect.poll(async () => page.evaluate(() => !!(window.kakao && window.kakao.maps && window.kakao.maps.Map)), { timeout: 30000 }).toBe(true);
-  expect(fatal.filter((f) => /Refused to/.test(f)), `CSP 가 무언가를 막았다:\n${fatal.join('\n')}`).toEqual([]);
-});
+// ★도메인마다 확인한다 (형 지적 2026-08-27 "지도를 불러오지 못했다고 에러가 뜨네").
+//   그동안 `logis-op.web.app` 하나만 검사해서 통과시켰는데, **형이 실제로 쓰는 커스텀 도메인 2개**는
+//   카카오 앱에 등록돼 있지 않아 SDK 가 401 로 거절당하고 있었다(실측). 검사한 적 없는 주소가
+//   진짜 사용 주소였던 셈이다 → 운영에서 쓰는 주소를 전부 돈다.
+const MAP_DOMAINS = process.env.E2E_BASE
+  ? [BASE]
+  : ['https://logis-op.web.app', 'https://narami.wssc.kr', 'https://wr.wslos.com'];
+
+for (const domain of MAP_DOMAINS) {
+  test(`③ 지도(카카오 SDK)가 실제로 뜬다 — ${domain.replace('https://', '')}`, async ({ page }) => {
+    test.skip(!domain.startsWith('https://'), 'HTTP 로컬 미리보기에서는 카카오가 SDK 를 막는다(환경 차이)');
+    const fatal = watchFatal(page);
+    await page.goto(`${domain}/?r=${SHARE}&d=${DRIVER}`, { waitUntil: 'domcontentloaded' });
+    const input = page.locator('input[inputmode="numeric"], input[type="password"], input[type="tel"]').first();
+    await input.waitFor({ timeout: 20000 });
+    await input.fill(PASS);
+    await page.keyboard.press('Enter');
+    await expect(page.getByText(NAMES[0], { exact: false }).first()).toBeVisible({ timeout: 30000 });
+    // ★CSP 에서 script-src 'unsafe-inline' 을 뺐다(2026-08-24). 지도 SDK 가 막히면 여기서 걸린다.
+    await expect.poll(async () => page.evaluate(() => !!(window.kakao && window.kakao.maps && window.kakao.maps.Map)), { timeout: 30000 }).toBe(true);
+    // 준비만으로는 부족하다 — 타일이 실제로 그려져야 "지도가 떴다"이다
+    await expect.poll(async () => page.evaluate(() => document.querySelectorAll('img[src*="daumcdn"], img[src*="kakao"]').length), { timeout: 20000 }).toBeGreaterThan(0);
+    expect(fatal.filter((f) => /Refused to/.test(f)), `CSP 가 무언가를 막았다:\n${fatal.join('\n')}`).toEqual([]);
+  });
+}
 
 test('④ 틀린 비밀번호는 들어가지 못한다', async ({ page }) => {
   await page.goto(`${BASE}/?r=${SHARE}&d=${DRIVER}`, { waitUntil: 'domcontentloaded' });

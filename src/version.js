@@ -1,8 +1,13 @@
-export const APP_VERSION = 'V7.27.3';
+export const APP_VERSION = 'V7.28';
 export const APP_BUILD = '2026.08.27';
-export const APP_BUILD_TIME = '2026.08.27 22:16';
+export const APP_BUILD_TIME = '2026.08.27 22:37';
 
 export const CHANGELOG = [
+  { v: "V7.28", date: "2026.08.27", items: [
+    "지도가 안 뜨던 문제 해결 — 회사 주소(narami.wssc.kr·wr.wslos.com)에서도 지도가 나옵니다",
+    "동별 배송지도에서 저장된 지자체를 목록에서 고르게",
+    "배송일정 관리에도 저장된 지자체 선택 추가",
+  ]},
   { v: "V7.27.3", date: "2026.08.27", items: [
     "지도가 안 뜨던 문제와 배정된 동을 미배정으로 잘못 알리던 문제를 고쳤습니다",
   ]},

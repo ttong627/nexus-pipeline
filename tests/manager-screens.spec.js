@@ -136,3 +136,24 @@ test('담당자 로그인 → 주요 메뉴를 모두 열어도 화면이 죽지
   expect(dead, '열자마자 비는 화면: ' + dead.join(' / ')).toEqual([]);
   expect(fatal, '화면을 죽이는 오류: ' + fatal.join(' / ')).toEqual([]);
 });
+
+// ── 저장된 지자체 선택 (형 지시 2026-08-27) ─────────────────────────────────
+//   "여기도 지자체를 저장된 지자체 중에 고를 수 있게 해줘"
+//   예전엔 관리자에게 빈 datalist 만 줘서 **고를 것이 하나도 없었다**. 목록이 실제로 차는지 본다.
+test('동별 배송지도 — 저장된 지자체를 목록에서 고를 수 있다', async ({ page }) => {
+  test.slow();
+  const fatal = [];
+  page.on('pageerror', (e) => fatal.push('pageerror: ' + e.message));
+  page.on('dialog', (d) => d.dismiss().catch(() => {}));
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await signIn(page);
+
+  await page.getByRole('button', { name: /동별 배송지도/, exact: false }).first().click({ timeout: 20000 });
+  const select = page.locator('select').first();
+  await select.waitFor({ timeout: 20000 });
+  // 목록이 채워질 때까지 (cloud_lists 조회는 서버 왕복이다)
+  await expect.poll(async () => select.locator('option').count(), { timeout: 25000 }).toBeGreaterThan(1);
+  const first = (await select.locator('option').nth(1).innerText()).trim();
+  expect(first.length, '지자체 이름이 비어 있다').toBeGreaterThan(1);
+  expect(fatal, '화면을 죽이는 오류: ' + fatal.join(' / ')).toEqual([]);
+});
