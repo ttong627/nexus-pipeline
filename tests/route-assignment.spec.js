@@ -71,6 +71,9 @@ test.beforeAll(async () => {
     for (let i = 0; i < 2; i++) {
       batch.set(monthRef().collection('records').doc(`r_${di}_${i}`), {
         이름: `검증${di}${i}E2E`, 주소: `${CITY} 검증로 ${70 + di * 2 + i}`,
+        // ★휴대폰이 있어야 3개월 보관의 강키(이름+전화끝8 · S-1)가 만들어진다.
+        //   실제 명단은 99%가 연락처를 갖고 있다(동대문구 2026-08 실측 7,669/7,712).
+        휴대폰: `010-9${di}${i}0-${1000 + di * 10 + i}`,
         포수: 1, 행정동: dong, lat: 37.579 + di * 0.001, lng: 127.049 + i * 0.001, _test: true,
       });
     }
@@ -293,4 +296,89 @@ test('저장해도 다른 동의 기사 칸은 그대로다 (긴급 1 재발방�
   const after = await monthRef().collection('records').where('행정동', '==', DONGS[1]).get();
   const wiped = after.docs.filter((d) => String(d.data().기사 || '').trim() !== KEEP);
   expect(wiped.length, `배정하지 않은 ${DONGS[1]} 의 기사 칸이 ${wiped.length}건 지워졌다`).toBe(0);
+});
+
+// ── 지도 저장 (기사·좌표·순번) — 형 실측 사고 재발방지 (2026-08-28) ──────────────
+//   형 증상: 지도에서 [저장·확정]을 눌렀더니 **명단의 배송순번이 전부 사라졌다**
+//            (동대문구 2026-08 세 개 동 1,530건 실측). 3개월 보관은 아예 0건이었다.
+//   원인: `배송순번: r.배송순번 ? String(r.배송순번) : ''` — 순번을 안 매긴 저장이 전건을 덮었다(G-4).
+//        보관 코드는 다른 버튼(`handleSaveToCloud`)에만 있어 이 경로로는 한 건도 안 남았다.
+//   ★지도가 그려질 필요는 없다 — 확인할 것은 **기사·좌표·순번이 DB 에 제대로 쓰이는가**다(형 지적).
+const openMap = async (page) => {
+  await page.getByRole('button', { name: /다음 — 매칭 방식 선택/ }).click({ timeout: 20000 });
+  await page.getByText('전체 한번에', { exact: false }).first().click({ timeout: 20000 });
+  await page.getByRole('button', { name: /전체 시작/ }).click({ timeout: 20000 });
+  // 지도 화면의 저장 버튼이 뜨면 도착한 것이다(지도 타일이 그려지길 기다리지 않는다)
+  await page.getByRole('button', { name: /저장·확정/ }).first().waitFor({ timeout: 40000 });
+};
+
+test('지도 저장이 명단의 기존 배송순번을 지우지 않는다 (긴급 · G-4)', async ({ page }) => {
+  test.slow();
+  const fatal = [];
+  page.on('pageerror', (e) => fatal.push('pageerror: ' + e.message));
+  page.on('dialog', (d) => d.accept().catch(() => {}));   // 혼재 확인창은 승인
+  await page.setViewportSize({ width: 1920, height: 1080 });
+
+  // 명단에 순번을 미리 넣어 둔다 — 전월 이식·앞선 작업으로 순번이 있는 상태가 실제 상황이다
+  const all = await monthRef().collection('records').get();
+  const pre = db().batch();
+  all.docs.forEach((d, i) => pre.update(d.ref, { 배송순번: String(i + 1), 기사: '' }));
+  await pre.commit();
+
+  await signIn(page);
+  await openStep2(page);
+  await activateDriver(page);
+  // 저장·확정은 미배정 0건을 요구한다 → 세 동 모두 배정
+  for (const dong of DONGS) {
+    const card = dongCard(page, dong);
+    await card.waitFor({ timeout: 20000 });
+    if ((await card.getAttribute('data-assigned')) === '0') {
+      await card.click({ timeout: 15000 });
+      await expect(card).toHaveAttribute('data-assigned', '1', { timeout: 10000 });
+    }
+  }
+  await openMap(page);
+
+  // 순번은 손대지 않고 저장한다 — 예전엔 이때 명단 순번이 전멸했다
+  await page.getByRole('button', { name: /저장·확정/ }).first().click({ timeout: 20000 });
+  await expect(page.getByText(/저장·확정 완료|반영/).first()).toBeVisible({ timeout: 60000 });
+  await page.waitForTimeout(4000);
+
+  const after = await monthRef().collection('records').get();
+  const lostSeq = after.docs.filter((d) => !String(d.data().배송순번 || '').trim());
+  expect(lostSeq.length, `배송순번이 ${lostSeq.length}건 지워졌다`).toBe(0);
+  // 기사는 지도 화면이 주인이므로 반영돼야 한다
+  const withDriver = after.docs.filter((d) => String(d.data().기사 || '').trim()).length;
+  expect(withDriver, '기사 배정이 명단에 반영되지 않았다').toBeGreaterThan(0);
+  expect(fatal, '화면을 죽이는 오류: ' + fatal.join(' / ')).toEqual([]);
+});
+
+test('지도 저장·확정이 배정을 3개월 보관에 남긴다 (route_assignments)', async ({ page }) => {
+  test.slow();
+  page.on('dialog', (d) => d.accept().catch(() => {}));
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await db().recursiveDelete(db().collection('route_assignments').doc(CITY)).catch(() => {});
+
+  await signIn(page);
+  await openStep2(page);
+  await activateDriver(page);
+  for (const dong of DONGS) {
+    const card = dongCard(page, dong);
+    await card.waitFor({ timeout: 20000 });
+    if ((await card.getAttribute('data-assigned')) === '0') {
+      await card.click({ timeout: 15000 });
+      await expect(card).toHaveAttribute('data-assigned', '1', { timeout: 10000 });
+    }
+  }
+  await openMap(page);
+  await page.getByRole('button', { name: /저장·확정/ }).first().click({ timeout: 20000 });
+  await expect(page.getByText(/저장·확정 완료|반영/).first()).toBeVisible({ timeout: 60000 });
+
+  // 명단(1개월)이 지워져도 남아야 하는 배정 보관
+  await expect.poll(async () => {
+    const ms = await db().collection('route_assignments').doc(CITY).collection('months').listDocuments();
+    if (!ms.length) return 0;
+    const recs = await ms[0].collection('records').get();
+    return recs.size;
+  }, { timeout: 40000, message: '3개월 보관에 한 건도 안 남았다' }).toBeGreaterThan(0);
 });
