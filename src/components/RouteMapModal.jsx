@@ -21,7 +21,8 @@ import { getDriversCollection } from '../utils/company.js';
 import SharePasscodePrompt from './SharePasscodePrompt.jsx';
 import { loadKakaoMapsSdk } from '../utils/kakaoSdk.js';   // 지도 SDK 로더 SSOT(중복 로드·이미 로드됨 처리)
 import { suggestNearbyAssignments, applyNearbySuggestions } from '../utils/nearbyDongAssign.js';   // 인근 동 패턴 배정(제안만)
-import { buildAssignmentBatch, applyCarriedAssignments, RETENTION_MONTHS } from '../utils/assignmentStore.js';   // 배정만 따로 3개월 보관(명단과 분리)
+import { buildAssignmentBatch, applyCarriedAssignments, RETENTION_MONTHS } from '../utils/assignmentStore.js';
+import { decideSyncFields, buildRecordPatch } from '../utils/cloudSyncPatch.js';   // 빈값이 기존 값을 덮지 않게(G-4)   // 배정만 따로 3개월 보관(명단과 분리)
 // ★순번 엔진은 SSOT 한 곳에만 산다 — 예전엔 이 파일에 41개 심볼이 문자 단위로 복제돼 있었다(2026-08-23 점검에서 제거).
 //   복제는 드리프트 전엔 증상이 없다가, 다음 수정이 한쪽에만 들어가는 순간 화면과 서버 순번이 갈라진다.
 //   회귀 `scripts/apt-dong-parse.test.mjs` 의 '전 심볼 가드'가 재정의를 막는다.
@@ -1928,25 +1929,33 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
         { merge: true }
       );
       // cloud_lists 레코드에 기사/순번/좌표 동기화 — 499 청크 유지, commit만 병렬
+      //   ★순번을 매기지 않은 저장이 명단의 기존 순번을 지우면 안 된다(G-4 · 2026-08-28 실측:
+      //     동대문구 2026-08 세 개 동 1,530건의 배송순번이 전부 빈값이 돼 있었다).
+      //     `decideSyncFields` 가 '이번 저장이 다룰 자격이 있는 필드'만 고른다.
       const CHUNK = 499;
       const driverNameById = new Map(drivers.map(d => [d.id, d.name || '']));
+      const syncFields = decideSyncFields(saveRecs);
       const syncBatches = [];
+      let syncWrote = 0, syncSkipped = 0;
       for (let i = 0; i < saveRecs.length; i += CHUNK) {
         const batch = writeBatch(db);
         let hasOps = false;
         saveRecs.slice(i, i + CHUNK).forEach(r => {
-          if (!r._cloudDocId) return;
-          const driverName = driverNameById.get(r._driverId) || '';
+          if (!r._cloudDocId) { syncSkipped++; return; }
+          const patch = buildRecordPatch(r, driverNameById.get(r._driverId) || '', syncFields);
+          if (!patch) return;
           const ref = doc(db, 'cloud_lists', cloudCity, 'months', cloudMonthId, 'records', r._cloudDocId);
-          const patch = { 기사: driverName, 배송순번: r.배송순번 ? String(r.배송순번) : '' };
-          if (r._lat !== undefined && r._lat !== null) { patch.lat = r._lat; patch.lng = r._lng; }
-          if (r._isApt !== undefined) patch.isApt = r._isApt;
           batch.set(ref, patch, { merge: true });
-          hasOps = true;
+          hasOps = true; syncWrote++;
         });
         if (hasOps) syncBatches.push(batch.commit());
       }
       await Promise.all(syncBatches);
+      // ★정합성 가드(M-5 정신): 세션에 담긴 배정과 명단에 실제로 쓴 건수가 다르면 담당자에게 알린다.
+      //   예전엔 조용히 넘어가 "지도엔 배정이 있는데 명단은 비어 있는" 상태를 아무도 몰랐다.
+      if (syncSkipped > 0) {
+        showToast('warning', `⚠️ ${syncSkipped}건은 명단 문서를 찾지 못해 반영되지 않았습니다 — 클라우드 명단을 다시 불러온 뒤 저장해 주세요`, 7000);
+      }
       // 이번달 명단 화면이 방금 저장한 기사배정을 즉시 보도록 월 메타 rev +1 (캐시 stale 방지)
       await setDoc(doc(db, 'cloud_lists', cloudCity, 'months', cloudMonthId), { rev: increment(1) }, { merge: true });
       // driver_assignments 동기화 — RouteSetupModal에서 다음번 기사구성 자동 로드용
@@ -1994,6 +2003,10 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
       setIsDirty(false);
       if (isFinal) {
         await syncToBaseList();
+        // ★배정 3개월 보관 — 형이 실제로 쓰는 버튼이 여기다(2026-08-28 점검).
+        //   예전엔 이 경로에 보관이 없어서 `route_assignments` 가 계속 0건이었다.
+        //   확정 저장에서만 한다(임시저장은 자주 일어나 쓰기가 폭증한다).
+        await archiveAssignments(saveRecs);
         // delivery_history 자동 적재 (기사별 실적 집계)
         try {
           const histBatch = writeBatch(db);
@@ -2276,6 +2289,35 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
   };
 
   // ── cloud_lists records 일괄 패치 (공통 유틸) ──────────────────────────
+  // ── 배정만 따로 3개월 보관 (형 지시 2026-08-27) ─────────────────────────────
+  //   명단(1개월)이 지워져도 기사·순번·좌표는 남는다. 이름·주소·전화는 담지 않고 매칭키 해시만 남긴다.
+  //   ★두 저장 경로가 함께 쓴다(2026-08-28 점검) — 예전엔 `handleSaveToCloud` 에만 있어서,
+  //     클라우드 모드에서 실제로 쓰는 [저장·확정] 버튼으로는 **한 건도 보관되지 않았다**(실측: 0건).
+  //   ★실패해도 본 저장을 막지 않는다. 다만 조용히 넘기지도 않는다 — 담당자가 알아야 한다.
+  const archiveAssignments = async (saveRecs) => {
+    if (!cloudCity || !cloudMonthId) return;
+    try {
+      const { rows, skippedDup } = await buildAssignmentBatch(
+        saveRecs.map(r => ({
+          이름: r.이름, 생년월일: r.생년월일, 휴대폰: r.휴대폰 || r.연락처,
+          기사: drivers.find(d => d.id === r._driverId)?.name || r.기사 || '',
+          배송순번: r.배송순번, 행정동: getRouteDong(r), lat: r._lat ?? r.lat, lng: r._lng ?? r.lng,
+        })),
+      );
+      for (let i = 0; i < rows.length; i += 499) {
+        const ab = writeBatch(db);
+        rows.slice(i, i + 499).forEach(row => {
+          ab.set(doc(db, 'route_assignments', cloudCity, 'months', cloudMonthId, 'records', row.k), row, { merge: true });
+        });
+        await ab.commit();
+      }
+      if (skippedDup) console.warn(`[배정 보관] 같은 키 중복 ${skippedDup}건은 보관하지 않았다(누구 것인지 모호 · S-2)`);
+    } catch (bkErr) {
+      console.warn('[배정 보관] 실패(본 저장에는 영향 없음):', bkErr);
+      showToast?.('error', '배정 보관(3개월)에 실패했습니다 — 저장 자체는 완료됐습니다', 6000);
+    }
+  };
+
   const patchCloudRecords = async (recs) => {
     const CHUNK = 499;
     let patchCount = 0;
@@ -2315,31 +2357,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
       // 1단계: cloud_lists에 기사/배송순번/좌표 저장
       await patchCloudRecords(saveRecs);
 
-      // 1-2단계: 배정만 따로 3개월 보관(형 지시 2026-08-27) — 명단(1개월)이 지워져도 기사·순번·좌표는 남는다.
-      //   ★이름·주소·전화는 담지 않는다. 매칭키 해시만 남긴다(`assignmentStore`).
-      //   ★실패해도 본 저장을 막지 않는다 — 보관은 부가 기능이고, 배정 저장이 우선이다.
-      try {
-        const { rows, skippedDup } = await buildAssignmentBatch(
-          saveRecs.map(r => ({
-            이름: r.이름, 생년월일: r.생년월일, 휴대폰: r.휴대폰 || r.연락처,
-            기사: drivers.find(d => d.id === r._driverId)?.name || r.기사 || '',
-            배송순번: r.배송순번, 행정동: getRouteDong(r), lat: r._lat ?? r.lat, lng: r._lng ?? r.lng,
-          })),
-        );
-        for (let i = 0; i < rows.length; i += 499) {
-          const ab = writeBatch(db);
-          rows.slice(i, i + 499).forEach(row => {
-            ab.set(doc(db, 'route_assignments', cloudCity, 'months', cloudMonthId, 'records', row.k), row, { merge: true });
-          });
-          await ab.commit();
-        }
-        if (skippedDup) console.warn(`[배정 보관] 같은 키 중복 ${skippedDup}건은 보관하지 않았다(누구 것인지 모호 · S-2)`);
-      } catch (bkErr) {
-        // ★조용히 넘기지 않는다(2026-08-27 점검) — 콘솔에만 남기면 3개월 보관이 깨진 걸 아무도 모른다.
-        //   보관은 "명단이 지워져도 기사·순번·좌표는 남는다"는 약속이라 실패를 담당자가 알아야 한다.
-        console.warn('[배정 보관] 실패(본 저장에는 영향 없음):', bkErr);
-        showToast?.('error', '배정 보관(3개월)에 실패했습니다 — 저장 자체는 완료됐습니다', 6000);
-      }
+      await archiveAssignments(saveRecs);
 
       // 1-3단계: **이미 나간 기사 지도(공유 링크)를 최신으로 갱신**한다(형 지시 2026-08-27).
       //   기사는 링크와 번호를 한 번만 받는다 — 배정·순번을 고칠 때마다 새 링크를 뿌릴 수는 없다.

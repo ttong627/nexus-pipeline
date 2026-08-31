@@ -1,8 +1,13 @@
-export const APP_VERSION = 'V7.30';
-export const APP_BUILD = '2026.08.28';
-export const APP_BUILD_TIME = '2026.08.28 00:03';
+export const APP_VERSION = 'V7.31';
+export const APP_BUILD = '2026.08.31';
+export const APP_BUILD_TIME = '2026.08.31 10:25';
 
 export const CHANGELOG = [
+  { v: "V7.31", date: "2026.08.31", items: [
+    "지도 저장이 기존 배송순번을 지우던 문제 해결 (중요)",
+    "배정 3개월 보관이 [저장·확정]에서도 기록됩니다",
+    "명단에 반영되지 못한 건수를 저장 직후 알려줍니다",
+  ]},
   { v: "V7.30", date: "2026.08.28", items: [
     "저장할 때 배정하지 않은 동의 기사 칸이 지워지던 문제 해결 (중요)",
     "배정을 전부 해제한 것도 저장됩니다 · 뒤로가기에도 미저장 알림",
