@@ -11,6 +11,8 @@ import { splitByDay, splitBySequence, summarizeDaySplit } from '../engine/delive
 // ★parseAptDong 은 **SSOT 에서 가져온다** — 여기 복제본이 있었고(문자 단위 동일),
 //   `호` optional 오탐 수정이 한쪽에만 적용될 뻔했다(2026-08-11). 다시 정의하지 말 것.
 import { getEffectiveLoad, parseAptDong } from '../engine/routeSequenceEngine.js';
+// ★기본명단 매칭은 SSOT 엔진만 쓴다 — 동명이인 안전매칭(S-1·S-2)을 여기서 다시 짜면 가드가 갈라진다.
+import { buildBaseIndex, matchBase, MATCH_REASON } from '../engine/baseMatcher.js';
 import Vworld3DView from './Vworld3DView.jsx';
 import { annotateCarryover } from '../utils/prevMonthCarryover.js';
 import { newShareId } from '../utils/shareId.js';
@@ -284,6 +286,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
   const paintRafRef = useRef(0);          // applyPaint rAF 스로틀 (프레임당 1회)
   const paintLastPtRef = useRef(null);    // 마지막 마우스 좌표 (rAF 콜백에서 사용)
   const isPaintingRef = useRef(false);
+  const syncSkipRef = useRef(0);   // 직전 sync-back 에서 모호(동명이인 의심)로 보류한 건수 — 완료 알림에 덧붙인다
   const pendingPaintRef = useRef(new Map()); // id → newDriverId (드래그 중 누적, mouseup 시 commit)
   const recordsRef = useRef([]);             // stale-closure 방지용 최신 records 미러
   const autoSaveDataRef = useRef({ records: [], drivers: [] }); // 자동저장용 최신값 (setInterval deps 제거용)
@@ -2032,7 +2035,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
         } catch (e) {
           console.error('delivery_history 적재 실패:', e);
         }
-        showToast('success', `${activeDong ? activeDong + ' ' : ''}저장·확정 완료 — 명단·기본명단 반영 ${filteredRecords.filter(r => r._driverId).length}건 (전체 확정 ${saveRecs.filter(r => r._driverId).length}건)`, 5000);
+        showToast('success', `${activeDong ? activeDong + ' ' : ''}저장·확정 완료 — 명단·기본명단 반영 ${filteredRecords.filter(r => r._driverId).length}건 (전체 확정 ${saveRecs.filter(r => r._driverId).length}건)${syncSkipRef.current ? ` · ⚠ 동명이인 의심 ${syncSkipRef.current}건은 기본명단에 쓰지 않음(확인 필요)` : ''}`, 5000);
       } else {
         showToast('success', `임시저장 완료 — 배정현황이 저장되었습니다 (기본명단 미반영)`);
       }
@@ -2234,46 +2237,47 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
   };
 
   // ── base_lists 드라이버 배정 sync-back ──────────────────────────────
+  //  ★매칭은 SSOT 엔진(`src/engine/baseMatcher.js`)이 한다 — 여기서 키를 다시 조립하지 않는다.
+  //    예전엔 `map.set(이름_키, ref)` 로 **무조건 덮어썼다** — 같은 이름·같은 생년월일이거나 가족이
+  //    유선전화를 함께 쓰면 **마지막 문서가 조용히 이겨**, 남의 기본명단에 기사·순번·좌표를 썼다.
+  //    2026-07-10 동대문 김옥순 주소오염과 **같은 메커니즘**이다(§1-4 S-1·S-2 위반 · 좌표는 사실상 주소다).
+  //    같은 계열인 App.jsx 클라우드 저장 sync-back 은 이미 가드가 있었고 **이 경로만 빠져 있었다**.
+  //  ★엔진은 강키(이름+생년월일 / 이름+휴대폰끝8 / 이름+유선끝8)를 **병렬 등록**하고 이름도
+  //    NFC·공백제거·A-1 5자 절단 변형까지 등록한다 → 키를 넓히기만 하므로 되던 매칭은 줄지 않는다.
+  //    후보가 2건 이상이면 `ambiguous` 로 돌아오고 그 건은 **쓰지 않고 건너뛴다**(S-2).
+  //    빠진 건 다시 넣으면 되지만 잘못 쓴 기사·순번·좌표는 그대로 배송으로 나간다.
+  //    건너뛴 수는 조용히 버리지 않고 **완료 알림에 함께 알린다**(담당자가 확인해야 할 건이다).
   const syncToBaseList = async () => {
-    const digitKey = v => String(v || '').replace(/[^\d]/g, '');
+    syncSkipRef.current = 0;
     try {
       const baseSnap = await getDocs(collection(db, 'base_lists', cloudCity, 'records'));
       if (baseSnap.empty) return; // base_lists 없으면 skip
 
-      const byBirth = new Map(), byPhone = new Map(), byLandline = new Map();
-      baseSnap.docs.forEach(d => {
-        const b = d.data();
-        const name = b.name || b.이름 || '';
-        const bk = digitKey(b.birthKey || b.생년월일 || '');
-        const ph = digitKey(b.mobile || b.휴대폰 || '');
-        const ld = digitKey(b.landline || b.유선전화 || '');
-        if (bk) byBirth.set(`${name}_${bk}`, d.ref);
-        if (ph) byPhone.set(`${name}_${ph}`, d.ref);
-        if (ld) byLandline.set(`${name}_${ld}`, d.ref);
-      });
+      // 문서참조를 레코드에 얹어 엔진에 넘긴다 — 엔진은 순수함수라 Firestore 를 모른다.
+      const baseRecs = baseSnap.docs.map(d => ({ __id: d.id, __ref: d.ref, ...d.data() }));
+      const baseIndex = buildBaseIndex(baseRecs, { idOf: r => r.__id });
 
       const updates = [];
+      let ambiguous = 0;
       records.forEach(r => {
+        const { entry, reason } = matchBase(baseIndex, r);
+        if (!entry) {
+          // 누구 것인지 모호하면 쓰지 않는다(S-2). 아무거나 집으면 그게 동명이인 오염이다.
+          if (reason === MATCH_REASON.AMBIGUOUS) ambiguous++;
+          return;
+        }
         const driverName = drivers.find(d => d.id === r._driverId)?.name || '';
-        const name = r.이름 || '';
-        const bk = digitKey(r.생년월일 || '');
-        const ph = digitKey(r.휴대폰 || '');
-        const ld = digitKey(r.유선전화 || '');
-
-        let ref = null;
-        if (bk) ref = byBirth.get(`${name}_${bk}`);
-        if (!ref && ph) ref = byPhone.get(`${name}_${ph}`);
-        if (!ref && ld) ref = byLandline.get(`${name}_${ld}`);
-        if (!ref) return;
-
         const patch = {};
+        // G-4·M-9: 빈값은 기존 값을 덮지 않는다 — 값이 있는 것만 담는다.
         if (driverName) patch.driver = driverName;
         if (r.배송순번) patch.seqNo = String(r.배송순번);
         if (r._lat) patch.lat = r._lat;
         if (r._lng) patch.lng = r._lng;
         if (r._isApt !== undefined) patch.isApt = r._isApt;
-        if (Object.keys(patch).length) updates.push({ ref, patch });
+        if (Object.keys(patch).length) updates.push({ ref: entry.__ref, patch });
       });
+      syncSkipRef.current = ambiguous;
+      if (ambiguous) console.warn(`[base_lists sync] 동명이인 의심 ${ambiguous}건은 쓰지 않고 보류(S-2) — 담당자 확인 필요`);
 
       const CHUNK = 499;
       for (let i = 0; i < updates.length; i += CHUNK) {
@@ -2427,7 +2431,7 @@ export default function RouteMapModal({ gridData, fileInfo, onClose, onBack = nu
       setLastAutoSave(new Date());
       setHasUnsaved(false);
       setSessionStatus('draft');
-      showToast('success', `DB 저장 완료 — ${cloudCity} ${cloudMonthId} · 기본명단 반영: ${synced}건`);
+      showToast('success', `DB 저장 완료 — ${cloudCity} ${cloudMonthId} · 기본명단 반영: ${synced}건${syncSkipRef.current ? ` · ⚠ 동명이인 의심 ${syncSkipRef.current}건 보류(확인 필요)` : ''}`);
     } catch (e) {
       showToast('error', 'DB 저장 실패: ' + e.message);
     } finally {

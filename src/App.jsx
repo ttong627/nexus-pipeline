@@ -5,6 +5,7 @@ import { APP_VERSION } from "./version.js";
 import { cleanupExpiredCache } from "./engine/dbCache.js";
 import { refreshSavedCols } from "./utils/colOrder.js";
 import { splitNameBirth, sanitizeNote } from "./utils/noteSanitizer.js";
+import { buildBaseIndex, matchBase, MATCH_REASON, extractImportable } from "./engine/baseMatcher.js";
 import { evaluateAddrChange } from "./utils/prevMonthGuard.js";
 import { logUsageEvent } from "./utils/usageLog.js";
 import { HOUSEHOLD_EXCL, HOUSEHOLD_RE } from "./columnRules.js";
@@ -335,9 +336,17 @@ export default function App() {
   // M-10: 주소 대량변동 경고를 담당자가 확인했는지 — 확인 전에는 저장을 막는다
   const [addrAlertAck, setAddrAlertAck] = useState(false);
   const [baseCount, setBaseCount] = useState(0);
+  // baseMap = 기본명단 매칭 인덱스(`src/engine/baseMatcher.js` buildBaseIndex 산출물).
+  // 예전엔 평범한 객체였고 키 조립·조회가 모달과 정제 루프에 흩어져 있었다 — 한쪽만 고치면 조용히 갈라진다(G-6).
   const [baseMap, setBaseMap] = useState(null);
   const [importFields, setImportFields] = useState(null); // null = 전체 이식, Set = 선택 필드만
   const [dbImportReady, setDbImportReady] = useState(null); // { count, fields }
+  // ── 기본명단 자동 이식 (형 지시 2026-09-03 · D-8) ────────────────────────────
+  // 지자체가 정해지는 순간 기본명단을 스스로 불러온다. 예전엔 담당자가 [기본명단 이식] 버튼을
+  // 눌러야만 특이사항이 붙어서, 안 누른 달은 통째로 빠졌다 — 실측 8개 지자체 45,231건 중
+  // **5,282건(11.7%)** 이 그렇게 빠졌다(동대문 0건 vs 부천 원미 1,474건. 차이는 버튼뿐이었다).
+  const baseAutoRef = useRef(null);                              // 진행 중 Promise(정제 시작 때 기다린다)
+  const [baseAutoInfo, setBaseAutoInfo] = useState(null);        // { city, count, indexed, failed }
   const [showDbImport, setShowDbImport] = useState(false);
   const [dbNavCity, setDbNavCity] = useState(''); // DB Overview에서 지자체 선택 후 관리 화면 이동
   const [isBasePurifyMode, setIsBasePurifyMode] = useState(false);
@@ -988,9 +997,35 @@ export default function App() {
     }
   }, [step]);   // eslint-disable-line react-hooks/exhaustive-deps -- 함수 신원이 매 렌더 바뀐다 — 넣으면 계속 다시 실행된다
 
+  // ── D-8 기본명단 자동 이식 ────────────────────────────────────────────────
+  // 지자체가 확정되면 그 지자체 기본명단을 미리 읽어 매칭 인덱스를 만들어 둔다.
+  // ★막지 않는다 — 실패하든 비어 있든 정제는 그대로 진행한다(업무 중단 금지).
+  //   담당자가 [기본명단 이식]으로 직접 고른 것이 있으면 그것이 우선이다(의사 존중).
+  const startAutoBaseLoad = useCallback((city) => {
+    if (!city) return;
+    baseAutoRef.current = (async () => {
+      try {
+        // §19: 서버 직접 조회. 캐시로 읽으면 방금 저장한 특이사항이 안 보인다.
+        const snap = await getDocsFromServer(collection(db, `base_lists/${city}/records`));
+        if (snap.empty) { setBaseAutoInfo({ city, count: 0, indexed: 0 }); return null; }
+        const recs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        const index = buildBaseIndex(recs);
+        setBaseAutoInfo({ city, count: recs.length, indexed: index.indexed });
+        return index;
+      } catch (e) {
+        // 자동 이식 실패가 정제를 막아서는 안 된다. 알리되 진행한다.
+        console.warn('[기본명단 자동 이식] 실패 — 정제는 계속합니다', e);
+        logClientError('baseAutoImport', e, { city });
+        setBaseAutoInfo({ city, failed: true });
+        return null;
+      }
+    })();
+  }, []);
+
   const handleCityMonthConfirm = (city, monthYYYYMM) => {
     const { sheetsData, initialSel, analysisSummary: summary } = pendingSetup || {};
     if (!sheetsData) return;
+    startAutoBaseLoad(city);   // D-8: 지자체가 정해지는 순간 기본명단을 미리 읽는다
     setFileInfo(prev => ({ ...prev, city, month: monthYYYYMM, operatorName }));
     setWorksheets(sheetsData);
     setMapDefs(initialSel);
@@ -1205,6 +1240,21 @@ export default function App() {
     let count = 0;
     setEngineProgress({ current: 0, total, percent: 0 });
 
+    // ── D-8: 자동으로 읽어 둔 기본명단을 여기서 받는다 ─────────────────────
+    // 담당자가 [기본명단 이식]으로 직접 고른 것(baseMap)이 있으면 그것이 우선이다.
+    // 없을 때만 자동 로드분을 쓴다 — 버튼을 누르지 않아 특이사항이 통째로 빠지던 구멍을 메운다.
+    let activeBase = baseMap;
+    let autoImported = false;
+    if (!activeBase && baseAutoRef.current) {
+      const auto = await baseAutoRef.current;
+      if (auto?.indexed) { activeBase = auto; autoImported = true; setBaseMap(auto); }
+    }
+    // 자동 이식의 대상 필드는 [기본명단 이식] 창의 기본 체크와 같게 맞춘다(놀람 방지).
+    const activeFields = activeBase && autoImported
+      ? ['note', 'detailAddr', 'seqNo', 'driver']
+      : importFields;
+    let ambiguousCount = 0;   // 동명이인 등으로 **일부러 붙이지 않은** 건수(S-2) — 끝나고 알린다
+
     const results = [];
     let lastProgressTime = Date.now();
 
@@ -1249,37 +1299,29 @@ export default function App() {
           // baseMap 3순위 매칭: 이름+생년월일 → 이름+휴대폰 → 이름+유선전화
           // A-34: 생년월일 컬럼이 비어 있으면 이름칸에서 분리한 값을 쓴다(누락 방지)
           const birthKey = parseBirthDate(getVal(row, 'birth') || _nameSplit.birth);
+          // ── 기본명단 매칭 (SSOT: src/engine/baseMatcher.js) ──────────────────
+          // 강키(이름+생년월일 / 이름+휴대폰끝8 / 이름+유선끝8)만 쓴다. 이름 단독은 절대 금지(S-1).
+          // 엔진이 흡수하는 것: 이름 NFC·공백, **A-1 5자 절단본**(기본명단엔 잘린 이름이 저장된다),
+          // 전화 앞자리 0 유실, 엑셀 날짜셀 숫자(27469), 생년월일 표기 차이.
+          // 후보가 2건 이상이면 **붙이지 않는다** — 잘못 붙은 특이사항은 그대로 배송으로 나간다(S-2).
           let baseEntry = null;
-          if (baseMap) {
-            const dkf = v => String(v || '').replace(/[^\d]/g, '');
-            const dph = dkf(phones.mobile);
-            const dld = dkf(phones.landline);
-            if (birthKey) baseEntry = baseMap[`${name}_${birthKey}`] || null;
-            if (!baseEntry && dph.length >= 9) baseEntry = baseMap[`ph_${name}_${dph}`] || null;
-            if (!baseEntry && dld.length >= 9) baseEntry = baseMap[`ld_${name}_${dld}`] || null;
+          if (activeBase) {
+            const m = matchBase(activeBase, {
+              이름: name, 생년월일: birthKey, 휴대폰: phones.mobile, 유선전화: phones.landline,
+            });
+            baseEntry = m.entry;
+            if (m.reason === MATCH_REASON.AMBIGUOUS) ambiguousCount++;
           }
+          const imp = extractImportable(baseEntry);
+          const wants = (key) => Boolean(imp) && (activeFields === null || activeFields?.includes(key));
 
-          // 레거시 note에 박힌 (본명:XXX)는 제거(이중오염 차단) — 이름은 별도 본명 컬럼으로 분리됨
-          const importedNoteClean = baseEntry?.note
-            ? String(baseEntry.note).replace(/^\[기본\]\s*/g, '').replace(/\(본명:[^)]*\)/g, '').replace(/\s+/g, ' ').trim()
-            : '';
-          const importedNote = baseEntry && (importFields === null || importFields?.includes('note')) && importedNoteClean
-            ? `◆${importedNoteClean}`
-            : '';
-          const importedDriver = baseEntry && (importFields === null || importFields?.includes('driver'))
-            ? (baseEntry.driver || baseEntry.기사 || '')
-            : '';
-          const importedSeqNo = baseEntry && (importFields === null || importFields?.includes('seqNo'))
-            ? (baseEntry.seqNo || baseEntry.배송순번 || '')
-            : '';
-          const importedSms = baseEntry && (importFields === null || importFields?.includes('sms'))
-            ? (baseEntry.sms || baseEntry.문자수신 || '')
-            : '';
+          const importedNote = wants('note') && imp.note ? `◆${imp.note}` : '';
+          const importedDriver = wants('driver') ? imp.driver : '';
+          const importedSeqNo = wants('seqNo') ? imp.seqNo : '';
+          const importedSms = wants('sms') ? imp.sms : '';
           // D-5: 상세주소 이식 (형 지시 2026-07-22) — 이번 달 명단 주소에 호수·층이 없을 때
           // 기본명단에 쌓인 상세주소를 가져와 채운다. 명단에 값이 있으면 절대 덮어쓰지 않는다.
-          const importedDetail = baseEntry && (importFields === null || importFields?.includes('detailAddr'))
-            ? String(baseEntry.detailAddr || baseEntry.detailAddress || baseEntry.상세주소 || '').trim()
-            : '';
+          const importedDetail = wants('detailAddr') ? imp.detailAddr : '';
           const smsValue = parseSMS(getVal(row, 'sms') || importedSms);
           const hasImportedBase = Boolean(importedNote || importedDriver || importedSeqNo || importedSms || importedDetail);
 
@@ -1434,6 +1476,26 @@ export default function App() {
       }
     }
     pushHistory(results);
+
+    // ── D-8 자동 이식 결과 보고 ─────────────────────────────────────────────
+    // 붙은 건수와 **일부러 안 붙인 건수**를 함께 남긴다. 조용히 넘어가면
+    // 담당자는 특이사항이 없는 건지 못 붙은 건지 구분할 수 없다.
+    {
+      const importedCount = results.filter(r => r._이식됨).length;
+      if (autoImported) {
+        setProgressLogs(prev => [...prev,
+          `✅ 기본명단 자동 이식 — ${baseAutoInfo?.count?.toLocaleString?.() || '?'}건에서 ${importedCount.toLocaleString()}건 적용 (특이사항·상세주소·순번·기사)`]);
+      }
+      if (ambiguousCount > 0) {
+        // S-2: 동명이인 등으로 후보가 2건 이상이면 붙이지 않았다. 빠진 게 아니라 막은 것이다.
+        console.warn(`[기본명단 매칭] 동명이인 의심 ${ambiguousCount}건 — 오매칭 방지를 위해 이식하지 않음`);
+        setProgressLogs(prev => [...prev,
+          `⚠️ 동명이인 의심 ${ambiguousCount.toLocaleString()}건은 이식하지 않았습니다 (잘못 붙는 것을 막기 위함 · 담당자 확인 필요)`]);
+      }
+      if (baseAutoInfo?.failed) {
+        setProgressLogs(prev => [...prev, `⚠️ 기본명단을 불러오지 못해 특이사항 자동 이식을 건너뛰었습니다`]);
+      }
+    }
 
     // 정합성 가드 — 파싱 입력 건수와 정제 결과 건수가 다르면 대상자 누락 신호(형 원칙: 대상자·포수 누락 절대 금지).
     // dedup 자동삭제를 없앴으므로 정상 상태에서는 항상 일치. 불일치 시 즉시 경고해 조용한 증발을 차단한다.
@@ -2549,6 +2611,19 @@ export default function App() {
       // 생년월일 있는 이름 목록 — 2·3순위 신규 추가 시 중복 방지
       const birthKeyedNames = new Set();
 
+      // ── S-2 충돌 가드 (형 지시 2026-09-03 "오탐하면 절대 안돼") ──────────────
+      // 같은 강키를 가진 기존 레코드가 2건 이상이면 그 키는 **누구도 가리키지 않는다**.
+      // 예전엔 마지막 레코드가 조용히 이겨서, 그 자리에 저장하면 **남의 기본명단을 덮었다**
+      // (2026-07-10 동대문 김옥순 주소오염과 같은 메커니즘 · 같은 파일의 좌표 sync-back 은
+      //  이미 이 가드를 갖췄는데 이 경로만 빠져 있었다).
+      // 실측 근거: 기본명단 20곳 145,470건에 이름+생년월일 충돌 6곳 · 이름+휴대폰 충돌 143곳.
+      const conflictedKeys = new Set();
+      const putLive = (bucket, key, rec) => {
+        if (conflictedKeys.has(key)) return;
+        if (bucket[key] && bucket[key] !== rec) { delete bucket[key]; conflictedKeys.add(key); return; }
+        bucket[key] = rec;
+      };
+
       existing.forEach(r => {
         const rName  = (r.name || r.이름 || '').trim();
         const rBirth = normalizeBirth(r.birthKey || String(r.생년월일 || ''));
@@ -2556,14 +2631,17 @@ export default function App() {
         const rLand  = digitKey(r.landline || r.유선전화  || '');
         if (!rName) return;
         if (rBirth) {
-          liveByBirth[`${rName}__${rBirth}`] = r;
+          putLive(liveByBirth, `${rName}__${rBirth}`, r);
           birthKeyedNames.add(rName);
         } else if (rPhone.length >= 9) {
-          liveByPhone[`${rName}__${rPhone}`] = r;       // 생년월일 없는 레코드만
+          putLive(liveByPhone, `${rName}__${rPhone}`, r);       // 생년월일 없는 레코드만
         } else if (rLand.length >= 9) {
-          liveByLandline[`${rName}__${rLand}`] = r;     // 생년월일·휴대폰 모두 없는 레코드만
+          putLive(liveByLandline, `${rName}__${rLand}`, r);     // 생년월일·휴대폰 모두 없는 레코드만
         }
       });
+      // 충돌 키에 해당하는 사람은 이번 저장에서 건드리지 않는다(기존 값 보존 = 되돌릴 수 있다).
+      // 신규로 추가하지도 않는다 — 중복이 쌓이면 다음 달에 더 큰 혼란이 된다.
+      let conflictSkipped = 0;
 
       // ② 우선순위 매칭
       const updates    = [];
@@ -2668,6 +2746,15 @@ export default function App() {
           }
           return out;
         };
+
+        // S-2: 이 사람의 강키가 기존 명단에서 충돌한다면(동명이인 의심) 이번 저장에서 제외한다.
+        // 어느 문서가 이 사람인지 알 수 없는데 쓰면, 그 순간 남의 기록을 덮게 된다.
+        if ((birthKey && conflictedKeys.has(`${name}__${birthKey}`))
+          || (mKey.length >= 9 && conflictedKeys.has(`${name}__${mKey}`))
+          || (lKey.length >= 9 && conflictedKeys.has(`${name}__${lKey}`))) {
+          conflictSkipped++;
+          return;
+        }
 
         if (birthKey) {
           // ── 1순위: 이름+생년월일 ────────────────────────────────────────
@@ -2822,7 +2909,9 @@ export default function App() {
         alert(`⚠️ 일부 오류 발생!\n신규: ${adds.length}건, 업데이트: ${updates.length}건\n성공: ${successCount}건, 실패 배치: ${errors.length}개\n\n${errors.join('\n')}`);
       } else {
         gDone(`기본명단 저장 완료 · 신규 ${adds.length}건 / 업데이트 ${updates.length}건`);
-        alert(`✅ 기본명단 저장 완료!\n신규 추가: ${adds.length}건\n기존 업데이트: ${updates.length}건\n\n[진단] 기존 DB: ${existing.length}건 / 생년월일 인덱스: ${Object.keys(liveByBirth).length}건 / 전화번호 인덱스: ${Object.keys(liveByPhone).length}건`);
+        alert(`✅ 기본명단 저장 완료!\n신규 추가: ${adds.length}건\n기존 업데이트: ${updates.length}건\n\n[진단] 기존 DB: ${existing.length}건 / 생년월일 인덱스: ${Object.keys(liveByBirth).length}건 / 전화번호 인덱스: ${Object.keys(liveByPhone).length}건${conflictSkipped ? `
+
+⚠️ 동명이인 의심 ${conflictSkipped}건은 건드리지 않았습니다 (기존 값 보존 · 담당자 확인 필요)` : ''}`);
       }
     } catch (e) {
       setGLoad({ show: false });

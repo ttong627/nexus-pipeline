@@ -31,6 +31,7 @@ import { isTranslitBuildingDong } from '../../services/address-service/src/share
 import { logAudit } from '../utils/audit.js';   // B-11 파괴적 작업 감사 로그
 import { kakaoSearchAddress, kakaoSearchKeyword } from '../utils/kakaoApi.js';   // ★REST 키는 서버에만 있다(2026-08-23 점검)
 import AddrChangeModal from './cloudList/AddrChangeModal.jsx';   // 주소변경 확인 모달(2026-08-23 Phase 4-3 분리)
+import { buildBaseIndex, matchBase, MATCH_REASON } from '../engine/baseMatcher.js';   // 기본명단·전월 매칭 SSOT(2026-09-03) — 생년월일 정규화·전화 끝8·동명이인 보류
 
 const ttl90 = () => Timestamp.fromMillis(Date.now() + 90 * 24 * 60 * 60 * 1000);
 
@@ -1423,45 +1424,52 @@ ${e.message}`);
     setAddrChanges([]);
     setDongAddrWarnings({});
 
-    // 저번달 delivery_history 로드 (name+birthKey 또는 name+phone 키)
-    const prevMap = new Map();
+    // 저번달 delivery_history 로드 — baseMatcher SSOT 인덱스로 구축.
+    //   ★결함 수정: 예전엔 `이름__생년월일` 원문을 그대로 키로 써서 75.03.15/750315/19750315/
+    //   엑셀 날짜셀 숫자(27469)가 전부 다른 키가 되어 미매칭이 났다. buildBaseIndex 는
+    //   생년월일을 YY.MM.DD 로 통일하고 이름은 NFC+공백제거(+A-1 5자 절단 변형)로 정규화한다.
+    let prevIndex = { map: new Map() };
     try {
       const now = new Date();
       const pd = new Date(now.getFullYear(), now.getMonth() - 1, 1);
       const prevId = `${pd.getFullYear()}-${String(pd.getMonth() + 1).padStart(2, '0')}`;
       const prevSnap = await getDocs(collection(db, 'delivery_history', selectedCity, 'months', prevId, 'records'));
-      prevSnap.docs.forEach(d => {
-        const r = d.data();
-        const digits = v => String(v || '').replace(/[^\d]/g, '');
-        const k1 = r.birthKey ? `${r.name}__${r.birthKey}` : null;
-        const ph = digits(r.mobile || '').slice(-7);
-        const k2 = ph.length >= 7 ? `${r.name}__${ph}` : null;
-        if (k1) prevMap.set(k1, r.address || '');
-        if (k2) prevMap.set(k2, r.address || '');
-      });
+      prevIndex = buildBaseIndex(prevSnap.docs.map(d => d.data()));
     } catch (e) { console.warn('[주소정제] 저번달 로드 실패:', e); }
 
+    // 저번달 주소 조회 — 생년월일→휴대폰→유선 강키 순서로 matchBase 가 조회한다(전화는 끝 8자리).
+    //   ★후보 2건 이상(동명이인)이면 어느 쪽도 채택하지 않고 미매칭으로 처리한다(S-2) —
+    //   여기서 잘못 붙으면 CL-4 판정(이사/주민센터배송)이 통째로 틀어진다.
+    let prevAmbiguousCount = 0;
+    const matchPrevAddr = (rec) => {
+      const m = matchBase(prevIndex, rec);
+      if (m.reason === MATCH_REASON.AMBIGUOUS) { prevAmbiguousCount++; return null; }
+      return m.entry?.address || null;
+    };
+
     // 기본명단(base_lists) 로드 — 도로명주소 비교 기준(이사/주민센터배송 판정)
-    const baseMap = new Map();
+    //   ★결함 수정: 예전엔 전화 끝 7자리 + "마지막 값이 이긴다"(k1)/"먼저 값이 이긴다"(k2) 정책이
+    //   한 파일 안에서도 엇갈렸다. baseMatcher 는 끝 8자리(B-15·S-1 규약) + 후보 2건↑ 보류로 통일한다.
+    let baseIndex = { map: new Map() };
     try {
       const baseSnap = await getDocsFromServer(collection(db, `base_lists/${selectedCity}/records`));
-      baseSnap.docs.forEach(d => {
-        const r = d.data();
-        const digits = v => String(v || '').replace(/[^\d]/g, '');
-        const name = (r.name || r.이름 || '').trim();
-        if (!name) return;
-        const road = r.roadAddr || parseDisplayedAddress(r.address || r.주소 || '').road || '';
-        const dong = r.dong || r.행정동 || r.legalDong || '';
-        // 법정동 — 동 단위 이사/주민센터배송 판정용(법정동↔법정동 비교, 행정동≠법정동 과탐 방지)
-        const legalDong = r.legalDong || parseDisplayedAddress(r.address || r.주소 || '').paren.split(',')[0]?.trim() || '';
-        const val = { road, dong, legalDong };
-        const k1 = r.birthKey ? `${name}__${r.birthKey}` : null;
-        const ph = digits(r.mobile || r.휴대폰 || '').slice(-7);
-        const k2 = ph.length >= 7 ? `${name}__${ph}` : null;
-        if (k1) baseMap.set(k1, val);
-        if (k2 && !baseMap.has(k2)) baseMap.set(k2, val);
-      });
+      baseIndex = buildBaseIndex(baseSnap.docs.map(d => d.data()));
     } catch (e) { console.warn('[주소정제] 기본명단 로드 실패:', e); }
+
+    // 기본명단 조회 — CL-4 판정용 {road, dong, legalDong} 파생. 매칭 방식만 교체, 판정 규칙(법정동↔법정동)은 불변.
+    //   ★모호(동명이인 후보 2건↑)면 채택하지 않는다 — 오판 시 배송지가 통째로 바뀌므로 최우선 방어.
+    let baseAmbiguousCount = 0;
+    const matchBaseEntry = (rec) => {
+      const m = matchBase(baseIndex, rec);
+      if (m.reason === MATCH_REASON.AMBIGUOUS) { baseAmbiguousCount++; return null; }
+      const r = m.entry;
+      if (!r) return null;
+      const road = r.roadAddr || parseDisplayedAddress(r.address || r.주소 || '').road || '';
+      const dong = r.dong || r.행정동 || r.legalDong || '';
+      // 법정동 — 동 단위 이사/주민센터배송 판정용(법정동↔법정동 비교, 행정동≠법정동 과탐 방지)
+      const legalDong = r.legalDong || parseDisplayedAddress(r.address || r.주소 || '').paren.split(',')[0]?.trim() || '';
+      return { road, dong, legalDong };
+    };
 
     const changes = [];
     const dirtyUpdates = {};
@@ -1520,20 +1528,17 @@ ${e.message}`);
         if (!addrChanged && !riNeedsUpdate && !legalNeedsUpdate && !phoneSwap) return;
 
         if (addrChanged) {
-          // 저번달 주소 매칭
-          const digits = v => String(v || '').replace(/[^\d]/g, '');
-          const ph = digits(rec.휴대폰 || '').slice(-7);
-          const k1 = rec.생년월일 ? `${rec.이름}__${rec.생년월일}` : null;
-          const k2 = ph.length >= 7 ? `${rec.이름}__${ph}` : null;
-          const prevAddr = (k1 && prevMap.get(k1)) || (k2 && prevMap.get(k2)) || null;
+          // 저번달·기본명단 매칭 — baseMatcher SSOT(강키 병렬조회 + 동명이인 후보 2건↑ 보류).
+          //   모호(ambiguous)면 매칭 없음으로 취급한다(기존 매칭 실패 시와 동일 동작 — 결함③ 방지).
+          const prevAddr = matchPrevAddr(rec);
+          const baseEntry = matchBaseEntry(rec);
 
-          // 변경 유형 자동 감지 — 기본명단 도로명주소 비교 + 법정동 규칙
+          // 변경 유형 자동 감지 — 기본명단 도로명주소 비교 + 법정동 규칙 (판정 규칙 불변, CL-4)
           //  · 도로명 같음 → 정제 (포맷/동호수만 변경)
           //  · 도로명 다름 + 새 주소 법정동 == 기본명단 법정동 → 이사 (같은 동 내 이동)
           //  · 도로명 다름 + 새 주소 법정동 != 기본명단 법정동 → 주민센터배송 (다른 동 → 관할 밖)
           // 법정동↔법정동 비교(둘 다 주소DB 법정동, 100% 정확). 행정동≠법정동 과탐 방지.
           // 비교 기준: 기본명단(base_lists) 우선, 없으면 저번달.
-          const baseEntry = (k1 && baseMap.get(k1)) || (k2 && baseMap.get(k2)) || null;
           const baseRoad = baseEntry?.road || prevAddr || '';
           let changeType = '정제';
           if (refined.확인필요) {
@@ -1579,14 +1584,10 @@ ${e.message}`);
       setDirtyRecords(prev => ({ ...prev, ...dirtyUpdates }));
     }
 
-    // 행정동별 저번달 대비 주소 변경 건수 (경고 기준: 10건+)
+    // 행정동별 저번달 대비 주소 변경 건수 (경고 기준: 10건+) — 조회는 matchPrevAddr()로 통일(prevIndex 재사용)
     const dongCount = {};
     records.forEach(rec => {
-      const digits = v => String(v || '').replace(/[^\d]/g, '');
-      const ph = digits(rec.휴대폰 || '').slice(-7);
-      const k1 = rec.생년월일 ? `${rec.이름}__${rec.생년월일}` : null;
-      const k2 = ph.length >= 7 ? `${rec.이름}__${ph}` : null;
-      const prevAddr = (k1 && prevMap.get(k1)) || (k2 && prevMap.get(k2)) || null;
+      const prevAddr = matchPrevAddr(rec);
       if (!prevAddr) return;
       const currentAddr = (dirtyUpdates[rec.id]?.주소 || rec.주소 || '').trim();
       if (hasRoadAddressChanged(prevAddr, currentAddr)) {
@@ -1600,6 +1601,11 @@ ${e.message}`);
     setIsRefiningAddr(false);
     setRefineProgress(null);
     setAddrChangeTab('dong');
+
+    // 모호(동명이인 후보 2건↑) 보류 건수 — 오탐 대신 미매칭으로 빠졌으니 담당자가 확인할 수 있게 남긴다.
+    if (prevAmbiguousCount > 0 || baseAmbiguousCount > 0) {
+      console.warn(`[주소정제] 동명이인 등 후보 2건↑로 매칭 보류: 저번달 ${prevAmbiguousCount}건, 기본명단 ${baseAmbiguousCount}건`);
+    }
 
     if (changes.length > 0) {
       setShowAddrChanges(true);

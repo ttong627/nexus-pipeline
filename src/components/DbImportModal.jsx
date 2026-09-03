@@ -1,7 +1,7 @@
 ﻿import { useState } from 'react';
 import { db, collection, getDocsFromServer } from '../config/firebase.js';
 import { Database, Download, X, CheckSquare, Square } from 'lucide-react';
-import { normalizeBirth } from '../utils/parsers.js';
+import { buildBaseIndex } from '../engine/baseMatcher.js';
 import { REGIONS, getSigunguOptions } from '../utils/regions.js';
 
 const IMPORT_FIELDS = [
@@ -54,39 +54,13 @@ export default function DbImportModal({ onClose, onImport, defaultCity }) {
           return;
         }
       }
-      // 3순위 매칭 인덱스 구축 (D-1: 이름+생년월일 → 이름+휴대폰 → 이름+유선전화)
-      const baseMapObj = {};
-      const dk = v => String(v || '').replace(/[^\d]/g, '');
-      // updatedAt(Firestore Timestamp/숫자) → ms. 없으면 0. 최신 우선 비교용(B-15)
-      const tsMs = (r) => {
-        const u = r?.updatedAt;
-        if (!u) return 0;
-        if (typeof u.toMillis === 'function') return u.toMillis();
-        if (typeof u.seconds === 'number') return u.seconds * 1000;
-        if (typeof u === 'number') return u;
-        return 0;
-      };
-      // 같은 키 중복 시 최신(updatedAt) 레코드만 유지 — 임의 덮어쓰기로 옛 자료가 남지 않게
-      const put = (key, r) => {
-        const prev = baseMapObj[key];
-        if (!prev || tsMs(r) >= tsMs(prev)) baseMapObj[key] = r;
-      };
-      filtered.forEach(r => {
-        const nm = (r.name || r.이름 || '').trim();
-        if (!nm) return;
-        const bk = r.birthKey || normalizeBirth(r.birth || r.생년월일 || '');
-        const ph = dk(r.mobile || r.휴대폰 || '');
-        const ld = dk(r.landline || r.유선전화 || '');
-        if (bk) {
-          put(`${nm}_${bk}`, r);            // 1순위
-        } else if (ph.length >= 9) {
-          put(`ph_${nm}_${ph}`, r);         // 2순위 (생년월일 없을 때)
-        } else if (ld.length >= 9) {
-          put(`ld_${nm}_${ld}`, r);         // 3순위 (생년월일·휴대폰 모두 없을 때)
-        }
-      });
+      // 매칭 인덱스 구축은 SSOT 엔진 한 곳에서만 한다(src/engine/baseMatcher.js).
+      // ★예전엔 여기서 직접 키를 조립했고 `if/else if` 라 **생년월일이 있는 레코드는
+      //   전화 키로 아예 등록되지 않았다** — 그 달 명단이 생년월일 칸을 비워 보내면
+      //   전화가 멀쩡해도 매칭이 통째로 실패했다. 엔진은 가진 강키를 전부 등록한다.
+      const index = buildBaseIndex(filtered);
       setFetchedCount(filtered.length);
-      onImport(baseMapObj, [...checkedFields], selectedCity, filtered.length);
+      onImport(index, [...checkedFields], selectedCity, filtered.length);
     } catch (e) {
       console.error(e);
       alert('불러오기 실패: ' + e.message);

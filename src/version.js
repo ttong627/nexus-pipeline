@@ -1,8 +1,13 @@
-export const APP_VERSION = 'V7.31';
-export const APP_BUILD = '2026.08.31';
-export const APP_BUILD_TIME = '2026.08.31 10:25';
+export const APP_VERSION = 'V7.32';
+export const APP_BUILD = '2026.09.03';
+export const APP_BUILD_TIME = '2026.09.03 22:17';
 
 export const CHANGELOG = [
+  { v: "V7.32", date: "2026.09.03", items: [
+    "명단을 올리면 특이사항이 자동으로 붙습니다 (버튼을 누르지 않아도 됩니다)",
+    "이름이 5자를 넘거나 전화 앞자리 0이 빠져도 매칭됩니다",
+    "동명이인이 의심되면 붙이지 않고 알려드립니다 (잘못 붙는 것 방지)",
+  ]},
   { v: "V7.31", date: "2026.08.31", items: [
     "지도 저장이 기존 배송순번을 지우던 문제 해결 (중요)",
     "배정 3개월 보관이 [저장·확정]에서도 기록됩니다",

@@ -1,7 +1,7 @@
 ﻿import { useState } from 'react';
 import { db, collection, getDocsFromServer } from '../config/firebase.js';
 import { Database, Download, X, AlertCircle } from 'lucide-react';
-import { normalizeBirth } from '../utils/parsers.js';
+import { buildBaseIndex } from '../engine/baseMatcher.js';
 import { REGIONS, getSigunguOptions } from '../utils/regions.js';
 
 export default function CloudBaseModal({ onClose, onImport, user }) {
@@ -41,39 +41,12 @@ export default function CloudBaseModal({ onClose, onImport, user }) {
         }
       }
 
-      // 3순위 매칭 인덱스 구축 (이름+생년월일 → 이름+휴대폰 → 이름+유선전화)
-      const newBaseMapObj = {};
-      const dk = v => String(v || '').replace(/[^\d]/g, '');
-      // updatedAt(Firestore Timestamp/숫자) → ms. 없으면 0. 최신 우선 비교용(B-15)
-      const tsMs = (r) => {
-        const u = r?.updatedAt;
-        if (!u) return 0;
-        if (typeof u.toMillis === 'function') return u.toMillis();
-        if (typeof u.seconds === 'number') return u.seconds * 1000;
-        if (typeof u === 'number') return u;
-        return 0;
-      };
-      // 같은 키 중복 시 최신(updatedAt) 레코드만 유지 — 임의 덮어쓰기로 옛 자료가 남지 않게
-      const put = (key, r) => {
-        const prev = newBaseMapObj[key];
-        if (!prev || tsMs(r) >= tsMs(prev)) newBaseMapObj[key] = r;
-      };
-      filtered.forEach(r => {
-        const nm = (r.name || r.이름 || '').trim();
-        if (!nm) return;
-        const bk = r.birthKey || normalizeBirth(r.birth || r.생년월일 || '');
-        const ph = dk(r.mobile || r.휴대폰 || '');
-        const ld = dk(r.landline || r.유선전화 || '');
-        if (bk) {
-          put(`${nm}_${bk}`, r);
-        } else if (ph.length >= 9) {
-          put(`ph_${nm}_${ph}`, r);
-        } else if (ld.length >= 9) {
-          put(`ld_${nm}_${ld}`, r);
-        }
-      });
+      // 매칭 인덱스 구축은 SSOT 엔진 한 곳에서만 한다(src/engine/baseMatcher.js).
+      // ★예전엔 여기서 직접 키를 조립했고 `if/else if` 라 생년월일이 있는 레코드는
+      //   전화 키로 등록되지 않았다 — 명단이 생년월일 칸을 비워 보내면 통째로 미매칭이었다.
+      const index = buildBaseIndex(filtered);
 
-      onImport(newBaseMapObj, selectedCity, filtered.length);
+      onImport(index, selectedCity, filtered.length);
     } catch (e) {
       console.error(e);
       alert('데이터를 불러오는데 실패했습니다: ' + e.message);

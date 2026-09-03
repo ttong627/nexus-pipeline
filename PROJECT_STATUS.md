@@ -1,11 +1,56 @@
 # 📋 PROJECT STATUS — nexus-pipeline
-> 자동 생성: /확인 스킬 · 갱신 **2026-08-31 10:54 KST (V7.31 배포 후 · 지도 저장 검증 완료)** · 직전 갱신 2026-08-23 18:25 KST
+> 자동 생성: /확인 스킬 · 갱신 **2026-09-03 21:23 KST (/확인 실측 · 읽기 전용 · 코드 변경 0)** · 직전 갱신 2026-08-31 10:54 KST
 
-> ⚠️ **이 문서보다 `HANDOFF.md` 가 최신일 수 있다.** 좌표 작업(C 시리즈)·개인정보보호 대응의 현재 상태·다음 할 일은
-> `HANDOFF.md` → `prompt_plan.md`(접근통제 계획) → `좌표관리_설계.md` 가 SSOT 다. 여기는 프로젝트 전반의 스냅샷이다.
-> **아래 「이전 작업」 블록들은 그 시점 기록이다 — 현재 상태로 읽지 말 것.**
+> 세션 인계 문서 `HANDOFF.md` 는 **08-27(V7.19)** 이 마지막 갱신이다 — **이 문서(09-03)가 더 최신**이다. 좌표 작업(C 시리즈)·개인정보보호 대응의
+> 근거는 `HANDOFF.md` → `prompt_plan.md`(접근통제 계획) → `좌표관리_설계.md` 에 박제돼 있다. 여기는 프로젝트 전반의 스냅샷이다.
+> **아래 「이전 스냅샷」·「이전 작업」 블록들은 그 시점 기록이다 — 현재 상태로 읽지 말 것.**
 
-## 📌 현재 상태 (2026-08-31 · V7.31)
+## 📌 현재 스냅샷 (2026-09-03 21:23 KST · /확인 실측 · 읽기 전용)
+
+> 마지막 커밋(08-31 11:12) 뒤 **3일(82시간)** 공백 후 첫 확인. **코드 변경 0 · 리포 최신·clean · 운영 전부 살아 있다. 운영 번들 = 로컬 빌드(파일명까지 동일).**
+
+| 블록 | 판정 | 근거(실측) |
+|---|---|---|
+| 동기화 | 🟢 | `main` = `origin/main` = **`4a93765`** · behind 0 / ahead 0 · 미커밋·untracked **0** (owner 토큰 주입 fetch · 전역 gh 계정 불변) |
+| 계정·식별 | 🟡 | repo owner **ttong627** / gh active **ttong0627**(불일치 — 전환 안 함, 명령별 토큰 주입) · gcloud **ttong627@gmail.com** ✅ · firebase **ttong627@gmail.com** ✅ · ⚠️gcloud 기본 project = `wssc-nutrition`(타 프로젝트) → **`--project logis-op` 매 명령 필수** |
+| 환경 | 🟢 | node **v24.15.0** / npm **11.12.1** · gh·gcloud·firebase OK · node_modules 루트·functions·services/address-service **전부 설치** · `.env` **16키**(값 비노출) · `src/version.js` **V7.31** = package.json **7.31.0** · **회귀 589/589**(62 suites · 2.9초 · **이 시점 재실행**) |
+| 배포 | 🟢 | Hosting 3도메인 **200**(logis-op.web.app 0.07s · narami.wssc.kr 0.42s · wr.wslos.com 0.16s) · 운영 엔트리 **`index-D0Eum_DC.js` = 로컬 `dist` 동일** · Functions 5개 ACTIVE(openShare·api·geocode·geocodeAuto·leakAlert · 08-27 13:57 KST 배포) · Cloud Run `nexus-address-api` **`00078-td6`**(08-23 그대로) · `/v1/address/db-status` 200 0.49s · `/v1/coords/status` 200 0.19s |
+| 정기배치 | 🟢 | `nexus-address-sync` **08-31·09-01·09-02 04:23 KST 3회 연속 성공** · `nexus-address-listfill` 08-30(월) 05:10 성공 · 스케줄러 3개 ENABLED(geocodeAuto 3분 · 마지막 21:21) · Cloud Run Job 9개 등록 |
+| 앱구성 | 🟢 | 루트(React 19.2+Vite 8+Firebase 12) · `functions/`(CJS · Functions 5개) · `services/address-service/`(Cloud Run 운영 API + Job 9개) |
+| 마지막 작업 | 🟢 | 08-31 **V7.31** 지도 저장 수정(순번 보존·3개월 보관 기록·반영 실패 알림) + E2E 2종 + 문서. **미배포분 없음** |
+
+### 🟡 형 판단·조치가 필요한 것 (우선순위순)
+
+1. 🟡 **`route_assignments` 실사용 저장 0건** — 정리기 dry-run(`npm run purge:assignments`) 결과 **지자체 문서 0곳 · 정리 대상 0**.
+   V7.31 이 [저장·확정]에 3개월 보관 기록을 붙였고 E2E 로 동작은 확인됐지만, **배포 후 3일간 담당자의 실제 저장이 아직 없었다**는 뜻이다.
+   담당자가 다음에 지도를 저장한 뒤 dry-run 을 다시 돌려 **1곳 이상 잡히는지** 확인할 것. 스케줄러 연결은 데이터가 쌓인 뒤.
+2. 🟡 **3개월 보관 정리기 스케줄러 미연결**(이월) — 수동 `npm run retention:check`(dry-run) / `purge:assignments:write`.
+3. 🟡 **동대문구 배송순번 0건**(이월) — 지워진 게 아니라 매긴 적이 없는 것. 순번을 매기면 그때부터 보존된다.
+4. 🟢 (주)한울 `kittong627@gmail.com` 지자체 승인 없음(이월) — 관리자 패널에서 부여는 형 결정.
+5. 📅 **개정 개인정보보호법 시행 2026-09-11 = D-8**(date 계산). 대응(비밀번호 입장·PII 최소보관·열람기록·세대 무효화)은 **V7.19 까지 배포 완료**, 코드상 남은 항목 없음.
+6. 📝 `HANDOFF_배정저장_일정.md`(07-24) 는 구형 인계 문서 — 6개 이슈 중 무엇이 V7.27~V7.31 에서 닫혔는지 **이번 확인에서 대조하지 않았다**(읽기 전용 범위 밖).
+
+### 식별 · 배포 환경 (현재)
+- GitHub: `ttong627/nexus-pipeline` main (계정 세트 **ttong627**) · 로컬 `i:\ttong_project\nexus-pipeline-clean`
+- GCP/Firebase: **`logis-op`**(`.firebaserc` default) · 리전 asia-northeast3
+- 접속 URL: https://logis-op.web.app · https://narami.wssc.kr · https://wr.wslos.com (카카오 도메인 등록 완료 08-31)
+- 빌드: `npm run build`(prebuild = eslint ≤120 warn + tsc) · 전체 검증 `npm run test:all` · 배포 후 `npm run test:e2e`(운영 대상 · spec 5개)
+- 배포: `node scripts/bump-version.cjs minor "항목"…` → `npm run deploy`(Hosting · `--account ttong627@gmail.com`) · 규칙 `deploy:rules` · 함수 `deploy:functions` · 주소서비스는 `services/address-service` 별도(Cloud Run + Job)
+- 커밋·푸시: main 직접 · 원격 git 은 `GH_TOKEN=$(gh auth token --user ttong627)` 주입(전역 계정 전환 금지)
+
+### 규칙 문서 (SSOT — 메뉴·기능 처리 방식의 기록, 작업 전 필독)
+| 문서 | 내용 |
+|---|---|
+| `CLAUDE.md` | 운영 전체 규칙 — 정제 A-1~A-38 · 무손실 M · 동명이인 S · DB B/C/D · 컬럼 CM · 정렬 SO · 공유 비밀번호 SH · 점검 절대규칙 G · 배분 R · 순번 DS · 버전 VER |
+| `HANDOFF.md` | 세션 인계(마지막 08-27 · V7.19 까지) — 새 세션 "이어서" 로 복원 |
+| `prompt_plan.md` · `좌표관리_설계.md` | 접근통제(개인정보보호) 계획 · 좌표 저장소/C 시리즈 실측 근거 |
+| `동명이인_주소오염_재발방지_설계.md` | S-1~S-6 사고 경위·설계 |
+| `DELIVERY_SEQUENCE_RULES.md` · `implementation_plan.md` | 배송순번 규칙 · 구현 계획(이름 기준, 이번 확인에서 미정독) |
+| `HANDOFF_배정저장_일정.md`(07-24) · `HANDOFF_vworld.md` | 배정 저장/일정 분할 6개 이슈 · V월드/배송완료 비교 인계(구형) |
+| `docs/MANUAL_CHECKLIST.md`(08-23) | 형 수동 확인 항목 |
+| `AGENTS.md` · `AI_GLOBAL_RULES.md` · `AI_TEAM_SKILLS.md` · `CLAUDE_FORGE_PRINCIPLES.md` | 팀·에이전트 운영 규칙 |
+
+## 📌 이전 스냅샷 (2026-08-31 · V7.31 배포 후 · 그 시점 기록)
 
 | 항목 | 상태 |
 |---|---|
@@ -679,7 +724,11 @@ gcloud도 `--account ttong627@gmail.com`을 매 명령에 붙인다.
 - 검증 명령: `node --test scripts/*.test.mjs`(파리티 포함) · `node --test scripts/address-golden.test.mjs` · `npx eslint .` · `npx vite build`
 - 품질 모니터 `scripts/monitor.log`: 최근 기록 **2026-08-03 09:00** — 88,463건 괄호붕괴 0·잡값 0·정본 100% **정상(악화 없음)**
 
-## 동기화 (2026-08-23 10:50 KST)
+## 동기화 (2026-09-03 21:21 KST)
+- fetch: owner 토큰 주입(전역 계정 전환 없음 · gh active 는 `ttong0627` 그대로) → `main` = `origin/main` = **`4a93765`**(08-31 11:12) · **behind 0 / ahead 0** · 미커밋·untracked **0** → 이미 최신(merge 불필요)
+- 마지막 커밋 이후 **3일(82시간)** 무변경 — 작업 공백(운영 정상 가동 · 정기배치 3일 연속 성공)
+
+## 동기화 (2026-08-23 10:50 KST) — 과거 기록
 - fetch: owner 토큰 주입(`GH_TOKEN=$(gh auth token --user ttong627) git -c credential.helper='!gh auth git-credential' fetch origin`) — **전역 계정 전환 없음**
 - 결과: `main` = `origin/main` = **`c3bded2`**(08-13 21:26) · **behind 0 / ahead 0** · 추적파일 clean → 이미 최신(merge 불필요)
 - untracked: `.serena/` 1건(08-12 생성, gitignore 미등록) — 앱 코드 아님, 보류
@@ -693,7 +742,15 @@ gcloud도 `--account ttong627@gmail.com`을 매 명령에 붙인다.
 - gh active 계정: **ttong627** = repo owner **일치** ✅ (08-06 기록의 ttong0627 불일치는 해소)
 
 ## 리스크
-### 2026-08-23 신규·갱신 (I: 정본 실측)
+### 2026-09-03 갱신 (/확인 실측 · 현재 판정은 문서 맨 위 「현재 스냅샷」이 정본)
+- 🟢 **운영 = 리포 = 로컬 빌드**(Hosting `index-D0Eum_DC.js` 3도메인 · Functions 5개 ACTIVE · Cloud Run `00078-td6`) · 회귀 **589/589** 재실행 · 정기배치 sync 3일 연속 성공
+- 🟡 **`route_assignments` 실사용 저장 0건**(정리기 dry-run 지자체 0곳) — V7.31 배포 후 담당자 저장이 아직 없다. 다음 저장 뒤 dry-run 재확인
+- 🟡 gcloud 기본 project = `wssc-nutrition` · gh active ≠ owner — **둘 다 그대로**(명령별 `--project logis-op`·토큰 주입으로 운용)
+- 🟢 ~~🟠 카카오 REST 키 번들 노출~~ → **08-23 21:57 해소**(`/api/kakao` 프록시 · 번들 실측 없음 · G-5/G-11 · 아래 08-23 항목은 그 이전 기록)
+- 🟢 ~~untracked `.serena/`~~ → 08-23 해소(2개 파일 커밋 · 캐시 제외)
+- 📅 개인정보보호법 시행 **2026-09-11 = D-8** · 대응 코드 V7.19 까지 배포 완료
+
+### 2026-08-23 신규·갱신 (I: 정본 실측) — 과거 기록
 - 🟢 ~~개인정보보호 Phase 2(SMS) 미착수~~ → 형 결정(18:3x)으로 **공유링크 비밀번호(숫자 6자리)** 방식으로 대체 — 구현·검증 완료(CLAUDE.md §14-1 SH-1~6 · 루트 446/446), **배포 대기**(IAM 1줄 → functions:openShare → rules → hosting · HANDOFF 절차). SMS 인증·`신입1` 번호·Console 작업은 더 이상 전제가 아니다. `SHARE_TRANSITION_DUAL_WRITE=true`는 유지(토큰 경로 실측 후 내릴 것).
 - 🟢 ~~주소품질 모니터 08-17 악화 판정~~ → **원인 규명·수정(A-38)·저장분 복구 46건 완료**(같은 날).
 - 🟢 ~~동대문구 2026-08 명단이 주소DB 없이 정제됨~~ → 형 "모두 고"로 **재정제 완료**(`scripts/repurify-month.mjs` · 매칭 7,712/7,712 · 식별자 0%→100% ·
